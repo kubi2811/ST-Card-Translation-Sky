@@ -4,7 +4,27 @@ import { useTranslation } from '../hooks/useTranslation';
 import { useT } from '../i18n/useLocale';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { FieldGroup } from '../types/card';
-import { RotateCcw, AlertTriangle, CheckCircle2, Clock, ArrowLeftRight, BarChart3, Ban, Search, X } from 'lucide-react';
+import { RotateCcw, AlertTriangle, CheckCircle2, Clock, ArrowLeftRight, BarChart3, Ban, Search, X, Copy, Check } from 'lucide-react';
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <button
+      onClick={handleCopy}
+      className="btn btn-ghost btn-xs tooltip"
+      data-tooltip={copied ? "Copied!" : "Copy"}
+      style={{ padding: '2px 4px', height: 'auto', minHeight: 'auto', opacity: 0.6 }}
+      title={copied ? "Copied!" : "Copy original text"}
+    >
+      {copied ? <Check size={12} color="var(--accent-success)" /> : <Copy size={12} />}
+    </button>
+  );
+}
 
 const TAB_IDS: (FieldGroup | 'all')[] = [
   'all', 'core', 'messages', 'lorebook', 'lorebook_keys', 'system', 'creator', 'regex', 'depth_prompt', 'tavern_helper',
@@ -77,6 +97,9 @@ function DiffView({ original, translated }: { original: string; translated: stri
         }}>
           Original
         </span>
+        <div style={{ position: 'absolute', top: '0px', right: '4px', zIndex: 10 }}>
+          <CopyButton text={original} />
+        </div>
         <div
           style={{
             padding: '14px 8px 6px',
@@ -217,7 +240,10 @@ function VirtualTableView({
 
                     {/* Original */}
                     <td style={{ width: '40%' }}>
-                      <div className="field-original">
+                      <div className="field-original" style={{ position: 'relative', paddingRight: '24px' }}>
+                        <div style={{ position: 'absolute', top: '2px', right: '2px', zIndex: 10 }}>
+                          <CopyButton text={field.original} />
+                        </div>
                         {field.original.length > 500
                           ? field.original.slice(0, 500) + '...'
                           : field.original}

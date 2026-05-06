@@ -1,0 +1,269 @@
+```html
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            /* Ưu tiên font chữ cổ phong như Georgia/Times New Roman */
+            font-family: "Georgia", "Times New Roman", "Noto Serif", "Segoe UI", Tahoma, sans-serif;
+            background: transparent;
+        }
+
+        /* Container ngoài: Nền giấy xuyến chỉ và viền mực thủy mặc */
+        .scene-info-panel {
+            position: relative;
+            margin: 12px auto;
+            max-width: 860px;
+            border-radius: 4px; /* Phong cách cổ thường dùng góc vuông hoặc bo tròn nhẹ */
+            padding: 2px;
+            background: 
+                linear-gradient(135deg, rgba(230, 222, 210, 0.9), rgba(245, 240, 230, 0.9)),
+                url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" opacity="0.05"><path d="M0 0 L100 100 M100 0 L0 100" stroke="%23000" stroke-width="0.5"/></svg>'); /* Họa tiết giấy xuyến chỉ đơn giản */
+            box-shadow:
+                0 4px 12px rgba(0, 0, 0, 0.15),
+                0 0 0 1px rgba(139, 115, 85, 0.3) inset; /* Viền trong màu nâu mờ ảo */
+        }
+
+        /* Lớp trong: Tăng cường thêm cảm giác giấy xuyến chỉ/cuộn tranh cũ */
+        .scene-inner {
+            border-radius: 2px;
+            overflow: hidden;
+            background: rgba(250, 246, 235, 0.95);
+            border: 1px solid rgba(188, 167, 137, 0.4);
+            position: relative;
+        }
+        
+        /* Trang trí hoa văn cổ điển 4 góc (dùng CSS pseudo-element mô phỏng) */
+        .scene-inner::before, 
+        .scene-inner::after {
+            content: "";
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            border: 2px solid rgba(139, 115, 85, 0.4);
+            pointer-events: none;
+            z-index: 10;
+            transition: all 0.3s;
+        }
+        .scene-inner::before {
+            top: 4px; left: 4px;
+            border-right: none;
+            border-bottom: none;
+        }
+        .scene-inner::after {
+            bottom: 4px; right: 4px;
+            border-left: none;
+            border-top: none;
+        }
+
+        .scene-header {
+            position: relative;
+            padding: 24px 20px 16px 20px;
+            border-bottom: 1px dashed rgba(139, 115, 85, 0.5); /* Dùng nét đứt thay nét liền, mang đậm nét cổ kính hơn */
+            background: linear-gradient(180deg, rgba(245, 238, 226, 0.8), transparent);
+            text-align: center; /* Bố cục căn giữa */
+        }
+
+        /* Hiệu ứng con dấu tiêu đề ở trên cùng */
+        .scene-title-ribbon {
+            position: absolute;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 4px 12px;
+            background: #9b2e2e; /* Màu đỏ chu sa */
+            color: #fffaf0;
+            font-size: 14px;
+            font-weight: bold;
+            letter-spacing: 0.3em;
+            text-indent: 0.3em;
+            box-shadow: 2px 2px 0 rgba(0,0,0,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            /* Hiệu ứng viền con dấu bị khuyết */
+            border-radius: 2px;
+            writing-mode: horizontal-tb;
+        }
+        
+        .scene-title-ribbon::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border: 1px dashed rgba(255,255,255,0.3);
+            pointer-events: none;
+        }
+
+        .scene-meta {
+            display: flex;
+            flex-direction: column;
+            align-items: center; /* Căn giữa */
+            gap: 12px;
+            color: #3e2815;
+            margin-top: 8px;
+        }
+
+        .meta-row {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            font-size: 15px;
+            font-weight: 500;
+            position: relative;
+        }
+        
+        /* Thêm dấu chấm nhỏ trang trí hai bên chữ */
+        .meta-row::before, .meta-row::after {
+            content: "·";
+            color: #9b2e2e;
+            font-weight: bold;
+        }
+
+        .meta-icon {
+            display: none; /* Phong cách cổ không cần icon SVG hiện đại, ẩn đi */
+            width: 18px;
+            height: 18px;
+            flex-shrink: 0;
+        }
+
+        .meta-text {
+            color: #3e2815;
+        }
+
+        .meta-date {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            color: #3e2815;
+        }
+
+        .date-main {
+            font-size: 16px;
+            letter-spacing: 1px;
+        }
+
+        .date-weekday {
+            font-size: 14px;
+            color: #6e5540;
+        }
+
+        .meta-time {
+            font-size: 15px;
+            letter-spacing: 1px;
+        }
+
+        /* Nút thu gọn: Cảm giác trục tranh/nút cài ẩn */
+        .collapse-button {
+            margin-top: 16px;
+            width: 100%;
+            padding: 6px 10px;
+            border-radius: 2px;
+            border: 1px solid rgba(139, 115, 85, 0.4);
+            background: rgba(238, 229, 214, 0.6);
+            color: #5c3a21;
+            font-family: inherit;
+            font-size: 14px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: all 0.2s ease;
+        }
+
+        .collapse-button:hover {
+            background: rgba(226, 213, 193, 0.8);
+            border-color: rgba(139, 115, 85, 0.8);
+        }
+
+        .collapse-icon {
+            width: 14px;
+            height: 14px;
+            transition: transform 0.2s ease;
+        }
+
+        .collapse-icon svg {
+            width: 100%;
+            height: 100%;
+            fill: #5c3a21;
+        }
+
+        .collapse-icon.collapsed {
+            transform: rotate(180deg);
+        }
+
+        .collapse-text {
+            letter-spacing: 0.5em;
+            text-indent: 0.5em;
+        }
+
+        .character-container {
+            padding: 24px 16px 20px 16px;
+            max-height: 3200px;
+            overflow: hidden;
+            transition: max-height 0.4s ease, padding 0.4s ease;
+            position: relative;
+        }
+        
+        /* Thêm họa tiết vân như ý/sơn thủy mờ ảo làm nền */
+        .character-container::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle at 50% 50%, rgba(139, 115, 85, 0.03) 0%, transparent 70%);
+            pointer-events: none;
+        }
+
+        .character-container.collapsed {
+            max-height: 0;
+            padding: 0 16px;
+        }
+
+        .character-grid {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 24px;
+        }
+
+        /* Thẻ nhân vật: Chủ yếu hiển thị ảnh đứng, tên thu nhỏ ở dưới */
+        .character-card {
+            flex: 0 1 calc(33.333% - 24px);
+            max-width: 220px;
+            min-width: 180px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 10px 12px;
+            background: rgba(255, 255, 255, 0.28);
+            border: 1px solid rgba(188, 167, 137, 0.28);
+            border-radius: 2px;
+            box-shadow: 2px 2px 6px rgba(0,0,0,0.04);
+            transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+        }
+        
+        .character-card:hover {
+            transform: translateY(-2px);
+            border-color: rgba(188, 167, 137, 0.55);
+            background: rgba(255, 255, 255, 0.45);
+        }
+
+        /* Hiển thị ảnh đứng trọn vẹn, không cắt tròn */
+        .character-avatar {
+            width: 100%;
+            aspect-ratio: 3 / 4;
+            overflow: hidden;
+            position: relative;
+            background: linear-gradient(180deg, rgba(244, 239, 229, 0.95), rgba(231, 223, 208, 0.92));
+            border: 1px solid rgba(157, 133, 103, 0.35);
+            border-radius: 2px;
+            box-shadow:
+                0 0 0 1px rgba(255, 248, 238,

@@ -1,0 +1,664 @@
+```
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            /* 古风字体首选楷体/宋体 */
+            font-family: "STKaiti", "KaiTi", "PMingLiU", "SimSun", "Microsoft YaHei", serif;
+            background: transparent;
+        }
+
+        /* 外层容器：宣纸质感底纹与水墨边框 */
+        .scene-info-panel {
+            position: relative;
+            margin: 12px auto;
+            max-width: 860px;
+            border-radius: 4px; /* 古风多直角或微圆角 */
+            padding: 2px;
+            background: 
+                linear-gradient(135deg, rgba(230, 222, 210, 0.9), rgba(245, 240, 230, 0.9)),
+                url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" opacity="0.05"><path d="M0 0 L100 100 M100 0 L0 100" stroke="%23000" stroke-width="0.5"/></svg>'); /* 简易宣纸纹理 */
+            box-shadow:
+                0 4px 12px rgba(0, 0, 0, 0.15),
+                0 0 0 1px rgba(139, 115, 85, 0.3) inset; /* 隐约的褐色内描边 */
+        }
+
+        /* 内层：进一步强化宣纸/旧画卷质感 */
+        .scene-inner {
+            border-radius: 2px;
+            overflow: hidden;
+            background: rgba(250, 246, 235, 0.95);
+            border: 1px solid rgba(188, 167, 137, 0.4);
+            position: relative;
+        }
+        
+        /* 四角古典花角装饰 (用CSS伪元素模拟) */
+        .scene-inner::before, 
+        .scene-inner::after {
+            content: "";
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            border: 2px solid rgba(139, 115, 85, 0.4);
+            pointer-events: none;
+            z-index: 10;
+            transition: all 0.3s;
+        }
+        .scene-inner::before {
+            top: 4px; left: 4px;
+            border-right: none;
+            border-bottom: none;
+        }
+        .scene-inner::after {
+            bottom: 4px; right: 4px;
+            border-left: none;
+            border-top: none;
+        }
+
+        .scene-header {
+            position: relative;
+            padding: 24px 20px 16px 20px;
+            border-bottom: 1px dashed rgba(139, 115, 85, 0.5); /* 虚线代替实线，更显古意 */
+            background: linear-gradient(180deg, rgba(245, 238, 226, 0.8), transparent);
+            text-align: center; /* 居中排版 */
+        }
+
+        /* 顶部标题印章效果 */
+        .scene-title-ribbon {
+            position: absolute;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 4px 12px;
+            background: #9b2e2e; /* 朱红色 */
+            color: #fffaf0;
+            font-size: 14px;
+            font-weight: bold;
+            letter-spacing: 0.3em;
+            text-indent: 0.3em;
+            box-shadow: 2px 2px 0 rgba(0,0,0,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            /* 印章残缺边缘效果 */
+            border-radius: 2px;
+            writing-mode: horizontal-tb;
+        }
+        
+        .scene-title-ribbon::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border: 1px dashed rgba(255,255,255,0.3);
+            pointer-events: none;
+        }
+
+        .scene-meta {
+            display: flex;
+            flex-direction: column;
+            align-items: center; /* 居中对齐 */
+            gap: 12px;
+            color: #3e2815;
+            margin-top: 8px;
+        }
+
+        .meta-row {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            font-size: 15px;
+            font-weight: 500;
+            position: relative;
+        }
+        
+        /* 文字两边加个小圆点修饰 */
+        .meta-row::before, .meta-row::after {
+            content: "·";
+            color: #9b2e2e;
+            font-weight: bold;
+        }
+
+        .meta-icon {
+            display: none; /* 古风不需要现代SVG图标，隐藏掉 */
+            width: 18px;
+            height: 18px;
+            flex-shrink: 0;
+        }
+
+        .meta-text {
+            color: #3e2815;
+        }
+
+        .meta-date {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            color: #3e2815;
+        }
+
+        .date-main {
+            font-size: 16px;
+            letter-spacing: 1px;
+        }
+
+        .date-weekday {
+            font-size: 14px;
+            color: #6e5540;
+        }
+
+        .meta-time {
+            font-size: 15px;
+            letter-spacing: 1px;
+        }
+
+        /* 折叠按钮：画轴/暗扣质感 */
+        .collapse-button {
+            margin-top: 16px;
+            width: 100%;
+            padding: 6px 10px;
+            border-radius: 2px;
+            border: 1px solid rgba(139, 115, 85, 0.4);
+            background: rgba(238, 229, 214, 0.6);
+            color: #5c3a21;
+            font-family: inherit;
+            font-size: 14px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: all 0.2s ease;
+        }
+
+        .collapse-button:hover {
+            background: rgba(226, 213, 193, 0.8);
+            border-color: rgba(139, 115, 85, 0.8);
+        }
+
+        .collapse-icon {
+            width: 14px;
+            height: 14px;
+            transition: transform 0.2s ease;
+        }
+
+        .collapse-icon svg {
+            width: 100%;
+            height: 100%;
+            fill: #5c3a21;
+        }
+
+        .collapse-icon.collapsed {
+            transform: rotate(180deg);
+        }
+
+        .collapse-text {
+            letter-spacing: 0.5em;
+            text-indent: 0.5em;
+        }
+
+        .character-container {
+            padding: 24px 16px 20px 16px;
+            max-height: 3200px;
+            overflow: hidden;
+            transition: max-height 0.4s ease, padding 0.4s ease;
+            position: relative;
+        }
+        
+        /* 增加一个隐约的背景如意纹/山水纹 */
+        .character-container::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle at 50% 50%, rgba(139, 115, 85, 0.03) 0%, transparent 70%);
+            pointer-events: none;
+        }
+
+        .character-container.collapsed {
+            max-height: 0;
+            padding: 0 16px;
+        }
+
+        .character-grid {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 24px;
+        }
+
+        /* 角色卡片：以立绘展示为主，名字缩为底部小字 */
+        .character-card {
+            flex: 0 1 calc(33.333% - 24px);
+            max-width: 220px;
+            min-width: 180px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 10px 12px;
+            background: rgba(255, 255, 255, 0.28);
+            border: 1px solid rgba(188, 167, 137, 0.28);
+            border-radius: 2px;
+            box-shadow: 2px 2px 6px rgba(0,0,0,0.04);
+            transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+        }
+        
+        .character-card:hover {
+            transform: translateY(-2px);
+            border-color: rgba(188, 167, 137, 0.55);
+            background: rgba(255, 255, 255, 0.45);
+        }
+
+        /* 立绘完整展示，不做圆形裁切 */
+        .character-avatar {
+            width: 100%;
+            aspect-ratio: 3 / 4;
+            overflow: hidden;
+            position: relative;
+            background: linear-gradient(180deg, rgba(244, 239, 229, 0.95), rgba(231, 223, 208, 0.92));
+            border: 1px solid rgba(157, 133, 103, 0.35);
+            border-radius: 2px;
+            box-shadow:
+                0 0 0 1px rgba(255, 248, 238, 0.7) inset,
+                0 4px 10px rgba(0,0,0,0.08);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .character-avatar img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            object-position: center top;
+            display: block;
+        }
+
+        .character-avatar-fallback {
+            position: relative;
+            font-size: 72px;
+            opacity: 0.45;
+            filter: sepia(100%) hue-rotate(330deg) saturate(150%); /* 让emoji偏旧黄色/褐色 */
+        }
+
+        /* 名字改为底部小字说明 */
+        .character-name {
+            width: 100%;
+            text-align: center;
+            font-size: 12px;
+            line-height: 1.4;
+            color: #5c4330;
+            letter-spacing: 0.08em;
+            padding-top: 2px;
+        }
+
+        @media (max-width: 800px) {
+            .scene-info-panel {
+                margin: 10px;
+            }
+            .character-grid {
+                gap: 16px;
+            }
+            .character-card {
+                flex: 0 1 calc(50% - 16px);
+                max-width: 200px;
+                min-width: 150px;
+            }
+        }
+
+        @media (max-width: 520px) {
+            .scene-info-panel {
+                margin: 8px;
+            }
+            .meta-row {
+                font-size: 14px;
+            }
+            .date-main {
+                font-size: 15px;
+            }
+            .character-grid {
+                gap: 12px;
+            }
+            .character-card {
+                flex: 0 1 calc(50% - 12px);
+                max-width: 170px;
+                min-width: 130px;
+                padding: 8px 8px 10px;
+            }
+            .character-name {
+                font-size: 11px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="scene-info-panel">
+        <div class="scene-inner">
+            <div class="scene-header">
+                <div class="scene-title-ribbon">景 情 小 札</div>
+                <div class="scene-meta" id="scene-meta">
+                    <!-- 动态生成 -->
+                </div>
+                <button class="collapse-button" onclick="toggleCollapse()">
+                    <div class="collapse-icon" id="collapse-icon">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M7.41 8.59 12 13.17l4.59-4.58L18 10l-6 6-6-6z" />
+                        </svg>
+                    </div>
+                    <span class="collapse-text" id="collapse-text">收 起</span>
+                </button>
+            </div>
+
+            <div class="character-container" id="character-container">
+                <!-- 动态生成角色卡片 -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        (function () {
+            // 原始 SceneInfo 文本
+            const sceneText = `$1`;
+
+            /**
+             * 插图角色与表情配置
+             *
+             * SFW 目前支持：
+             * 平然 / 开心 / 犹豫 / 脸红
+             *
+             * NSFW 目前支持：
+             * 平常 / 害羞 / 迷离 / 诱惑
+             *
+             * 命名建议：
+             *   yan_qiuniang_default_normal.png      严秋娘-SFW平然
+             *   yan_qiuniang_default_happy.png       严秋娘-SFW开心
+             *   yan_qiuniang_default_hesitant.png    严秋娘-SFW犹豫
+             *   yan_qiuniang_default_blush.png       严秋娘-SFW脸红
+             *   yan_qiuniang_nsfw_normal.png         严秋娘-NSFW平常
+             *   yan_qiuniang_nsfw_shy.png            严秋娘-NSFW害羞
+             *   yan_qiuniang_nsfw_military.png       严秋娘-NSFW迷离
+             *   yan_qiuniang_nsfw_seductive.png      严秋娘-NSFW诱惑
+             *   （其余角色类推）
+             *
+             * NSFW 图床地址先保留占位，等待后续替换
+             */
+            const imageUrlMap = {
+                '严秋娘': {
+                    sfw: {
+                        '平然': 'https://raw.githubusercontent.com/xm212617-code/-/3c34d9e74f060a8fc256ff8f240ed79ef487525e/yan_qiuniang_default_normal.png',
+                        '开心': 'https://raw.githubusercontent.com/xm212617-code/-/3c34d9e74f060a8fc256ff8f240ed79ef487525e/yan_qiuniang_default_happy.png',
+                        '犹豫': 'https://raw.githubusercontent.com/xm212617-code/-/3c34d9e74f060a8fc256ff8f240ed79ef487525e/yan_qiuniang_default_hesitant.png',
+                        '脸红': 'https://raw.githubusercontent.com/xm212617-code/-/3c34d9e74f060a8fc256ff8f240ed79ef487525e/yan_qiuniang_default_blush.png'
+                    },
+                    nsfw: {
+                        '平常': 'https://raw.githubusercontent.com/xm212617-code/-/10eeeed43dd9c7fd84981ee6968f886c7d31fd95/yan_qiuniang_nsfw_normal.png',
+                        '害羞': 'https://raw.githubusercontent.com/xm212617-code/-/10eeeed43dd9c7fd84981ee6968f886c7d31fd95/yan_qiuniang_nsfw_shy.png',
+                        '迷离': 'https://raw.githubusercontent.com/xm212617-code/-/10eeeed43dd9c7fd84981ee6968f886c7d31fd95/yan_qiuniang_nsfw_military.png',
+                        '诱惑': 'https://raw.githubusercontent.com/xm212617-code/-/10eeeed43dd9c7fd84981ee6968f886c7d31fd95/yan_qiuniang_nsfw_seductive.png'
+                    }
+                },
+                '严昭清': {
+                    sfw: {
+                        '平然': 'https://raw.githubusercontent.com/xm212617-code/-/3c34d9e74f060a8fc256ff8f240ed79ef487525e/yan_zhaoqing_default_normal.png',
+                        '开心': 'https://raw.githubusercontent.com/xm212617-code/-/3c34d9e74f060a8fc256ff8f240ed79ef487525e/yan_zhaoqing_default_happy.png',
+                        '犹豫': 'https://raw.githubusercontent.com/xm212617-code/-/3c34d9e74f060a8fc256ff8f240ed79ef487525e/yan_zhaoqing_default_hesitant.png',
+                        '脸红': 'https://raw.githubusercontent.com/xm212617-code/-/3c34d9e74f060a8fc256ff8f240ed79ef487525e/yan_zhaoqing_default_blush.png'
+                    },
+                    nsfw: {
+                        '平常': 'https://raw.githubusercontent.com/xm212617-code/-/10eeeed43dd9c7fd84981ee6968f886c7d31fd95/yan_zhaoqing_nsfw_normal.png',
+                        '害羞': 'https://raw.githubusercontent.com/xm212617-code/-/10eeeed43dd9c7fd84981ee6968f886c7d31fd95/yan_zhaoqing_nsfw_shy.png',
+                        '迷离': 'https://raw.githubusercontent.com/xm212617-code/-/10eeeed43dd9c7fd84981ee6968f886c7d31fd95/yan_zhaoqing_nsfw_military.png',
+                        '诱惑': 'https://raw.githubusercontent.com/xm212617-code/-/10eeeed43dd9c7fd84981ee6968f886c7d31fd95/yan_zhaoqing_nsfw_seductive.png'
+                    }
+                },
+                '严昭欣': {
+                    sfw: {
+                        '平然': 'https://raw.githubusercontent.com/xm212617-code/-/3c34d9e74f060a8fc256ff8f240ed79ef487525e/yan_zhaoxin_default_normal.png',
+                        '开心': 'https://raw.githubusercontent.com/xm212617-code/-/3c34d9e74f060a8fc256ff8f240ed79ef487525e/yan_zhaoxin_default_happy.png',
+                        '犹豫': 'https://raw.githubusercontent.com/xm212617-code/-/3c34d9e74f060a8fc256ff8f240ed79ef487525e/yan_zhaoxin_default_hesitant.png',
+                        '脸红': 'https://raw.githubusercontent.com/xm212617-code/-/3c34d9e74f060a8fc256ff8f240ed79ef487525e/yan_zhaoxin_default_blush.png'
+                    },
+                    nsfw: {
+                        '平常': 'https://raw.githubusercontent.com/xm212617-code/-/10eeeed43dd9c7fd84981ee6968f886c7d31fd95/yan_zhaoxin_nsfw_normal.png',
+                        '害羞': 'https://raw.githubusercontent.com/xm212617-code/-/10eeeed43dd9c7fd84981ee6968f886c7d31fd95/yan_zhaoxin_nsfw_shy.png',
+                        '迷离': 'https://raw.githubusercontent.com/xm212617-code/-/10eeeed43dd9c7fd84981ee6968f886c7d31fd95/yan_zhaoxin_nsfw_military.png',
+                        '诱惑': 'https://raw.githubusercontent.com/xm212617-code/-/10eeeed43dd9c7fd84981ee6968f886c7d31fd95/yan_zhaoxin_nsfw_seductive.png'
+                    }
+                },
+                '陈真儿': {
+                    sfw: {
+                        '平然': 'https://raw.githubusercontent.com/xm212617-code/-/3c34d9e74f060a8fc256ff8f240ed79ef487525e/chen_zhen_er_default_normal.png',
+                        '开心': 'https://raw.githubusercontent.com/xm212617-code/-/3c34d9e74f060a8fc256ff8f240ed79ef487525e/chen_zhen_er_default_happy.png',
+                        '犹豫': 'https://raw.githubusercontent.com/xm212617-code/-/3c34d9e74f060a8fc256ff8f240ed79ef487525e/chen_zhen_er_default_hesitant.png',
+                        '脸红': 'https://raw.githubusercontent.com/xm212617-code/-/3c34d9e74f060a8fc256ff8f240ed79ef487525e/chen_zhen_er_default_blush.png'
+                    },
+                    nsfw: {
+                        '平常': 'https://raw.githubusercontent.com/xm212617-code/-/10eeeed43dd9c7fd84981ee6968f886c7d31fd95/chen_zhen_er_nsfw_normal.png',
+                        '害羞': 'https://raw.githubusercontent.com/xm212617-code/-/10eeeed43dd9c7fd84981ee6968f886c7d31fd95/chen_zhen_er_nsfw_shy.png',
+                        '迷离': 'https://raw.githubusercontent.com/xm212617-code/-/10eeeed43dd9c7fd84981ee6968f886c7d31fd95/chen_zhen_er_nsfw_military.png',
+                        '诱惑': 'https://raw.githubusercontent.com/xm212617-code/-/10eeeed43dd9c7fd84981ee6968f886c7d31fd95/chen_zhen_er_nsfw_seductive.png'
+                    }
+                },
+                '郭可儿': {
+                    sfw: {
+                        '平然': 'https://raw.githubusercontent.com/xm212617-code/-/3c34d9e74f060a8fc256ff8f240ed79ef487525e/guo_ke_er_default_normal.png',
+                        '开心': 'https://raw.githubusercontent.com/xm212617-code/-/3c34d9e74f060a8fc256ff8f240ed79ef487525e/guo_ke_er_default_happy.png',
+                        '犹豫': 'https://raw.githubusercontent.com/xm212617-code/-/3c34d9e74f060a8fc256ff8f240ed79ef487525e/guo_ke_er_default_hesitant.png',
+                        '脸红': 'https://raw.githubusercontent.com/xm212617-code/-/3c34d9e74f060a8fc256ff8f240ed79ef487525e/guo_ke_er_default_blush.png'
+                    },
+                    nsfw: {
+                        '平常': 'https://raw.githubusercontent.com/xm212617-code/-/10eeeed43dd9c7fd84981ee6968f886c7d31fd95/guo_ke_er_nsfw_normal.png',
+                        '害羞': 'https://raw.githubusercontent.com/xm212617-code/-/10eeeed43dd9c7fd84981ee6968f886c7d31fd95/guo_ke_er_nsfw_shy.png',
+                        '迷离': 'https://raw.githubusercontent.com/xm212617-code/-/10eeeed43dd9c7fd84981ee6968f886c7d31fd95/guo_ke_er_nsfw_military.png',
+                        '诱惑': 'https://raw.githubusercontent.com/xm212617-code/-/10eeeed43dd9c7fd84981ee6968f886c7d31fd95/guo_ke_er_nsfw_seductive.png'
+                    }
+                }
+            };
+
+            const fallbackAvatars = {
+                '严秋娘': '📜',
+                '严昭清': '👒',
+                '严昭欣': '🎐',
+                '陈真儿': '👑',
+                '郭可儿': '🌸'
+            };
+
+            // 解析地点
+            const locationMatch = sceneText.match(/地点[：:]\s*(.+)/);
+            const location = locationMatch ? locationMatch[1].trim() : '未知处所';
+
+            // 解析场景类型：SFW / NSFW，未提供时默认 SFW
+            const sceneTypeMatch = sceneText.match(/场景类型[：:]\s*(SFW|NSFW)/i);
+            const sceneType = sceneTypeMatch ? sceneTypeMatch[1].trim().toUpperCase() : 'SFW';
+
+            // 解析时间：格式 "YYYY年MM月DD日 周X 时段 HH:MM"
+            const timeMatch = sceneText.match(/时间[：:]\s*(.+)/);
+            let dateStr = '';
+            let weekdayStr = '';
+            let timeStr = '';
+
+            if (timeMatch) {
+                const fullTime = timeMatch[1].trim();
+                const detailMatch = fullTime.match(/(\d{4})年(\d{1,2})月(\d{1,2})日\s*(周[一二三四五六日])\s*([上中下]午|傍晚|晚上|深夜)\s*(\d{1,2}:\d{2})/);
+                if (detailMatch) {
+                    dateStr = `${detailMatch[1]}年${detailMatch[2]}月${detailMatch[3]}日`;
+                    weekdayStr = detailMatch[4];
+                    timeStr = `${detailMatch[5]} ${detailMatch[6]}`;
+                } else {
+                    dateStr = fullTime;
+                }
+            }
+
+            /**
+             * 在场角色解析
+             *
+             * 约定格式（推荐）：
+             *   - 严秋娘|平然
+             *   - 严昭清|开心
+             *
+             * 兼容三段式（第三段会被忽略）：
+             *   - 严昭欣|常服|犹豫
+             */
+            const charactersMatch = sceneText.match(/在场角色[：:]\s*([\s\S]*?)(?=\n\n|\n$|$)/);
+            let characters = [];
+
+            const supportedNames = Object.keys(imageUrlMap);
+            const emotionFallbackMap = {
+                SFW: '平然',
+                NSFW: '平常'
+            };
+
+            if (charactersMatch) {
+                const charText = charactersMatch[1];
+                const lines = charText.split('\n')
+                    .map(line => line.trim())
+                    .filter(line => line.startsWith('-'))
+                    .map(line => line.replace(/^-\s*/, '').trim());
+
+                characters = lines.map(line => {
+                    const parts = line.split('|');
+                    if (parts.length === 2) {
+                        return {
+                            name: parts[0].trim(),
+                            emotion: parts[1].trim()
+                        };
+                    } else if (parts.length >= 3) {
+                        // 兼容 "姓名|服装|表情" 写法，忽略服装段
+                        return {
+                            name: parts[0].trim(),
+                            emotion: parts[2].trim()
+                        };
+                    }
+                    return { name: line, emotion: emotionFallbackMap[sceneType] || '平然' };
+                }).filter(char => supportedNames.includes(char.name));
+            }
+
+            // 场景元信息渲染
+            const metaContainer = document.getElementById('scene-meta');
+            let metaHTML = '';
+
+            if (dateStr) {
+                metaHTML += `
+                    <div class="meta-row">
+                        <div class="meta-icon">
+                            <svg viewBox="0 0 24 24">
+                                <path d="M7 4V2h2v2h6V2h2v2h1.5C19.89 4 21 5.12 21 6.5v12c0 1.38-1.11 2.5-2.5 2.5h-13C4.12 21 3 19.88 3 18.5v-12C3 5.12 4.12 4 5.5 4H7zm0 2H5.5c-.27 0-.5.22-.5.5V8h14V6.5c0-.28-.22-.5-.5-.5H17v2h-2V6H9v2H7V6zm-2 4v8.5c0 .28.22.5.5.5h13c.28 0 .5-.22.5-.5V10H5z"/>
+                            </svg>
+                        </div>
+                        <div class="meta-date">
+                            <span class="date-main">${dateStr}</span>
+                            ${weekdayStr ? `<span class="date-weekday">${weekdayStr}</span>` : ''}
+                        </div>
+                    </div>
+                `;
+            }
+
+            if (timeStr) {
+                metaHTML += `
+                    <div class="meta-row">
+                        <div class="meta-icon">
+                            <svg viewBox="0 0 24 24">
+                                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/>
+                            </svg>
+                        </div>
+                        <span class="meta-text meta-time">${timeStr}</span>
+                    </div>
+                `;
+            }
+
+            if (location) {
+                metaHTML += `
+                    <div class="meta-row">
+                        <div class="meta-icon">
+                            <svg viewBox="0 0 24 24">
+                                <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
+                            </svg>
+                        </div>
+                        <span class="meta-text">${location}</span>
+                    </div>
+                `;
+            }
+
+            metaContainer.innerHTML = metaHTML;
+
+            // 获取图片 URL（按场景类型选 SFW / NSFW，若目标图未配置则回退到该类型默认图）
+            function getImageUrl(name, emotion, currentSceneType) {
+                const typeKey = currentSceneType === 'NSFW' ? 'nsfw' : 'sfw';
+                const fallbackEmotion = currentSceneType === 'NSFW' ? '平常' : '平然';
+                const characterImages = imageUrlMap[name];
+
+                if (!characterImages || !characterImages[typeKey]) {
+                    return null;
+                }
+
+                if (characterImages[typeKey][emotion]) {
+                    const url = characterImages[typeKey][emotion];
+                    if (url && !url.startsWith('{{')) return url;
+                }
+
+                if (characterImages[typeKey][fallbackEmotion]) {
+                    const url = characterImages[typeKey][fallbackEmotion];
+                    if (url && !url.startsWith('{{')) return url;
+                }
+
+                return null;
+            }
+
+            // 渲染角色卡片：支持多位角色（按 SceneInfo 顺序展示）
+            const container = document.getElementById('character-container');
+            if (characters.length > 0) {
+                const displayChars = characters.slice(0, 5); // 理论上最多 5 人
+
+                let cardsHTML = '<div class="character-grid">';
+
+                for (const char of displayChars) {
+                    const imageUrl = getImageUrl(char.name, char.emotion, sceneType);
+                    const fallback = fallbackAvatars[char.name] || '👤';
+
+                    cardsHTML += `
+                        <div class="character-card">
+                            <div class="character-avatar">
+                                ${imageUrl ? `
+                                    <img src="${imageUrl}"
+                                         alt="${char.name}"
+                                         onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                                    <div class="character-avatar-fallback" style="display:none;">${fallback}</div>
+                                ` : `
+                                    <div class="character-avatar-fallback">${fallback}</div>
+                                `}
+                            </div>
+                            <div class="character-name">${char.name}</div>
+                        </div>
+                    `;
+                }
+
+                cardsHTML += '</div>';
+                container.innerHTML = cardsHTML;
+            }
+        })();
+
+        function toggleCollapse() {
+            const container = document.getElementById('character-container');
+            const icon = document.getElementById('collapse-icon');
+            const text = document.getElementById('collapse-text');
+
+            container.classList.toggle('collapsed');
+            icon.classList.toggle('collapsed');
+
+            if (container.classList.contains('collapsed')) {
+                text.textContent = '展 开';
+            } else {
+                text.textContent = '收 起';
+            }
+        }
+    </script>
+</body>
+</html>
+```

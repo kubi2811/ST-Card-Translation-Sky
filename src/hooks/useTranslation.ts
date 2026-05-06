@@ -128,13 +128,22 @@ export function useTranslation() {
     store.setCurrentFieldIndex(index);
     store.updateField(field.path, { status: 'translating' });
     const charCount = field.original.length;
-    const CHUNK_THRESHOLD = 15000;
+    // Tự động tính toán CHUNK_THRESHOLD dựa trên token user nhập (cùng công thức maxTokens * 3.5)
+    const currentMaxTokens = store.proxy.maxTokens;
+    const currentChunkSize = store.translationConfig.chunkSize;
+    const CHUNK_THRESHOLD = currentChunkSize && currentChunkSize > 0
+      ? currentChunkSize
+      : (currentMaxTokens && currentMaxTokens > 0 ? Math.min(Math.floor(currentMaxTokens * 3.5), 40000) : 40000);
+      
     if (charCount > CHUNK_THRESHOLD) {
       const estimatedChunks = Math.ceil(charCount / CHUNK_THRESHOLD);
       store.addLog('active', `Translating: ${field.label} (${charCount.toLocaleString()} chars → ~${estimatedChunks} chunks ⚡parallel)`);
     } else {
       store.addLog('active', `Translating: ${field.label} (${charCount.toLocaleString()} chars)`);
     }
+
+    // IMPORTANT: read fresh retries from store (not stale `field` parameter) to prevent infinite retry loops
+    const freshRetries = () => useStore.getState().fields.find(f => f.path === field.path)?.retries || 0;
 
     try {
       // Contextual keyword translation: for lorebook keys, find the already-translated content
@@ -231,6 +240,7 @@ export function useTranslation() {
         field.previousTranslation,
         resolvedFieldType,
         currentMvuDict,
+        store.translationConfig.chunkSize
       );
 
       // Post-process regex HTML: font swap + underscore display
@@ -243,9 +253,10 @@ export function useTranslation() {
       }
 
       // Empty translation guard — if API returned empty/whitespace, treat as error
+
       if (!translated || !translated.trim()) {
-        if ((field.retries || 0) < 1) {
-          store.updateField(field.path, { retries: (field.retries || 0) + 1 });
+        if (freshRetries() < 1) {
+          store.updateField(field.path, { retries: freshRetries() + 1 });
           store.addLog('retry', `⚠️ Empty translation for ${field.label}. Auto-retrying...`);
           await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
           return 'retry';
@@ -256,12 +267,17 @@ export function useTranslation() {
       }
 
       // Min response length validation
-      const ratio = store.proxy.minResponseRatio || 0;
+      // Code-heavy fields (TavernHelper scripts, regex HTML) legitimately produce much shorter
+      // translations because most content is code that stays unchanged — only CJK text is translated.
+      // Use a much lower threshold for these fields to prevent false-positive retries.
+      const isCodeHeavyField = field.group === 'tavern_helper' || field.group === 'regex';
+      const baseRatio = store.proxy.minResponseRatio || 0;
+      const ratio = isCodeHeavyField ? Math.min(baseRatio, 0.03) : baseRatio;
       if (ratio > 0 && field.original.length > 20) {
         const responseRatio = translated.length / field.original.length;
         if (responseRatio < ratio) {
-          if ((field.retries || 0) < 1) {
-            store.updateField(field.path, { retries: (field.retries || 0) + 1 });
+          if (freshRetries() < 1) {
+            store.updateField(field.path, { retries: freshRetries() + 1 });
             store.addLog('retry', `⚠️ Translation too short for ${field.label}: ${translated.length}/${field.original.length} chars (${(responseRatio * 100).toFixed(0)}% ratio). Auto-retrying...`);
             await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
             return 'retry'; // Signal to retry
@@ -280,7 +296,7 @@ export function useTranslation() {
         store.updateField(field.path, { status: 'pending' });
         throw err; // Re-throw for cancel handling
       }
-      store.updateField(field.path, { status: 'error', error: msg, retries: (field.retries || 0) + 1 });
+      store.updateField(field.path, { status: 'error', error: msg, retries: freshRetries() + 1 });
       store.addLog('error', `Failed: ${field.label} — ${msg}`);
       store.addToast('error', `Failed: ${field.label}`);
       return 'error';
@@ -393,7 +409,8 @@ export function useTranslation() {
         effectivePrompt,
         batchSchemaForApi,
         abortRef.current?.signal,
-        batchGlossaryForApi
+        batchGlossaryForApi,
+        store.translationConfig.chunkSize
       );
 
       // ═══ Apply results + Post-batch MVU validation ═══
@@ -1058,7 +1075,10 @@ export function useTranslation() {
         controller.signal,
         contextHint,
         retransGlossaryForApi,
-        field.previousTranslation
+        field.previousTranslation,
+        undefined,
+        undefined,
+        store.translationConfig.chunkSize
       );
 
       // Post-process regex HTML
@@ -1135,7 +1155,10 @@ export function useTranslation() {
           undefined,
           contextHint,
           store.translationConfig.glossary,
-          field.previousTranslation
+          field.previousTranslation,
+          undefined,
+          undefined,
+          store.translationConfig.chunkSize
         );
 
         store.updateField(field.path, { status: 'done', translated, retries: field.retries + 1 });

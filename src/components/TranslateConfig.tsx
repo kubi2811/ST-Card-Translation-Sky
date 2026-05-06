@@ -470,6 +470,29 @@ export default function TranslateConfig() {
               </div>
             </div>
 
+            {/* Chunk Size Control */}
+            <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '10px' }}>
+              <label className="label" style={{ marginBottom: '6px' }}>
+                {locale === 'vi' ? 'Kích thước chia nhỏ (Chunk Size)' : 'Chunk Size Limit'}
+              </label>
+              <input
+                className="input"
+                type="number"
+                min={1000}
+                max={2000000}
+                step={1000}
+                value={translationConfig.chunkSize || 0}
+                onChange={(e) => setTranslationConfig({ chunkSize: parseInt(e.target.value) || 0 })}
+                placeholder={locale === 'vi' ? '0 = Tự động (Tối đa 40k)' : '0 = Auto (Max 40k)'}
+                style={{ width: '100%' }}
+              />
+              <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '4px', lineHeight: '1.4' }}>
+                {locale === 'vi' 
+                  ? 'Ghi đè giới hạn cắt đoạn mặc định. Đặt 0 để tự động tính dựa trên Max Tokens của proxy. Dùng cho Regex/MVU lớn để tránh cắt ngang cấu trúc code.' 
+                  : 'Override default chunking threshold. Set to 0 to auto-calculate based on proxy Max Tokens. Use large chunks for Regex/MVU to prevent breaking code structure.'}
+              </div>
+            </div>
+
             {/* ═══ Cross-field Context RAG ═══ */}
             <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '10px' }}>
               <label className="checkbox-wrapper">

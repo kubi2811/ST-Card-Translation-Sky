@@ -247,6 +247,7 @@ export const useStore = create<AppState>((set) => ({
     enableRAGContext: LS.get('st-translator-rag-enabled', true),
     ragMaxFields: LS.get('st-translator-rag-max-fields', 5),
     ragMaxChars: LS.get('st-translator-rag-max-chars', 3000),
+    chunkSize: LS.get('st-translator-chunk-size', 0),
   },
   setTranslationConfig: (partial) =>
     set((s) => {
@@ -265,6 +266,9 @@ export const useStore = create<AppState>((set) => ({
       }
       if ('ragMaxChars' in partial) {
         LS.set('st-translator-rag-max-chars', next.ragMaxChars);
+      }
+      if ('chunkSize' in partial) {
+        LS.set('st-translator-chunk-size', next.chunkSize);
       }
       return { translationConfig: next };
     }),

@@ -418,15 +418,17 @@ ${fragmentList}${mvuBlock}`;
 export function chunkText(text: string, maxChars?: number, maxTokens?: number): string[] {
   // Now using unlimited context approaches with high chunk thresholds
   if (maxChars === undefined) {
-    if (maxTokens && maxTokens > 4000) {
-      maxChars = maxTokens * 2;
+    if (maxTokens && maxTokens > 0) {
+      // Đặt giới hạn 40,000 ký tự cho mỗi chunk theo yêu cầu để đảm bảo ổn định
+      maxChars = Math.min(Math.floor(maxTokens * 3.5), 40000); 
     } else {
-      maxChars = 200000; // Use a large threshold for new models
+      maxChars = 40000; // Fallback
     }
   }
 
-  // ═══ HARD CAP: Set to 200K chars per chunk ═══
-  const HARD_CAP = 200000;
+  // ═══ HARD CAP: 500K chars per chunk ═══
+  // Tăng giới hạn lên rất cao để tôn trọng API trả phí / proxy không giới hạn
+  const HARD_CAP = 500000;
   maxChars = Math.min(maxChars, HARD_CAP);
 
   if (text.length <= maxChars) return [text];
@@ -1276,11 +1278,13 @@ export async function translateText(
   fieldType?: TranslationFieldType,
   /** MVU dictionary for variable sync (expert mode) */
   mvuDictionary?: Record<string, string>,
+  /** Custom chunk size (override default logic) */
+  chunkSize?: number,
 ): Promise<string> {
   if (!text || text.trim() === '') return '';
 
   const isExpert = config.expertMode;
-  const chunks = chunkText(text, undefined, config.maxTokens);
+  const chunks = chunkText(text, chunkSize && chunkSize > 0 ? chunkSize : undefined, config.maxTokens);
 
   // ═══ SINGLE CHUNK — fast path (no parallelism needed) ═══
   if (chunks.length === 1) {
@@ -1383,11 +1387,15 @@ export async function translateBatch(
   customPrompt?: string,
   customSchema?: string,
   signal?: AbortSignal,
-  glossary?: GlossaryEntry[]
+  glossary?: GlossaryEntry[],
+  chunkSize?: number
 ): Promise<string[]> {
   if (items.length === 0) return [];
   if (items.length === 1) {
-    const result = await translateText(items[0].text, items[0].fieldName, config, targetLang, sourceLang, customPrompt, customSchema, signal, undefined, glossary);
+    const result = await translateText(
+      items[0].text, items[0].fieldName, config, targetLang, sourceLang, 
+      customPrompt, customSchema, signal, undefined, glossary, undefined, undefined, undefined, chunkSize
+    );
     return [result];
   }
 

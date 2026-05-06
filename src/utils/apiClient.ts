@@ -541,7 +541,11 @@ export function chunkText(text: string, maxChars?: number, maxTokens?: number): 
 }
 
 /* ─── Model Output Token Limits ─── */
-export function getMaxOutputTokens(modelId: string): number {
+export function getMaxOutputTokens(modelId: string, maxTokensFromConfig?: number): number {
+  if (maxTokensFromConfig && maxTokensFromConfig > 0) {
+    return maxTokensFromConfig;
+  }
+
   const model = modelId.toLowerCase();
   
   // Anthropic Models
@@ -589,7 +593,7 @@ async function callOpenAICompatible(
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
-    max_tokens: getMaxOutputTokens(config.model),
+    max_tokens: getMaxOutputTokens(config.model, config.maxTokens),
     temperature: config.temperature,
     stream: useStream,
   };
@@ -687,7 +691,7 @@ async function callAnthropic(
 
   const body = {
     model: config.model,
-    max_tokens: getMaxOutputTokens(config.model),
+    max_tokens: getMaxOutputTokens(config.model, config.maxTokens),
     system,
     messages: [{ role: 'user', content: user }],
     temperature: config.temperature,
@@ -796,7 +800,7 @@ async function callGemini(
     system_instruction: { parts: [{ text: system }] },
     contents: [{ role: 'user', parts: [{ text: user }] }],
     generationConfig: {
-      maxOutputTokens: getMaxOutputTokens(config.model),
+      maxOutputTokens: getMaxOutputTokens(config.model, config.maxTokens),
       temperature: config.temperature,
     },
     safetySettings: [

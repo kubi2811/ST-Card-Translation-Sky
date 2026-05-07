@@ -641,36 +641,44 @@ async function callOpenAICompatible(
   let fullContent = '';
   let buffer = '';
   
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      if (buffer) {
-        // Process any remaining buffered text
-        const line = buffer.trim();
-        if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        if (buffer) {
+          // Process any remaining buffered text
+          const line = buffer.trim();
+          if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+            try {
+              const parsed = JSON.parse(line.slice(6));
+              const text = parsed.choices?.[0]?.delta?.content;
+              if (text) fullContent += text;
+            } catch (e) {}
+          }
+        }
+        break;
+      }
+      
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || ''; // Keep the last incomplete line in the buffer
+      
+      for (const line of lines) {
+        const trimmedLine = line.trim();
+        if (trimmedLine.startsWith('data: ') && trimmedLine !== 'data: [DONE]') {
           try {
-            const parsed = JSON.parse(line.slice(6));
+            const parsed = JSON.parse(trimmedLine.slice(6));
             const text = parsed.choices?.[0]?.delta?.content;
             if (text) fullContent += text;
           } catch (e) {}
         }
       }
-      break;
     }
-    
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || ''; // Keep the last incomplete line in the buffer
-    
-    for (const line of lines) {
-      const trimmedLine = line.trim();
-      if (trimmedLine.startsWith('data: ') && trimmedLine !== 'data: [DONE]') {
-        try {
-          const parsed = JSON.parse(trimmedLine.slice(6));
-          const text = parsed.choices?.[0]?.delta?.content;
-          if (text) fullContent += text;
-        } catch (e) {}
-      }
+  } catch (err: any) {
+    if (fullContent && !signal?.aborted) {
+      console.warn(`[API] OpenAI stream aborted prematurely (${err.message}). Returning partial content.`);
+    } else {
+      throw err;
     }
   }
 
@@ -745,37 +753,45 @@ async function callAnthropic(
   let fullContent = '';
   let buffer = '';
   
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      if (buffer) {
-        const line = buffer.trim();
-        if (line.startsWith('data: ')) {
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        if (buffer) {
+          const line = buffer.trim();
+          if (line.startsWith('data: ')) {
+            try {
+              const parsed = JSON.parse(line.slice(6));
+              if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
+                fullContent += parsed.delta.text;
+              }
+            } catch (e) {}
+          }
+        }
+        break;
+      }
+      
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      
+      for (const line of lines) {
+        const trimmedLine = line.trim();
+        if (trimmedLine.startsWith('data: ')) {
           try {
-            const parsed = JSON.parse(line.slice(6));
+            const parsed = JSON.parse(trimmedLine.slice(6));
             if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
               fullContent += parsed.delta.text;
             }
           } catch (e) {}
         }
       }
-      break;
     }
-    
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-    
-    for (const line of lines) {
-      const trimmedLine = line.trim();
-      if (trimmedLine.startsWith('data: ')) {
-        try {
-          const parsed = JSON.parse(trimmedLine.slice(6));
-          if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
-            fullContent += parsed.delta.text;
-          }
-        } catch (e) {}
-      }
+  } catch (err: any) {
+    if (fullContent && !signal?.aborted) {
+      console.warn(`[API] Anthropic stream aborted prematurely (${err.message}). Returning partial content.`);
+    } else {
+      throw err;
     }
   }
 
@@ -847,40 +863,48 @@ async function callGemini(
   let fullContent = '';
   let buffer = '';
   
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      if (buffer) {
-        const line = buffer.trim();
-        if (line.startsWith('data: ')) {
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        if (buffer) {
+          const line = buffer.trim();
+          if (line.startsWith('data: ')) {
+            try {
+              const jsonStr = line.slice(6).trim();
+              if (jsonStr) {
+                const parsed = JSON.parse(jsonStr);
+                const text = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (text) fullContent += text;
+              }
+            } catch (e) {}
+          }
+        }
+        break;
+      }
+      
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      
+      for (const line of lines) {
+        const trimmedLine = line.trim();
+        if (trimmedLine.startsWith('data: ')) {
           try {
-            const jsonStr = line.slice(6).trim();
-            if (jsonStr) {
-              const parsed = JSON.parse(jsonStr);
-              const text = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
-              if (text) fullContent += text;
-            }
+            const jsonStr = trimmedLine.slice(6).trim();
+            if (!jsonStr) continue;
+            const parsed = JSON.parse(jsonStr);
+            const text = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (text) fullContent += text;
           } catch (e) {}
         }
       }
-      break;
     }
-    
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-    
-    for (const line of lines) {
-      const trimmedLine = line.trim();
-      if (trimmedLine.startsWith('data: ')) {
-        try {
-          const jsonStr = trimmedLine.slice(6).trim();
-          if (!jsonStr) continue;
-          const parsed = JSON.parse(jsonStr);
-          const text = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (text) fullContent += text;
-        } catch (e) {}
-      }
+  } catch (err: any) {
+    if (fullContent && !signal?.aborted) {
+      console.warn(`[API] Gemini stream aborted prematurely (${err.message}). Returning partial content.`);
+    } else {
+      throw err;
     }
   }
 

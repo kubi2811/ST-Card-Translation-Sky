@@ -650,7 +650,10 @@ ${varList}`;
         }
       }
 
-    } catch (err) {
+    } catch (err: any) {
+      if (err.name === 'AbortError' || signal?.aborted) {
+        throw err; // Re-throw to handle cancellation properly
+      }
       console.error(`AI MVU key translation batch failed:`, err);
       // Continue with next batch
     }

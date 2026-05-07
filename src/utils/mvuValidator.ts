@@ -141,7 +141,7 @@ export function autoFixMvuVariables(
   if (unreplacedKeys.length === 0) return translated;
 
   let fixed = translated;
-  // Sort by length descending to avoid partial replacements
+  // Sort by length descending to avoid partial replacements (e.g. replacing 'var' inside 'variable')
   const sortedKeys = [...unreplacedKeys].sort((a, b) => b.length - a.length);
 
   for (const key of sortedKeys) {
@@ -149,6 +149,13 @@ export function autoFixMvuVariables(
     if (!replacement || key === replacement) continue;
 
     const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    
+    // Replace in macros specifically FIRST
+    // This catches {{getvar::key}} and {{setvar::key::val}} specifically
+    const macroRegex = new RegExp(`(\\{\\{(?:getvar|setvar|addvar)::)${escaped}(\\}\\}|::)`, 'g');
+    fixed = fixed.replace(macroRegex, `$1${replacement}$2`);
+
+    // Replace standalone occurrences
     const isAscii = /^[a-zA-Z0-9_]+$/.test(key);
     const regex = isAscii
       ? new RegExp(`\\b${escaped}\\b`, 'g')
@@ -158,6 +165,54 @@ export function autoFixMvuVariables(
   }
 
   return fixed;
+}
+
+/**
+ * Validates that getvar/setvar macros reference translated variable names.
+ */
+export function validateGetvarSetvarSync(
+  translated: string, 
+  dictionary: Record<string, string>
+): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  const macros = translated.match(/\{\{(?:getvar|setvar|addvar)::([^}]+?)(?:\}\}|::)/g) || [];
+  
+  for (const macro of macros) {
+    // Extract the variable name
+    const match = macro.match(/\{\{(?:getvar|setvar|addvar)::([^}]+?)(?:\}\}|::)/);
+    if (!match) continue;
+    
+    const varName = match[1];
+    
+    // Check if the varName is an ORIGINAL key in the dictionary that should have been translated
+    if (dictionary[varName] && dictionary[varName] !== varName) {
+      errors.push(`Macro ${macro} uses original key "${varName}" instead of translated "${dictionary[varName]}"`);
+    }
+  }
+  
+  return { valid: errors.length === 0, errors };
+}
+
+/**
+ * Final check for CJK residuals in pure code fields.
+ */
+export function checkCodeFieldForCjk(
+  translated: string,
+  fieldType?: string
+): { valid: boolean; residual?: string } {
+  if (fieldType !== 'json_patch' && fieldType !== 'initvar' && fieldType !== 'controller') {
+    return { valid: true };
+  }
+  
+  // Find Chinese characters
+  const match = translated.match(/[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/);
+  if (match) {
+    const start = Math.max(0, match.index! - 10);
+    const end = Math.min(translated.length, match.index! + 10);
+    return { valid: false, residual: translated.slice(start, end) };
+  }
+  
+  return { valid: true };
 }
 
 /**

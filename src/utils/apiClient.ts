@@ -415,6 +415,78 @@ ${fragmentList}${mvuBlock}`;
 }
 
 /* ─── Chunk long text (CJK-aware / Unlimited Context) ─── */
+/**
+ * Check if a candidate split position is "safe" — i.e., not inside a template literal,
+ * EJS block, regex pattern, or unbalanced JSON structure.
+ * Returns true if it is safe to split at `pos`.
+ */
+function isSafeBoundary(text: string, pos: number): boolean {
+  const before = text.slice(0, pos);
+
+  // 1. Backtick balance — splitting inside `template ${expr}` breaks JS
+  const backtickCount = (before.match(/(?<!\\)`/g) || []).length;
+  if (backtickCount % 2 !== 0) return false;
+
+  // 2. EJS tag balance — splitting inside <% ... %> breaks templates
+  const ejsOpens = (before.match(/<%/g) || []).length;
+  const ejsCloses = (before.match(/%>/g) || []).length;
+  if (ejsOpens > ejsCloses) return false;
+
+  // 3. Triple-backtick code fence balance
+  const codeBlockMarkers = (before.match(/```/g) || []).length;
+  if (codeBlockMarkers % 2 !== 0) return false;
+
+  // 4. JSON brace balance — avoid splitting inside { ... } objects
+  //    Only check last 2000 chars for performance
+  const recentSlice = before.slice(-2000);
+  let braceDepth = 0;
+  for (const ch of recentSlice) {
+    if (ch === '{') braceDepth++;
+    else if (ch === '}') braceDepth--;
+  }
+  if (braceDepth > 2) return false; // deep nesting = probably inside JSON
+
+  return true;
+}
+
+/**
+ * Find the best safe boundary position near `targetPos` within `text`.
+ * Searches backward from targetPos looking for a split point that passes isSafeBoundary().
+ * Returns the best position, or targetPos if no safe boundary found.
+ */
+function findSafeBoundary(text: string, targetPos: number, minPos: number): number {
+  // Try double newline boundaries first (most natural)
+  const priorities = ['\n\n', '\n', '. ', '。', '；', ' '];
+  
+  for (const sep of priorities) {
+    let searchFrom = targetPos;
+    while (searchFrom > minPos) {
+      const idx = text.lastIndexOf(sep, searchFrom);
+      if (idx <= minPos) break;
+      
+      const splitAt = idx + sep.length;
+      if (isSafeBoundary(text, splitAt)) {
+        return splitAt;
+      }
+      searchFrom = idx - 1;
+    }
+  }
+
+  // Fallback: try any position near targetPos that is safe
+  for (let pos = targetPos; pos > minPos; pos -= 50) {
+    if (isSafeBoundary(text, pos)) {
+      // Find nearest newline or space
+      const nl = text.lastIndexOf('\n', pos);
+      if (nl > minPos && isSafeBoundary(text, nl + 1)) return nl + 1;
+      const sp = text.lastIndexOf(' ', pos);
+      if (sp > minPos && isSafeBoundary(text, sp + 1)) return sp + 1;
+      return pos;
+    }
+  }
+
+  return targetPos; // give up, use original position
+}
+
 export function chunkText(text: string, maxChars?: number, maxTokens?: number): string[] {
   // Now using unlimited context approaches with high chunk thresholds
   if (maxChars === undefined) {
@@ -439,6 +511,7 @@ export function chunkText(text: string, maxChars?: number, maxTokens?: number): 
 
   const chunks: string[] = [];
   let remaining = text;
+  const minChunkRatio = 0.3; // Don't accept chunks smaller than 30% of maxChars
 
   while (remaining.length > 0) {
     if (remaining.length <= maxChars) {
@@ -446,40 +519,14 @@ export function chunkText(text: string, maxChars?: number, maxTokens?: number): 
       break;
     }
 
+    const minPos = Math.floor(maxChars * minChunkRatio);
     let splitIdx = -1;
     
-    // ─── JSON / EJS / Markdown safe splitting ───
-    // First try to find a safe boundary outside of code blocks/objects
-    // Because parsing partial JSON/EJS breaks things easily.
+    // ─── PRIMARY: Use findSafeBoundary for template-literal/EJS/regex safety ───
+    splitIdx = findSafeBoundary(remaining, maxChars, minPos);
     
-    // Attempt double newline boundary, ensuring not in the middle of an EJS or Markdown block
-    let searchIdx = maxChars;
-    while (searchIdx > maxChars * 0.3) {
-      splitIdx = remaining.lastIndexOf('\n\n', searchIdx);
-      if (splitIdx !== -1) {
-        // Quick boundary check: if inside a backtick code block, try to jump out
-        const textBefore = remaining.slice(0, splitIdx);
-        const codeBlockMarkers = (textBefore.match(/```/g) || []).length;
-        // if inside backticks (odd number of ```), skip this split
-        if (codeBlockMarkers % 2 !== 0) {
-          searchIdx = remaining.lastIndexOf('```', splitIdx - 1);
-          continue;
-        }
-        
-        // if inside EJS block (more <% than %>), jump out
-        const ejsOpens = (textBefore.match(/<%/g) || []).length;
-        const ejsCloses = (textBefore.match(/%>/g) || []).length;
-        if (ejsOpens > ejsCloses) {
-          searchIdx = remaining.lastIndexOf('<%', splitIdx - 1);
-          continue;
-        }
-        break; // found safe split
-      }
-      break;
-    }
-
-    // ─── HTML-aware splitting ───
-    if (splitIdx < maxChars * 0.3 && isHtml) {
+    // ─── SECONDARY: HTML-aware splitting if primary didn't find good spot ───
+    if (splitIdx < minPos && isHtml) {
       if (hasTable) {
         const safeBlockEndRegex = /<\/(div|section|article|table|ul|ol|p|h[1-6])>\s*/gi;
         let bestHtmlSplit = -1;
@@ -487,52 +534,62 @@ export function chunkText(text: string, maxChars?: number, maxTokens?: number): 
         while ((m = safeBlockEndRegex.exec(remaining)) !== null) {
           const endPos = m.index + m[0].length;
           if (endPos > maxChars) break;
-          if (endPos > maxChars * 0.3) {
+          if (endPos > minPos) {
             const textBefore = remaining.slice(0, endPos);
             const tableOpens = (textBefore.match(/<table[\s>]/gi) || []).length;
             const tableCloses = (textBefore.match(/<\/table>/gi) || []).length;
             if (!(tableOpens > tableCloses) || m[1].toLowerCase() === 'table') {
-              bestHtmlSplit = endPos;
+              if (isSafeBoundary(remaining, endPos)) {
+                bestHtmlSplit = endPos;
+              }
             }
           }
         }
-        if (bestHtmlSplit > maxChars * 0.3) splitIdx = bestHtmlSplit;
+        if (bestHtmlSplit > minPos) splitIdx = bestHtmlSplit;
       } else {
         const htmlBlockEndRegex = /<\/(?:div|section|article|table|ul|ol|tr|li|p|h[1-6])>\s*/gi;
         let bestHtmlSplit = -1;
         let m;
         while ((m = htmlBlockEndRegex.exec(remaining)) !== null) {
           const endPos = m.index + m[0].length;
-          if (endPos <= maxChars && endPos > maxChars * 0.3) bestHtmlSplit = endPos;
+          if (endPos <= maxChars && endPos > minPos && isSafeBoundary(remaining, endPos)) {
+            bestHtmlSplit = endPos;
+          }
           if (endPos > maxChars) break;
         }
-        if (bestHtmlSplit > maxChars * 0.3) splitIdx = bestHtmlSplit;
+        if (bestHtmlSplit > minPos) splitIdx = bestHtmlSplit;
       }
     }
 
     // ─── Fallback splittings ───
-    if (splitIdx < maxChars * 0.3) splitIdx = remaining.lastIndexOf('\n', maxChars);
-    if (splitIdx < maxChars * 0.3) splitIdx = remaining.lastIndexOf(' ', maxChars);
+    if (splitIdx < minPos) {
+      const nl = remaining.lastIndexOf('\n', maxChars);
+      if (nl > minPos && isSafeBoundary(remaining, nl + 1)) splitIdx = nl + 1;
+    }
+    if (splitIdx < minPos) {
+      const sp = remaining.lastIndexOf(' ', maxChars);
+      if (sp > minPos) splitIdx = sp + 1;
+    }
     
     // ─── Code-safe fallback splitting for minified JS/HTML ───
-    if (splitIdx < maxChars * 0.3) {
+    if (splitIdx < minPos) {
       const maxSlice = remaining.slice(0, maxChars);
       const codeBoundaries = /[;}>](?=[^\w]|$)/g;
       let bestCodeSplit = -1;
       let m;
       while ((m = codeBoundaries.exec(maxSlice)) !== null) {
         const pos = m.index + 1;
-        if (pos <= maxChars && pos > maxChars * 0.3) {
+        if (pos <= maxChars && pos > minPos) {
           bestCodeSplit = pos;
         }
       }
-      if (bestCodeSplit > maxChars * 0.3) splitIdx = bestCodeSplit;
+      if (bestCodeSplit > minPos) splitIdx = bestCodeSplit;
     }
 
     // ─── Prose punctuation fallback ───
-    if (splitIdx < maxChars * 0.3) {
+    if (splitIdx < minPos) {
       const sentenceEnd = remaining.slice(0, maxChars).search(/[。！？；」』】）\n][^。！？；」』】）]*$/); 
-      splitIdx = sentenceEnd > maxChars * 0.3 ? sentenceEnd + 1 : maxChars;
+      splitIdx = sentenceEnd > minPos ? sentenceEnd + 1 : maxChars;
     }
 
     chunks.push(remaining.slice(0, splitIdx));
@@ -1286,6 +1343,50 @@ async function verifySeams(
 }
 
 /* ─── Main translate function with parallel chunks + seam verification ─── */
+// ─── Secret Masking Utilities ───
+interface SecretMaskMap {
+  [placeholder: string]: string;
+}
+
+function maskSecrets(text: string): { maskedText: string; map: SecretMaskMap } {
+  const map: SecretMaskMap = {};
+  let maskedText = text;
+  let counter = 0;
+
+  // Patterns to protect: Bearer tokens, API keys, passwords, generic tokens
+  const patterns = [
+    /(Bearer\s+)[A-Za-z0-9\-._~+/]+=*/g,
+    /([a-zA-Z0-9_]*key[a-zA-Z0-9_]*\s*[:=]\s*['"])([^'"]+)(['"])/gi,
+    /([a-zA-Z0-9_]*password[a-zA-Z0-9_]*\s*[:=]\s*['"])([^'"]+)(['"])/gi,
+    /([a-zA-Z0-9_]*token[a-zA-Z0-9_]*\s*[:=]\s*['"])([^'"]+)(['"])/gi,
+  ];
+
+  for (const pattern of patterns) {
+    maskedText = maskedText.replace(pattern, (match, p1, p2, p3) => {
+      // If it's the Bearer pattern, there is no p3
+      if (!p3) {
+        const placeholder = `__SECRET_TOKEN_${counter++}__`;
+        map[placeholder] = match.substring(p1.length);
+        return `${p1}${placeholder}`;
+      }
+      
+      const placeholder = `__SECRET_TOKEN_${counter++}__`;
+      map[placeholder] = p2;
+      return `${p1}${placeholder}${p3}`;
+    });
+  }
+
+  return { maskedText, map };
+}
+
+function unmaskSecrets(text: string, map: SecretMaskMap): string {
+  let unmaskedText = text;
+  for (const [placeholder, secret] of Object.entries(map)) {
+    unmaskedText = unmaskedText.replace(new RegExp(placeholder, 'g'), secret);
+  }
+  return unmaskedText;
+}
+
 export async function translateText(
   text: string,
   fieldName: string,
@@ -1307,8 +1408,11 @@ export async function translateText(
 ): Promise<string> {
   if (!text || text.trim() === '') return '';
 
+  // 1. Mask secrets (API keys, tokens, passwords) before translation
+  const { maskedText, map: secretMap } = maskSecrets(text);
+
   const isExpert = config.expertMode;
-  const chunks = chunkText(text, chunkSize && chunkSize > 0 ? chunkSize : undefined, config.maxTokens);
+  const chunks = chunkText(maskedText, chunkSize && chunkSize > 0 ? chunkSize : undefined, config.maxTokens);
 
   // ═══ SINGLE CHUNK — fast path (no parallelism needed) ═══
   if (chunks.length === 1) {
@@ -1321,7 +1425,9 @@ export async function translateText(
     const result = await translateChunk(
       chunks[0], 0, 1, fieldName, config, targetLang, sourceLang, system, user, signal
     );
-    const cleaned = cleanTranslationResponse(text, result, isExpert);
+    let cleaned = cleanTranslationResponse(maskedText, result, isExpert);
+    cleaned = unmaskSecrets(cleaned, secretMap); // Unmask before residual check
+    
     // RESIDUAL CJK CHECK: auto-retry if Chinese text remains
     return postTranslationResidualCheck(
       text, cleaned, fieldName, config, targetLang, sourceLang, signal, fieldType, mvuDictionary
@@ -1391,10 +1497,12 @@ export async function translateText(
   // For HTML content, join without separator to avoid injecting text nodes
   // that break <table>, <ul>, and other structural elements.
   // For plain text, use \n\n to maintain paragraph separation.
-  const isHtmlContent = /<[a-z][^>]*>/i.test(text) && /<\/[a-z]+>/i.test(text);
+  const isHtmlContent = /<[a-z][^>]*>/i.test(maskedText) && /<\/[a-z]+>/i.test(maskedText);
   const joiner = isHtmlContent ? '' : '\n\n';
   const rawResult = verifiedChunks.join(joiner);
-  const cleaned = cleanTranslationResponse(text, rawResult, isExpert);
+  let cleaned = cleanTranslationResponse(maskedText, rawResult, isExpert);
+  cleaned = unmaskSecrets(cleaned, secretMap); // Unmask before residual check
+  
   // RESIDUAL CJK CHECK: auto-retry if Chinese text remains
   return postTranslationResidualCheck(
     text, cleaned, fieldName, config, targetLang, sourceLang, signal, fieldType, mvuDictionary

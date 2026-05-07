@@ -473,17 +473,13 @@ export function useTranslation() {
           const validation = validateMvuVariables(batchFields[j].original, translated, mvuDict, fieldType);
 
           if (validation.unreplaced.length > 0) {
-            const isCodeField = isMvuCriticalField(batchFields[j]) ||
-              batchFields[j].group === 'tavern_helper' || batchFields[j].group === 'regex';
-
-            if (isCodeField) {
-              // Auto-fix unreplaced variables in code fields
-              const fixed = autoFixMvuVariables(translated, mvuDict, validation.unreplaced);
-              if (fixed !== translated) {
-                translated = fixed;
-                autoFixCount++;
-                store.addLog('info', `🔧 Auto-fixed ${validation.unreplaced.length} vars in ${batchFields[j].label}`);
-              }
+            // Tự động sửa (auto-fix) biến MVU cho TẤT CẢ các trường (kể cả lorebook, description, v.v.)
+            // để đảm bảo tính nhất quán của biến trên toàn bộ thẻ theo yêu cầu người dùng.
+            const fixed = autoFixMvuVariables(translated, mvuDict, validation.unreplaced);
+            if (fixed !== translated) {
+              translated = fixed;
+              autoFixCount++;
+              store.addLog('info', `🔧 Auto-fixed ${validation.unreplaced.length} vars in ${batchFields[j].label}`);
             } else {
               store.addLog('warning', `⚠️ ${validation.unreplaced.length} unreplaced vars in ${batchFields[j].label}: ${validation.unreplaced.slice(0, 3).join(', ')}`);
             }

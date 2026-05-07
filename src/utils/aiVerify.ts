@@ -837,6 +837,37 @@ export function verifyFields(
         }
       }
     }
+
+    // ─── 8. Template literal / backtick balance (B1 verification) ───
+    if (field.group === 'tavern_helper' || field.group === 'lorebook' || field.group === 'regex') {
+      const origBackticks = (orig.match(/(?<!\\)`/g) || []).length;
+      const transBackticks = (currentAutoFix.match(/(?<!\\)`/g) || []).length;
+      
+      if (origBackticks > 0 && origBackticks % 2 === 0 && transBackticks % 2 !== 0) {
+        // Odd backtick count in translation = broken template literal
+        issues.push({
+          id: crypto.randomUUID(), fieldPath: field.path,
+          severity: 'error', category: 'bracket_mismatch',
+          location: field.label,
+          description: `Template literal broken: original has ${origBackticks} backticks (balanced), translation has ${transBackticks} (unbalanced). This will cause a JS syntax error.`,
+          original: `Backticks: ${origBackticks}`,
+          current: `Backticks: ${transBackticks}`,
+          suggestion: 'Check translated text for missing or extra backtick (`) characters in template literals.',
+          autoFixable: false,
+        });
+      } else if (origBackticks > 0 && Math.abs(origBackticks - transBackticks) > 2) {
+        issues.push({
+          id: crypto.randomUUID(), fieldPath: field.path,
+          severity: 'warning', category: 'bracket_mismatch',
+          location: field.label,
+          description: `Backtick count changed significantly: ${origBackticks} → ${transBackticks}. Template literals may be damaged.`,
+          original: `Backticks: ${origBackticks}`,
+          current: `Backticks: ${transBackticks}`,
+          suggestion: 'Verify template literal expressions are intact.',
+          autoFixable: false,
+        });
+      }
+    }
   }
 
   return issues;

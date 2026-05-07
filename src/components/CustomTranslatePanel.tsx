@@ -3,6 +3,8 @@ import { useStore } from '../store';
 import { translateText } from '../utils/apiClient';
 import type { TranslationFieldType } from '../utils/masterPrompt';
 import { applyMvuToText } from '../utils/mvuSync';
+import { buildEffectivePrompt } from '../utils/promptBuilder';
+import type { TranslationField } from '../types/card';
 import { Code2, Play, Copy, CheckCircle2, Loader2, Trash2 } from 'lucide-react';
 
 /**
@@ -38,27 +40,28 @@ export default function CustomTranslatePanel() {
     abortRef.current = new AbortController();
 
     try {
-      // Build MVU dict injection prompt
-      let effectivePrompt = translationConfig.translationPrompt || '';
-      const mvuDict = translationConfig.enableMvuSync
-        ? translationConfig.mvuDictionary
-        : {};
-      const mvuEntries = Object.entries(mvuDict).filter(([k, v]) => k && v && k !== v);
-
-      if (mvuEntries.length > 0) {
-        const dictList = mvuEntries.map(([k, v]) => `  "${k}" → "${v}"`).join('\n');
-        effectivePrompt += `\n\nCRITICAL — MVU/Zod VARIABLE REPLACEMENT DICTIONARY:
-Replace the following variable names with their translated equivalents EVERYWHERE they appear:
-${dictList}
-- Replace ALL occurrences consistently. Do NOT invent your own translations.`;
-      }
-
-      if (strictPreservation) {
-        effectivePrompt += `\n\n[STRICT CODE PRESERVATION MODE ENABLED]
-- DO NOT translate any JSON keys, JSON Patch paths, macro structures, or EJS/HTML tags.
-- Ensure bracket matching is 100% accurate.
-- If unsure about translating a specific code segment, RETURN THE ORIGINAL CODE UNCHANGED.`;
-      }
+      // ═══ Centralized prompt building (single source of truth) ═══
+      const syntheticField: TranslationField = {
+        path: 'custom_code',
+        label: 'Custom Code',
+        group: 'tavern_helper',
+        original: input,
+        translated: '',
+        status: 'translating',
+        retries: 0,
+      };
+      const promptResult = buildEffectivePrompt({
+        translationPrompt: translationConfig.translationPrompt,
+        enableJailbreak: translationConfig.enableJailbreak,
+        enableObjectiveMode: translationConfig.enableObjectiveMode,
+        enableMvuSync: translationConfig.enableMvuSync,
+        enableRAGContext: false, // No cross-field RAG for custom panel
+        field: syntheticField,
+        mvuDictionary: translationConfig.mvuDictionary,
+        glossary: translationConfig.glossary,
+        strictCodePreservation: strictPreservation,
+        expertMode: proxy.expertMode,
+      });
 
       const result = await translateText(
         input,
@@ -66,11 +69,11 @@ ${dictList}
         proxy,
         translationConfig.targetLanguage,
         translationConfig.sourceLanguage,
-        effectivePrompt,
+        promptResult.effectivePrompt,
         undefined, // customSchema
         abortRef.current.signal,
         undefined, // contextHint
-        translationConfig.glossary,
+        promptResult.glossaryForApi,
         undefined, // previousTranslation
         fieldType,
         translationConfig.enableMvuSync ? translationConfig.mvuDictionary : undefined,
@@ -79,7 +82,9 @@ ${dictList}
 
       // Hậu xử lý (Post-process) bắt buộc bằng regex để đảm bảo biến MVU được đồng bộ 100%
       // ngay cả khi AI bỏ sót hoặc dịch sai từ điển.
-      if (translationConfig.enableMvuSync && mvuEntries.length > 0) {
+      const mvuDict = translationConfig.enableMvuSync ? translationConfig.mvuDictionary : {};
+      const hasMvuEntries = Object.entries(mvuDict).some(([k, v]) => k && v && k !== v);
+      if (translationConfig.enableMvuSync && hasMvuEntries) {
         // Tuỳ thuộc vào fieldType mà quyết định mức độ aggressive:
         // html_dashboard, code_script thường là dạng code => aggressive = true
         // narrative, mixed => aggressive = false (chỉ áp dụng vào các cấu trúc macro)

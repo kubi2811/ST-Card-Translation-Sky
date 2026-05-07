@@ -2,46 +2,32 @@ import type { CharacterCard, ProxySettings } from '../types/card';
 import { extractPatchFieldNames } from './jsonPatchValidator';
 
 /**
- * Áp dụng Chiến Lược B: Đồng bộ hóa tên biến MVU/Zod trên toàn bộ thẻ.
- * Thay thế một tập hợp các khóa (keys) thành các khóa đã dịch (translatedKeys) 
- * trong các thành phần trọng yếu của thẻ:
- * 1. Zod Schema Script (TavernHelper)
- * 2. Regex Scripts (HTML Dashboard)
- * 3. Lorebook Entries (Đặc biệt là [initvar] và [mvu_update])
+ * Áp dụng logic thay thế biến MVU/Zod vào một đoạn văn bản (text).
+ * @param text Văn bản cần xử lý
+ * @param variableDictionary Từ điển biến { gốc: dịch }
+ * @param aggressive true: thay thế mọi nơi (code), false: chỉ thay thế trong macro/cấu trúc (văn bản)
  */
-export function syncMvuVariables(
-  card: CharacterCard,
+export function applyMvuToText(
+  text: string,
   variableDictionary: Record<string, string>,
-  enabledGroups?: string[]
-): CharacterCard {
-  // Deep clone thẻ để tránh tham chiếu
-  const result = JSON.parse(JSON.stringify(card)) as CharacterCard;
+  aggressive: boolean = true
+): string {
+  if (!text || typeof text !== 'string') return text;
   
-  if (!result.data) return result;
-
-  // Lấy danh sách các cặp [gốc, dịch], sắp xếp theo độ dài giảm dần
-  // → Tránh replace nhầm khi key ngắn là substring của key dài
-  // VD: "好感" và "好感度" → replace "好感度" trước
   const entries = Object.entries(variableDictionary)
     .filter(([k, v]) => k && v && k !== v)
     .sort((a, b) => b[0].length - a[0].length);
-  if (entries.length === 0) return result;
-
-  // Escape regex special characters
+  if (entries.length === 0) return text;
+  
   const escapeRegExp = (str: string) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-  // ─── replaceInCode: Replace biến trong ngữ cảnh code (aggressive) ───
-  // Dùng cho: TavernHelper scripts, regex HTML, lorebook entries  
-  // Thay thế MỌI NƠI vì các field này chứa code/data
-  const replaceInCode = (text: string): string => {
-    if (!text || typeof text !== 'string') return text;
-    let newText = text;
-    for (const [original, translated] of entries) {
-      const escaped = escapeRegExp(original);
-      
+  
+  let newText = text;
+  for (const [original, translated] of entries) {
+    const escaped = escapeRegExp(original);
+    
+    if (aggressive) {
       const isAsciiOnly = /^[a-zA-Z0-9_]+$/.test(original);
       let regex: RegExp;
-      
       if (isAsciiOnly) {
         // ASCII keys: sử dụng word boundary để tránh replace nhầm
         regex = new RegExp(`\\b${escaped}\\b`, 'g');
@@ -49,22 +35,8 @@ export function syncMvuVariables(
         // Unicode keys (Trung/Nhật/Hàn): replace trực tiếp
         regex = new RegExp(escaped, 'g');
       }
-      
       newText = newText.replace(regex, translated);
-    }
-    return newText;
-  };
-
-  // ─── replaceInStructured: Replace biến CHỈ trong ngữ cảnh có cấu trúc ───
-  // Dùng cho: narrative fields (system_prompt, description, v.v.)
-  // Chỉ replace khi biến xuất hiện trong context rõ ràng:
-  //   {{getvar::KEY}}, {{setvar::KEY::}}, data-var="KEY", KEY: value (YAML), z.object fields
-  const replaceInStructured = (text: string): string => {
-    if (!text || typeof text !== 'string') return text;
-    let newText = text;
-    for (const [original, translated] of entries) {
-      const escaped = escapeRegExp(original);
-      
+    } else {
       // 1. {{getvar::KEY}} / {{setvar::KEY::}} / {{addvar::KEY}}
       newText = newText.replace(
         new RegExp(`(\\{\\{(?:getvar|setvar|addvar|getglobalvar|setglobalvar|addglobalvar)::)${escaped}`, 'g'),
@@ -83,8 +55,35 @@ export function syncMvuVariables(
         `$1$2${translated}$3$4`
       );
     }
-    return newText;
-  };
+  }
+  
+  return newText;
+}
+
+/**
+ * Áp dụng Chiến Lược B: Đồng bộ hóa tên biến MVU/Zod trên toàn bộ thẻ.
+ * Thay thế một tập hợp các khóa (keys) thành các khóa đã dịch (translatedKeys) 
+ * trong các thành phần trọng yếu của thẻ:
+ * 1. Zod Schema Script (TavernHelper)
+ * 2. Regex Scripts (HTML Dashboard)
+ * 3. Lorebook Entries (Đặc biệt là [initvar] và [mvu_update])
+ */
+export function syncMvuVariables(
+  card: CharacterCard,
+  variableDictionary: Record<string, string>,
+  enabledGroups?: string[]
+): CharacterCard {
+  // Deep clone thẻ để tránh tham chiếu
+  const result = JSON.parse(JSON.stringify(card)) as CharacterCard;
+  
+  if (!result.data) return result;
+
+  // Lấy danh sách các cặp [gốc, dịch], sắp xếp theo độ dài giảm dần
+  const entries = Object.entries(variableDictionary).filter(([k, v]) => k && v && k !== v);
+  if (entries.length === 0) return result;
+
+  const replaceInCode = (text: string) => applyMvuToText(text, variableDictionary, true);
+  const replaceInStructured = (text: string) => applyMvuToText(text, variableDictionary, false);
 
   // 1. Xử lý TavernHelper Scripts (Zod Schema) — code context
   if (!enabledGroups || enabledGroups.includes('tavern_helper')) {

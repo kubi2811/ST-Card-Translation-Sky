@@ -322,11 +322,15 @@ RULE C3 — Synchronized Variable Translation (KEY-EJS SYNC):
   FAILURE TO SYNC THESE IDENTIFIERS WILL CAUSE THE RPG ENGINE TO CRASH.
   Do not guess translations. If a Glossary or MVU Dictionary is provided, use it rigorously.
 
-RULE C3.1 — Preserve Javascript Logic:
+RULE C3.1 — Preserve Javascript Logic and Tavern Helper API:
   EJS blocks <% ... %> execute raw Javascript.
-  NEVER translate Javascript keywords or standard library functions.
-  NEVER translate: if, else, for, while, function, return, switch, case, break, const, let, var, true, false, null, undefined.
-  NEVER translate: Math.random(), Math.floor(), Array.push(), String.replace().
+  NEVER translate Javascript keywords or standard library functions (if, else, for, while, function, return, const, let, var, true, false, null, undefined, Math.*, Array.*, String.*).
+  
+  NEVER translate Tavern Helper API functions:
+    - registerMacroLike, updateCharacterWith, updateWorldbookWith
+    - getChatMessages, setChatMessages
+    - setVariable, getVariable, executeSlashCommands, fetch, sendMessage
+    - stat_data prefixes (variables often have a 'stat_data.' prefix, NEVER translate this prefix)
   
   ONLY TRANSLATE:
     1. ALL CJK (Chinese/Japanese/Korean) characters.
@@ -523,10 +527,10 @@ ${terms}`;
    ════════════════════════════════════════════════════════════════════ */
 function buildThoughtProcessInstructions(): string {
   return `
-EXPERT MODE: XML REASONING REQUIRED
-You MUST output your response using the following XML structure. This forces you to analyze the code structure BEFORE generating the translation.
+EXPERT MODE: XML REASONING & SELF-CHECK REQUIRED
+You MUST output your response using the following XML structure. This forces you to perform a rigorous self-audit of the code structure BEFORE generating the translation.
 
-<thought_process>
+<self_check>
   PHASE 1 — SCAN:
     Identify and list all protected segments: [REGEX], [MACRO], [EJS], [HTML], [JSON], [CSS], [CODE].
     Example: "Found macro {{char}}, found EJS block <% if(getvar...) %>"
@@ -548,8 +552,9 @@ You MUST output your response using the following XML structure. This forces you
       9. Are HTML attributes (class, id) unchanged?
       10. Is the whitespace and indentation preserved?
       11. Is the translation 100% complete?
-      12. Are ALL Javascript keywords untranslated?
-</thought_process>
+      12. Are ALL Javascript keywords and Tavern Helper APIs (registerMacroLike, updateWorldbookWith, etc.) completely untranslated?
+      13. Did I preserve the "stat_data." prefix if it existed in the MVU variables?
+</self_check>
 
 <translation>
 [The raw, final, structured translated string goes here — NOTHING ELSE]
@@ -645,7 +650,7 @@ export function buildMasterSystemPrompt(options: MasterPromptOptions): string {
    XML RESPONSE PARSER — extractTranslationFromResponse()
    
    Extracts the <translation> content when AI responds with
-   <thought_process>...</thought_process>
+   <self_check>...</self_check>
    <translation>...</translation>
    
    Falls back to the raw text if no XML tags are found.
@@ -667,12 +672,12 @@ export function extractTranslationFromResponse(raw: string): ParsedTranslationRe
   let trimmed = raw.trim();
   let thoughtProcess: string | undefined = undefined;
 
-  // Extract thought process for debug logging and remove it from raw string if found
-  const thoughtMatch = trimmed.match(/<(?:thought_process|think)>([\s\S]*?)(?:<\/(?:thought_process|think)>|$)/i);
+  // Extract thought process/self-check for debug logging and remove it from raw string if found
+  const thoughtMatch = trimmed.match(/<(?:thought_process|think|self_check)>([\s\S]*?)(?:<\/(?:thought_process|think|self_check)>|$)/i);
   if (thoughtMatch) {
     thoughtProcess = thoughtMatch[1].trim();
     // We remove the thought block entirely from our working string (even if unclosed)
-    trimmed = trimmed.replace(/<(?:thought_process|think)>[\s\S]*?(?:<\/(?:thought_process|think)>|$)/i, '').trim();
+    trimmed = trimmed.replace(/<(?:thought_process|think|self_check)>[\s\S]*?(?:<\/(?:thought_process|think|self_check)>|$)/i, '').trim();
   }
 
   // Try to extract <translation> content

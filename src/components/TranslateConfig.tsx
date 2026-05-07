@@ -169,6 +169,30 @@ export default function TranslateConfig() {
           <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>{t.skipAlreadyTranslated}</span>
         </label>
 
+        {/* Bật Jailbreak (Anti-Censorship) */}
+        <label className="checkbox-wrapper" style={{ marginTop: '-4px' }}>
+          <input
+            type="checkbox"
+            checked={translationConfig.enableJailbreak || false}
+            onChange={(e) => setTranslationConfig({ enableJailbreak: e.target.checked })}
+          />
+          <span style={{ color: 'var(--accent-danger)', fontSize: '0.8rem', fontWeight: 500 }}>
+            {locale === 'vi' ? 'Bật Jailbreak (Phá màng lọc đạo đức, dùng cho card NSFW)' : 'Enable Jailbreak (Bypass safety filters for NSFW)'}
+          </span>
+        </label>
+
+        {/* Chế độ Bạch miêu (Tuyệt đối không độ) */}
+        <label className="checkbox-wrapper" style={{ marginTop: '-4px' }}>
+          <input
+            type="checkbox"
+            checked={translationConfig.enableObjectiveMode !== false}
+            onChange={(e) => setTranslationConfig({ enableObjectiveMode: e.target.checked })}
+          />
+          <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
+            {locale === 'vi' ? 'Dịch Bạch Miêu (Sát nghĩa, không thêm thắt văn phong)' : 'Objective Mode (Literal translation, no embellishments)'}
+          </span>
+        </label>
+
         {/* ═══ Glossary / Terminology Database ═══ */}
         <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '10px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>

@@ -273,12 +273,16 @@ function countCJK(text: string): number {
   return (text.match(/[\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f\uff00-\uffef]/g) || []).length;
 }
 
-/** Count HTML open/close tags */
-function countHtmlTags(text: string): { open: number; close: number; selfClose: number } {
-  const open = (text.match(/<[a-z][^/>]*>/gi) || []).length;
-  const close = (text.match(/<\/[a-z][^>]*>/gi) || []).length;
-  const selfClose = (text.match(/<[a-z][^>]*\/>/gi) || []).length;
-  return { open, close, selfClose };
+/** Count HTML and EJS tags */
+function countHtmlTags(text: string): { open: number; close: number; selfClose: number; ejs: number } {
+  // Strip EJS tags first so they aren't counted as HTML tags by accident
+  const ejsCount = (text.match(/<%[=-]?[\s\S]*?%>/g) || []).length;
+  const noEjs = text.replace(/<%[=-]?[\s\S]*?%>/g, '');
+  
+  const open = (noEjs.match(/<[a-zA-Z][^/>]*>/gi) || []).length;
+  const close = (noEjs.match(/<\/[a-zA-Z][^>]*>/gi) || []).length;
+  const selfClose = (noEjs.match(/<[a-zA-Z][^>]*\/>/gi) || []).length;
+  return { open, close, selfClose, ejs: ejsCount };
 }
 
 /** Count bracket pairs */
@@ -287,6 +291,7 @@ function countBrackets(text: string): Record<string, [number, number]> {
     '()': [(text.match(/\(/g) || []).length, (text.match(/\)/g) || []).length],
     '{}': [(text.match(/\{/g) || []).length, (text.match(/\}/g) || []).length],
     '[]': [(text.match(/\[/g) || []).length, (text.match(/\]/g) || []).length],
+    '<% %>': [(text.match(/<%/g) || []).length, (text.match(/%>/g) || []).length],
   };
 }
 
@@ -437,10 +442,25 @@ export function verifyFields(
       }
     }
 
-    // ─── 2. HTML tag balance (for regex/tavern_helper fields) ───
-    if ((field.group === 'regex' || field.group === 'tavern_helper') && /<[a-z]/i.test(orig)) {
+    // ─── 2. HTML tag & EJS balance (for regex/tavern_helper fields) ───
+    if ((field.group === 'regex' || field.group === 'tavern_helper' || field.group === 'lorebook') && (/<[a-zA-Z]/i.test(orig) || /<%/.test(orig))) {
       const origTags = countHtmlTags(orig);
       const transTags = countHtmlTags(trans);
+      
+      // EJS tags mismatch is fatal for Tavern Helper
+      if (origTags.ejs !== transTags.ejs) {
+        issues.push({
+          id: crypto.randomUUID(), fieldPath: field.path,
+          severity: 'error', category: 'html_broken',
+          location: field.label,
+          description: `EJS tag mismatch: original has ${origTags.ejs} EJS blocks, translation has ${transTags.ejs}. This breaks Javascript execution.`,
+          original: `EJS blocks: ${origTags.ejs}`,
+          current: `EJS blocks: ${transTags.ejs}`,
+          suggestion: 'Check translated text for broken <% or %> tags.',
+          autoFixable: false,
+        });
+      }
+
       const origNet = origTags.open - origTags.close;
       const transNet = transTags.open - transTags.close;
       if (Math.abs(origNet - transNet) > 1 || Math.abs(origTags.open - transTags.open) > 2) {
@@ -577,25 +597,78 @@ export function verifyFields(
         }
       }
 
-      // Compute auto-fix for missing macros (3-phase)
+      // Compute auto-fix for missing macros
       let fixedTrans: string | null = null;
       if (missingMacros.length > 0) {
         fixedTrans = currentAutoFix;
 
+        // Phase 0: Semantic recovery for common system macros and MVU dictionary
+        const commonMistakes: Record<string, string[]> = {
+          '{{char}}': ['{{nhân vật}}', '{{character}}', '{{nhan vat}}', '{{bot}}'],
+          '{{user}}': ['{{người dùng}}', '{{người chơi}}', '{{player}}'],
+          '{{original}}': ['{{bản gốc}}', '{{gốc}}']
+        };
+
+        let remainingMissing = [...missingMacros];
+        let remainingExtra = [...extraMacros];
+
+        for (const missing of [...remainingMissing]) {
+          // 1. Try common mistakes
+          let recovered = false;
+          if (commonMistakes[missing]) {
+            for (const mistake of commonMistakes[missing]) {
+              if (fixedTrans.includes(mistake)) {
+                fixedTrans = fixedTrans.replace(mistake, missing);
+                remainingExtra = remainingExtra.filter(e => e !== mistake);
+                remainingMissing = remainingMissing.filter(m => m !== missing);
+                recovered = true;
+                break;
+              }
+            }
+          }
+          if (recovered) continue;
+
+          // 2. Try MVU reverse lookup if it's a getvar/setvar macro
+          const varMatch = missing.match(/\{\{(getvar|setvar|addvar|getglobalvar|setglobalvar|addglobalvar)::([^:}]+)/);
+          if (varMatch) {
+            const macroType = varMatch[1];
+            const originalVar = varMatch[2].trim();
+            // What should it have been translated to?
+            const expectedMapped = mvuDictionary[originalVar] || Object.keys(mvuDictionary).find(k => mvuDictionary[k] === originalVar);
+            
+            // Did the AI mistakenly translate it to something else? We look at extraMacros for the same macroType
+            for (const extra of remainingExtra) {
+              const extraMatch = extra.match(new RegExp(`\\{\\{${macroType}::([^:}]+)`));
+              if (extraMatch) {
+                // If the extra macro isn't a known MVU variable, the AI probably hallucinated its translation
+                const extraVar = extraMatch[1].trim();
+                const isKnown = mvuDictionary[extraVar] || Object.values(mvuDictionary).includes(extraVar);
+                if (!isKnown) {
+                  fixedTrans = fixedTrans.replace(extra, missing);
+                  remainingExtra = remainingExtra.filter(e => e !== extra);
+                  remainingMissing = remainingMissing.filter(m => m !== missing);
+                  recovered = true;
+                  break;
+                }
+              }
+            }
+          }
+        }
+
         // Phase 1: Replace extra (translated) macros with missing (original) macros
-        if (extraMacros.length > 0) {
+        if (remainingExtra.length > 0) {
           if (origMacros.length === transMacros.length) {
             for (let i = 0; i < origMacros.length; i++) {
               const om = origMacros[i], tm = transMacros[i];
-              if (om !== tm && !origSet.has(tm)) {
+              if (om !== tm && !origSet.has(tm) && remainingExtra.includes(tm)) {
                 fixedTrans = fixedTrans.replace(tm, om);
               }
             }
           } else {
             const sortByPos = (arr: string[], text: string) =>
               [...arr].sort((a, b) => text.indexOf(a) - text.indexOf(b));
-            const sortedMissing = sortByPos(missingMacros, orig);
-            const sortedExtra = sortByPos(extraMacros, currentAutoFix);
+            const sortedMissing = sortByPos(remainingMissing, orig);
+            const sortedExtra = sortByPos(remainingExtra, currentAutoFix);
             const n = Math.min(sortedMissing.length, sortedExtra.length);
             for (let i = 0; i < n; i++) {
               fixedTrans = fixedTrans!.replace(sortedExtra[i], sortedMissing[i]);
@@ -604,7 +677,7 @@ export function verifyFields(
         }
 
         // Phase 2: Find bare macro content (braces stripped) and re-wrap with {{}}
-        const stillMissing2 = missingMacros.filter(m => !fixedTrans!.includes(m));
+        const stillMissing2 = remainingMissing.filter(m => !fixedTrans!.includes(m));
         for (const m of stillMissing2) {
           const bare = m.slice(2, -2); // strip {{ and }}
           if (bare && fixedTrans!.includes(bare) && !fixedTrans!.includes(`{{${bare}}}`)) {
@@ -613,7 +686,7 @@ export function verifyFields(
         }
 
         // Phase 3: Insert completely missing macros at approximate position
-        const stillMissing3 = missingMacros.filter(m => !fixedTrans!.includes(m));
+        const stillMissing3 = stillMissing2.filter(m => !fixedTrans!.includes(m));
         for (const m of stillMissing3) {
           const posInOrig = orig.indexOf(m);
           if (posInOrig === -1) continue;

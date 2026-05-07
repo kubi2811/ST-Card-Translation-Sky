@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useStore } from '../store';
 import { translateText } from '../utils/apiClient';
 import type { TranslationFieldType } from '../utils/masterPrompt';
+import { applyMvuToText } from '../utils/mvuSync';
 import { Code2, Play, Copy, CheckCircle2, Loader2, Trash2 } from 'lucide-react';
 
 /**
@@ -18,6 +19,7 @@ export default function CustomTranslatePanel() {
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState('');
   const [fieldType, setFieldType] = useState<TranslationFieldType>('mixed');
+  const [strictPreservation, setStrictPreservation] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -51,6 +53,13 @@ ${dictList}
 - Replace ALL occurrences consistently. Do NOT invent your own translations.`;
       }
 
+      if (strictPreservation) {
+        effectivePrompt += `\n\n[STRICT CODE PRESERVATION MODE ENABLED]
+- DO NOT translate any JSON keys, JSON Patch paths, macro structures, or EJS/HTML tags.
+- Ensure bracket matching is 100% accurate.
+- If unsure about translating a specific code segment, RETURN THE ORIGINAL CODE UNCHANGED.`;
+      }
+
       const result = await translateText(
         input,
         'Custom Code',
@@ -66,8 +75,19 @@ ${dictList}
         fieldType,
         translationConfig.enableMvuSync ? translationConfig.mvuDictionary : undefined,
       );
+      let finalResult = result;
 
-      setOutput(result);
+      // Hậu xử lý (Post-process) bắt buộc bằng regex để đảm bảo biến MVU được đồng bộ 100%
+      // ngay cả khi AI bỏ sót hoặc dịch sai từ điển.
+      if (translationConfig.enableMvuSync && mvuEntries.length > 0) {
+        // Tuỳ thuộc vào fieldType mà quyết định mức độ aggressive:
+        // html_dashboard, code_script thường là dạng code => aggressive = true
+        // narrative, mixed => aggressive = false (chỉ áp dụng vào các cấu trúc macro)
+        const isAggressive = ['html_dashboard', 'code_script', 'mixed'].includes(fieldType);
+        finalResult = applyMvuToText(finalResult, translationConfig.mvuDictionary, isAggressive);
+      }
+
+      setOutput(finalResult);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg !== 'Cancelled') {
@@ -197,6 +217,16 @@ ${dictList}
               </button>
             ))}
           </div>
+
+          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.75rem', color: 'var(--text-secondary)', cursor: 'pointer', marginLeft: 'auto' }}>
+            <input 
+              type="checkbox" 
+              checked={strictPreservation} 
+              onChange={e => setStrictPreservation(e.target.checked)} 
+              style={{ accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
+            />
+            Strict Code Preservation
+          </label>
         </div>
 
         {/* Input */}

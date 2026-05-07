@@ -250,16 +250,18 @@ export function validateWithZodSchema(
  */
 export function validateJsonPatchIntegrity(
   translated: string,
-  schemas: DetectedZodSchema[]
-): { valid: boolean; errors: { path: string; reason: string }[] } {
+  schemas: DetectedZodSchema[],
+  dictionary?: Record<string, string>
+): { valid: boolean; errors: { path: string; reason: string }[]; autoFixable: boolean } {
   if (!translated || schemas.length === 0) {
-    return { valid: true, errors: [] };
+    return { valid: true, errors: [], autoFixable: false };
   }
 
   const patchArrays = extractJsonPatches(translated);
-  if (patchArrays.length === 0) return { valid: true, errors: [] };
+  if (patchArrays.length === 0) return { valid: true, errors: [], autoFixable: false };
 
   const allErrors: { path: string; reason: string }[] = [];
+  let isAutoFixable = false;
 
   for (const patches of patchArrays) {
     for (const schema of schemas) {
@@ -268,13 +270,28 @@ export function validateJsonPatchIntegrity(
         const runtimeSchema = buildRuntimeSchema(schema.fields);
         const result = validatePatchAgainstSchema(patches, runtimeSchema);
         for (const invalid of result.invalidOps) {
-          allErrors.push({ path: invalid.op.path, reason: invalid.reason });
+          const path = invalid.op.path;
+          let reason = invalid.reason;
+          
+          // Reverse check: did the AI translate the path?
+          if (dictionary) {
+            const topField = path.split('/').filter(Boolean)[0];
+            if (topField) {
+              const originalKey = Object.keys(dictionary).find(k => dictionary[k] === topField);
+              if (originalKey && schema.fields && schema.fields.some(f => f.name === originalKey)) {
+                reason = `Path "${path}" was translated. It should remain "${originalKey}" per Zod schema.`;
+                isAutoFixable = true;
+              }
+            }
+          }
+
+          allErrors.push({ path, reason });
         }
       } catch { /* skip */ }
     }
   }
 
-  return { valid: allErrors.length === 0, errors: allErrors };
+  return { valid: allErrors.length === 0, errors: allErrors, autoFixable: isAutoFixable };
 }
 
 /**
@@ -327,7 +344,7 @@ export function buildMvuZodReport(
     const patchErrors: { path: string; reason: string }[] = [];
 
     for (const field of patchFields) {
-      const result = validateJsonPatchIntegrity(field.translated, schemas);
+      const result = validateJsonPatchIntegrity(field.translated, schemas, dictionary);
       const patches = extractJsonPatches(field.translated);
       const opCount = patches.reduce((sum, p) => sum + p.length, 0);
       totalOps += opCount;

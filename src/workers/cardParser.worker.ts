@@ -256,7 +256,9 @@ function extractTranslatableFields(card: any, enabledGroups: string[]): any[] {
   function addField(path: string, label: string, group: string, text: unknown, entryType?: LorebookEntryType) {
     if (!enabledGroups.includes(group)) return;
     if (typeof text !== 'string' || text.trim() === '') return;
-    if (isCodeOnly(text)) return;
+    // B5 fix: comment fields are always human-readable — skip isCodeOnly check
+    const isCommentField = path.endsWith('.comment');
+    if (!isCommentField && isCodeOnly(text)) return;
     fields.push({ path, label, group, original: text, translated: '', status: 'pending', retries: 0, entryType });
   }
 

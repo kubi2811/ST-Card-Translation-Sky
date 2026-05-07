@@ -265,7 +265,7 @@ export function quickVerify(
 
 export interface FieldIssue extends VerifyIssue {
   fieldPath: string;
-  category: 'residual_source' | 'html_broken' | 'bracket_mismatch' | 'macro_damaged' | 'json_broken' | 'mvu_inconsistent' | 'length_anomaly' | 'empty_translation' | 'regex_broken';
+  category: 'residual_source' | 'html_broken' | 'bracket_mismatch' | 'macro_damaged' | 'json_broken' | 'mvu_inconsistent' | 'length_anomaly' | 'empty_translation' | 'regex_broken' | 'code_splice';
 }
 
 /** Count CJK characters in text */
@@ -844,17 +844,49 @@ export function verifyFields(
       const transBackticks = (currentAutoFix.match(/(?<!\\)`/g) || []).length;
       
       if (origBackticks > 0 && origBackticks % 2 === 0 && transBackticks % 2 !== 0) {
-        // Odd backtick count in translation = broken template literal
-        issues.push({
-          id: crypto.randomUUID(), fieldPath: field.path,
-          severity: 'error', category: 'bracket_mismatch',
-          location: field.label,
-          description: `Template literal broken: original has ${origBackticks} backticks (balanced), translation has ${transBackticks} (unbalanced). This will cause a JS syntax error.`,
-          original: `Backticks: ${origBackticks}`,
-          current: `Backticks: ${transBackticks}`,
-          suggestion: 'Check translated text for missing or extra backtick (`) characters in template literals.',
-          autoFixable: false,
-        });
+        // B1 auto-fix attempt: if exactly 1 backtick missing, try to restore it
+        if (origBackticks - transBackticks === 1) {
+          // Find template literal patterns in original and check corresponding positions in translation
+          const origPositions: number[] = [];
+          for (let bi = 0; bi < orig.length; bi++) {
+            if (orig[bi] === '`' && (bi === 0 || orig[bi - 1] !== '\\')) origPositions.push(bi);
+          }
+          const transPositions: number[] = [];
+          for (let bi = 0; bi < currentAutoFix.length; bi++) {
+            if (currentAutoFix[bi] === '`' && (bi === 0 || currentAutoFix[bi - 1] !== '\\')) transPositions.push(bi);
+          }
+          // Simple heuristic: if translation is shorter by 1 backtick, append one at the end of the last template literal context
+          if (transPositions.length > 0 && transPositions.length % 2 !== 0) {
+            // Find the nearest newline or end-of-line after the last backtick
+            const lastBacktickPos = transPositions[transPositions.length - 1];
+            const nextNewline = currentAutoFix.indexOf('\n', lastBacktickPos);
+            const insertPos = nextNewline > lastBacktickPos ? nextNewline : currentAutoFix.length;
+            currentAutoFix = currentAutoFix.slice(0, insertPos) + '`' + currentAutoFix.slice(insertPos);
+            issues.push({
+              id: crypto.randomUUID(), fieldPath: field.path,
+              severity: 'warning', category: 'bracket_mismatch',
+              location: field.label,
+              description: `Template literal auto-fixed: restored missing backtick (${origBackticks} → ${transBackticks} → ${origBackticks}).`,
+              original: `Backticks: ${origBackticks}`,
+              current: `Backticks: ${origBackticks} (fixed)`,
+              suggestion: 'Backtick was auto-restored. Verify template literal is correctly closed.',
+              autoFixable: true,
+              fixPath: field.path,
+              fixValue: currentAutoFix,
+            });
+          }
+        } else {
+          issues.push({
+            id: crypto.randomUUID(), fieldPath: field.path,
+            severity: 'error', category: 'bracket_mismatch',
+            location: field.label,
+            description: `Template literal broken: original has ${origBackticks} backticks (balanced), translation has ${transBackticks} (unbalanced). This will cause a JS syntax error.`,
+            original: `Backticks: ${origBackticks}`,
+            current: `Backticks: ${transBackticks}`,
+            suggestion: 'Check translated text for missing or extra backtick (`) characters in template literals.',
+            autoFixable: false,
+          });
+        }
       } else if (origBackticks > 0 && Math.abs(origBackticks - transBackticks) > 2) {
         issues.push({
           id: crypto.randomUUID(), fieldPath: field.path,
@@ -866,6 +898,93 @@ export function verifyFields(
           suggestion: 'Verify template literal expressions are intact.',
           autoFixable: false,
         });
+      }
+    }
+
+    // ─── 9. Code splice detection (B8 verification) ───
+    if (field.group === 'tavern_helper' || field.group === 'lorebook' || field.group === 'regex') {
+      // Check for unmatched function bodies
+      const funcKeywords = (currentAutoFix.match(/\bfunction\s*\w*\s*\(/g) || []).length;
+      const arrowFuncs = (currentAutoFix.match(/=>\s*\{/g) || []).length;
+      const totalFuncOpens = funcKeywords + arrowFuncs;
+      
+      if (totalFuncOpens > 0) {
+        let braceDepth = 0;
+        for (const ch of currentAutoFix) {
+          if (ch === '{') braceDepth++;
+          else if (ch === '}') braceDepth--;
+        }
+        if (braceDepth !== 0) {
+          issues.push({
+            id: crypto.randomUUID(), fieldPath: field.path,
+            severity: 'error', category: 'code_splice',
+            location: field.label,
+            description: `Code structure corrupted: ${totalFuncOpens} function(s) detected but brace depth is ${braceDepth} (should be 0). Translation may have broken a function body.`,
+            original: `Functions: ${totalFuncOpens}, expected braceDepth: 0`,
+            current: `braceDepth: ${braceDepth}`,
+            suggestion: 'The translation has mismatched curly braces { }. Check that function bodies are intact.',
+            autoFixable: false,
+          });
+        }
+      }
+
+      // Check for broken <script> or <style> tags
+      const scriptOpens = (currentAutoFix.match(/<script[\s>]/gi) || []).length;
+      const scriptCloses = (currentAutoFix.match(/<\/script>/gi) || []).length;
+      if (scriptOpens !== scriptCloses) {
+        issues.push({
+          id: crypto.randomUUID(), fieldPath: field.path,
+          severity: 'error', category: 'code_splice',
+          location: field.label,
+          description: `<script> tag mismatch: ${scriptOpens} opening vs ${scriptCloses} closing tags.`,
+          original: `<script>: ${scriptOpens} open, ${scriptCloses} close`,
+          current: 'Mismatched',
+          suggestion: 'The translation has broken <script> tags. Ensure all <script> tags are properly closed.',
+          autoFixable: false,
+        });
+      }
+    }
+
+    // ─── 10. EJS path sync verification (B6 verification) ───
+    if ((field.group === 'tavern_helper' || field.group === 'lorebook') && Object.keys(mvuDictionary).length > 0) {
+      // Extract getvar/setvar paths from translation
+      const ejsPathRegex = /(?:getvar|setvar)\s*\(\s*['"]([^'"]+)['"]/g;
+      let pathMatch;
+      while ((pathMatch = ejsPathRegex.exec(currentAutoFix)) !== null) {
+        const path = pathMatch[1];
+        // Check each segment of dotted path for untranslated CJK
+        const segments = path.split('.');
+        for (const seg of segments) {
+          if (/[\u4e00-\u9fff\u3400-\u4dbf]/.test(seg)) {
+            // This segment still has CJK — check if it's in the MVU dictionary
+            if (mvuDictionary[seg]) {
+              currentAutoFix = currentAutoFix.split(seg).join(mvuDictionary[seg]);
+              issues.push({
+                id: crypto.randomUUID(), fieldPath: field.path,
+                severity: 'warning', category: 'mvu_inconsistent',
+                location: field.label,
+                description: `EJS path segment "${seg}" in getvar/setvar still CJK. Auto-replaced with "${mvuDictionary[seg]}" from MVU dictionary.`,
+                original: seg,
+                current: mvuDictionary[seg],
+                suggestion: `Applied MVU dictionary: "${seg}" → "${mvuDictionary[seg]}"`,
+                autoFixable: true,
+                fixPath: field.path,
+                fixValue: currentAutoFix,
+              });
+            } else {
+              issues.push({
+                id: crypto.randomUUID(), fieldPath: field.path,
+                severity: 'warning', category: 'residual_source',
+                location: field.label,
+                description: `EJS path segment "${seg}" in getvar/setvar still contains CJK but no MVU dictionary entry found.`,
+                original: seg,
+                current: seg,
+                suggestion: `Add "${seg}" to the MVU dictionary and re-translate.`,
+                autoFixable: false,
+              });
+            }
+          }
+        }
       }
     }
   }
@@ -979,6 +1098,13 @@ const CATEGORY_FIX_HINTS: Record<string, string> = {
 - If the ORIGINAL regex had boundary slashes, the TRANSLATION must have exactly matching boundary slashes
 - DO NOT wrap the regex in quotes or markdown (no backticks)
 - Only translate the natural language (e.g. Chinese) text inside the regex pattern`,
+
+  code_splice: `CODE STRUCTURE FIX RULES:
+- Count ALL curly braces { } in the ORIGINAL — your output MUST have the EXACT same count
+- Do NOT break function bodies: every function() { must have its matching }
+- Do NOT break script/style blocks: every opening tag must have a matching closing tag
+- Preserve ALL arrow functions: () => { ... } must remain intact
+- If template literals (backticks) are broken, restore the missing backtick`,
 };
 
 /* ═══ Validate fix quality — multi-layer checks ═══ */

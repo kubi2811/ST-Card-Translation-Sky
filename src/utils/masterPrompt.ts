@@ -267,7 +267,23 @@ RULE C2 — JSON Key Translation Integrity:
   Example (Before):
     { "角色状态": "健康", "精神力": 100 }
   Example (After - CORRECT):
-    { "Trạng thái nhân vật": "Khỏe mạnh", "Tinh thần lực": 100 }`;
+    { "Trạng thái nhân vật": "Khỏe mạnh", "Tinh thần lực": 100 }
+
+RULE L3 — [initvar] Entries Are MANDATORY Translation Targets:
+  [initvar] blocks contain {{setvar::KEY::VALUE}} macros that initialize the card's state variables.
+  These entries are the SOURCE OF TRUTH for all variable names used throughout the card.
+  You MUST translate:
+    - The KEY part of macros: {{setvar::愤怒程度::5}} → {{setvar::Mức độ tức giận::5}}
+    - The VALUE part if it contains CJK text: {{setvar::性格::冷酷}} → {{setvar::Tính cách::Lạnh lùng}}
+    - YAML-like key:value lines: translate BOTH key AND value per MVU dictionary
+    - Any narrative text descriptions between macros
+  You MUST NOT skip any [initvar] content — untranslated init values WILL cause variable mismatch at runtime.
+  If an MVU Dictionary is provided, use it as the authoritative source for all variable name translations.
+  
+RULE L4 — Lorebook comment Field:
+  The 'comment' field of lorebook entries is a human-readable label.
+  It MUST be translated to the target language. Do NOT skip it even if it looks short or code-like.
+  Examples: "角色初始化" → "Khởi tạo nhân vật", "战斗系统规则" → "Quy tắc hệ thống chiến đấu".`;
 }
 
 /** JSON Patch (RFC 6902) translation rules */
@@ -362,7 +378,29 @@ RULE C3.1 — Preserve Javascript Logic and Tavern Helper API:
       <div class="happy-ui">Vui vẻ</div>
     <% } ngược lại { %>                     <-- FATAL ERROR
       <div class="sad-ui">Buồn bã</div>
-    <% } %>`;
+    <% } %>
+
+RULE E3 — EJS String Literal Synchronization Checklist:
+  When translating a field that contains BOTH JSON data AND EJS code, follow these steps IN ORDER:
+
+  1. SCAN: Find all getvar('X'), setvar('X', ...) calls in the field.
+  2. MAP: For each X, find its JSON key counterpart in the same field.
+  3. TRANSLATE: Use the MVU dictionary for the translated name. If no dictionary entry exists, translate consistently.
+  4. REPLACE: Apply the SAME translated name to BOTH the JSON key and the EJS call.
+  5. VERIFY: Re-read your output. Every getvar/setvar string must match a JSON key EXACTLY.
+
+  NESTED KEY RULE: For dotted paths like 'stat_data.NAME.FIELD':
+    - 'stat_data' is an ASCII prefix — NEVER translate it
+    - CJK name segments — translate per glossary/MVU dictionary
+    - CJK field segments — translate per MVU dictionary
+    - Reassemble with dots: 'stat_data.TRANSLATED_NAME.TRANSLATED_FIELD'
+    - This EXACT reassembled string must appear in ALL getvar/setvar calls referencing this variable.
+
+  CJK-IN-JS STRING LITERAL RULE:
+    When you encounter CJK text inside a JavaScript string literal (single or double quotes within EJS blocks):
+    - ALWAYS translate the CJK text to the target language
+    - PRESERVE the quote characters and string boundaries exactly
+    - NEVER leave CJK text inside JS string literals — it causes variable lookup failures at runtime.`;
 }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -487,8 +525,13 @@ function buildMvuSyncBlock(
   if (isCodeField) {
     return `
 CRITICAL — MVU/Zod VARIABLE REPLACEMENT DICTIONARY:
-To prevent EJS desync (Failure Mode 4), you MUST replace the following variable names with their translated equivalents EVERYWHERE they appear.
-This includes: JSON keys, data-var attributes, {{getvar::NAME}}, {{setvar::NAME::VALUE}}, getvar('NAME'), setvar('NAME', val), and Zod schema definitions.
+ZERO-TOLERANCE ENFORCEMENT: The dictionary below is your ONLY source of truth for variable names.
+You MUST NOT invent alternative translations. If a name appears in this dictionary,
+use the dictionary translation EXACTLY — character for character, including diacritics and spacing.
+Any deviation = total system crash. A SINGLE inconsistent variable name will break the entire card.
+
+You MUST replace the following variable names with their translated equivalents EVERYWHERE they appear.
+This includes: JSON keys, data-var attributes, {{getvar::NAME}}, {{setvar::NAME::VALUE}}, getvar('NAME'), setvar('NAME', val), Zod schema definitions, and string comparison literals.
 
 DICTIONARY:
 ${dictList}
@@ -497,7 +540,8 @@ Rules:
 - Replace ALL occurrences consistently. Use EXACTLY the target strings above.
 - Variable names use natural spaces, NOT underscores.
 - Do NOT invent your own translations for these variables. Use the dictionary.
-- Do NOT translate English variable names. Japanese proper nouns use Romaji.`;
+- Do NOT translate English variable names. Japanese proper nouns use Romaji.
+- For dotted paths (e.g., stat_data.天海琉璃.阶段), translate EACH CJK segment separately using this dictionary, keep ASCII segments (stat_data) unchanged.`;
   }
 
   return `
@@ -518,7 +562,15 @@ function buildGlossaryBlock(glossary: GlossaryEntry[]): string {
 
   return `
 MANDATORY TERMINOLOGY (use these translations exactly, no exceptions):
-${terms}`;
+${terms}
+
+RULE G2 — Name Consistency Across Fields:
+When the glossary above contains character names, you MUST use this EXACT translation in ALL contexts:
+  - Narrative prose and dialogue
+  - JSON dotted paths: getvar('stat_data.ORIGINAL_NAME.X') → getvar('stat_data.TRANSLATED_NAME.X')
+  - Zod schema keys
+  - {{setvar::ORIGINAL_NAME_好感度::5}} → {{setvar::TRANSLATED_NAME_Hảo Cảm::5}}
+A character name translated differently in different locations = card crash.`;
 }
 
 /* ════════════════════════════════════════════════════════════════════

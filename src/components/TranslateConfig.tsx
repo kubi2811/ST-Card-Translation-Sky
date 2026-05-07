@@ -5,7 +5,7 @@ import { TARGET_LANGUAGES, SOURCE_LANGUAGES } from '../utils/cardFields';
 import { getDefaultTranslationPrompt } from '../utils/apiClient';
 import { aiExtractGlossaryTerms } from '../utils/mvuSync';
 import type { TranslationMode, LorebookStrategy, FieldGroupConfig, FieldGroup, GlossaryEntry } from '../types/card';
-import { Languages, Settings2, FileJson, BookOpen, Plus, Trash2, Download, Upload, Bot, Loader2 } from 'lucide-react';
+import { Languages, Settings2, FileJson, BookOpen, Plus, Trash2, Download, Upload, Bot, Loader2, Save, RotateCcw, CheckCircle } from 'lucide-react';
 import MvuSyncPanel from './MvuSyncPanel';
 
 /** Map field group IDs to i18n keys */
@@ -30,6 +30,38 @@ export default function TranslateConfig() {
   const t = useT();
   const groupLabels = useGroupLabels();
   const [isAutoExtractingGlossary, setIsAutoExtractingGlossary] = useState(false);
+  const defaultPrompt = getDefaultTranslationPrompt(translationConfig.sourceLanguage, translationConfig.targetLanguage);
+  const [promptDraft, setPromptDraft] = useState<string>(translationConfig.translationPrompt || '');
+  const [schemaDraft, setSchemaDraft] = useState<string>(translationConfig.customSchema || '');
+  const [promptSaved, setPromptSaved] = useState(false);
+  const [schemaSaved, setSchemaSaved] = useState(false);
+
+  // Track whether drafts differ from saved values
+  const promptDirty = promptDraft !== (translationConfig.translationPrompt || '');
+  const schemaDirty = schemaDraft !== (translationConfig.customSchema || '');
+
+  const savePrompt = () => {
+    const defaultP = getDefaultTranslationPrompt(translationConfig.sourceLanguage, translationConfig.targetLanguage);
+    if (promptDraft === defaultP || !promptDraft.trim()) {
+      setTranslationConfig({ translationPrompt: '' });
+      setPromptDraft('');
+    } else {
+      setTranslationConfig({ translationPrompt: promptDraft });
+    }
+    setPromptSaved(true);
+    setTimeout(() => setPromptSaved(false), 2000);
+  };
+
+  const resetPrompt = () => {
+    setTranslationConfig({ translationPrompt: '' });
+    setPromptDraft('');
+  };
+
+  const saveSchema = () => {
+    setTranslationConfig({ customSchema: schemaDraft });
+    setSchemaSaved(true);
+    setTimeout(() => setSchemaSaved(false), 2000);
+  };
 
   const updateGlossaryEntry = (index: number, field: 'source' | 'target', value: string) => {
     const updated = [...translationConfig.glossary];
@@ -425,72 +457,156 @@ export default function TranslateConfig() {
             {/* Custom Schema */}
             <div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                <label className="label" style={{ marginBottom: 0 }}>{t.customSchema || 'Custom Format Schema'}</label>
-                <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', color: 'var(--accent-primary)', fontWeight: 600 }}>
-                  <FileJson size={14} />
-                  {t.uploadJson || 'Upload JSON'}
-                  <input
-                    type="file"
-                    accept=".json,.txt"
-                    style={{ display: 'none' }}
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (!file) return;
-                      const reader = new FileReader();
-                      reader.onload = (evt) => {
-                        try {
-                          const content = evt.target?.result as string;
-                          const parsed = JSON.parse(content);
-                          setTranslationConfig({ customSchema: JSON.stringify(parsed, null, 2) });
-                        } catch (err) {
-                          setTranslationConfig({ customSchema: evt.target?.result as string });
-                        }
-                      };
-                      reader.readAsText(file);
-                      e.target.value = '';
-                    }}
-                  />
+                <label className="label" style={{ marginBottom: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  {t.customSchema || 'Custom Format Schema'}
+                  {schemaDirty && (
+                    <span style={{
+                      fontSize: '0.6rem', padding: '1px 6px',
+                      background: 'rgba(255,180,0,0.15)', borderRadius: 'var(--radius-sm)',
+                      color: 'var(--accent-warning)', fontWeight: 600,
+                    }}>
+                      {locale === 'vi' ? 'Chưa lưu' : 'Unsaved'}
+                    </span>
+                  )}
+                  {schemaSaved && !schemaDirty && (
+                    <span style={{
+                      fontSize: '0.6rem', padding: '1px 6px',
+                      background: 'rgba(80,200,120,0.15)', borderRadius: 'var(--radius-sm)',
+                      color: '#50c878', fontWeight: 600,
+                      display: 'flex', alignItems: 'center', gap: '3px',
+                    }}>
+                      <CheckCircle size={10} /> {locale === 'vi' ? 'Đã lưu!' : 'Saved!'}
+                    </span>
+                  )}
                 </label>
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.7rem', color: 'var(--accent-primary)', fontWeight: 600 }}>
+                    <FileJson size={12} />
+                    {t.uploadJson || 'Upload JSON'}
+                    <input
+                      type="file"
+                      accept=".json,.txt"
+                      style={{ display: 'none' }}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = (evt) => {
+                          try {
+                            const content = evt.target?.result as string;
+                            const parsed = JSON.parse(content);
+                            setSchemaDraft(JSON.stringify(parsed, null, 2));
+                          } catch {
+                            setSchemaDraft(evt.target?.result as string || '');
+                          }
+                        };
+                        reader.readAsText(file);
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+                  <button
+                    onClick={saveSchema}
+                    disabled={!schemaDirty}
+                    style={{
+                      padding: '2px 10px', fontSize: '0.7rem', fontWeight: 600,
+                      border: '1px solid var(--accent-primary)', borderRadius: 'var(--radius-sm)',
+                      background: schemaDirty ? 'var(--accent-primary)' : 'transparent',
+                      color: schemaDirty ? 'white' : 'var(--text-muted)',
+                      cursor: schemaDirty ? 'pointer' : 'default',
+                      display: 'flex', alignItems: 'center', gap: '4px',
+                      transition: 'all 0.15s',
+                      opacity: schemaDirty ? 1 : 0.5,
+                    }}
+                  >
+                    <Save size={11} /> {locale === 'vi' ? 'Lưu' : 'Save'}
+                  </button>
+                </div>
               </div>
               <textarea
                 className="input"
-                style={{ width: '100%', minHeight: '80px', fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical' }}
+                style={{
+                  width: '100%', minHeight: '80px', fontFamily: 'monospace', fontSize: '0.8rem',
+                  resize: 'vertical',
+                  borderColor: schemaDirty ? 'var(--accent-warning)' : undefined,
+                }}
                 placeholder={t.customSchemaDesc || "Optional: Provide a JSON schema, MVU rules, or Zod format. The AI will strictly follow this structure."}
-                value={translationConfig.customSchema || ''}
-                onChange={(e) => setTranslationConfig({ customSchema: e.target.value })}
+                value={schemaDraft}
+                onChange={(e) => setSchemaDraft(e.target.value)}
+                onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveSchema(); } }}
               />
             </div>
 
             {/* Custom Translation Prompt */}
             <div>
-              <label className="label" style={{ marginBottom: '6px', display: 'flex', justifyContent: 'space-between' }}>
-                <span>Custom Translation Prompt</span>
-                {translationConfig.translationPrompt && (
-                  <span 
-                    style={{ fontSize: '0.7rem', color: 'var(--accent-primary)', cursor: 'pointer' }}
-                    onClick={() => setTranslationConfig({ translationPrompt: '' })}
+              <label className="label" style={{ marginBottom: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  Custom Translation Prompt
+                  {promptDirty && (
+                    <span style={{
+                      fontSize: '0.6rem', padding: '1px 6px',
+                      background: 'rgba(255,180,0,0.15)', borderRadius: 'var(--radius-sm)',
+                      color: 'var(--accent-warning)', fontWeight: 600,
+                    }}>
+                      {locale === 'vi' ? 'Chưa lưu' : 'Unsaved'}
+                    </span>
+                  )}
+                  {promptSaved && !promptDirty && (
+                    <span style={{
+                      fontSize: '0.6rem', padding: '1px 6px',
+                      background: 'rgba(80,200,120,0.15)', borderRadius: 'var(--radius-sm)',
+                      color: '#50c878', fontWeight: 600,
+                      display: 'flex', alignItems: 'center', gap: '3px',
+                      animation: 'fadeIn 0.2s',
+                    }}>
+                      <CheckCircle size={10} /> {locale === 'vi' ? 'Đã lưu!' : 'Saved!'}
+                    </span>
+                  )}
+                </span>
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  {(translationConfig.translationPrompt || promptDirty) && (
+                    <span 
+                      style={{ fontSize: '0.7rem', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '3px' }}
+                      onClick={resetPrompt}
+                      title={locale === 'vi' ? 'Khôi phục prompt mặc định' : 'Reset to default prompt'}
+                    >
+                      <RotateCcw size={10} /> Reset
+                    </span>
+                  )}
+                  <button
+                    onClick={savePrompt}
+                    disabled={!promptDirty}
+                    style={{
+                      padding: '2px 10px', fontSize: '0.7rem', fontWeight: 600,
+                      border: '1px solid var(--accent-primary)', borderRadius: 'var(--radius-sm)',
+                      background: promptDirty ? 'var(--accent-primary)' : 'transparent',
+                      color: promptDirty ? 'white' : 'var(--text-muted)',
+                      cursor: promptDirty ? 'pointer' : 'default',
+                      display: 'flex', alignItems: 'center', gap: '4px',
+                      transition: 'all 0.15s',
+                      opacity: promptDirty ? 1 : 0.5,
+                    }}
                   >
-                    Reset to Default
-                  </span>
-                )}
+                    <Save size={11} /> {locale === 'vi' ? 'Lưu' : 'Save'}
+                  </button>
+                </div>
               </label>
               <textarea
                 className="input"
-                style={{ width: '100%', minHeight: '120px', fontFamily: 'monospace', fontSize: '0.75rem', resize: 'vertical', whiteSpace: 'pre-wrap' }}
-                placeholder="Leave empty to use the default prompt..."
-                value={translationConfig.translationPrompt || getDefaultTranslationPrompt(translationConfig.sourceLanguage, translationConfig.targetLanguage)}
-                onChange={(e) => {
-                  // Only save if it differs from default
-                  const defaultPrompt = getDefaultTranslationPrompt(translationConfig.sourceLanguage, translationConfig.targetLanguage);
-                  if (e.target.value === defaultPrompt) {
-                    setTranslationConfig({ translationPrompt: '' });
-                  } else {
-                    setTranslationConfig({ translationPrompt: e.target.value });
-                  }
+                style={{
+                  width: '100%', minHeight: '120px', fontFamily: 'monospace', fontSize: '0.75rem',
+                  resize: 'vertical', whiteSpace: 'pre-wrap',
+                  borderColor: promptDirty ? 'var(--accent-warning)' : undefined,
                 }}
+                placeholder={locale === 'vi' ? 'Để trống để dùng prompt mặc định...' : 'Leave empty to use the default prompt...'}
+                value={promptDraft || defaultPrompt}
+                onChange={(e) => setPromptDraft(e.target.value === defaultPrompt ? '' : e.target.value)}
+                onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); savePrompt(); } }}
               />
               <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '4px', lineHeight: '1.4' }}>
-                You can fully customize the strict rules. The target language and source language info is already applied. Leave empty to use the built-in default.
+                {locale === 'vi'
+                  ? 'Tùy chỉnh prompt dịch. Nhấn Save (hoặc Ctrl+S) để áp dụng. Prompt được lưu tự động vào bộ nhớ trình duyệt.'
+                  : 'Customize the translation prompt. Press Save (or Ctrl+S) to apply. The prompt is persisted in browser storage.'}
               </div>
             </div>
 

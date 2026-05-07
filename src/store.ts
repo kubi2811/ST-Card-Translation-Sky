@@ -230,16 +230,16 @@ export const useStore = create<AppState>((set) => ({
 
   // ─── Translation Config ───
   translationConfig: {
-    sourceLanguage: '中文',
-    targetLanguage: 'Tiếng Việt',
-    translationPrompt: '',
+    sourceLanguage: LS.get('st-translator-source-lang', '中文'),
+    targetLanguage: LS.get('st-translator-target-lang', 'Tiếng Việt'),
+    translationPrompt: LS.get('st-translator-custom-prompt', ''),
     mode: 'field',
     lorebookStrategy: 'single',
     lorebookBatchSize: 5,
     concurrentBatches: 1,
     skipAlreadyTranslated: true,
     fieldGroups: [...DEFAULT_FIELD_GROUPS],
-    customSchema: '',
+    customSchema: LS.get('st-translator-custom-schema', ''),
     exportKeyMode: 'merge' as ExportKeyMode,
     glossary: LS.get('st-translator-glossary', []) as GlossaryEntry[],
     enableMvuSync: false,
@@ -277,6 +277,18 @@ export const useStore = create<AppState>((set) => ({
       }
       if ('enableObjectiveMode' in partial) {
         LS.set('st-translator-objective-mode', next.enableObjectiveMode);
+      }
+      if ('translationPrompt' in partial) {
+        LS.set('st-translator-custom-prompt', next.translationPrompt);
+      }
+      if ('customSchema' in partial) {
+        LS.set('st-translator-custom-schema', next.customSchema);
+      }
+      if ('sourceLanguage' in partial) {
+        LS.set('st-translator-source-lang', next.sourceLanguage);
+      }
+      if ('targetLanguage' in partial) {
+        LS.set('st-translator-target-lang', next.targetLanguage);
       }
       return { translationConfig: next };
     }),

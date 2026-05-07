@@ -416,15 +416,98 @@ ${fragmentList}${mvuBlock}`;
 
 /* ─── Chunk long text (CJK-aware / Unlimited Context) ─── */
 /**
+ * Check if position is inside a JS function body by scanning backward for
+ * unmatched braces preceded by function-like keywords.
+ */
+function isInsideFunctionBody(text: string, pos: number): boolean {
+  // Scan backward up to 5000 chars for brace balance
+  const scanStart = Math.max(0, pos - 5000);
+  const slice = text.slice(scanStart, pos);
+  
+  let braceDepth = 0;
+  for (let i = slice.length - 1; i >= 0; i--) {
+    if (slice[i] === '}') braceDepth++;
+    else if (slice[i] === '{') {
+      braceDepth--;
+      if (braceDepth < 0) {
+        // Found unmatched opening brace — check if preceded by function keyword
+        const preceding = slice.slice(Math.max(0, i - 80), i).trim();
+        if (/(?:function\s*\w*\s*\([^)]*\)\s*$|=>\s*$|\)\s*$|catch\s*\([^)]*\)\s*$|finally\s*$|else\s*$|try\s*$|do\s*$)/.test(preceding)) {
+          return true;
+        }
+        // Could be an object literal or class body — still unsafe
+        if (/(?:class\s+\w+|if\s*\([^)]*\)|for\s*\([^)]*\)|while\s*\([^)]*\)|switch\s*\([^)]*\))\s*$/.test(preceding)) {
+          return true;
+        }
+        braceDepth = 0; // reset
+      }
+    }
+  }
+  return braceDepth < -1; // deeply unmatched = inside nested block
+}
+
+/**
+ * Check if position is inside a <script> or <style> block.
+ */
+function isInsideScriptOrStyle(text: string, pos: number): boolean {
+  const before = text.slice(0, pos);
+  const scriptOpens = (before.match(/<script[\s>]/gi) || []).length;
+  const scriptCloses = (before.match(/<\/script>/gi) || []).length;
+  if (scriptOpens > scriptCloses) return true;
+
+  const styleOpens = (before.match(/<style[\s>]/gi) || []).length;
+  const styleCloses = (before.match(/<\/style>/gi) || []).length;
+  if (styleOpens > styleCloses) return true;
+
+  return false;
+}
+
+/**
+ * State-machine scan for backtick balance. More accurate than regex —
+ * properly handles escaped backticks and nested template expressions.
+ * Scans the last `maxScan` chars before `pos`.
+ */
+function countUnescapedBackticks(text: string, pos: number, maxScan: number = 5000): number {
+  const start = Math.max(0, pos - maxScan);
+  const slice = text.slice(start, pos);
+  let count = 0;
+  for (let i = 0; i < slice.length; i++) {
+    if (slice[i] === '`' && (i === 0 || slice[i - 1] !== '\\')) {
+      count++;
+    }
+  }
+  return count;
+}
+
+/**
+ * Check if position is inside an unclosed string literal (single or double quote).
+ * Scans the last 2000 chars for quote state.
+ */
+function isInsideStringLiteral(text: string, pos: number): boolean {
+  const start = Math.max(0, pos - 2000);
+  const slice = text.slice(start, pos);
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < slice.length; i++) {
+    const ch = slice[i];
+    const prev = i > 0 ? slice[i - 1] : '';
+    if (prev === '\\') continue; // escaped
+    if (ch === "'" && !inDouble) inSingle = !inSingle;
+    if (ch === '"' && !inSingle) inDouble = !inDouble;
+  }
+  return inSingle || inDouble;
+}
+
+/**
  * Check if a candidate split position is "safe" — i.e., not inside a template literal,
- * EJS block, regex pattern, or unbalanced JSON structure.
+ * EJS block, regex pattern, function body, script/style block, or unbalanced JSON structure.
  * Returns true if it is safe to split at `pos`.
  */
 function isSafeBoundary(text: string, pos: number): boolean {
   const before = text.slice(0, pos);
 
-  // 1. Backtick balance — splitting inside `template ${expr}` breaks JS
-  const backtickCount = (before.match(/(?<!\\)`/g) || []).length;
+  // 1. Backtick balance — splitting inside `template ${expr}` breaks JS (B1)
+  const backtickCount = countUnescapedBackticks(text, pos);
   if (backtickCount % 2 !== 0) return false;
 
   // 2. EJS tag balance — splitting inside <% ... %> breaks templates
@@ -445,6 +528,15 @@ function isSafeBoundary(text: string, pos: number): boolean {
     else if (ch === '}') braceDepth--;
   }
   if (braceDepth > 2) return false; // deep nesting = probably inside JSON
+
+  // 5. Function body detection — splitting inside function(){...} corrupts code (B8)
+  if (isInsideFunctionBody(text, pos)) return false;
+
+  // 6. Script/style block detection — never split inside <script> or <style>
+  if (isInsideScriptOrStyle(text, pos)) return false;
+
+  // 7. String literal detection — splitting inside "..." or '...' breaks code
+  if (isInsideStringLiteral(text, pos)) return false;
 
   return true;
 }
@@ -1359,6 +1451,15 @@ function maskSecrets(text: string): { maskedText: string; map: SecretMaskMap } {
     /([a-zA-Z0-9_]*key[a-zA-Z0-9_]*\s*[:=]\s*['"])([^'"]+)(['"])/gi,
     /([a-zA-Z0-9_]*password[a-zA-Z0-9_]*\s*[:=]\s*['"])([^'"]+)(['"])/gi,
     /([a-zA-Z0-9_]*token[a-zA-Z0-9_]*\s*[:=]\s*['"])([^'"]+)(['"])/gi,
+    // B7: SillyTavern password check patterns
+    // input === "secret_code" or input == "密码"
+    /(input\s*={2,3}\s*['"])([^'"]{3,50})(['"])/g,
+    // executeSlashCommands('/pass secret')
+    /(\/pass\s+)([^\s'"<>]{3,30})/g,
+    // data-password="value" or data-secret="value"
+    /(data-(?:password|pass|secret|code|pin)\s*=\s*['"])([^'"]+)(['"])/gi,
+    // const pass = "hardcoded" or let secret = 'value'
+    /((?:pass|secret|credential|pwd|pin)\s*=\s*['"])([^'"]+)(['"])/gi,
   ];
 
   for (const pattern of patterns) {

@@ -257,7 +257,7 @@ export function buildUnifiedRAGContext(input: UnifiedRAGInput): string {
           dictList + '\n' +
           'Rules:\n' +
           '- Replace ALL occurrences: {{getvar::}}, {{setvar::}}, data-var, YAML keys, z.object fields\n' +
-          '- Use SPACES between words in translated variable names, NOT underscores\n' +
+          '- Variable names may use natural spacing. CONSISTENCY is the only rule \u2014 same variable = identical string everywhere\n' +
           '- In JS/Zod code, use QUOTED string keys for multi-word names: { "Tên biến": z.string() }\n' +
           '- Use EXACTLY the mapped translation — do NOT invent your own';
       } else {
@@ -265,7 +265,7 @@ export function buildUnifiedRAGContext(input: UnifiedRAGInput): string {
           '═══ MVU/ZOD VARIABLE DICTIONARY (MANDATORY) ═══\n' +
           'This card uses MVU variables. When you encounter ANY of these original variable names, REPLACE them with the translation:\n' +
           dictList + '\n' +
-          '- Use SPACES between words, NOT underscores\n' +
+          '- Variable names may use natural spacing. CONSISTENCY is mandatory \u2014 same variable = identical string everywhere\n' +
           '- Apply in macros ({{getvar::NAME}}), data-var attributes, and all contexts\n' +
           '- Use EXACTLY the dictionary translation — do NOT invent alternatives';
       }

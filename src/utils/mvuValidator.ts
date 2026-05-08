@@ -110,13 +110,23 @@ export function validateMvuVariables(
   }
 
   // ─── Check macro syntax integrity ───
-  const originalMacros = (original.match(/\{\{(?:getvar|setvar|addvar)::([^}]+)\}\}/g) || []).length;
-  const translatedMacros = (translated.match(/\{\{(?:getvar|setvar|addvar)::([^}]+)\}\}/g) || []).length;
+  const originalMacros = (original.match(/\{\{(?:getvar|setvar|addvar|getglobalvar|setglobalvar|addglobalvar)::([^}]+)(?:\}\}|::)/g) || []).length;
+  const translatedMacros = (translated.match(/\{\{(?:getvar|setvar|addvar|getglobalvar|setglobalvar|addglobalvar)::([^}]+)(?:\}\}|::)/g) || []).length;
   if (originalMacros > 0 && translatedMacros === 0) {
     result.warnings.push(`All ${originalMacros} macros disappeared from translation`);
     result.valid = false;
   } else if (Math.abs(originalMacros - translatedMacros) > 2) {
     result.warnings.push(`Macro count changed significantly: ${originalMacros} → ${translatedMacros}`);
+  }
+
+  // ─── Check EJS syntax integrity ───
+  const originalEjs = (original.match(/(?:getvar|setvar|addvar|getglobalvar|setglobalvar|addglobalvar|getVariable|setVariable)\s*\(/g) || []).length;
+  const translatedEjs = (translated.match(/(?:getvar|setvar|addvar|getglobalvar|setglobalvar|addglobalvar|getVariable|setVariable)\s*\(/g) || []).length;
+  if (originalEjs > 0 && translatedEjs === 0) {
+    result.warnings.push(`All ${originalEjs} EJS function calls disappeared from translation`);
+    result.valid = false;
+  } else if (Math.abs(originalEjs - translatedEjs) > 2) {
+    result.warnings.push(`EJS function call count changed significantly: ${originalEjs} → ${translatedEjs}`);
   }
 
   // Build summary
@@ -162,8 +172,12 @@ export function autoFixMvuVariables(
     fixed = fixed.replace(macroRegex, `$1${safeRepl}$2`);
 
     // 2. Replace in EJS function calls: getvar('key') / setvar('key', ...)
-    const ejsRegex = new RegExp(`((?:getvar|setvar|addvar|getglobalvar|setglobalvar|addglobalvar|getVariable|setVariable)\\s*\\(\\s*['"])${escaped}(['"])`, 'g');
-    fixed = fixed.replace(ejsRegex, `$1${safeRepl}$2`);
+    const ejsRegex = new RegExp(`((?:getvar|setvar|addvar|getglobalvar|setglobalvar|addglobalvar|getVariable|setVariable)\\s*\\(\\s*['"])([^'"]+)(['"])`, 'g');
+    fixed = fixed.replace(ejsRegex, (match, prefix, inner, suffix) => {
+      const segmentRegex = new RegExp(`(^|\\.)(${escaped})(\\.|$)`, 'g');
+      const newInner = inner.replace(segmentRegex, `$1${safeRepl}$3`);
+      return `${prefix}${newInner}${suffix}`;
+    });
 
     // 3. Replace in data-var attributes: data-var="key"
     const dataVarRegex = new RegExp(`(data-var\\s*=\\s*["'])${escaped}(["'])`, 'g');
@@ -488,4 +502,305 @@ function extractJsonObjects(text: string): Record<string, unknown>[] {
   }
 
   return objects;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   CROSS-CHECK VALIDATION — HTML ↔ Initvar Synchronization
+   ═══════════════════════════════════════════════════════════════ */
+
+export interface CrossCheckResult {
+  valid: boolean;
+  /** Variables referenced in HTML but NOT found in Initvar/Dictionary */
+  orphanVars: { varName: string; source: string; context: string }[];
+  /** Variables correctly matched between HTML and Initvar */
+  matchedVars: string[];
+  /** Suggestions for fixing orphan variables */
+  suggestions: { orphan: string; closest: string; similarity: number }[];
+  /** Summary */
+  summary: string;
+}
+
+/**
+ * Extract all variable names REFERENCED in HTML/Regex replaceString fields.
+ * Scans 3 patterns: data-var attributes, {{getvar::}} macros, getvar() EJS calls.
+ */
+function extractHtmlVarReferences(htmlText: string): { varName: string; context: string }[] {
+  const refs: { varName: string; context: string }[] = [];
+  if (!htmlText) return refs;
+  const seen = new Set<string>();
+
+  // 1. data-var="KEY"
+  const dataVarRegex = /data-var\s*=\s*["']([^"']+)["']/g;
+  let match: RegExpExecArray | null;
+  while ((match = dataVarRegex.exec(htmlText)) !== null) {
+    const v = match[1].trim();
+    if (v && !seen.has(v)) { seen.add(v); refs.push({ varName: v, context: `data-var="${v}"` }); }
+  }
+
+  // 2. {{getvar::KEY}} / {{setvar::KEY::}} / {{addvar::KEY}}
+  const macroRegex = /\{\{(?:getvar|setvar|addvar|getglobalvar|setglobalvar|addglobalvar)::([^:}]+)/g;
+  while ((match = macroRegex.exec(htmlText)) !== null) {
+    const v = match[1].trim();
+    if (v && !seen.has(v)) { seen.add(v); refs.push({ varName: v, context: match[0] }); }
+  }
+
+  // 3. getvar('KEY') / setvar('KEY', ...) / getVariable("KEY")
+  const ejsRegex = /(?:getvar|setvar|addvar|getglobalvar|setglobalvar|addglobalvar|getVariable|setVariable)\s*\(\s*['"]([^'"]+)['"]/g;
+  while ((match = ejsRegex.exec(htmlText)) !== null) {
+    const fullKey = match[1].trim();
+    // For dotted paths like stat_data.X.Y, extract each segment
+    const segments = fullKey.split('.');
+    for (const seg of segments) {
+      if (seg && !seen.has(seg) && seg.length > 1 && !/^\d+$/.test(seg)) {
+        seen.add(seg);
+        refs.push({ varName: seg, context: match[0] });
+      }
+    }
+  }
+
+  return refs;
+}
+
+/**
+ * Extract all variable names DEFINED in Initvar fields.
+ * Scans YAML keys and {{setvar::KEY::VALUE}} macros.
+ */
+function extractInitvarDefinitions(initvarText: string): Set<string> {
+  const defs = new Set<string>();
+  if (!initvarText) return defs;
+
+  // YAML keys: "key:" at start of line (with optional quotes)
+  const yamlKeyRegex = /^\s*(?:["']([^"':\n]+)["']|([^"':\s\n][^"':\n]*[^"':\s\n]|[^"':\s\n]))\s*:/gm;
+  let match: RegExpExecArray | null;
+  while ((match = yamlKeyRegex.exec(initvarText)) !== null) {
+    const key = (match[1] || match[2])?.trim();
+    if (key && !key.startsWith('[') && !key.startsWith('<') && !key.startsWith('#') && !key.startsWith('{')) {
+      defs.add(key);
+    }
+  }
+
+  // {{setvar::KEY::VALUE}} macros
+  const macroRegex = /\{\{setvar::([^:}]+)/g;
+  while ((match = macroRegex.exec(initvarText)) !== null) {
+    const key = match[1].trim();
+    if (key) defs.add(key);
+  }
+
+  return defs;
+}
+
+/**
+ * Simple string similarity (Dice coefficient) for suggesting closest matches.
+ */
+function diceCoefficient(a: string, b: string): number {
+  const la = a.toLowerCase(), lb = b.toLowerCase();
+  if (la === lb) return 1;
+  if (la.length < 2 || lb.length < 2) return 0;
+  const bigrams = new Map<string, number>();
+  for (let i = 0; i < la.length - 1; i++) {
+    const bi = la.substring(i, i + 2);
+    bigrams.set(bi, (bigrams.get(bi) || 0) + 1);
+  }
+  let intersection = 0;
+  for (let i = 0; i < lb.length - 1; i++) {
+    const bi = lb.substring(i, i + 2);
+    const count = bigrams.get(bi) || 0;
+    if (count > 0) { intersection++; bigrams.set(bi, count - 1); }
+  }
+  return (2 * intersection) / (la.length - 1 + lb.length - 1);
+}
+
+/**
+ * Cross-check: Scan ALL variable names REFERENCED in HTML (replaceString)
+ * and verify each exists in the Initvar definitions or Dictionary.
+ * 
+ * This catches the most critical error: a variable used in the HTML dashboard
+ * that doesn't exist in Initvar → will show "undefined" at runtime.
+ *
+ * @param regexFields - Translated replaceString fields from regex scripts
+ * @param initvarFields - Translated initvar lorebook entries  
+ * @param dictionary - MVU variable dictionary (original → translated)
+ */
+export function crossCheckHtmlVsInitvar(
+  regexFields: { translated: string; label: string }[],
+  initvarFields: { translated: string; label: string }[],
+  dictionary: Record<string, string>
+): CrossCheckResult {
+  const result: CrossCheckResult = {
+    valid: true,
+    orphanVars: [],
+    matchedVars: [],
+    suggestions: [],
+    summary: '',
+  };
+
+  // Build the complete set of known variable names
+  const knownVars = new Set<string>();
+
+  // From Initvar fields (translated)
+  for (const field of initvarFields) {
+    if (!field.translated) continue;
+    const defs = extractInitvarDefinitions(field.translated);
+    for (const d of defs) knownVars.add(d);
+  }
+
+  // From Dictionary values (translated names)
+  for (const v of Object.values(dictionary)) {
+    if (v) knownVars.add(v);
+  }
+  // Also add dictionary keys (original names) as they may still be valid
+  for (const k of Object.keys(dictionary)) {
+    if (k) knownVars.add(k);
+  }
+
+  // Noise filter: skip very short or generic names
+  const isNoise = (v: string) => v.length < 2 || /^\d+$/.test(v);
+
+  // Scan all HTML/regex fields for variable references
+  const allHtmlRefs: { varName: string; source: string; context: string }[] = [];
+  for (const field of regexFields) {
+    if (!field.translated) continue;
+    const refs = extractHtmlVarReferences(field.translated);
+    for (const ref of refs) {
+      if (!isNoise(ref.varName)) {
+        allHtmlRefs.push({ ...ref, source: field.label });
+      }
+    }
+  }
+
+  // Cross-check each reference
+  const matched = new Set<string>();
+  for (const ref of allHtmlRefs) {
+    if (knownVars.has(ref.varName)) {
+      matched.add(ref.varName);
+    } else {
+      // Orphan — this variable won't resolve at runtime
+      result.orphanVars.push({
+        varName: ref.varName,
+        source: ref.source,
+        context: ref.context,
+      });
+      result.valid = false;
+
+      // Find closest match for suggestion
+      let bestMatch = '', bestScore = 0;
+      for (const known of knownVars) {
+        const score = diceCoefficient(ref.varName, known);
+        if (score > bestScore && score > 0.4) {
+          bestScore = score;
+          bestMatch = known;
+        }
+      }
+      if (bestMatch) {
+        result.suggestions.push({ orphan: ref.varName, closest: bestMatch, similarity: bestScore });
+      }
+    }
+  }
+
+  result.matchedVars = [...matched];
+
+  // Build summary
+  const parts: string[] = [];
+  parts.push(`${result.matchedVars.length} ✅ matched`);
+  if (result.orphanVars.length > 0) parts.push(`${result.orphanVars.length} ❌ orphan`);
+  result.summary = parts.join(' | ');
+
+  return result;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   findRegex ↔ Narrative Tag Consistency Check
+   ═══════════════════════════════════════════════════════════════ */
+
+export interface FindRegexValidationResult {
+  valid: boolean;
+  /** Tags found in findRegex but NOT in any narrative field */
+  missingTags: { tag: string; regexLabel: string }[];
+  /** Tags that matched correctly */
+  matchedTags: { tag: string; regexLabel: string; foundIn: string }[];
+  /** Summary */
+  summary: string;
+}
+
+/**
+ * Validate that custom XML tags in findRegex (translated) actually exist
+ * in narrative fields (first_mes, description, etc).
+ * 
+ * If findRegex uses `<Trạng thái>(.*?)</Trạng thái>` but no narrative field
+ * contains `<Trạng thái>`, the regex will never match → dashboard won't display.
+ *
+ * @param regexFields - Translated regex entries with findRegex content
+ * @param narrativeFields - Translated narrative fields to search for matching tags
+ */
+export function validateFindRegexVsNarrative(
+  regexFields: { findRegex: string; label: string }[],
+  narrativeFields: { translated: string; label: string }[]
+): FindRegexValidationResult {
+  const result: FindRegexValidationResult = {
+    valid: true,
+    missingTags: [],
+    matchedTags: [],
+    summary: '',
+  };
+
+  // Concatenate all narrative text for searching
+  const allNarrative = narrativeFields
+    .filter(f => f.translated)
+    .map(f => ({ text: f.translated, label: f.label }));
+
+  for (const regex of regexFields) {
+    if (!regex.findRegex) continue;
+
+    // Extract custom XML-like tags: <TagName> patterns
+    // Matches tags like <Trạng thái>, <Stats>, etc. but NOT standard HTML
+    const standardHtml = new Set([
+      'div', 'span', 'p', 'br', 'hr', 'a', 'b', 'i', 'u', 'em', 'strong',
+      'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'table', 'tr',
+      'td', 'th', 'thead', 'tbody', 'img', 'input', 'button', 'form', 'select',
+      'option', 'textarea', 'label', 'style', 'script', 'link', 'meta', 'head',
+      'body', 'html', 'section', 'article', 'nav', 'header', 'footer', 'main',
+      'aside', 'details', 'summary', 'figure', 'figcaption', 'pre', 'code',
+      'blockquote', 'small', 'sub', 'sup', 'mark', 'del', 'ins',
+    ]);
+
+    // Match opening tags in the findRegex pattern
+    const tagRegex = /<([^\/\s>!?][^>]*?)>/g;
+    let match: RegExpExecArray | null;
+    const seenTags = new Set<string>();
+
+    while ((match = tagRegex.exec(regex.findRegex)) !== null) {
+      let tagName = match[1].trim();
+      // Remove regex quantifiers/groups that might be captured
+      tagName = tagName.replace(/[\\()+*?{}[\]|$.^]/g, '').trim();
+      if (!tagName || tagName.length < 2) continue;
+
+      const tagLower = tagName.toLowerCase();
+      if (standardHtml.has(tagLower)) continue;
+      if (seenTags.has(tagName)) continue;
+      seenTags.add(tagName);
+
+      // Search for this tag in narrative fields
+      let found = false;
+      for (const narr of allNarrative) {
+        if (narr.text.includes(`<${tagName}>`)) {
+          result.matchedTags.push({ tag: tagName, regexLabel: regex.label, foundIn: narr.label });
+          found = true;
+          break;
+        }
+      }
+
+      if (!found) {
+        result.missingTags.push({ tag: tagName, regexLabel: regex.label });
+        result.valid = false;
+      }
+    }
+  }
+
+  // Build summary
+  const parts: string[] = [];
+  if (result.matchedTags.length > 0) parts.push(`${result.matchedTags.length} ✅`);
+  if (result.missingTags.length > 0) parts.push(`${result.missingTags.length} ❌ missing`);
+  result.summary = parts.join(' | ') || 'No custom tags found';
+
+  return result;
 }

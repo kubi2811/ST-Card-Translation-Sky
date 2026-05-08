@@ -39,10 +39,12 @@ export function applyMvuToText(
       );
       
       // ── 2. EJS function calls: getvar('KEY') / setvar('KEY', ...) ──
-      newText = newText.replace(
-        new RegExp(`((?:getvar|setvar|addvar|getglobalvar|setglobalvar|addglobalvar|getVariable|setVariable)\\s*\\(\\s*['"])${escaped}(['"])`, 'g'),
-        `$1${safeTranslated}$2`
-      );
+      const ejsRegex = new RegExp(`((?:getvar|setvar|addvar|getglobalvar|setglobalvar|addglobalvar|getVariable|setVariable)\\s*\\(\\s*['"])([^'"]+)(['"])`, 'g');
+      newText = newText.replace(ejsRegex, (match, prefix, inner, suffix) => {
+        const segmentRegex = new RegExp(`(^|\\.)(${escaped})(\\.|$)`, 'g');
+        const newInner = inner.replace(segmentRegex, `$1${safeTranslated}$3`);
+        return `${prefix}${newInner}${suffix}`;
+      });
       
       // ── 3. data-var="KEY" ──
       newText = newText.replace(
@@ -83,10 +85,12 @@ export function applyMvuToText(
       );
       
       // 2. EJS function calls: getvar('KEY') / setvar('KEY', ...)
-      newText = newText.replace(
-        new RegExp(`((?:getvar|setvar|addvar|getglobalvar|setglobalvar|addglobalvar|getVariable|setVariable)\\s*\\(\\s*['"])${escaped}(['"])`, 'g'),
-        `$1${safeTranslated}$2`
-      );
+      const ejsRegex = new RegExp(`((?:getvar|setvar|addvar|getglobalvar|setglobalvar|addglobalvar|getVariable|setVariable)\\s*\\(\\s*['"])([^'"]+)(['"])`, 'g');
+      newText = newText.replace(ejsRegex, (match, prefix, inner, suffix) => {
+        const segmentRegex = new RegExp(`(^|\\.)(${escaped})(\\.|$)`, 'g');
+        const newInner = inner.replace(segmentRegex, `$1${safeTranslated}$3`);
+        return `${prefix}${newInner}${suffix}`;
+      });
       
       // 3. data-var="KEY"
       newText = newText.replace(
@@ -372,6 +376,25 @@ export function extractPotentialMvuKeys(card: CharacterCard): MvuKeyInfo[] {
     }
   };
 
+  // ─── Scan EJS function calls (TavernHelper/Regex/Lorebook) ───
+  const scanEjsCalls = (text: string) => {
+    if (!text || typeof text !== 'string') return;
+    const ejsCallRegex = /(?:getvar|setvar|addvar|getglobalvar|setglobalvar|addglobalvar|getVariable|setVariable)\s*\(\s*['"]([^'"]+)['"]/g;
+    let match;
+    while ((match = ejsCallRegex.exec(text)) !== null) {
+      const fullKey = match[1].trim();
+      if (fullKey) {
+        // For dotted paths like stat_data.X.Y, extract each segment
+        const segments = fullKey.split('.');
+        for (const seg of segments) {
+          if (seg && !isNoiseKey(seg)) {
+            trackKey(seg, 'ejs');
+          }
+        }
+      }
+    }
+  };
+
   // ─── Scan Zod schema fields ───
   const scanZodFields = (text: string) => {
     if (!text || typeof text !== 'string') return;
@@ -410,17 +433,19 @@ export function extractPotentialMvuKeys(card: CharacterCard): MvuKeyInfo[] {
       /mvu|variable|var_init|zod|initvar/i.test(nameStr);
 
     if (isInitvar || isMvu) {
-      // Full scan for MVU/initvar entries: YAML + macros + Zod + data-var
+      // Full scan for MVU/initvar entries: YAML + macros + EJS + Zod + data-var
       scanYamlKeys(entry.content);
       scanMacros(entry.content);
+      scanEjsCalls(entry.content);
       scanZodFields(entry.content);
       scanDataVar(entry.content);
     } else if (entry.content) {
       // Scan for JSON Patch field names
       const patchFields = extractPatchFieldNames(entry.content);
       for (const pf of patchFields) trackKey(pf, 'jsonpatch');
-      // Other entries: macros + data-var only (NO YAML — too noisy)
+      // Other entries: macros + EJS + data-var only (NO YAML — too noisy)
       scanMacros(entry.content);
+      scanEjsCalls(entry.content);
       scanDataVar(entry.content);
     }
   }
@@ -431,9 +456,10 @@ export function extractPotentialMvuKeys(card: CharacterCard): MvuKeyInfo[] {
   const tavernHelper = data.extensions?.tavern_helper as { scripts?: { content: string }[] } | undefined;
   if (tavernHelper?.scripts) {
     for (const script of tavernHelper.scripts) {
-      // Zod + macros + data-var (NO YAML — scripts are JS code, not YAML)
+      // Zod + macros + EJS + data-var (NO YAML — scripts are JS code, not YAML)
       scanZodFields(script.content);
       scanMacros(script.content);
+      scanEjsCalls(script.content);
       scanDataVar(script.content);
     }
   }
@@ -442,6 +468,7 @@ export function extractPotentialMvuKeys(card: CharacterCard): MvuKeyInfo[] {
     for (const script of tavernHelperLegacy) {
       scanZodFields(script.content);
       scanMacros(script.content);
+      scanEjsCalls(script.content);
       scanDataVar(script.content);
     }
   }
@@ -454,11 +481,13 @@ export function extractPotentialMvuKeys(card: CharacterCard): MvuKeyInfo[] {
       if (script.findRegex && typeof script.findRegex === 'string') {
         scanDataVar(script.findRegex);
         scanMacros(script.findRegex);
+        scanEjsCalls(script.findRegex);
       }
       if (script.replaceString) {
-        // data-var + macros only (NO YAML, NO Zod — this is HTML)
+        // data-var + macros + EJS only (NO YAML, NO Zod — this is HTML)
         scanDataVar(script.replaceString);
         scanMacros(script.replaceString);
+        scanEjsCalls(script.replaceString);
       }
     }
   }
@@ -473,11 +502,13 @@ export function extractPotentialMvuKeys(card: CharacterCard): MvuKeyInfo[] {
   for (const fieldText of narrativeFields) {
     if (!fieldText || typeof fieldText !== 'string') continue;
     scanMacros(fieldText);
+    scanEjsCalls(fieldText);
   }
   if (Array.isArray(data.alternate_greetings)) {
     for (const greeting of data.alternate_greetings) {
       if (typeof greeting !== 'string') continue;
       scanMacros(greeting);
+      scanEjsCalls(greeting);
     }
   }
 
@@ -569,7 +600,7 @@ You are a variable name translator for SillyTavern character cards.
 Your job: translate variable names from the source language to ${targetLang}.
 
 STRICT RULES:
-1. Use natural spacing with diacritics (e.g. Vietnamese: Độ Hảo Cảm, Sức Tấn Công). Do NOT use underscores.
+1. Use natural, readable formatting with diacritics (e.g. Vietnamese: Độ Hảo Cảm, Sức Tấn Công). CONSISTENCY is the only formatting rule — same variable = identical string everywhere.
 2. Keep the names SHORT but meaningful (2-4 words max).
 3. Be CONSISTENT: similar concepts MUST have similar naming patterns.
    - All emotion/feeling variables should follow the same pattern (e.g. Mức X, Độ X)
@@ -609,7 +640,7 @@ RESPOND in EXACT JSON format (no markdown): {"translations": {"original_key": "T
         : `${i + 1}. "${k}"`;
     }).join('\n');
 
-    const userPrompt = `Translate these variable names to ${targetLang} (natural language with spaces, NOT underscores):${contextBlock}
+    const userPrompt = `Translate these variable names to ${targetLang} (natural, readable formatting — consistency is the only rule):${contextBlock}
 Variables to translate:
 ${varList}`;
 

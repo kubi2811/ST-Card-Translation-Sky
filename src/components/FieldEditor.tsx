@@ -4,7 +4,7 @@ import { useTranslation } from '../hooks/useTranslation';
 import { useT } from '../i18n/useLocale';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { FieldGroup } from '../types/card';
-import { RotateCcw, AlertTriangle, CheckCircle2, Clock, ArrowLeftRight, BarChart3, Ban, Search, X, Copy, Check } from 'lucide-react';
+import { RotateCcw, AlertTriangle, CheckCircle2, Clock, ArrowLeftRight, BarChart3, Ban, Search, X, Copy, Check, Eye } from 'lucide-react';
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -140,6 +140,101 @@ function DiffView({ original, translated }: { original: string; translated: stri
           {translated.length > 800 ? translated.slice(0, 800) + '...' : translated}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Live HTML/Regex Preview Pane — renders translated HTML in a sandboxed iframe */
+function HtmlPreviewPane({ html }: { html: string }) {
+  const srcdoc = useMemo(() => {
+    // Wrap in a basic document with dark bg and common ST CSS vars
+    return `<!DOCTYPE html>
+<html>
+<head>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', Tahoma, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    color: #e0e0e0;
+    background: #1a1a2e;
+    padding: 12px;
+    word-break: break-word;
+    overflow-wrap: break-word;
+  }
+  img { max-width: 100%; height: auto; }
+  table { border-collapse: collapse; width: 100%; }
+  td, th { border: 1px solid #444; padding: 4px 8px; }
+  a { color: #82b1ff; }
+</style>
+</head>
+<body>
+${html}
+</body>
+</html>`;
+  }, [html]);
+
+  return (
+    <div style={{
+      marginTop: '6px',
+      border: '1px solid rgba(124,106,240,0.2)',
+      borderRadius: 'var(--radius-md)',
+      overflow: 'hidden',
+      background: '#1a1a2e',
+    }}>
+      <div style={{
+        padding: '3px 8px',
+        fontSize: '0.6rem',
+        fontWeight: 600,
+        color: 'var(--accent-primary)',
+        background: 'rgba(124,106,240,0.06)',
+        borderBottom: '1px solid rgba(124,106,240,0.1)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '4px',
+      }}>
+        <Eye size={10} />
+        HTML Preview (sandboxed)
+      </div>
+      <iframe
+        srcDoc={srcdoc}
+        sandbox="allow-same-origin"
+        style={{
+          width: '100%',
+          minHeight: '120px',
+          maxHeight: '400px',
+          border: 'none',
+          display: 'block',
+        }}
+        title="HTML Preview"
+      />
+    </div>
+  );
+}
+
+/** Toggle wrapper for HtmlPreviewPane — shows an eye button to expand/collapse */
+function HtmlPreviewToggle({ html }: { html: string }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div style={{ marginTop: '4px' }}>
+      <button
+        onClick={() => setShow(p => !p)}
+        className="btn btn-ghost btn-xs"
+        style={{
+          padding: '2px 8px',
+          fontSize: '0.62rem',
+          color: show ? 'var(--accent-primary)' : 'var(--text-muted)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '4px',
+          opacity: show ? 1 : 0.7,
+        }}
+      >
+        <Eye size={11} />
+        {show ? 'Hide Preview' : 'Preview HTML'}
+      </button>
+      {show && <HtmlPreviewPane html={html} />}
     </div>
   );
 }
@@ -387,6 +482,10 @@ function VirtualDiffView({
                   </div>
                 </div>
                 <DiffView original={field.original} translated={field.translated} />
+                {/* Show HTML preview toggle for regex fields */}
+                {field.group === 'regex' && field.path.includes('replaceString') && field.translated && (
+                  <HtmlPreviewToggle html={field.translated} />
+                )}
                 {field.error && (
                   <div style={{ fontSize: '0.65rem', color: 'var(--accent-danger)', marginTop: '6px' }}>
                     {field.error}

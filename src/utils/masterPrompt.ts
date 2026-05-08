@@ -260,7 +260,7 @@ RULE C2 — JSON Key Translation Integrity:
   When translating JSON structures used for MVU (Multi-Variable Update) state tracking, the keys themselves are variable names.
   Dịch MỌI chữ CJK (Hán/Nhật/Hàn) ở JSON key, bảo toàn ngoặc kép và cú pháp kỹ thuật. Dịch phù hợp quy tắc mvu và đồng biến với Schema. Nếu là tên riêng tiếng nhật thì dịch ra theo dạng phiên âm Romaji.
   RULES FOR KEYS:
-    - Use natural spaces, NOT underscores, unless specifically matching a dictionary.
+    - Use natural, readable formatting. The ONLY rule is EXACT CONSISTENCY — same variable = identical string everywhere in the card.
     - Must be consistent. If "修为" is translated as "Tu Vi" in one place, it must be "Tu Vi" everywhere.
     - Do NOT translate English keys.
     - Japanese proper nouns should use Romaji transliteration.
@@ -538,7 +538,7 @@ ${dictList}
 
 Rules:
 - Replace ALL occurrences consistently. Use EXACTLY the target strings above.
-- Variable names use natural spaces, NOT underscores.
+- Variable names may use natural spacing. CONSISTENCY is the only rule — same variable = identical string in initvar, schema, macros, and HTML.
 - Do NOT invent your own translations for these variables. Use the dictionary.
 - Do NOT translate English variable names. Japanese proper nouns use Romaji.
 - For dotted paths (e.g., stat_data.天海琉璃.阶段), translate EACH CJK segment separately using this dictionary, keep ASCII segments (stat_data) unchanged.`;

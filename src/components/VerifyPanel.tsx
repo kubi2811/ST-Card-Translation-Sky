@@ -4,7 +4,9 @@ import { useTranslation } from '../hooks/useTranslation';
 import { useT } from '../i18n/useLocale';
 import { aiVerifyCard, quickVerify, extractSystemReferences, verifyFields, applyAutoFix, aiFixIssues, aiFixSingleIssue } from '../utils/aiVerify';
 import type { VerifyIssue, VerifyResult, FieldIssue, AIFixReport } from '../utils/aiVerify';
-import { ShieldCheck, AlertTriangle, AlertCircle, Info, Loader2, Zap, Eye, ChevronDown, ChevronUp, Wrench, FileWarning, Code2, Braces, Hash, Type, ArrowLeftRight, CheckCircle2, Pencil, Save, Bot, XCircle } from 'lucide-react';
+import { crossCheckHtmlVsInitvar, validateFindRegexVsNarrative } from '../utils/mvuValidator';
+import type { CrossCheckResult, FindRegexValidationResult } from '../utils/mvuValidator';
+import { ShieldCheck, AlertTriangle, AlertCircle, Info, Loader2, Zap, Eye, ChevronDown, ChevronUp, Wrench, FileWarning, Code2, Braces, Hash, Type, ArrowLeftRight, CheckCircle2, Pencil, Save, Bot, XCircle, Link2 } from 'lucide-react';
 
 const SEVERITY_CONFIG = {
   error: { color: 'var(--accent-danger)', bg: 'rgba(255,82,82,0.06)', icon: AlertCircle, label: 'Error' },
@@ -55,6 +57,8 @@ export default function VerifyPanel() {
   const [aiFixReport, setAiFixReport] = useState<AIFixReport | null>(null);
   const [aiFixingIssueId, setAiFixingIssueId] = useState<string | null>(null);
   const aiFixAbortRef = useRef<AbortController | null>(null);
+  const [crossCheckResult, setCrossCheckResult] = useState<CrossCheckResult | null>(null);
+  const [findRegexResult, setFindRegexResult] = useState<FindRegexValidationResult | null>(null);
 
   const doneCount = fields.filter(f => f.status === 'done').length;
 
@@ -74,6 +78,35 @@ export default function VerifyPanel() {
       const issues = verifyFields(fields, translationConfig.mvuDictionary, translationConfig.sourceLanguage);
       setFieldIssues(issues);
       addLog('info', `Field verify: ${issues.length} issues (${issues.filter(i => i.severity === 'error').length} errors)`);
+
+      // ─── Cross-check: HTML ↔ Initvar ───
+      const regexFields = fields
+        .filter(f => f.group === 'regex' && f.path.includes('replaceString') && f.translated)
+        .map(f => ({ translated: f.translated, label: f.label }));
+      const initvarFields = fields
+        .filter(f => f.entryType === 'initvar' && f.translated)
+        .map(f => ({ translated: f.translated, label: f.label }));
+      if (regexFields.length > 0 && (initvarFields.length > 0 || Object.keys(translationConfig.mvuDictionary).length > 0)) {
+        const crossCheck = crossCheckHtmlVsInitvar(regexFields, initvarFields, translationConfig.mvuDictionary);
+        setCrossCheckResult(crossCheck);
+      } else {
+        setCrossCheckResult(null);
+      }
+
+      // ─── Cross-check: findRegex ↔ Narrative ───
+      const findRegexFields = fields
+        .filter(f => f.group === 'regex' && f.path.includes('findRegex') && f.translated)
+        .map(f => ({ findRegex: f.translated, label: f.label }));
+      const narrativeFields = fields
+        .filter(f => ['core', 'messages', 'system'].includes(f.group) && f.translated)
+        .map(f => ({ translated: f.translated, label: f.label }));
+      if (findRegexFields.length > 0 && narrativeFields.length > 0) {
+        const frResult = validateFindRegexVsNarrative(findRegexFields, narrativeFields);
+        setFindRegexResult(frResult);
+      } else {
+        setFindRegexResult(null);
+      }
+
       if (issues.length === 0) {
         addToast('success', t.verifyNoIssues);
       }
@@ -452,6 +485,82 @@ export default function VerifyPanel() {
         <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
           <CheckCircle2 size={28} color="var(--accent-success)" style={{ marginBottom: '6px' }} />
           <div>{t.verifyStartHint}</div>
+        </div>
+      )}
+
+      {/* ═══ Cross-check Results: HTML ↔ Initvar ═══ */}
+      {crossCheckResult && (
+        <div style={{ marginTop: '10px', padding: '10px 12px', borderRadius: 'var(--radius-md)',
+          border: `1px solid ${crossCheckResult.valid ? 'rgba(76,175,80,0.2)' : 'rgba(255,82,82,0.2)'}`,
+          background: crossCheckResult.valid ? 'rgba(76,175,80,0.03)' : 'rgba(255,82,82,0.03)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+            <Link2 size={14} color={crossCheckResult.valid ? 'var(--accent-success)' : 'var(--accent-danger)'} />
+            <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+              {isVi ? 'Đồng bộ HTML ↔ Initvar' : 'HTML ↔ Initvar Sync'}
+            </span>
+            <Badge color={crossCheckResult.valid ? 'var(--accent-success)' : 'var(--accent-danger)'}
+              bg={crossCheckResult.valid ? 'rgba(76,175,80,0.1)' : 'rgba(255,82,82,0.1)'}
+              text={crossCheckResult.summary} />
+          </div>
+          {crossCheckResult.orphanVars.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', maxHeight: '200px', overflowY: 'auto' }}>
+              {crossCheckResult.orphanVars.map((orphan, i) => {
+                const suggestion = crossCheckResult.suggestions.find(s => s.orphan === orphan.varName);
+                return (
+                  <div key={i} style={{ padding: '4px 8px', fontSize: '0.66rem', borderRadius: 'var(--radius-sm)',
+                    background: 'rgba(255,82,82,0.04)', border: '1px solid rgba(255,82,82,0.1)' }}>
+                    <span style={{ color: 'var(--accent-danger)', fontWeight: 600 }}>❌ "{orphan.varName}"</span>
+                    <span style={{ color: 'var(--text-muted)' }}> — {isVi ? 'trong' : 'in'} {orphan.source} ({orphan.context})</span>
+                    {suggestion && (
+                      <span style={{ color: 'var(--accent-success)', marginLeft: '6px' }}>
+                        💡 {isVi ? 'Có thể là' : 'Did you mean'} "{suggestion.closest}" ({Math.round(suggestion.similarity * 100)}%)
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {crossCheckResult.valid && (
+            <div style={{ fontSize: '0.68rem', color: 'var(--accent-success)' }}>
+              ✅ {isVi ? 'Tất cả biến trong HTML đều khớp với Initvar/Dictionary' : 'All HTML variables match Initvar/Dictionary'}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ═══ Cross-check Results: findRegex ↔ Narrative ═══ */}
+      {findRegexResult && (findRegexResult.matchedTags.length > 0 || findRegexResult.missingTags.length > 0) && (
+        <div style={{ marginTop: '8px', padding: '10px 12px', borderRadius: 'var(--radius-md)',
+          border: `1px solid ${findRegexResult.valid ? 'rgba(76,175,80,0.2)' : 'rgba(255,180,0,0.25)'}`,
+          background: findRegexResult.valid ? 'rgba(76,175,80,0.03)' : 'rgba(255,180,0,0.03)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+            <Code2 size={14} color={findRegexResult.valid ? 'var(--accent-success)' : 'var(--accent-warning)'} />
+            <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+              {isVi ? 'findRegex ↔ Tag Narrative' : 'findRegex ↔ Narrative Tags'}
+            </span>
+            <Badge color={findRegexResult.valid ? 'var(--accent-success)' : 'var(--accent-warning)'}
+              bg={findRegexResult.valid ? 'rgba(76,175,80,0.1)' : 'rgba(255,180,0,0.1)'}
+              text={findRegexResult.summary} />
+          </div>
+          {findRegexResult.missingTags.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+              {findRegexResult.missingTags.map((mt, i) => (
+                <div key={i} style={{ padding: '3px 8px', fontSize: '0.66rem', borderRadius: 'var(--radius-sm)',
+                  background: 'rgba(255,180,0,0.04)', border: '1px solid rgba(255,180,0,0.1)' }}>
+                  <span style={{ color: 'var(--accent-warning)', fontWeight: 600 }}>⚠️ &lt;{mt.tag}&gt;</span>
+                  <span style={{ color: 'var(--text-muted)' }}>
+                    {' '}{isVi ? `trong ${mt.regexLabel} — không tìm thấy trong bất kỳ field nào` : `in ${mt.regexLabel} — not found in any narrative field`}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          {findRegexResult.valid && (
+            <div style={{ fontSize: '0.68rem', color: 'var(--accent-success)' }}>
+              ✅ {isVi ? 'Tất cả custom tags đều khớp với nội dung narrative' : 'All custom tags match narrative content'}
+            </div>
+          )}
         </div>
       )}
     </div>

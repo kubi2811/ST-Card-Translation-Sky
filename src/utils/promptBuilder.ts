@@ -34,7 +34,7 @@ ADDITIONAL RULES FOR HTML/REGEX CONTENT:
     - 宋体 / SimSun → 'Times New Roman', 'Noto Serif', serif
     - 楷体 / KaiTi → 'Georgia', serif
     - Any other Chinese/Japanese font → 'Segoe UI', sans-serif
-15. VARIABLE NAME FORMATTING: Translated variable names and data-var attributes MUST use SPACES between words, NOT underscores. Example: "Ngoại giao đoàn" is correct, "Ngoại_giao_đoàn" is WRONG.
+15. VARIABLE NAME FORMATTING: Translated variable names may use natural spacing. The ONLY rule is EXACT CONSISTENCY — every occurrence of the same variable across all fields (Initvar, Zod schema, HTML data-var, macros) MUST use the identical string, character for character.
 16. TRANSLATE ALL CJK (Chinese/Japanese/Korean) text. Keep all HTML structure, data-var attributes, class names, and id attributes intact, BUT if an attribute value or tag content contains CJK, you MUST translate it.`;
 
 /** Prompt bổ sung dành riêng cho TavernHelper scripts */
@@ -58,7 +58,7 @@ ADDITIONAL RULES FOR [initvar] VARIABLE INITIALIZATION ENTRIES:
 16. PRESERVE the exact YAML structure: indentation, colons, line breaks.
 17. DO NOT translate numeric values, boolean values (true/false), or code expressions.
 18. Keep any {{macro}} placeholders exactly as-is (except for their CJK arguments).
-19. VARIABLE NAME FORMATTING: All translated key names (variable names) MUST use SPACES between words, NOT underscores. Example: "好感度: 陌生人" → "Hảo cảm: Người lạ" (spaces, NOT "Hảo_cảm").
+19. VARIABLE NAME FORMATTING: Translated key names may use natural spacing. The ONLY critical rule is 100% CHARACTER-EXACT CONSISTENCY between initvar YAML keys, z.object schema fields, and all macros. Example: if you choose "Hảo cảm" here, it MUST be "Hảo cảm" everywhere — not "Hảo Cảm" or "hảo cảm".
 20. CROSS-FIELD CONSISTENCY: The key names you produce here MUST be IDENTICAL to the z.object field names in the schema entry. If the schema uses "Giá trị tức đọa", you MUST also use "Giá trị tức đọa" here — never a different spelling or format.`;
 
 /** Prompt bổ sung cho MVU logic entries (controller/update) */
@@ -71,7 +71,7 @@ ADDITIONAL RULES FOR MVU LOGIC/CONTROLLER ENTRIES:
 17. Variable names in macros should use the translated names from the MVU dictionary.
 18. Keep JSON structures, conditional expressions, and mathematical formulas unchanged, BUT translate their CJK keys and values.
 19. Translate all descriptive text and CJK labels.
-20. VARIABLE NAME FORMATTING: All translated variable/key names MUST use SPACES between words, NOT underscores. In z.object() and JavaScript code, use QUOTED string keys for multi-word names. Example: z.object({ "Giá trị tức đọa": z.number() }) — NOT Giá_trị_tức_đọa.
+20. VARIABLE NAME FORMATTING: Translated variable names may use natural spacing. In z.object() and JavaScript code, use QUOTED string keys for multi-word names. Example: z.object({ "Giá trị tức đọa": z.number() }). The ONLY rule is EXACT CONSISTENCY — same variable = same string everywhere.
 21. CROSS-FIELD CONSISTENCY: Variable names MUST be IDENTICAL across initvar YAML keys and z.object schema keys. If the MVU dictionary provides a translated name, use it EXACTLY as-is (with spaces, no underscores).`;
 
 /** Prompt chống kiểm duyệt (Phá giới hạn Catbox) */
@@ -249,7 +249,7 @@ This card uses a variable system (MVU/Zod). The following variable names MUST be
 ${dictList}
 Rules:
 - Replace ALL occurrences of the original name with the translated name
-- Use SPACES between words in variable names, NOT underscores (e.g. "Giá trị tức đọa" not "Giá_trị_tức_đọa")
+- Variable names may use natural spacing. The ONLY rule is 100% consistency — same variable = identical string in initvar, schema, macros, and HTML
 - In z.object() or JS code, use QUOTED keys for multi-word names: { "Tên biến": z.string() }
 - Do NOT invent your own translations for these variables — use EXACTLY the dictionary above
 - If you see a variable name from the dictionary, ALWAYS use the mapped translation
@@ -262,7 +262,7 @@ This card uses a variable system. When you encounter ANY of the following origin
 ${dictList}
 Rules:
 - ALWAYS use the mapped translation from the dictionary above — do NOT invent alternatives
-- Use SPACES between words in translated variable names, NOT underscores
+- Variable names may use natural spacing. CONSISTENCY is mandatory — same variable = identical string everywhere
 - Variable names inside macros ({{getvar::NAME}}) MUST use the dictionary translation
 - This ensures consistency across ALL parts of the character card (lorebook, regex, schema, narrative)`;
 }

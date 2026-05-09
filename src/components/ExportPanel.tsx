@@ -13,7 +13,7 @@ const KEY_MODE_OPTIONS: { value: ExportKeyMode; labelEn: string; labelVi: string
 ];
 
 export default function ExportPanel() {
-  const { card, fields, cardFileName, originalImage, translationConfig, setTranslationConfig, phase, saveTranslationCache, locale, contentType, originalWorldbook } = useStore();
+  const { card, fields, cardFileName, originalImage, _pngArrayBuffer, translationConfig, setTranslationConfig, phase, saveTranslationCache, locale, contentType, originalWorldbook } = useStore();
   const { getExportCard } = useTranslation();
   const t = useT();
   const isWorldbook = contentType === 'worldbook';
@@ -75,7 +75,9 @@ export default function ExportPanel() {
 
     try {
       const json = JSON.stringify(exportCard);
-      const dataUrl = await embedCharaToPNG(originalImage, json);
+      // Prefer _pngArrayBuffer if available (especially after reload), fallback to originalImage
+      const imageData = _pngArrayBuffer || originalImage;
+      const dataUrl = await embedCharaToPNG(imageData, json);
       
       const baseName = cardFileName.replace(/\.(json|png)$/i, '');
       const langSuffix = translationConfig.targetLanguage === 'Tiếng Việt' ? 'vi' : 'translated';

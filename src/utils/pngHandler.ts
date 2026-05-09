@@ -93,12 +93,17 @@ export const extractCharaFromPNG = async (file: File): Promise<{json: string, da
 }
 
 /** Embeds new character JSON back into the original PNG, returning a new Data URL */
-export const embedCharaToPNG = async (originalDataUrl: string, newJson: string): Promise<string> => {
-    // 1. extract base64 from dataUrl
-    const b64 = originalDataUrl.split(',')[1];
-    const binStr = atob(b64);
-    const uint8 = new Uint8Array(binStr.length);
-    for(let i=0; i<binStr.length; i++) uint8[i] = binStr.charCodeAt(i);
+export const embedCharaToPNG = async (originalDataUrl: string | ArrayBuffer, newJson: string): Promise<string> => {
+    let uint8: Uint8Array;
+    if (typeof originalDataUrl === 'string') {
+        // 1. extract base64 from dataUrl
+        const b64 = originalDataUrl.split(',')[1];
+        const binStr = atob(b64);
+        uint8 = new Uint8Array(binStr.length);
+        for(let i=0; i<binStr.length; i++) uint8[i] = binStr.charCodeAt(i);
+    } else {
+        uint8 = new Uint8Array(originalDataUrl);
+    }
     
     // 2. parse and rebuild
     const view = new DataView(uint8.buffer);

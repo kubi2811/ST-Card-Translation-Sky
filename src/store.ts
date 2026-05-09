@@ -131,9 +131,22 @@ export const useStore = create<AppState>((set) => ({
     LS.set('st-translator-mvu-dict', {});
     // Separate image from card data in IDB — avoids serializing huge base64/blob
     IDB.set('st-translator-card-data', { card, cardFileName: fileName, contentType, originalWorldbook });
+    
+    // Also save the raw ArrayBuffer if we have it
+    const currentBuffer = useStore.getState()._pngArrayBuffer;
+    if (currentBuffer) {
+      IDB.set('st-translator-image-buffer', currentBuffer);
+    } else {
+      IDB.remove('st-translator-image-buffer');
+    }
+
     if (originalImage && !originalImage.startsWith('blob:')) {
       // Only persist data URLs (Blob URLs are not persistable)
       IDB.set('st-translator-image-data', originalImage);
+    } else if (!currentBuffer) {
+      // If we don't have a buffer and it's a blob url, the image won't persist!
+      // But we always set currentBuffer if it's a blob URL from the parser.
+      IDB.remove('st-translator-image-data');
     }
   },
   clearCard: () => {
@@ -161,16 +174,29 @@ export const useStore = create<AppState>((set) => ({
     IDB.remove('st-translator-card-data');
     IDB.remove('st-translator-fields-data');
     IDB.remove('st-translator-image-data');
+    IDB.remove('st-translator-image-buffer');
   },
   loadStateFromIDB: async () => {
     const cardData = await IDB.get<{card: CharacterCard, cardFileName: string, contentType?: ContentType, originalWorldbook?: Worldbook | null} | null>('st-translator-card-data', null);
     if (cardData) {
       // Load image separately
       const savedImage = await IDB.get<string | null>('st-translator-image-data', null);
+      const savedBuffer = await IDB.get<ArrayBuffer | null>('st-translator-image-buffer', null);
+      
+      let loadedImage = savedImage;
+      let blobUrl = null;
+      if (savedBuffer) {
+        const blob = new Blob([savedBuffer], { type: 'image/png' });
+        blobUrl = URL.createObjectURL(blob);
+        loadedImage = blobUrl;
+      }
+
       set({
         card: cardData.card,
         cardFileName: cardData.cardFileName,
-        originalImage: savedImage,
+        originalImage: loadedImage,
+        _pngArrayBuffer: savedBuffer || null,
+        _blobUrl: blobUrl,
         contentType: cardData.contentType || 'card',
         originalWorldbook: cardData.originalWorldbook || null,
       });

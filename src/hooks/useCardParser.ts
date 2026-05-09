@@ -90,6 +90,8 @@ export function useCardParser() {
         // Store the original ArrayBuffer reference for PNG export
         if (isPng && result.pngBlob) {
           useStore.getState()._pngArrayBuffer = await result.pngBlob.arrayBuffer();
+        } else {
+          useStore.getState()._pngArrayBuffer = null;
         }
 
         setCard(result.card, file.name, blobUrl, result.contentType, result.originalWorldbook);
@@ -151,6 +153,8 @@ export function useCardParser() {
 
         const card = json as CharacterCard;
         const summary = getCardSummary(card);
+        
+        useStore.getState()._pngArrayBuffer = null;
         setCard(card, file.name, dataUrl, 'card', null);
         addToast('success', `Loaded: ${summary.name} (${summary.lorebookCount} lorebook entries)`);
         return card;

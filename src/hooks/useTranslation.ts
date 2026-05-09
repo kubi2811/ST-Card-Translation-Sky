@@ -6,7 +6,7 @@ import { syncMvuVariables, postProcessRegexHtml, extractPotentialMvuKeyStrings, 
 import { shouldSkipTranslation } from '../utils/langDetect';
 import { clearRAGCache } from '../utils/ragContext';
 import { getMvuCardSummary } from '../utils/mvuDetector';
-import { validateMvuVariables, autoFixMvuVariables, generateSyncReport } from '../utils/mvuValidator';
+import { validateMvuVariables, autoFixMvuVariables, generateSyncReport, buildEntryNameDictionary, validateEntryNameSync } from '../utils/mvuValidator';
 import { buildEffectivePrompt } from '../utils/promptBuilder';
 import type { FieldGroup, FieldGroupConfig, TranslationField } from '../types/card';
 
@@ -113,6 +113,9 @@ export function useTranslation() {
       }
 
       // ═══ Centralized prompt building (single source of truth) ═══
+      // Build entry name dictionary from already-translated lorebook name fields
+      const entryNameDict = buildEntryNameDictionary(fields);
+
       const promptResult = buildEffectivePrompt({
         translationPrompt: store.translationConfig.translationPrompt,
         enableJailbreak: store.translationConfig.enableJailbreak,
@@ -127,6 +130,7 @@ export function useTranslation() {
         liveSchemaContext: store.liveSchemaContext,
         ragMaxFields: store.translationConfig.ragMaxFields,
         ragMaxChars: store.translationConfig.ragMaxChars,
+        entryNameDictionary: Object.keys(entryNameDict).length > 0 ? entryNameDict : undefined,
         expertMode: store.proxy.expertMode,
       });
 
@@ -236,6 +240,9 @@ export function useTranslation() {
       
       
       // ═══ Centralized prompt building (single source of truth) ═══
+      // Build entry name dictionary from already-translated lorebook name fields
+      const batchEntryNameDict = buildEntryNameDictionary(store.fields);
+
       const promptResult = buildEffectivePrompt({
         translationPrompt: store.translationConfig.translationPrompt,
         enableJailbreak: store.translationConfig.enableJailbreak,
@@ -251,6 +258,7 @@ export function useTranslation() {
         liveSchemaContext: store.liveSchemaContext,
         ragMaxFields: store.translationConfig.ragMaxFields,
         ragMaxChars: store.translationConfig.ragMaxChars,
+        entryNameDictionary: Object.keys(batchEntryNameDict).length > 0 ? batchEntryNameDict : undefined,
         expertMode: store.proxy.expertMode,
       });
 
@@ -816,6 +824,35 @@ export function useTranslation() {
          store.addLog('warning', warning);
       }
     }
+
+    // ═══ Post-Translation Entry Name ↔ Text Sync Verification ═══
+    {
+      const doneFields = store.fields.filter(f => f.status === 'done');
+      const entryNameResult = validateEntryNameSync(doneFields.map(f => ({
+        path: f.path,
+        label: f.label,
+        group: f.group,
+        original: f.original,
+        translated: f.translated,
+        status: f.status,
+      })));
+
+      if (entryNameResult.matchedNames.length > 0 || entryNameResult.missingNames.length > 0) {
+        if (entryNameResult.valid) {
+          store.addLog('success', `✅ EJS Sync: All ${entryNameResult.matchedNames.length} entry names correctly synchronized in text!`);
+        } else {
+          store.addLog('warning', `⚠️ EJS Sync: ${entryNameResult.missingNames.length} entry name(s) NOT found in translated text — EJS auto-trigger will fail!`);
+          for (const m of entryNameResult.missingNames.slice(0, 5)) {
+            store.addLog('error', `  Entry "${m.originalName}" → "${m.translatedName}" missing in text (was in: ${m.appearedInOriginal})`);
+          }
+          if (entryNameResult.suggestions.length > 0) {
+            for (const s of entryNameResult.suggestions.slice(0, 3)) {
+              store.addLog('info', `  💡 "${s.missingName}": ${s.closest}`);
+            }
+          }
+        }
+      }
+    }
   }, [prepareFields, store]);
 
   const pauseTranslation = useCallback(() => {
@@ -857,6 +894,9 @@ export function useTranslation() {
       }
 
       // ═══ Centralized prompt building (single source of truth) ═══
+      // Build entry name dictionary from already-translated lorebook name fields
+      const retranslateEntryNameDict = buildEntryNameDictionary(store.fields);
+
       const promptResult = buildEffectivePrompt({
         translationPrompt: store.translationConfig.translationPrompt,
         enableJailbreak: store.translationConfig.enableJailbreak,
@@ -871,6 +911,7 @@ export function useTranslation() {
         liveSchemaContext: store.liveSchemaContext,
         ragMaxFields: store.translationConfig.ragMaxFields,
         ragMaxChars: store.translationConfig.ragMaxChars,
+        entryNameDictionary: Object.keys(retranslateEntryNameDict).length > 0 ? retranslateEntryNameDict : undefined,
         expertMode: store.proxy.expertMode,
       });
 

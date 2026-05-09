@@ -106,6 +106,7 @@ export function getDefaultTranslationPrompt(sourceLang: string, targetLang: stri
   const vietnameseRules = targetLang.toLowerCase().includes('việt') || targetLang.toLowerCase().includes('vietnamese')
     ? `\n15. VIETNAMESE SPECIFIC RULES:
     - Translate Chinese names (characters, places, martial arts, etc.) into Hán Việt (Sino-Vietnamese) instead of Pinyin or raw English.
+    - For Japanese proper nouns (names, places), use standard Romaji transliteration (e.g. 田中 → Tanaka, 桜 → Sakura). Do NOT apply Hán Việt to Japanese names.
     - Use natural roleplay pronouns (e.g., tôi/bạn, anh/em, hắn/nàng/y) suitable for the context, avoiding rigid direct translation of pronouns (like 'ngươi/ta' unless it's a historical setting).
     - Ensure a smooth, natural literary flow (văn phong mượt mà) suitable for fiction/roleplay. Avoid word-by-word literal translation.`
     : '';
@@ -130,7 +131,10 @@ STRICT RULES:
    - Variable placeholders like {{char}}, {{user}}, {{random}}: Keep exactly as-is, do NOT translate.
    - Text inside angle brackets like <角色名>, <设定>: Keep the bracket structure, translate the content inside.
 10. Maintain consistent terminology. If you translate a term one way, use that same translation throughout.
-11. For Japanese proper nouns (names, places, etc.), you MUST transliterate them into standard Romaji.
+11. PROPER NOUN TRANSLITERATION RULES:
+    - Chinese proper nouns (names, places, titles) → Hán Việt / Sino-Vietnamese reading (e.g. 李明 → Lý Minh). Do NOT use Pinyin.
+    - Japanese proper nouns (names, places) → standard Romaji transliteration (e.g. 田中 → Tanaka, 桜 → Sakura). Do NOT apply Hán Việt to Japanese names.
+    - Keep honorifics as-is or map to Vietnamese equivalents based on context (-san, -chan, -sama).
 12. CRITICAL: The output must contain ONLY the translated text in ${targetLang}. Do NOT include source language text. Do NOT pair original text with translation. Do NOT use arrows (→) or colons (:) to show before/after.
 13. CRITICAL: You MUST translate the COMPLETE text. Do NOT stop early. Do NOT summarize or truncate. If the text is very long, translate ALL of it from start to finish.
 14. CRITICAL: ABSOLUTELY NO untranslated source language characters (e.g., Chinese Hanzi, Japanese Kanji) should remain in the final output. You MUST translate every single word into ${targetLang} unless it is a specific system variable name (like {{char}}). This includes: section headers, YAML-like key names, parenthetical annotations, labels, category names, and text inside XML tags. After translating, scan your ENTIRE output for any remaining Chinese characters — if you find ANY, translate them immediately.
@@ -261,7 +265,7 @@ function buildTranslationMessages(
       ? `\n    - VIETNAMESE SPECIFIC: Translate names into Hán Việt (Sino-Vietnamese). Use natural roleplay pronouns. Ensure smooth literary flow.`
       : '';
 
-    const safetyRule = `\n\nCRITICAL RULE: ABSOLUTELY NO untranslated source language characters (e.g., Chinese Hanzi, Japanese Kanji) should remain in the final output. You MUST translate every single word into ${targetLang} unless it is a specific system variable name (like {{char}}).${vietnameseSafetyRule}`;
+    const safetyRule = `\n\nCRITICAL RULE: ABSOLUTELY NO untranslated source language characters (e.g., Chinese Hanzi, Japanese Kanji) should remain in the final output. You MUST translate every single word into ${targetLang} unless it is a specific system variable name (like {{char}}).${vietnameseSafetyRule}\n    - PROPER NOUN RULE: Chinese proper nouns → Hán Việt. Japanese proper nouns → Romaji (NOT Hán Việt). Do NOT mix up these two systems.`;
 
     let regexInstruction = '';
     if (fieldName.includes('findRegex') || fieldName.includes('replaceString')) {
@@ -391,7 +395,7 @@ RULES:
 1. Output the COMPLETE text with ALL Chinese replaced by ${targetLang} translations.
 2. Do NOT change anything already in ${targetLang}, English, or code.
 3. Preserve ALL formatting, HTML, code, macros, EJS, regex patterns.
-4. Translate Chinese names using Han Viet (Sino-Vietnamese) reading.
+4. Translate Chinese names using Hán Việt (Sino-Vietnamese) reading. Japanese names use Romaji transliteration (NOT Hán Việt).
 5. Do NOT wrap output in markdown fences.
 6. Do NOT add explanations.
 7. Return the FULL text, not just the translated fragments.

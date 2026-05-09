@@ -139,6 +139,8 @@ export interface UnifiedRAGInput {
   mvuDictionary?: Record<string, string>;
   /** Custom Schema text — từ TranslationConfig */
   customSchema?: string;
+  /** Entry name dictionary for EJS sync: original entry name → translated name */
+  entryNameDictionary?: Record<string, string>;
   /** Cấu hình RAG */
   maxFields?: number;
   maxChars?: number;
@@ -269,6 +271,30 @@ export function buildUnifiedRAGContext(input: UnifiedRAGInput): string {
           '- Apply in macros ({{getvar::NAME}}), data-var attributes, and all contexts\n' +
           '- Use EXACTLY the dictionary translation — do NOT invent alternatives';
       }
+      sections.push(section);
+      totalChars += section.length;
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // SECTION 3b: Entry Name Dictionary (EJS Auto-Trigger Sync)
+  // ══════════════════════════════════════════════════════════
+  if (input.entryNameDictionary) {
+    const entryNameEntries = Object.entries(input.entryNameDictionary)
+      .filter(([k, v]) => k && v && k !== v);
+    if (entryNameEntries.length > 0) {
+      // Track covered terms
+      for (const [k, v] of entryNameEntries) {
+        coveredTerms.add(k.toLowerCase());
+        coveredTerms.add(v.toLowerCase());
+      }
+
+      const dictList = entryNameEntries.map(([k, v]) => `  "${k}" → "${v}"`).join('\n');
+      let section = '═══ ENTRY NAME DICTIONARY (EJS SYNC) ═══\n' +
+        'SillyTavern auto-loads lorebook entries when their EXACT NAME appears in text.\n' +
+        'When translating, replace original entry names with their translated equivalents:\n' +
+        dictList + '\n' +
+        'A mismatch = the entry will NEVER be loaded at runtime.';
       sections.push(section);
       totalChars += section.length;
     }

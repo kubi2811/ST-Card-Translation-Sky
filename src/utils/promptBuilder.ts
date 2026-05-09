@@ -35,7 +35,8 @@ ADDITIONAL RULES FOR HTML/REGEX CONTENT:
     - 楷体 / KaiTi → 'Georgia', serif
     - Any other Chinese/Japanese font → 'Segoe UI', sans-serif
 15. VARIABLE NAME FORMATTING: Translated variable names may use natural spacing. The ONLY rule is EXACT CONSISTENCY — every occurrence of the same variable across all fields (Initvar, Zod schema, HTML data-var, macros) MUST use the identical string, character for character.
-16. TRANSLATE ALL CJK (Chinese/Japanese/Korean) text. Keep all HTML structure, data-var attributes, class names, and id attributes intact, BUT if an attribute value or tag content contains CJK, you MUST translate it.`;
+16. TRANSLATE ALL CJK (Chinese/Japanese/Korean) text. Keep all HTML structure, data-var attributes, class names, and id attributes intact, BUT if an attribute value or tag content contains CJK, you MUST translate it.
+17. PROPER NOUN RULE: Chinese proper nouns → Hán Việt. Japanese proper nouns → Romaji (NOT Hán Việt).`;
 
 /** Prompt bổ sung dành riêng cho TavernHelper scripts */
 export const TAVERN_HELPER_EXTRA_PROMPT = `
@@ -47,7 +48,8 @@ ADDITIONAL RULES FOR JAVASCRIPT/TAVERNHELPER SCRIPT CONTENT:
 17. PRESERVE ONLY TECHNICAL SYNTAX. Do not preserve CJK content. If a variable name or object key is in CJK, TRANSLATE IT and maintain consistency (MVU sync).
 18. Keep ALL code structure intact — same line breaks, same indentation, same semicolons/brackets.
 19. If a string contains mixed code and text (e.g. template literals with \${var}), translate only the CJK/text parts and preserve the code interpolations.
-20. Preserve font-family replacements as specified for Chinese/Japanese fonts.`;
+20. Preserve font-family replacements as specified for Chinese/Japanese fonts.
+21. PROPER NOUN RULE: Chinese proper nouns → Hán Việt. Japanese proper nouns → Romaji (NOT Hán Việt).`;
 
 /** Prompt bổ sung cho [initvar] entries (YAML variable initialization) */
 export const INITVAR_EXTRA_PROMPT = `
@@ -59,7 +61,8 @@ ADDITIONAL RULES FOR [initvar] VARIABLE INITIALIZATION ENTRIES:
 17. DO NOT translate numeric values, boolean values (true/false), or code expressions.
 18. Keep any {{macro}} placeholders exactly as-is (except for their CJK arguments).
 19. VARIABLE NAME FORMATTING: Translated key names may use natural spacing. The ONLY critical rule is 100% CHARACTER-EXACT CONSISTENCY between initvar YAML keys, z.object schema fields, and all macros. Example: if you choose "Hảo cảm" here, it MUST be "Hảo cảm" everywhere — not "Hảo Cảm" or "hảo cảm".
-20. CROSS-FIELD CONSISTENCY: The key names you produce here MUST be IDENTICAL to the z.object field names in the schema entry. If the schema uses "Giá trị tức đọa", you MUST also use "Giá trị tức đọa" here — never a different spelling or format.`;
+20. CROSS-FIELD CONSISTENCY: The key names you produce here MUST be IDENTICAL to the z.object field names in the schema entry. If the schema uses "Giá trị tức đọa", you MUST also use "Giá trị tức đọa" here — never a different spelling or format.
+21. PROPER NOUN RULE: If variable names contain Japanese proper nouns, transliterate using Romaji (NOT Hán Việt).`;
 
 /** Prompt bổ sung cho MVU logic entries (controller/update) */
 export const MVU_LOGIC_EXTRA_PROMPT = `
@@ -72,7 +75,8 @@ ADDITIONAL RULES FOR MVU LOGIC/CONTROLLER ENTRIES:
 18. Keep JSON structures, conditional expressions, and mathematical formulas unchanged, BUT translate their CJK keys and values.
 19. Translate all descriptive text and CJK labels.
 20. VARIABLE NAME FORMATTING: Translated variable names may use natural spacing. In z.object() and JavaScript code, use QUOTED string keys for multi-word names. Example: z.object({ "Giá trị tức đọa": z.number() }). The ONLY rule is EXACT CONSISTENCY — same variable = same string everywhere.
-21. CROSS-FIELD CONSISTENCY: Variable names MUST be IDENTICAL across initvar YAML keys and z.object schema keys. If the MVU dictionary provides a translated name, use it EXACTLY as-is (with spaces, no underscores).`;
+21. CROSS-FIELD CONSISTENCY: Variable names MUST be IDENTICAL across initvar YAML keys and z.object schema keys. If the MVU dictionary provides a translated name, use it EXACTLY as-is (with spaces, no underscores).
+22. PROPER NOUN RULE: If variable/field names contain Japanese proper nouns, transliterate using Romaji (NOT Hán Việt).`;
 
 /** Prompt chống kiểm duyệt (Phá giới hạn Catbox) */
 export const JAILBREAK_PROMPT = `
@@ -134,6 +138,8 @@ export interface PromptBuildOptions {
   liveSchemaContext?: string;
   ragMaxFields?: number;
   ragMaxChars?: number;
+  /** Entry name dictionary for EJS sync: original entry name → translated name */
+  entryNameDictionary?: Record<string, string>;
 
   // ─── Extra options ───
   /** Strict Code Preservation (CustomTranslatePanel toggle) */
@@ -294,6 +300,7 @@ export function buildEffectivePrompt(options: PromptBuildOptions): PromptBuildRe
     liveSchemaContext,
     ragMaxFields = 5,
     ragMaxChars = 3000,
+    entryNameDictionary,
     strictCodePreservation = false,
     expertMode = false,
   } = options;
@@ -353,6 +360,7 @@ export function buildEffectivePrompt(options: PromptBuildOptions): PromptBuildRe
       glossary,
       mvuDictionary: enableMvuSync ? mvuDictionary : undefined,
       customSchema: effectiveSchema,
+      entryNameDictionary,
       maxFields: isBatchMode ? Math.min(ragMaxFields, 3) : ragMaxFields,
       maxChars: isBatchMode ? Math.min(ragMaxChars, 2000) : ragMaxChars,
     });

@@ -594,7 +594,7 @@ export async function aiTranslateMvuKeys(
 
   if (keysToTranslate.length === 0) return result;
 
-  const systemPrompt = `Dịch tiếng trung sang tiếng việt, không dịch tiếng anh. Dịch phù hợp quy tắc mvu và đồng biến với Schema. Nếu là tên riêng tiếng nhật thì dịch ra theo dạng phiên âm Romaji.
+  const systemPrompt = `Translate CJK (Chinese/Japanese/Korean) variable names to ${targetLang}. Do NOT translate English or ASCII names. Chinese proper nouns → Hán Việt. Japanese proper nouns → Romaji. Keep consistency with MVU Schema.
 
 You are a variable name translator for SillyTavern character cards.
 Your job: translate variable names from the source language to ${targetLang}.

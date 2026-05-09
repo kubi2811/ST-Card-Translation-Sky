@@ -33,6 +33,8 @@ export interface MasterPromptOptions {
   customPromptSuffix?: string;
   /** RAG context block from ragContext.ts - injected as Layer 8 */
   ragContextBlock?: string;
+  /** Entry name dictionary for EJS sync: original entry name → translated name */
+  entryNameDictionary?: Record<string, string>;
 }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -162,8 +164,25 @@ When the source language is Chinese, ALL proper nouns MUST be rendered in their 
 
   if (isJapanese && isVietnamese) {
     rules += `
-P1 — Japanese Proper Nouns:
-When source is Japanese, use standard Romaji transliteration (桜 → Sakura, 田中 → Tanaka). Do NOT apply Hán Việt to Japanese names. Honorifics (-san, -chan, -sama) can be kept as-is or mapped to Vietnamese equivalents based on context.`;
+P1 — Japanese Proper Nouns (Romaji Transliteration):
+When source is Japanese, ALL proper nouns MUST be transliterated using standard Romaji. This is mandatory.
+Do NOT apply Hán Việt (Sino-Vietnamese) to Japanese names — even if they use Kanji characters that look identical to Chinese.
+  - Personal names:  田中 → Tanaka (NOT: Điền Trung), 桜 → Sakura (NOT: Anh)
+  - Place names:     東京 → Tokyo (NOT: Đông Kinh), 大阪 → Osaka (NOT: Đại Phản)
+  - School names:    浦原学院 → Urahara Gakuin, 鶴見高校 → Tsurumi Koukou
+  - Family names:    佐藤 → Sato, 鈴木 → Suzuki, 高橋 → Takahashi
+  - Given names:     悠斗 → Yuuto, 美咲 → Misaki, 蓮 → Ren
+  - Honorifics (-san, -chan, -sama, -kun, -senpai) can be kept as-is or mapped to Vietnamese equivalents based on context.
+  - Mixed Kanji names: use the Japanese reading (On'yomi/Kun'yomi), NOT the Chinese reading.`;
+  }
+
+  // ── Fallback for mixed-language or auto-detect cards ──
+  if (isVietnamese && !isChinese && !isJapanese) {
+    rules += `
+P1 — Proper Noun Transliteration (Mixed/Auto-detect Source):
+  - Chinese proper nouns (中文) → Hán Việt / Sino-Vietnamese reading. Do NOT use Pinyin.
+  - Japanese proper nouns (日本語) → standard Romaji transliteration. Do NOT apply Hán Việt to Japanese names.
+  - Distinguish by context: if a character card is clearly Japanese-themed (school life, Japanese cities, -san/-chan), use Romaji for all names.`;
   }
 
   if (isVietnamese) {
@@ -285,7 +304,24 @@ RULE L3 — [initvar] Entries Are MANDATORY Translation Targets:
 RULE L4 — Lorebook comment Field:
   The 'comment' field of lorebook entries is a human-readable label.
   It MUST be translated to the target language. Do NOT skip it even if it looks short or code-like.
-  Examples: "角色初始化" → "Khởi tạo nhân vật", "战斗系统规则" → "Quy tắc hệ thống chiến đấu".`;
+  Examples: "角色初始化" → "Khởi tạo nhân vật", "战斗系统规则" → "Quy tắc hệ thống chiến đấu".
+
+RULE L5 — Entry Name ↔ Text Synchronization (EJS Auto-Trigger):
+  SillyTavern auto-loads lorebook entries when their EXACT NAME appears in the rendered text
+  (including output from EJS templates). Each card designer implements this differently,
+  but the core requirement is: the entry name content must EXACTLY match the entry's name field.
+  
+  CRITICAL IMPLICATIONS FOR TRANSLATION:
+  1. If an entry is NAMED "暗影王座" and this name appears in the description text,
+     then when you translate the entry name to "Ngai Vàng Bóng Tối", you MUST ALSO use
+     EXACTLY "Ngai Vàng Bóng Tối" wherever "暗影王座" appeared in narrative fields.
+  2. Even disabled entries (green) can be triggered this way — the name match alone activates them.
+  3. A single character difference between the translated entry name and the text = entry not loaded.
+  4. This applies across ALL fields: description, first_mes, mes_example, alternate_greetings,
+     system_prompt, depth_prompt, and other lorebook entry content.
+  
+  If an ENTRY NAME DICTIONARY is provided below, use it as the authoritative source.
+  Every original entry name in the text MUST be replaced with its exact dictionary translation.`;
 }
 
 /** JSON Patch (RFC 6902) translation rules */
@@ -552,6 +588,40 @@ ${dictList}`;
 }
 
 /* ════════════════════════════════════════════════════════════════════
+   LAYER 5b — ENTRY NAME SYNC BLOCK (dynamic)
+   Injected when entry name dictionary is present (EJS support)
+   ════════════════════════════════════════════════════════════════════ */
+function buildEntryNameSyncBlock(
+  entryNameDictionary: Record<string, string>,
+  fieldType: TranslationFieldType
+): string {
+  const entries = Object.entries(entryNameDictionary).filter(([k, v]) => k && v && k !== v);
+  if (entries.length === 0) return '';
+
+  // Only inject for field types where entry names would appear in text
+  const relevantTypes: TranslationFieldType[] = ['narrative', 'lorebook', 'mixed', 'ejs_code'];
+  if (!relevantTypes.includes(fieldType)) return '';
+
+  const dictList = entries.map(([k, v]) => `  "${k}" → "${v}"`).join('\n');
+
+  return `
+ENTRY NAME DICTIONARY (EJS AUTO-TRIGGER SYNC):
+SillyTavern auto-loads lorebook entries when their EXACT NAME appears in the text.
+When you encounter any of these original entry names in the text, you MUST replace them
+with the EXACT translated name below — character for character, including diacritics and spacing.
+A mismatch = the entry will NEVER be loaded at runtime.
+
+DICTIONARY:
+${dictList}
+
+Rules:
+- Replace ALL occurrences of the original entry name with its translated equivalent.
+- The translated name must be IDENTICAL to the lorebook entry's translated name.
+- Do NOT paraphrase, abbreviate, or alter the translated name in any way.
+- This is separate from MVU variable sync — entry names are for EJS content triggers, not code variables.`;
+}
+
+/* ════════════════════════════════════════════════════════════════════
    LAYER 6 — GLOSSARY BLOCK (dynamic)
    ════════════════════════════════════════════════════════════════════ */
 function buildGlossaryBlock(glossary: GlossaryEntry[]): string {
@@ -715,6 +785,11 @@ export function buildMasterSystemPrompt(options: MasterPromptOptions): string {
   // Layer 5: MVU sync block (if dictionary present)
   if (mvuDictionary && Object.keys(mvuDictionary).length > 0) {
     layers.push(buildMvuSyncBlock(mvuDictionary, fieldType));
+  }
+
+  // Layer 5b: Entry Name Sync block (if entry name dictionary present)
+  if (options.entryNameDictionary && Object.keys(options.entryNameDictionary).length > 0) {
+    layers.push(buildEntryNameSyncBlock(options.entryNameDictionary, fieldType));
   }
 
   // Layer 6: Glossary (if present)

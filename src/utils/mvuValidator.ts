@@ -804,3 +804,182 @@ export function validateFindRegexVsNarrative(
 
   return result;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   EJS Entry Name ↔ Narrative Text Synchronization
+   ═══════════════════════════════════════════════════════════════ */
+
+export interface EntryNameSyncResult {
+  valid: boolean;
+  /** Entry names found in narrative text (correctly synchronized) */
+  matchedNames: { originalName: string; translatedName: string; foundIn: string }[];
+  /** Entry names NOT found in narrative text (EJS will fail) */
+  missingNames: { originalName: string; translatedName: string; appearedInOriginal: string }[];
+  /** Suggestions for fixing missing names */
+  suggestions: { missingName: string; closest: string; similarity: number }[];
+  /** Summary */
+  summary: string;
+}
+
+/**
+ * Build entry name dictionary from translated lorebook name fields.
+ * Maps original entry name → translated entry name.
+ * 
+ * This dictionary is used for:
+ * 1. Validation: checking translated names appear in narrative text
+ * 2. Prompt injection: telling AI to use exact translated names
+ * 3. Auto-fix: replacing original names in narrative text with translations
+ */
+export function buildEntryNameDictionary(
+  fields: { path: string; original: string; translated: string; status: string }[]
+): Record<string, string> {
+  const dict: Record<string, string> = {};
+  for (const f of fields) {
+    // Match lorebook[N].name fields
+    if (
+      f.status === 'done' &&
+      f.translated &&
+      f.translated.trim() &&
+      /\.name$/.test(f.path) &&
+      f.path.includes('character_book.entries[')
+    ) {
+      const orig = f.original.trim();
+      const trans = f.translated.trim();
+      // Only add if the name actually changed (was translated)
+      if (orig && trans && orig !== trans) {
+        dict[orig] = trans;
+      }
+    }
+  }
+  return dict;
+}
+
+/**
+ * Validate that translated lorebook entry names appear in translated narrative text.
+ * 
+ * SillyTavern auto-loads lorebook entries when their EXACT NAME appears in
+ * the main text (including EJS-rendered output). If a translated entry name
+ * doesn't appear in the translated narrative, the entry will never be
+ * triggered → card breaks.
+ *
+ * @param fields - All translation fields with their original and translated content
+ */
+export function validateEntryNameSync(
+  fields: { path: string; label: string; group: string; original: string; translated: string; status: string }[]
+): EntryNameSyncResult {
+  const result: EntryNameSyncResult = {
+    valid: true,
+    matchedNames: [],
+    missingNames: [],
+    suggestions: [],
+    summary: '',
+  };
+
+  // 1. Build entry name dictionary from lorebook name fields
+  const entryNameDict = buildEntryNameDictionary(fields);
+  const entryNames = Object.entries(entryNameDict);
+  if (entryNames.length === 0) {
+    result.summary = 'No translated entry names found';
+    return result;
+  }
+
+  // 2. Collect all narrative text (original and translated)
+  const narrativeGroups = new Set(['core', 'messages', 'system', 'depth_prompt', 'lorebook']);
+  const narrativeOriginals: { text: string; label: string }[] = [];
+  const narrativeTranslated: { text: string; label: string }[] = [];
+
+  for (const f of fields) {
+    if (!narrativeGroups.has(f.group)) continue;
+    // Skip the name fields themselves and key fields
+    if (f.path.endsWith('.name') && f.path.includes('character_book.entries[')) continue;
+    if (f.path.endsWith('.keys') || f.path.endsWith('.secondary_keys')) continue;
+    // Skip comment fields — they're metadata, not narrative
+    if (f.path.endsWith('.comment')) continue;
+
+    if (f.original && f.original.trim()) {
+      narrativeOriginals.push({ text: f.original, label: f.label });
+    }
+    if (f.status === 'done' && f.translated && f.translated.trim()) {
+      narrativeTranslated.push({ text: f.translated, label: f.label });
+    }
+  }
+
+  // Concatenate all narrative text for faster searching
+  const allOriginalText = narrativeOriginals.map(n => n.text).join('\n');
+  const allTranslatedText = narrativeTranslated.map(n => n.text).join('\n');
+
+  // 3. For each entry name: check if it appears in narrative text
+  for (const [originalName, translatedName] of entryNames) {
+    // Only check entries whose original name appears in the original narrative text
+    if (!allOriginalText.includes(originalName)) continue;
+
+    // Check if translated name appears in translated narrative text
+    if (allTranslatedText.includes(translatedName)) {
+      // Find which field it was found in
+      const foundIn = narrativeTranslated.find(n => n.text.includes(translatedName))?.label || 'unknown';
+      result.matchedNames.push({ originalName, translatedName, foundIn });
+    } else {
+      // Find which original field contained the original name
+      const appearedIn = narrativeOriginals.find(n => n.text.includes(originalName))?.label || 'unknown';
+      result.missingNames.push({
+        originalName,
+        translatedName,
+        appearedInOriginal: appearedIn,
+      });
+      result.valid = false;
+
+      // Try to find closest match in translated text for suggestion
+      // Check if a partial or similar name exists
+      const words = translatedName.split(/\s+/);
+      if (words.length > 1) {
+        // Try finding individual words
+        const foundWords = words.filter(w => w.length > 1 && allTranslatedText.includes(w));
+        if (foundWords.length > 0) {
+          result.suggestions.push({
+            missingName: translatedName,
+            closest: `Partial match: "${foundWords.join(', ')}" found in text`,
+            similarity: foundWords.length / words.length,
+          });
+        }
+      }
+    }
+  }
+
+  // 4. Build summary
+  const parts: string[] = [];
+  if (result.matchedNames.length > 0) parts.push(`${result.matchedNames.length} ✅ synced`);
+  if (result.missingNames.length > 0) parts.push(`${result.missingNames.length} ❌ missing`);
+  result.summary = parts.join(' | ') || 'No entry names in narrative text';
+
+  return result;
+}
+
+/**
+ * Auto-fix: replace original entry names still present in translated narrative text
+ * with their translated equivalents from the entry name dictionary.
+ * 
+ * Use this when validation detects that original names weren't replaced in narrative text.
+ */
+export function autoFixEntryNames(
+  translatedText: string,
+  entryNameDict: Record<string, string>
+): string {
+  if (!translatedText || Object.keys(entryNameDict).length === 0) return translatedText;
+
+  let fixed = translatedText;
+  // Sort by length descending to avoid partial replacements
+  const sortedEntries = Object.entries(entryNameDict)
+    .filter(([k, v]) => k && v && k !== v)
+    .sort(([a], [b]) => b.length - a.length);
+
+  const escapeRegExp = (str: string) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const safeReplacement = (str: string) => str.replace(/\$/g, '$$$$');
+
+  for (const [originalName, translatedName] of sortedEntries) {
+    if (!fixed.includes(originalName)) continue;
+    const regex = new RegExp(escapeRegExp(originalName), 'g');
+    fixed = fixed.replace(regex, safeReplacement(translatedName));
+  }
+
+  return fixed;
+}

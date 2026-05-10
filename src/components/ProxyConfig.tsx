@@ -512,7 +512,7 @@ export default function ProxyConfig() {
                   max={1800000}
                   step={1000}
                   value={proxy.requestTimeout}
-                  onChange={(e) => setProxy({ requestTimeout: parseInt(e.target.value) || 300000 })}
+                  onChange={(e) => setProxy({ requestTimeout: parseInt(e.target.value) || 600000 })}
                 />
                 <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '2px' }}>
                   {t.requestTimeoutHint}
@@ -603,7 +603,7 @@ export default function ProxyConfig() {
                     temperature: 0.3,
                     requestDelay: 500,
                     retryDelay: 1000,
-                    requestTimeout: 300000,
+                    requestTimeout: 600000,
                     maxRetries: 3,
                     minResponseRatio: 0.15,
                     systemPromptPrefix: '',

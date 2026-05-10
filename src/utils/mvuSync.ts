@@ -60,8 +60,8 @@ export function applyMvuToText(
       
       // ── 5. Zod schema: { KEY: z.type() } or { "KEY": z.type() } ──
       newText = newText.replace(
-        new RegExp(`([{,]\\s*)(["']?)${escaped}(["']?)(\\s*:\\s*z\\.)`, 'g'),
-        `$1$2${safeTranslated}$3$4`
+        new RegExp(`(["']?)${escaped}(["']?)(\\s*:\\s*(?:z|Zod)\\.)`, 'g'),
+        `$1${safeTranslated}$2$3`
       );
       
       // ── 6. General standalone occurrences (fallback) ──
@@ -102,6 +102,12 @@ export function applyMvuToText(
       newText = newText.replace(
         new RegExp(`^(\\s*)(["']?)${escaped}(["']?)(\\s*:)`, 'gm'),
         `$1$2${safeTranslated}$3$4`
+      );
+      
+      // 5. Zod schema: { KEY: z.type() } or { "KEY": z.type() }
+      newText = newText.replace(
+        new RegExp(`(["']?)${escaped}(["']?)(\\s*:\\s*(?:z|Zod)\\.)`, 'g'),
+        `$1${safeTranslated}$2$3`
       );
     }
   }
@@ -288,8 +294,8 @@ function isNoiseKey(key: string): boolean {
   if (NOISE_CODE.has(lower)) return true;
   // Pure numeric
   if (/^\d+$/.test(key)) return true;
-  // Single char
-  if (key.length < 2) return true;
+  // Single char (allow single CJK chars, ignore single ASCII)
+  if (key.length < 2 && /^[a-zA-Z0-9_]$/.test(key)) return true;
   // Too long (not a typical variable name)
   if (key.length > 50) return true;
   // CSS-like patterns: starts with - or contains only lowercase+hyphens (e.g. "border-radius")
@@ -443,10 +449,11 @@ export function extractPotentialMvuKeys(card: CharacterCard): MvuKeyInfo[] {
       // Scan for JSON Patch field names
       const patchFields = extractPatchFieldNames(entry.content);
       for (const pf of patchFields) trackKey(pf, 'jsonpatch');
-      // Other entries: macros + EJS + data-var only (NO YAML — too noisy)
+      // Other entries: macros + EJS + data-var + Zod only (NO YAML — too noisy)
       scanMacros(entry.content);
       scanEjsCalls(entry.content);
       scanDataVar(entry.content);
+      scanZodFields(entry.content);
     }
   }
 
@@ -482,12 +489,14 @@ export function extractPotentialMvuKeys(card: CharacterCard): MvuKeyInfo[] {
         scanDataVar(script.findRegex);
         scanMacros(script.findRegex);
         scanEjsCalls(script.findRegex);
+        scanZodFields(script.findRegex);
       }
       if (script.replaceString) {
-        // data-var + macros + EJS only (NO YAML, NO Zod — this is HTML)
+        // data-var + macros + EJS + Zod only (NO YAML — this is HTML)
         scanDataVar(script.replaceString);
         scanMacros(script.replaceString);
         scanEjsCalls(script.replaceString);
+        scanZodFields(script.replaceString);
       }
     }
   }
@@ -503,12 +512,14 @@ export function extractPotentialMvuKeys(card: CharacterCard): MvuKeyInfo[] {
     if (!fieldText || typeof fieldText !== 'string') continue;
     scanMacros(fieldText);
     scanEjsCalls(fieldText);
+    scanZodFields(fieldText);
   }
   if (Array.isArray(data.alternate_greetings)) {
     for (const greeting of data.alternate_greetings) {
       if (typeof greeting !== 'string') continue;
       scanMacros(greeting);
       scanEjsCalls(greeting);
+      scanZodFields(greeting);
     }
   }
 
@@ -532,16 +543,17 @@ export function extractPotentialMvuKeys(card: CharacterCard): MvuKeyInfo[] {
   const result: MvuKeyInfo[] = [];
   for (const key of keys) {
     const sources = keySources.get(key);
-    const isExplicit = sources && (sources.has('macro') || sources.has('datavar') || sources.has('yaml'));
+    const isExplicit = sources && (sources.has('macro') || sources.has('datavar') || sources.has('yaml') || sources.has('zod'));
 
     if (isExplicit) {
-      // For explicit sources (macros, explicitly marked MVU YAML, UI data-vars),
+      // For explicit sources (macros, explicitly marked MVU YAML, UI data-vars, Zod),
       // we only filter out extreme noise, allowing generic words like "name" or "status".
-      if (/^\d+$/.test(key) || key.length < 2 || key.length > 50) continue;
+      if (/^\d+$/.test(key) || key.length > 50) continue;
+      if (key.length < 2 && /^[a-zA-Z0-9_]$/.test(key)) continue;
       // Skip pure hex colors and URLs as they are never variables
       if (/^#[0-9a-fA-F]{3,8}$/.test(key) || /^https?:/.test(key) || /^\/\//.test(key)) continue;
     } else {
-      // For implicit sources (e.g. only Zod schema), apply full strict noise filtering
+      // For implicit sources (e.g. only EJS calls), apply full strict noise filtering
       if (isNoiseKey(key)) continue;
     }
 

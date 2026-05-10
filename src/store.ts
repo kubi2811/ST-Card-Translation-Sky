@@ -218,7 +218,7 @@ export const useStore = create<AppState>((set) => ({
     temperature: LS.get('st-translator-advanced-settings', { temperature: 0.3 }).temperature ?? 0.3,
     requestDelay: LS.get('st-translator-advanced-settings', { requestDelay: 500 }).requestDelay ?? 500,
     retryDelay: LS.get('st-translator-advanced-settings', { retryDelay: 1000 }).retryDelay ?? 1000,
-    requestTimeout: LS.get('st-translator-advanced-settings', { requestTimeout: 300000 }).requestTimeout ?? 300000,
+    requestTimeout: LS.get('st-translator-advanced-settings', { requestTimeout: 600000 }).requestTimeout ?? 600000,
     maxRetries: LS.get('st-translator-advanced-settings', { maxRetries: 3 }).maxRetries ?? 3,
     minResponseRatio: LS.get('st-translator-advanced-settings', { minResponseRatio: 0.15 }).minResponseRatio ?? 0.15,
     systemPromptPrefix: LS.get('st-translator-advanced-settings', { systemPromptPrefix: '' }).systemPromptPrefix ?? '',

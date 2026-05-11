@@ -105,6 +105,16 @@ const en = {
   ignored: 'Ignored',
   skipAlreadyTranslated: 'Skip fields already in target language',
 
+  // Mod Mode
+  modMode: 'Mod Mode',
+  modModeDesc: 'Apply custom instructions to rewrite content without changing language',
+  modInstructions: 'Mod Instructions',
+  modInstructionsPlaceholder: 'Enter instructions for rewriting content (e.g., "Make the character more mysterious", "Add more detail to descriptions")...',
+  modSave: 'Save Mod',
+  modSaved: 'Mod instructions saved!',
+  applyMod: 'Apply Mod',
+  modNoInstructions: 'Enter mod instructions first',
+
   // Log Filter
   all: 'All',
   error: 'Error',
@@ -286,6 +296,16 @@ const vi: TranslationKeys = {
   skipped: 'Bỏ qua',
   ignored: 'Bỏ qua (không dịch)',
   skipAlreadyTranslated: 'Bỏ qua trường đã đúng ngôn ngữ đích',
+
+  // Mod Mode
+  modMode: 'Chế độ Mod',
+  modModeDesc: 'Áp dụng chỉ thị tùy chỉnh để viết lại nội dung mà không thay đổi ngôn ngữ',
+  modInstructions: 'Chỉ thị Mod',
+  modInstructionsPlaceholder: 'Nhập chỉ thị viết lại nội dung (VD: "Làm nhân vật bí ẩn hơn", "Thêm chi tiết vào mô tả")...',
+  modSave: 'Lưu Mod',
+  modSaved: 'Đã lưu chỉ thị Mod!',
+  applyMod: 'Áp dụng Mod',
+  modNoInstructions: 'Hãy nhập chỉ thị Mod trước',
 
   // Log Filter
   all: 'Tất cả',

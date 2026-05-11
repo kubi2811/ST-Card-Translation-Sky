@@ -737,12 +737,10 @@ export default function TranslateConfig() {
                 />
                 <div>
                   <span style={{ color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                    🔧 {locale === 'vi' ? 'Chế độ Mod Dịch Thuật' : 'Mod Translation Mode'}
+                    🔧 {t.modMode}
                   </span>
                   <span style={{ color: 'var(--text-muted)', fontSize: '0.65rem', display: 'block', marginTop: '2px' }}>
-                    {locale === 'vi'
-                      ? 'Áp đặt các yêu cầu đặc biệt khi dịch. AI sẽ ưu tiên tuân thủ yêu cầu này cao nhất (VD: "Dịch theo phong cách kiếm hiệp", "Giữ nguyên tên riêng A"). Các biến số MVU vẫn sẽ đồng bộ theo luật này.'
-                      : 'Enforce special instructions during translation. The AI will strictly follow these instructions as high priority.'}
+                    {t.modModeDesc}
                   </span>
                 </div>
               </label>
@@ -751,7 +749,7 @@ export default function TranslateConfig() {
                 <div style={{ marginTop: '8px', marginLeft: '20px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <label className="label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.7rem' }}>
                     <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      {locale === 'vi' ? 'Yêu cầu đặc biệt (Mod Instructions)' : 'Special Instructions'}
+                      {t.modInstructions}
                       {modInstructionsDirty && (
                         <span style={{
                           fontSize: '0.6rem', padding: '1px 6px',
@@ -769,7 +767,7 @@ export default function TranslateConfig() {
                           display: 'flex', alignItems: 'center', gap: '3px',
                           animation: 'fadeIn 0.2s',
                         }}>
-                          <CheckCircle size={10} /> {locale === 'vi' ? 'Đã lưu!' : 'Saved!'}
+                          <CheckCircle size={10} /> {t.modSaved}
                         </span>
                       )}
                     </span>
@@ -787,7 +785,7 @@ export default function TranslateConfig() {
                         opacity: modInstructionsDirty ? 1 : 0.5,
                       }}
                     >
-                      <Save size={11} /> {locale === 'vi' ? 'Lưu' : 'Save'}
+                      <Save size={11} /> {t.modSave}
                     </button>
                   </label>
                   <textarea
@@ -797,7 +795,7 @@ export default function TranslateConfig() {
                       resize: 'vertical',
                       borderColor: modInstructionsDirty ? 'var(--accent-warning)' : undefined,
                     }}
-                    placeholder={locale === 'vi' ? "Nhập yêu cầu đặc biệt của bạn vào đây..." : "Enter your special instructions here..."}
+                    placeholder={t.modInstructionsPlaceholder}
                     value={modInstructionsDraft}
                     onChange={(e) => setModInstructionsDraft(e.target.value)}
                     onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveModInstructions(); } }}
@@ -836,7 +834,7 @@ export default function TranslateConfig() {
                       opacity: (translationConfig.modInstructions?.trim() && !modInstructionsDirty && card) ? 1 : 0.5,
                     }}
                   >
-                    🔧 {locale === 'vi' ? 'Áp dụng Mod (không dịch)' : 'Apply Mod (no translation)'}
+                    🔧 {t.applyMod}
                   </button>
                   {modInstructionsDirty && translationConfig.modInstructions?.trim() && (
                     <span style={{ fontSize: '0.6rem', color: 'var(--accent-warning)', marginTop: '4px' }}>

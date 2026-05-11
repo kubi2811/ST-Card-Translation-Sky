@@ -61,6 +61,8 @@ export default function CustomTranslatePanel() {
         glossary: translationConfig.glossary,
         strictCodePreservation: strictPreservation,
         expertMode: proxy.expertMode,
+        enableModMode: translationConfig.enableModMode,
+        modInstructions: translationConfig.modInstructions,
       });
 
       const result = await translateText(

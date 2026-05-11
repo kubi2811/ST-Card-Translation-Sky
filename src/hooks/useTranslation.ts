@@ -1153,12 +1153,27 @@ export function useTranslation() {
       return;
     }
 
+    if (!store.card) {
+      store.addToast('error', 'No card loaded. Please upload a card first.');
+      return;
+    }
+
+    // Auto-prepare fields if empty (user clicks Apply Mod without translating first)
+    let currentFields = store.fields;
+    if (currentFields.length === 0) {
+      currentFields = prepareFields(false);
+      if (currentFields.length === 0) {
+        store.addToast('error', 'No translatable fields found in card.');
+        return;
+      }
+    }
+
     // Get all fields that have content (translated or original)
     const enabledGroups = store.translationConfig.fieldGroups
       .filter((g: FieldGroupConfig) => g.enabled)
       .map((g: FieldGroupConfig) => g.id);
 
-    const targetFields = store.fields.filter(f => {
+    const targetFields = currentFields.filter(f => {
       if (f.status === 'ignored') return false;
       if (!enabledGroups.includes(f.group)) return false;
       const content = f.translated || f.original;
@@ -1166,7 +1181,7 @@ export function useTranslation() {
     });
 
     if (targetFields.length === 0) {
-      store.addToast('error', 'No fields to apply Mod to. Load a card first.');
+      store.addToast('error', 'No fields to apply Mod to.');
       return;
     }
 
@@ -1178,21 +1193,40 @@ export function useTranslation() {
       ? store.translationConfig.targetLanguage
       : detectedLang;
 
+    // Clear state for fresh progress tracking
+    abortRef.current = new AbortController();
+    pauseRef.current = false;
+    store.setPhase('translating');
+    store.setStartTime(Date.now());
+    store.clearLogs();
+
     store.addLog('info', `🔧 Applying Mod to ${targetFields.length} field(s) [Language: ${effectiveLang}]`);
     store.addLog('info', `📝 Mod instructions: "${modInstructions.slice(0, 100)}${modInstructions.length > 100 ? '...' : ''}"`);
-    store.setPhase('translating');
 
-    const controller = new AbortController();
-    abortRef.current = controller;
     let successCount = 0;
     let failCount = 0;
 
-    for (const field of targetFields) {
-      if (controller.signal.aborted || pauseRef.current) break;
+    for (let fi = 0; fi < targetFields.length; fi++) {
+      const field = targetFields[fi];
 
+      // Check abort
+      if (checkAbort()) {
+        store.setPhase('cancelled');
+        store.addLog('warning', '🔧 Mod cancelled by user');
+        break;
+      }
+
+      // Handle pause (reuse the same waitForPause as translation)
+      if (await waitForPause()) {
+        store.setPhase('cancelled');
+        store.addLog('warning', '🔧 Mod cancelled during pause');
+        break;
+      }
+
+      store.setCurrentFieldIndex(fi);
       const inputContent = field.translated || field.original;
       store.updateField(field.path, { status: 'translating', error: undefined });
-      store.addLog('active', `🔧 Modding: ${field.label}`);
+      store.addLog('active', `🔧 Modding: ${field.label} (${fi + 1}/${targetFields.length})`);
 
       try {
         // Build the entry name dictionary for EJS sync
@@ -1234,7 +1268,7 @@ export function useTranslation() {
           effectiveLang,     // source = same language
           promptResult.effectivePrompt,
           promptResult.schemaForApi,
-          controller.signal,
+          abortRef.current?.signal,
           undefined,
           promptResult.glossaryForApi,
           undefined, // no previous translation needed
@@ -1252,18 +1286,28 @@ export function useTranslation() {
           result = postProcessRegexHtml(result);
         }
 
+        // Empty result guard
+        if (!result || !result.trim()) {
+          store.updateField(field.path, { status: 'error', error: 'Mod returned empty result' });
+          store.addLog('error', `🔧 Mod returned empty for: ${field.label}`);
+          failCount++;
+          continue;
+        }
+
         store.updateField(field.path, { status: 'done', translated: result });
         store.addLog('success', `🔧 Modded: ${field.label}`);
         successCount++;
 
         // Delay between requests
-        if (store.proxy.requestDelay > 0) {
+        if (store.proxy.requestDelay > 0 && fi < targetFields.length - 1) {
           await new Promise(r => setTimeout(r, store.proxy.requestDelay));
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        if (msg === 'Cancelled') {
+        if (msg === 'Cancelled' || checkAbort()) {
+          store.updateField(field.path, { status: 'pending' });
           store.addLog('warning', `🔧 Mod cancelled at: ${field.label}`);
+          store.setPhase('cancelled');
           break;
         }
         store.updateField(field.path, { status: 'error', error: msg });
@@ -1273,13 +1317,16 @@ export function useTranslation() {
     }
 
     store.saveTranslationCache();
-    store.setPhase('done');
+    // Only set to 'done' if not already cancelled
+    if (useStore.getState().phase === 'translating') {
+      store.setPhase('done');
+    }
     store.addLog('info', `🔧 Mod complete: ${successCount} success, ${failCount} failed`);
     store.addToast(
       failCount === 0 ? 'success' : 'error',
       `Mod applied: ${successCount}/${targetFields.length} fields`
     );
-  }, [store]);
+  }, [store, prepareFields]);
 
   return {
     prepareFields,

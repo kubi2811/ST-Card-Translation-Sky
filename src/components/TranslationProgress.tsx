@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 
 export default function TranslationProgress() {
-  const { fields, phase, logs, logFilter, startTime, card, clearLogs, translationConfig, locale } = useStore();
+  const { fields, phase, logs, logFilter, startTime, card, clearLogs, translationConfig } = useStore();
   const { startTranslation, continueTranslation, pauseTranslation, resumeTranslation, cancelTranslation, retryAllErrors, applyModToAllFields } = useTranslation();
   const t = useT();
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -181,7 +181,7 @@ export default function TranslationProgress() {
             }}
           >
             <Wrench size={14} />
-            {locale === 'vi' ? 'Áp dụng Mod' : 'Apply Mod'}
+            {t.applyMod}
           </button>
         )}
       </div>

@@ -2,7 +2,7 @@ import { useCallback, useRef } from 'react';
 import { useStore } from '../store';
 import { translateText, translateBatch, fieldGroupToFieldType } from '../utils/apiClient';
 import { extractTranslatableFields, applyTranslationsToCard, autoTranslateLorebookTriggerKeys } from '../utils/cardFields';
-import { syncMvuVariables, postProcessRegexHtml, extractPotentialMvuKeyStrings, aiTranslateMvuKeys, extractZodDescriptions } from '../utils/mvuSync';
+import { syncMvuVariables, postProcessRegexHtml, extractPotentialMvuKeyStrings, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions } from '../utils/mvuSync';
 import { shouldSkipTranslation, detectLanguage } from '../utils/langDetect';
 import { clearRAGCache } from '../utils/ragContext';
 import { getMvuCardSummary } from '../utils/mvuDetector';
@@ -1210,55 +1210,51 @@ export function useTranslation() {
       store.addLog('info', '🧠 Cross-field Context RAG enabled for Mod');
     }
 
-    // ═══ Auto-populate MVU Dictionary (Strategy B) — same as startTranslation ═══
+    // ═══ Rename MVU variables theo Mod instructions ═══
+    // Tìm biến → đổi tên theo yêu cầu Mod → dùng mapping để đồng bộ biến khi Mod
     if (store.translationConfig.enableMvuSync && store.card) {
       try {
-        store.addLog('info', '🔧 Mod: Auto-detecting MVU/Zod variables...');
+        store.addLog('info', '🔧 Mod: Scanning MVU/Zod variables...');
         const extractedKeys = extractPotentialMvuKeyStrings(store.card);
 
         if (extractedKeys.length > 0) {
-          const existingDict = store.translationConfig.mvuDictionary;
-          const newKeys = extractedKeys.filter(k => !(k in existingDict));
+          store.addLog('active', `🤖 Renaming ${extractedKeys.length} variable names with Mod instructions...`);
 
-          store.addLog('info', `Found ${extractedKeys.length} variables (${newKeys.length} new, ${extractedKeys.length - newKeys.length} already mapped)`);
+          let schemaContext = store.translationConfig.customSchema || '';
+          if (!schemaContext.trim() && store.card?.data?.extensions?.tavern_helper?.scripts) {
+            schemaContext = store.card.data.extensions.tavern_helper.scripts.map(s => s.content).join('\n\n');
+          }
 
-          if (newKeys.length > 0) {
-            store.addLog('active', `🤖 Calling AI to translate ${newKeys.length} variable names...`);
+          let keyDescriptions: Record<string, string> = {};
+          if (schemaContext) {
+            keyDescriptions = extractZodDescriptions(schemaContext);
+          }
 
-            let schemaContext = store.translationConfig.customSchema || '';
-            if (!schemaContext.trim() && store.card?.data?.extensions?.tavern_helper?.scripts) {
-              schemaContext = store.card.data.extensions.tavern_helper.scripts.map(s => s.content).join('\n\n');
+          const renames = await aiRenameMvuKeys(
+            extractedKeys,
+            effectiveLang,
+            modInstructions,
+            store.proxy,
+            abortRef.current?.signal,
+            schemaContext,
+            keyDescriptions
+          );
+
+          // Build MVU dictionary: old_name → new_name (chỉ giữ key thực sự đổi)
+          const newDict: Record<string, string> = {};
+          let changedCount = 0;
+          for (const [k, v] of Object.entries(renames)) {
+            if (v && v.trim()) {
+              newDict[k] = v.trim();
+              if (k !== v.trim()) changedCount++;
             }
+          }
 
-            let keyDescriptions: Record<string, string> = {};
-            if (schemaContext) {
-              keyDescriptions = extractZodDescriptions(schemaContext);
-            }
-
-            const aiTranslations = await aiTranslateMvuKeys(
-              newKeys,
-              store.translationConfig.targetLanguage,
-              store.proxy,
-              abortRef.current?.signal,
-              schemaContext,
-              keyDescriptions
-            );
-
-            const mergedDict = { ...existingDict };
-            let addedCount = 0;
-            for (const [k, v] of Object.entries(aiTranslations)) {
-              if (v && v.trim() && k !== v && !(k in mergedDict)) {
-                mergedDict[k] = v;
-                addedCount++;
-              }
-            }
-
-            if (addedCount > 0) {
-              store.setTranslationConfig({ mvuDictionary: mergedDict });
-              store.addLog('success', `✅ Mod: Auto-added ${addedCount} variable translations to MVU Dictionary`);
-            } else {
-              store.addLog('info', 'All variables are already ASCII or mapped — no AI translation needed');
-            }
+          if (changedCount > 0) {
+            store.setTranslationConfig({ mvuDictionary: newDict });
+            store.addLog('success', `✅ Mod: ${changedCount} variable(s) will be renamed during Mod sync`);
+          } else {
+            store.addLog('info', 'Mod instructions did not change any variable names');
           }
         } else {
           store.addLog('info', 'No MVU/Zod variables detected in this card');
@@ -1269,7 +1265,7 @@ export function useTranslation() {
           store.setPhase('cancelled');
           return;
         }
-        store.addLog('warning', `⚠️ MVU auto-detect failed (non-critical): ${mvuMsg}`);
+        store.addLog('warning', `⚠️ MVU rename failed (non-critical): ${mvuMsg}`);
       }
     }
 

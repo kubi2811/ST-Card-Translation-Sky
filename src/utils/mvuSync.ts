@@ -589,7 +589,8 @@ export async function aiTranslateMvuKeys(
   proxy: ProxySettings,
   signal?: AbortSignal,
   schemaContext?: string,
-  keyDescriptions?: Record<string, string>
+  keyDescriptions?: Record<string, string>,
+  modInstructions?: string
 ): Promise<Record<string, string>> {
   if (keys.length === 0) return {};
 
@@ -605,6 +606,11 @@ export async function aiTranslateMvuKeys(
   }
 
   if (keysToTranslate.length === 0) return result;
+
+  // Build mod-aware system prompt
+  const modBlock = modInstructions?.trim()
+    ? `\n\n═══ USER MOD INSTRUCTIONS (HIGHEST PRIORITY) ═══\nThe user has provided custom instructions for how variable names should be translated. Follow these instructions ABOVE ALL other rules:\n${modInstructions.trim()}\n═══ END MOD INSTRUCTIONS ═══`
+    : '';
 
   const systemPrompt = `Translate CJK (Chinese/Japanese/Korean) variable names to ${targetLang}. Do NOT translate English or ASCII names. Chinese proper nouns → Hán Việt. Japanese proper nouns → Romaji. Keep consistency with MVU Schema.
 
@@ -625,7 +631,7 @@ STRICT RULES:
    - Use Title Case with diacritics: Hảo Cảm, Thể Lực, Trí Tuệ
    - Each word should be properly capitalized
    - Common patterns: 好感 → Hảo Cảm, 体力 → Thể Lực, 攻击 → Tấn Công
-9. The translated names must be covariant with the Zod Schema — matching the field structure and semantics.
+9. The translated names must be covariant with the Zod Schema — matching the field structure and semantics.${modBlock}
 
 RESPOND in EXACT JSON format (no markdown): {"translations": {"original_key": "Translated Key", ...}}`;
 
@@ -652,15 +658,247 @@ RESPOND in EXACT JSON format (no markdown): {"translations": {"original_key": "T
         : `${i + 1}. "${k}"`;
     }).join('\n');
 
-    const userPrompt = `Translate these variable names to ${targetLang} (natural, readable formatting — consistency is the only rule):${contextBlock}
-Variables to translate:
-${varList}`;
-
+    let currentBatchKeys = [...batch];
     let batchRetries = 0;
     const MAX_RETRIES = 3;
     let batchSuccess = false;
 
-    while (batchRetries < MAX_RETRIES && !batchSuccess) {
+    while (batchRetries < MAX_RETRIES && !batchSuccess && currentBatchKeys.length > 0) {
+      if (signal?.aborted) break;
+
+      try {
+        // Build variable list for current (possibly reduced) key set
+        const currentVarList = currentBatchKeys.map((k, i) => {
+          const desc = keyDescriptions?.[k];
+          return desc
+            ? `${i + 1}. "${k}" — ${desc}`
+            : `${i + 1}. "${k}"`;
+        }).join('\n');
+
+        // On retry, escalate the prompt with explicit correction hints
+        let retryHint = '';
+        if (batchRetries > 0) {
+          retryHint = `\n\n⚠️ CRITICAL: Your previous response STILL contained Chinese/Japanese/Korean characters in the translated values. This is WRONG. You MUST translate ALL values to ${targetLang} using ONLY Latin/Roman script. Do NOT keep ANY CJK characters (汉字/漢字/한글/カタカナ) in the output values. Convert them to ${targetLang} equivalents (e.g. 好感度 → Hảo Cảm, 攻击力 → Sức Tấn Công, 状态 → Trạng Thái).`;
+        }
+
+        const currentUserPrompt = `Translate these variable names to ${targetLang} (natural, readable formatting — consistency is the only rule):${contextBlock}
+Variables to translate:
+${currentVarList}${retryHint}`;
+
+        // Increase temperature on retries to get different outputs
+        const retryTemperature = Math.min(0.1 + batchRetries * 0.2, 0.5);
+
+        const url = proxy.proxyUrl.replace(/\/+$/, '');
+        let apiUrl: string;
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        let body: any;
+
+        if (proxy.provider === 'anthropic') {
+          apiUrl = url + '/messages';
+          headers['x-api-key'] = proxy.apiKey;
+          headers['anthropic-version'] = '2023-06-01';
+          headers['anthropic-dangerous-direct-browser-access'] = 'true';
+          body = {
+            model: proxy.model,
+            max_tokens: getMaxOutputTokens(proxy.model, proxy.maxTokens),
+            system: systemPrompt,
+            messages: [{ role: 'user', content: currentUserPrompt }],
+            temperature: retryTemperature,
+          };
+        } else if (proxy.provider === 'google') {
+          apiUrl = `${url}/models/${proxy.model}:generateContent?key=${proxy.apiKey}`;
+          body = {
+            system_instruction: { parts: [{ text: systemPrompt }] },
+            contents: [{ role: 'user', parts: [{ text: currentUserPrompt }] }],
+            generationConfig: { maxOutputTokens: getMaxOutputTokens(proxy.model, proxy.maxTokens), temperature: retryTemperature },
+            safetySettings: [
+              { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+              { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+              { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+              { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+            ],
+          };
+        } else {
+          apiUrl = url + '/chat/completions';
+          if (proxy.apiKey) headers['Authorization'] = `Bearer ${proxy.apiKey}`;
+          body = {
+            model: proxy.model,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: currentUserPrompt },
+            ],
+            max_tokens: getMaxOutputTokens(proxy.model, proxy.maxTokens),
+            temperature: retryTemperature,
+          };
+        }
+
+        // Add per-request timeout protection
+        const requestTimeout = (proxy as any).requestTimeout || 300000;
+        const timeoutController = new AbortController();
+        const timeoutId = setTimeout(() => timeoutController.abort('MVU key translation timeout'), requestTimeout * 2);
+        const fetchSignal = signal
+          ? AbortSignal.any([signal, timeoutController.signal])
+          : timeoutController.signal;
+
+        const res = await fetch(apiUrl, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+          signal: fetchSignal,
+        });
+        clearTimeout(timeoutId);
+
+        if (!res.ok) {
+          const errText = await res.text().catch(() => '');
+          throw new Error(`API ${res.status}: ${errText.slice(0, 200)}`);
+        }
+
+        const json = await res.json();
+        let responseText = '';
+        if (proxy.provider === 'anthropic') {
+          responseText = json.content?.[0]?.text || '';
+        } else if (proxy.provider === 'google') {
+          responseText = json.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        } else {
+          responseText = json.choices?.[0]?.message?.content || '';
+        }
+
+        // Parse JSON response
+        let jsonStr = responseText.trim();
+        if (jsonStr.startsWith('```')) {
+          jsonStr = jsonStr.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+        }
+
+        const parsed = JSON.parse(jsonStr);
+        const translations = parsed.translations || parsed;
+
+        // --- CJK Validation: accept good keys, collect bad ones ---
+        const isTargetNonCJK = !(/chinese|中文|japanese|日本語|korean|한국어/i.test(targetLang));
+        const cjkRegex = /[\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f\uff00-\uffef]/;
+        const cjkFailedKeys: string[] = [];
+
+        for (const [k, v] of Object.entries(translations)) {
+          if (typeof v !== 'string' || !v.trim()) continue;
+
+          if (isTargetNonCJK && cjkRegex.test(v.trim())) {
+            // This key still has CJK — track it for retry
+            cjkFailedKeys.push(k);
+          } else {
+            // Good translation — accept immediately
+            result[k] = v.trim();
+          }
+        }
+
+        if (cjkFailedKeys.length > 0 && isTargetNonCJK) {
+          batchRetries++;
+          console.warn(`[MVU Sync] CJK detected in ${cjkFailedKeys.length}/${Object.keys(translations).length} translated variables. Retrying failed keys... (${batchRetries}/${MAX_RETRIES})`);
+          if (batchRetries < MAX_RETRIES) {
+            // Only retry the keys that still have CJK (not the whole batch)
+            currentBatchKeys = cjkFailedKeys;
+            await new Promise(r => setTimeout(r, 1000 * Math.pow(2, batchRetries)));
+            continue; // Retry with reduced key set
+          } else {
+            console.warn(`[MVU Sync] CJK remained after max retries for ${cjkFailedKeys.length} keys. Accepting CJK translations as fallback.`);
+            // Accept CJK translations as fallback (better than nothing — the MVU dict
+            // will still have entries, and the caller can handle them)
+            for (const k of cjkFailedKeys) {
+              const v = translations[k];
+              if (typeof v === 'string' && v.trim()) {
+                result[k] = v.trim();
+              }
+            }
+            break;
+          }
+        }
+
+        batchSuccess = true;
+
+      } catch (err: any) {
+        if (err.name === 'AbortError' || signal?.aborted) {
+          throw err; // Re-throw to handle cancellation properly
+        }
+        batchRetries++;
+        console.error(`AI MVU key translation batch failed (Retry ${batchRetries}/${MAX_RETRIES}):`, err);
+        if (batchRetries < MAX_RETRIES) {
+          await new Promise(r => setTimeout(r, 1000 * Math.pow(2, batchRetries)));
+        }
+      }
+    }
+  } // end batch loop
+
+  return result;
+}
+
+/* ═══ AI Rename MVU Keys (Mod Mode) ═══ */
+
+/**
+ * Gọi AI để ĐỔI TÊN biến MVU theo yêu cầu Mod.
+ * Khác với aiTranslateMvuKeys (dịch CJK → ngôn ngữ đích),
+ * function này nhận biến ở BẤT KỲ ngôn ngữ nào và đổi tên theo Mod instructions.
+ * Không lọc CJK, không validate ngôn ngữ — chỉ đổi tên theo yêu cầu.
+ */
+export async function aiRenameMvuKeys(
+  keys: string[],
+  currentLang: string,
+  modInstructions: string,
+  proxy: ProxySettings,
+  signal?: AbortSignal,
+  schemaContext?: string,
+  keyDescriptions?: Record<string, string>
+): Promise<Record<string, string>> {
+  if (keys.length === 0 || !modInstructions.trim()) return {};
+
+  const result: Record<string, string> = {};
+
+  const systemPrompt = `You are a variable name modifier for SillyTavern character cards.
+The user wants to RENAME/MODIFY variable names according to their custom instructions.
+Current language: ${currentLang}.
+
+═══ USER MOD INSTRUCTIONS (FOLLOW EXACTLY) ═══
+${modInstructions.trim()}
+═══ END MOD INSTRUCTIONS ═══
+
+RULES:
+1. Read the Mod instructions carefully and rename variables EXACTLY as requested.
+2. If the Mod instructions say to keep a variable unchanged, return the SAME name.
+3. If the Mod instructions don't mention a specific variable, keep it AS IS (return same name).
+4. Maintain CONSISTENCY: similar concepts should follow similar naming patterns.
+5. The renamed variables must still be valid for use in code (macros, Zod schemas, YAML keys).
+6. Keep the output in the SAME script/language as the input unless Mod instructions say otherwise.
+
+RESPOND in EXACT JSON format (no markdown): {"renames": {"current_name": "new_name", ...}}
+For variables that stay the same, still include them: {"renames": {"unchanged_var": "unchanged_var"}}`;
+
+  // ─── Batch chunking ───
+  const BATCH_SIZE = 25;
+  const batches: string[][] = [];
+  for (let i = 0; i < keys.length; i += BATCH_SIZE) {
+    batches.push(keys.slice(i, i + BATCH_SIZE));
+  }
+
+  for (const batch of batches) {
+    if (signal?.aborted) break;
+
+    let contextBlock = '';
+    if (schemaContext && schemaContext.trim()) {
+      contextBlock = `\nHere is the Zod schema or script context where these variables are defined:\n\`\`\`javascript\n${schemaContext.slice(0, 5000)}\n\`\`\`\n\n`;
+    }
+
+    const varList = batch.map((k, i) => {
+      const desc = keyDescriptions?.[k];
+      return desc
+        ? `${i + 1}. "${k}" — ${desc}`
+        : `${i + 1}. "${k}"`;
+    }).join('\n');
+
+    const userPrompt = `Rename these variable names according to the Mod instructions above:${contextBlock}
+Variables to rename:
+${varList}`;
+
+    let retries = 0;
+    const MAX_RETRIES = 2;
+
+    while (retries <= MAX_RETRIES) {
       if (signal?.aborted) break;
 
       try {
@@ -708,10 +946,9 @@ ${varList}`;
           };
         }
 
-        // Add per-request timeout protection
         const requestTimeout = (proxy as any).requestTimeout || 300000;
         const timeoutController = new AbortController();
-        const timeoutId = setTimeout(() => timeoutController.abort('MVU key translation timeout'), requestTimeout * 2);
+        const timeoutId = setTimeout(() => timeoutController.abort('MVU rename timeout'), requestTimeout * 2);
         const fetchSignal = signal
           ? AbortSignal.any([signal, timeoutController.signal])
           : timeoutController.signal;
@@ -739,62 +976,34 @@ ${varList}`;
           responseText = json.choices?.[0]?.message?.content || '';
         }
 
-        // Parse JSON response
         let jsonStr = responseText.trim();
         if (jsonStr.startsWith('```')) {
           jsonStr = jsonStr.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
         }
 
         const parsed = JSON.parse(jsonStr);
-        const translations = parsed.translations || parsed;
+        const renames = parsed.renames || parsed.translations || parsed;
 
-        // --- CJK Validation ---
-        const isTargetNonCJK = !(/chinese|中文|japanese|日本語|korean|한국어/i.test(targetLang));
-        const cjkRegex = /[\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f\uff00-\uffef]/;
-        let cjkFound = false;
-
-        if (isTargetNonCJK) {
-          for (const [k, v] of Object.entries(translations)) {
-            if (typeof v === 'string' && v.trim() && cjkRegex.test(v.trim())) {
-              cjkFound = true;
-              break;
-            }
-          }
-        }
-
-        if (cjkFound) {
-          batchRetries++;
-          console.warn(`[MVU Sync] CJK detected in translated variables. Retrying... (${batchRetries}/${MAX_RETRIES})`);
-          if (batchRetries < MAX_RETRIES) {
-            await new Promise(r => setTimeout(r, 1000 * Math.pow(2, batchRetries)));
-            continue; // Retry
-          } else {
-            console.error(`AI MVU key translation failed: CJK characters remained after max retries.`);
-            // Accept failure for this batch
-            break;
-          }
-        }
-
-        for (const [k, v] of Object.entries(translations)) {
+        for (const [k, v] of Object.entries(renames)) {
           if (typeof v === 'string' && v.trim()) {
             result[k] = v.trim();
           }
         }
 
-        batchSuccess = true;
+        break; // Success, exit retry loop
 
       } catch (err: any) {
         if (err.name === 'AbortError' || signal?.aborted) {
-          throw err; // Re-throw to handle cancellation properly
+          throw err;
         }
-        batchRetries++;
-        console.error(`AI MVU key translation batch failed (Retry ${batchRetries}/${MAX_RETRIES}):`, err);
-        if (batchRetries < MAX_RETRIES) {
-          await new Promise(r => setTimeout(r, 1000 * Math.pow(2, batchRetries)));
+        retries++;
+        console.error(`AI MVU rename failed (Retry ${retries}/${MAX_RETRIES}):`, err);
+        if (retries <= MAX_RETRIES) {
+          await new Promise(r => setTimeout(r, 1000 * Math.pow(2, retries)));
         }
       }
     }
-  } // end batch loop
+  }
 
   return result;
 }

@@ -1203,81 +1203,181 @@ export function useTranslation() {
     store.addLog('info', `🔧 Applying Mod to ${targetFields.length} field(s) [Language: ${effectiveLang}]`);
     store.addLog('info', `📝 Mod instructions: "${modInstructions.slice(0, 100)}${modInstructions.length > 100 ? '...' : ''}"`);
 
+    // ═══ Clear RAG cache + live schema context for fresh state ═══
+    clearRAGCache();
+    store.clearLiveSchemaContext();
+    if (store.translationConfig.enableRAGContext) {
+      store.addLog('info', '🧠 Cross-field Context RAG enabled for Mod');
+    }
+
+    // ═══ Auto-populate MVU Dictionary (Strategy B) — same as startTranslation ═══
+    if (store.translationConfig.enableMvuSync && store.card) {
+      try {
+        store.addLog('info', '🔧 Mod: Auto-detecting MVU/Zod variables...');
+        const extractedKeys = extractPotentialMvuKeyStrings(store.card);
+
+        if (extractedKeys.length > 0) {
+          const existingDict = store.translationConfig.mvuDictionary;
+          const newKeys = extractedKeys.filter(k => !(k in existingDict));
+
+          store.addLog('info', `Found ${extractedKeys.length} variables (${newKeys.length} new, ${extractedKeys.length - newKeys.length} already mapped)`);
+
+          if (newKeys.length > 0) {
+            store.addLog('active', `🤖 Calling AI to translate ${newKeys.length} variable names...`);
+
+            let schemaContext = store.translationConfig.customSchema || '';
+            if (!schemaContext.trim() && store.card?.data?.extensions?.tavern_helper?.scripts) {
+              schemaContext = store.card.data.extensions.tavern_helper.scripts.map(s => s.content).join('\n\n');
+            }
+
+            let keyDescriptions: Record<string, string> = {};
+            if (schemaContext) {
+              keyDescriptions = extractZodDescriptions(schemaContext);
+            }
+
+            const aiTranslations = await aiTranslateMvuKeys(
+              newKeys,
+              store.translationConfig.targetLanguage,
+              store.proxy,
+              abortRef.current?.signal,
+              schemaContext,
+              keyDescriptions
+            );
+
+            const mergedDict = { ...existingDict };
+            let addedCount = 0;
+            for (const [k, v] of Object.entries(aiTranslations)) {
+              if (v && v.trim() && k !== v && !(k in mergedDict)) {
+                mergedDict[k] = v;
+                addedCount++;
+              }
+            }
+
+            if (addedCount > 0) {
+              store.setTranslationConfig({ mvuDictionary: mergedDict });
+              store.addLog('success', `✅ Mod: Auto-added ${addedCount} variable translations to MVU Dictionary`);
+            } else {
+              store.addLog('info', 'All variables are already ASCII or mapped — no AI translation needed');
+            }
+          }
+        } else {
+          store.addLog('info', 'No MVU/Zod variables detected in this card');
+        }
+      } catch (mvuErr) {
+        const mvuMsg = mvuErr instanceof Error ? mvuErr.message : String(mvuErr);
+        if (mvuMsg === 'Cancelled' || checkAbort()) {
+          store.setPhase('cancelled');
+          return;
+        }
+        store.addLog('warning', `⚠️ MVU auto-detect failed (non-critical): ${mvuMsg}`);
+      }
+    }
+
+    // ═══ MVU-optimized field ordering ═══
+    if (store.translationConfig.enableMvuSync) {
+      const MVU_GROUP_ORDER: Record<string, number> = {
+        tavern_helper: 0,
+        lorebook: 1,
+        lorebook_keys: 2,
+        regex: 3,
+        system: 4,
+        core: 5,
+        messages: 6,
+        depth_prompt: 7,
+        creator: 8,
+      };
+      targetFields.sort((a, b) => {
+        const orderA = MVU_GROUP_ORDER[a.group] ?? 99;
+        const orderB = MVU_GROUP_ORDER[b.group] ?? 99;
+        return orderA - orderB;
+      });
+      store.addLog('info', '📋 Mod: MVU field ordering → schema → lorebook → regex → OP → rest');
+    } else {
+      // Non-MVU: move findRegex fields BEFORE narrative/system fields
+      // so regex trigger dictionary is available when modding system prompts
+      const hasFindRegex = targetFields.some(f => f.path.includes('findRegex'));
+      if (hasFindRegex) {
+        const findRegexFields = targetFields.filter(f => f.path.includes('findRegex'));
+        const otherFields = targetFields.filter(f => !f.path.includes('findRegex'));
+        targetFields.length = 0;
+        targetFields.push(...findRegexFields, ...otherFields);
+        store.addLog('info', `📋 Mod: findRegex fields moved to front (${findRegexFields.length} patterns → mod before narrative)`);
+      }
+    }
+
     let successCount = 0;
     let failCount = 0;
+    let autoFixCount = 0;
 
-    for (let fi = 0; fi < targetFields.length; fi++) {
-      const field = targetFields[fi];
-
-      // Check abort
-      if (checkAbort()) {
-        store.setPhase('cancelled');
-        store.addLog('warning', '🔧 Mod cancelled by user');
-        break;
-      }
-
-      // Handle pause (reuse the same waitForPause as translation)
-      if (await waitForPause()) {
-        store.setPhase('cancelled');
-        store.addLog('warning', '🔧 Mod cancelled during pause');
-        break;
-      }
-
-      store.setCurrentFieldIndex(fi);
+    // ═══ Helper: Mod a single field (mirrors translateSingleField but uses forceModStandalone) ═══
+    const modSingleField = async (field: TranslationField): Promise<'done' | 'error'> => {
       const inputContent = field.translated || field.original;
       store.updateField(field.path, { status: 'translating', error: undefined });
-      store.addLog('active', `🔧 Modding: ${field.label} (${fi + 1}/${targetFields.length})`);
 
       try {
-        // Build the entry name dictionary for EJS sync
-        const modEntryNameDict = { ...buildEntryNameDictionary(store.fields), ...buildRegexTriggerDictionary(store.fields) };
+        // Contextual keyword translation for lorebook_keys (same as translateSingleField)
+        let contextHint: string | undefined;
+        if (field.group === 'lorebook_keys') {
+          const contentPath = field.path.replace('.keys', '.content').replace('.secondary_keys', '.content');
+          const currentFields = useStore.getState().fields;
+          const contentField = currentFields.find(f => f.path === contentPath);
+          if (contentField) {
+            contextHint = (contentField.translated || contentField.original || '').slice(0, 1500);
+          }
+        }
 
-        // Build prompt with forceModStandalone = true
+        // Read FRESH state for dynamic dictionaries (updated as fields are modded)
+        const freshState = useStore.getState();
+        const freshFields = freshState.fields;
+        const freshMvuDict = freshState.translationConfig.mvuDictionary;
+        const freshLiveSchema = freshState.liveSchemaContext;
+
+        const modEntryNameDict = { ...buildEntryNameDictionary(freshFields), ...buildRegexTriggerDictionary(freshFields) };
+
         const promptResult = buildEffectivePrompt({
           translationPrompt: store.translationConfig.translationPrompt,
           enableJailbreak: store.translationConfig.enableJailbreak,
-          enableObjectiveMode: false, // Disabled for Mod mode
+          enableObjectiveMode: false,
           enableMvuSync: store.translationConfig.enableMvuSync,
           enableRAGContext: store.translationConfig.enableRAGContext,
           field,
-          allFields: store.fields,
-          mvuDictionary: useStore.getState().translationConfig.mvuDictionary,
+          allFields: freshFields,
+          mvuDictionary: freshMvuDict,
           glossary: store.translationConfig.glossary,
           customSchema: store.translationConfig.customSchema,
-          liveSchemaContext: store.liveSchemaContext,
+          liveSchemaContext: freshLiveSchema,
           ragMaxFields: store.translationConfig.ragMaxFields,
           ragMaxChars: store.translationConfig.ragMaxChars,
           entryNameDictionary: Object.keys(modEntryNameDict).length > 0 ? modEntryNameDict : undefined,
           expertMode: store.proxy.expertMode,
           enableModMode: true,
           modInstructions: store.translationConfig.modInstructions,
-          forceModStandalone: true, // ← KEY FLAG: uses MOD_STANDALONE_PROMPT
+          forceModStandalone: true,
         });
 
         const resolvedFieldType = fieldGroupToFieldType(field.group, field.entryType);
         const currentMvuDict = store.translationConfig.enableMvuSync
-          ? useStore.getState().translationConfig.mvuDictionary
+          ? freshMvuDict
           : undefined;
 
-        // Use the same translateText but with source = target = detected language
         let result = await translateText(
           inputContent,
           field.label,
           store.proxy,
-          effectiveLang,     // target = same language
-          effectiveLang,     // source = same language
+          effectiveLang,
+          effectiveLang,
           promptResult.effectivePrompt,
           promptResult.schemaForApi,
           abortRef.current?.signal,
-          undefined,
+          contextHint,
           promptResult.glossaryForApi,
-          undefined, // no previous translation needed
+          undefined,
           resolvedFieldType,
           currentMvuDict,
           store.translationConfig.chunkSize
         );
 
-        // Post-process regex HTML: font swap + underscore display
+        // Post-process regex HTML
         const isRegexContent = field.group === 'regex' && (field.path.includes('replaceString') || field.path.includes('trimStrings'));
         if (isRegexContent && result) {
           result = postProcessRegexHtml(result);
@@ -1286,45 +1386,332 @@ export function useTranslation() {
           result = postProcessRegexHtml(result);
         }
 
-        // Empty result guard
         if (!result || !result.trim()) {
           store.updateField(field.path, { status: 'error', error: 'Mod returned empty result' });
           store.addLog('error', `🔧 Mod returned empty for: ${field.label}`);
           failCount++;
-          continue;
+          return 'error';
+        }
+
+        // Post-mod MVU Validation + Auto-fix (uses freshMvuDict from above)
+        const mvuDict = store.translationConfig.enableMvuSync ? freshMvuDict : {};
+        const hasMvuDict = Object.keys(mvuDict).filter(k => mvuDict[k] && k !== mvuDict[k]).length > 0;
+
+        if (hasMvuDict) {
+          const fieldType = (field.entryType || field.group) as any;
+          const validation = validateMvuVariables(inputContent, result, mvuDict, fieldType);
+
+          if (validation.unreplaced.length > 0) {
+            const fixed = autoFixMvuVariables(result, mvuDict, validation.unreplaced);
+            if (fixed !== result) {
+              result = fixed;
+              autoFixCount++;
+              store.addLog('info', `🔧 Auto-fixed ${validation.unreplaced.length} MVU vars in ${field.label}`);
+            } else {
+              store.addLog('warning', `⚠️ ${validation.unreplaced.length} unreplaced MVU vars in ${field.label}: ${validation.unreplaced.slice(0, 3).join(', ')}`);
+            }
+          }
+
+          for (const w of validation.warnings.slice(0, 2)) {
+            store.addLog('warning', `${field.label}: ${w}`);
+          }
         }
 
         store.updateField(field.path, { status: 'done', translated: result });
         store.addLog('success', `🔧 Modded: ${field.label}`);
         successCount++;
-
-        // Delay between requests
-        if (store.proxy.requestDelay > 0 && fi < targetFields.length - 1) {
-          await new Promise(r => setTimeout(r, store.proxy.requestDelay));
-        }
+        return 'done';
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (msg === 'Cancelled' || checkAbort()) {
           store.updateField(field.path, { status: 'pending' });
-          store.addLog('warning', `🔧 Mod cancelled at: ${field.label}`);
-          store.setPhase('cancelled');
-          break;
+          throw err;
         }
         store.updateField(field.path, { status: 'error', error: msg });
         store.addLog('error', `🔧 Mod failed: ${field.label} — ${msg}`);
         failCount++;
+        return 'error';
+      }
+    };
+
+    // ═══ Helper: Mod one batch of lorebook fields (mirrors translateOneBatch) ═══
+    const modOneBatch = async (batchFields: TranslationField[]) => {
+      // For batch mod, we build the prompt once with batchFields context
+      for (const f of batchFields) {
+        store.updateField(f.path, { status: 'translating' });
+      }
+      store.addLog('active', `🔧 Mod batch: ${batchFields.length} fields`);
+
+      // Process each field in the batch sequentially (mod is per-field API call)
+      for (const f of batchFields) {
+        if (checkAbort()) throw new Error('Cancelled');
+        if (await waitForPause()) throw new Error('Cancelled');
+        await modSingleField(f);
+
+        if (store.proxy.requestDelay > 0) {
+          await new Promise(r => setTimeout(r, Math.max(store.proxy.requestDelay, 300)));
+        }
+      }
+    };
+
+    // ═══ Main Mod Loop — mirrors startTranslation exactly ═══
+    const isBatchLorebook = store.translationConfig.lorebookStrategy === 'batch';
+    const batchSize = store.translationConfig.lorebookBatchSize || 20;
+    const lorebookGroups: FieldGroup[] = ['lorebook', 'lorebook_keys'];
+
+    let i = 0;
+    while (i < targetFields.length) {
+      // Check abort
+      if (checkAbort()) {
+        store.setPhase('cancelled');
+        store.addLog('warning', '🔧 Mod cancelled by user');
+        return;
+      }
+
+      // Handle pause
+      if (await waitForPause()) {
+        store.setPhase('cancelled');
+        return;
+      }
+
+      const field = targetFields[i];
+
+      // ─── Batch mode for lorebook fields (same as startTranslation) ───
+      if (isBatchLorebook && lorebookGroups.includes(field.group)) {
+        const concurrency = store.translationConfig.concurrentBatches || 1;
+        const MAX_BATCH_CHARS = Math.max(store.proxy.maxTokens || 65536, 10000);
+        const isMvuEnabled = store.translationConfig.enableMvuSync;
+
+        // Step 1: Collect ALL consecutive lorebook fields
+        const allLorebookFields: TranslationField[] = [];
+        while (i < targetFields.length && lorebookGroups.includes(targetFields[i].group)) {
+          allLorebookFields.push(targetFields[i]);
+          i++;
+        }
+
+        // Step 2: Split into sub-batches
+        const subBatches: TranslationField[][] = [];
+
+        if (isMvuEnabled) {
+          // ═══ MVU Smart Grouping: group by entryType first, then split ═══
+          const typeGroups: Record<string, TranslationField[]> = {};
+          for (const f of allLorebookFields) {
+            const typeKey = f.entryType || 'other';
+            if (!typeGroups[typeKey]) typeGroups[typeKey] = [];
+            typeGroups[typeKey].push(f);
+          }
+
+          const TYPE_BATCH_SIZES: Record<string, number> = {
+            initvar: batchSize,
+            mvu_logic: Math.min(batchSize, 5),
+            controller: Math.min(batchSize, 5),
+            rules: batchSize,
+            narrative: batchSize,
+            other: batchSize,
+          };
+
+          const typeOrder = ['initvar', 'controller', 'mvu_logic', 'rules', 'narrative', 'other'];
+          const sortedTypes = Object.keys(typeGroups).sort((a, b) => {
+            const ia = typeOrder.indexOf(a);
+            const ib = typeOrder.indexOf(b);
+            return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+          });
+
+          for (const typeKey of sortedTypes) {
+            const typeFields = typeGroups[typeKey];
+            const typeBatchSize = TYPE_BATCH_SIZES[typeKey] || batchSize;
+            let currentBatch: TranslationField[] = [];
+            let currentChars = 0;
+
+            for (const f of typeFields) {
+              const fContent = (f.translated || f.original).length;
+              if (currentBatch.length >= typeBatchSize || (currentBatch.length > 0 && currentChars + fContent > MAX_BATCH_CHARS)) {
+                subBatches.push(currentBatch);
+                currentBatch = [];
+                currentChars = 0;
+              }
+              currentBatch.push(f);
+              currentChars += fContent;
+            }
+            if (currentBatch.length > 0) subBatches.push(currentBatch);
+          }
+
+          const groupSummary = sortedTypes
+            .map(t => `${t}:${typeGroups[t].length}`)
+            .join(', ');
+          store.addLog('info', `🔧 Mod MVU batch grouping: ${allLorebookFields.length} fields → [${groupSummary}] → ${subBatches.length} batch(es)`);
+        } else {
+          // ═══ Standard splitting ═══
+          let currentBatch: TranslationField[] = [];
+          let currentChars = 0;
+          for (const f of allLorebookFields) {
+            const fContent = (f.translated || f.original).length;
+            if (currentBatch.length >= batchSize || (currentBatch.length > 0 && currentChars + fContent > MAX_BATCH_CHARS)) {
+              subBatches.push(currentBatch);
+              currentBatch = [];
+              currentChars = 0;
+            }
+            currentBatch.push(f);
+            currentChars += fContent;
+          }
+          if (currentBatch.length > 0) subBatches.push(currentBatch);
+          store.addLog('info', `🔧 Mod: ${allLorebookFields.length} lorebook fields → ${subBatches.length} batch(es), concurrency: ${concurrency}`);
+        }
+
+        store.setCurrentFieldIndex(i - 1);
+
+        // Step 3: Dispatch sub-batches with concurrency limit
+        let batchIdx = 0;
+        while (batchIdx < subBatches.length) {
+          if (checkAbort()) {
+            store.setPhase('cancelled');
+            store.addLog('warning', '🔧 Mod cancelled');
+            return;
+          }
+
+          const window = subBatches.slice(batchIdx, batchIdx + concurrency);
+          batchIdx += window.length;
+
+          try {
+            const results = await Promise.allSettled(
+              window.map(batch => modOneBatch(batch))
+            );
+
+            for (const r of results) {
+              if (r.status === 'rejected') {
+                const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
+                if (msg === 'Cancelled' || checkAbort()) {
+                  store.setPhase('cancelled');
+                  store.addLog('warning', '🔧 Mod cancelled');
+                  return;
+                }
+              }
+            }
+          } catch {
+            store.setPhase('cancelled');
+            store.addLog('warning', '🔧 Mod cancelled');
+            return;
+          }
+
+          // Delay between batch windows
+          if (batchIdx < subBatches.length && store.proxy.requestDelay > 0) {
+            await new Promise(r => setTimeout(r, store.proxy.requestDelay));
+          }
+
+          store.saveTranslationCache();
+        }
+
+        // Delay before next non-lorebook field
+        if (i < targetFields.length && store.proxy.requestDelay > 0) {
+          await new Promise(r => setTimeout(r, store.proxy.requestDelay));
+        }
+        continue;
+      }
+
+      // ─── Single field mode ───
+      try {
+        store.setCurrentFieldIndex(i);
+        store.addLog('active', `🔧 Modding: ${field.label} (${i + 1}/${targetFields.length})`);
+        const result = await modSingleField(field);
+
+        // ═══ Live Schema Injection: capture modded TavernHelper as schema context ═══
+        if (field.group === 'tavern_helper' && result === 'done') {
+          const currentSchema = store.translationConfig.customSchema;
+          if (!currentSchema?.trim()) {
+            const allModdedSchemas = useStore.getState().fields
+              .filter(f => f.group === 'tavern_helper' && f.status === 'done' && f.translated)
+              .map(f => f.translated)
+              .join('\n\n');
+            if (allModdedSchemas.trim()) {
+              store.setLiveSchemaContext(allModdedSchemas);
+              store.addLog('info', '📋 Live Schema: captured modded TavernHelper → context for remaining fields');
+            }
+          }
+        }
+      } catch {
+        // Cancel was thrown
+        store.setPhase('cancelled');
+        store.addLog('warning', '🔧 Mod cancelled');
+        return;
+      }
+
+      i++;
+
+      // Auto-save cache every 10 fields
+      if (i % 10 === 0) store.saveTranslationCache();
+
+      // Delay between requests
+      if (i < targetFields.length && store.proxy.requestDelay > 0) {
+        await new Promise(r => setTimeout(r, store.proxy.requestDelay));
       }
     }
 
     store.saveTranslationCache();
+
+    // ═══ Post-Mod MVU-ZOD Sync Verification Report ═══
+    if (store.translationConfig.enableMvuSync && Object.keys(store.translationConfig.mvuDictionary).length > 0) {
+      const syncReport = generateSyncReport(
+        store.fields.filter(f => f.status === 'done').map(f => ({
+          original: f.original,
+          translated: f.translated,
+          label: f.label,
+          group: f.group,
+          entryType: f.entryType,
+        })),
+        store.translationConfig.mvuDictionary
+      );
+
+      const missingVars = syncReport.unreplaced;
+      if (missingVars === 0) {
+        store.addLog('success', `✅ Mod MVU Sync: All ${syncReport.totalVars} variables correctly preserved!`);
+      } else {
+        store.addLog('warning', `⚠️ Mod MVU Sync: ${missingVars} variables were NOT properly preserved! Check Verify panel for details.`);
+        for (const detail of syncReport.details) {
+          store.addLog('error', detail);
+        }
+      }
+      for (const warning of syncReport.warnings) {
+        store.addLog('warning', warning);
+      }
+    }
+
+    // ═══ Post-Mod Entry Name ↔ Text Sync Verification (EJS) ═══
+    {
+      const doneFields = store.fields.filter(f => f.status === 'done');
+      const entryNameResult = validateEntryNameSync(doneFields.map(f => ({
+        path: f.path,
+        label: f.label,
+        group: f.group,
+        original: f.original,
+        translated: f.translated,
+        status: f.status,
+      })));
+
+      if (entryNameResult.matchedNames.length > 0 || entryNameResult.missingNames.length > 0) {
+        if (entryNameResult.valid) {
+          store.addLog('success', `✅ Mod EJS Sync: All ${entryNameResult.matchedNames.length} entry names correctly synchronized!`);
+        } else {
+          store.addLog('warning', `⚠️ Mod EJS Sync: ${entryNameResult.missingNames.length} entry name(s) NOT found in modded text — EJS auto-trigger will fail!`);
+          for (const m of entryNameResult.missingNames.slice(0, 5)) {
+            store.addLog('error', `  Entry "${m.originalName}" → "${m.translatedName}" missing in text (was in: ${m.appearedInOriginal})`);
+          }
+          if (entryNameResult.suggestions.length > 0) {
+            for (const s of entryNameResult.suggestions.slice(0, 3)) {
+              store.addLog('info', `  💡 "${s.missingName}": ${s.closest}`);
+            }
+          }
+        }
+      }
+    }
+
     // Only set to 'done' if not already cancelled
     if (useStore.getState().phase === 'translating') {
       store.setPhase('done');
     }
-    store.addLog('info', `🔧 Mod complete: ${successCount} success, ${failCount} failed`);
+    store.addLog('info', `🔧 Mod complete: ${successCount} success, ${failCount} failed${autoFixCount > 0 ? `, ${autoFixCount} auto-fixed` : ''}`);
     store.addToast(
       failCount === 0 ? 'success' : 'error',
-      `Mod applied: ${successCount}/${targetFields.length} fields`
+      `Mod applied: ${successCount}/${targetFields.length} fields${autoFixCount > 0 ? ` (${autoFixCount} auto-fixed)` : ''}`
     );
   }, [store, prepareFields]);
 

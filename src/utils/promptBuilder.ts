@@ -89,27 +89,34 @@ NHIỆM VỤ CỐT LÕI:
 - Giữ nguyên NGÔN NGỮ HIỆN TẠI của văn bản — KHÔNG dịch sang ngôn ngữ khác
 - Xuất ra văn bản đã chỉnh sửa, KHÔNG giải thích, KHÔNG hỏi lại
 
-QUY TẮC BẢO TOÀN CODE (TUYỆT ĐỐI):
-1. GIỮ NGUYÊN 100% tất cả code: EJS tags (<% %>, <%= %>, <%- %>), JavaScript logic, HTML tags, CSS styling
-2. GIỮ NGUYÊN 100% tất cả macros: {{char}}, {{user}}, {{getvar::}}, {{setvar::}}, {{addvar::}}
-3. GIỮ NGUYÊN 100% tất cả regex patterns (findRegex)
-4. GIỮ NGUYÊN 100% tất cả JSON structure, keys, và variable names (MVU/Zod sync)
-5. GIỮ NGUYÊN 100% tất cả URLs, file paths, image links
-6. GIỮ NGUYÊN 100% format: line breaks, indentation, whitespace
-7. KHÔNG wrap output trong markdown code fences
-8. KHÔNG convert ASCII sang full-width Unicode
+TOÀN QUYỀN CHỈNH SỬA — Bạn ĐƯỢC PHÉP thay đổi TẤT CẢ nội dung phi-code:
+- Prose/narrative, tính cách, lời thoại, hành động, bối cảnh
+- Tên biến MVU/Zod (YAML keys, z.object fields, getvar/setvar arguments, data-var attributes, macros)
+- Giá trị biến (YAML values, z.default(), z.describe())
+- Entry names trong lorebook
+- Bất kỳ text nào không phải code syntax
 
-PHẠM VI CHỈNH SỬA (CHỈ thay đổi những phần này):
-- Nội dung prose/narrative (mô tả, tính cách, lời thoại, hành động)
-- Bối cảnh và thiết lập nhân vật
-- Phong cách viết và giọng điệu
-- Nội dung YAML values (phần giá trị, KHÔNG đổi key names)
-- Text hiển thị trong HTML (nội dung bên trong tags)
+QUAN TRỌNG — KHI THAY ĐỔI TÊN BIẾN:
+Nếu bạn đổi tên biến, bạn PHẢI đổi ĐỒNG LOẠT ở TẤT CẢ vị trí xuất hiện:
+  - YAML key trong [initvar] → z.object() field name → data-var attribute → getvar('tên') → setvar('tên') → {{getvar::tên}} → {{setvar::tên}}
+  - Tên biến phải GIỐNG NHAU 100% ở mọi nơi (character-exact)
+  - Nếu bạn chỉ đổi ở 1 nơi mà quên nơi khác → card BỊ HỎNG
+
+CHỈ BẢO TOÀN CODE SYNTAX (TUYỆT ĐỐI):
+1. GIỮ NGUYÊN cấu trúc EJS: <% %>, <%= %>, <%- %> — logic bên trong (if/else, operators, phép tính)
+2. GIỮ NGUYÊN cấu trúc macros: {{char}}, {{user}}, cú pháp {{getvar::}}, {{setvar::}}, {{addvar::}}
+3. GIỮ NGUYÊN regex patterns (findRegex) — không đổi pattern
+4. GIỮ NGUYÊN JSON/YAML structure (brackets, colons, indentation)
+5. GIỮ NGUYÊN HTML tag structure, CSS, JavaScript logic
+6. GIỮ NGUYÊN URLs, file paths, image links
+7. GIỮ NGUYÊN số lượng getvar()/setvar()/addvar() calls — KHÔNG thêm, KHÔNG bớt
+8. KHÔNG wrap output trong markdown code fences
+9. KHÔNG convert ASCII sang full-width Unicode
 
 ƯU TIÊN:
-P1 (CAO NHẤT): Cấu trúc code phải sống sót nguyên vẹn sau chỉnh sửa
-P2: Đồng bộ biến MVU — tên biến không được thay đổi
-P3: Tuân thủ yêu cầu Mod của người dùng
+P1 (CAO NHẤT): Code syntax phải sống sót nguyên vẹn
+P2: Nếu đổi tên biến → ĐỒNG BỘ tất cả vị trí (xem quy tắc trên)
+P3: Tuân thủ yêu cầu Mod của người dùng — TOÀN QUYỀN với nội dung
 P4 (THẤP NHẤT): Chất lượng văn phong
 
 HOÀN CHỈNH:
@@ -390,18 +397,15 @@ export function buildEffectivePrompt(options: PromptBuildOptions): PromptBuildRe
 
     // Inject the user's Mod instructions
     modPrompt += `\n\n[YÊU CẦU MOD CỦA NGƯỜI DÙNG — ƯU TIÊN TUYỆT ĐỐI]
-Bạn ĐƯỢC TOÀN QUYỀN THAY ĐỔI cốt truyện, bối cảnh, xưng hô, tính cách, nội dung mô tả để tuân thủ tuyệt đối yêu cầu Mod dưới đây.
+Bạn ĐƯỢC TOÀN QUYỀN THAY ĐỔI mọi thứ TRỪ code syntax: cốt truyện, bối cảnh, xưng hô, tính cách, nội dung, tên biến, giá trị biến, entry names.
 Mọi mâu thuẫn giữa nội dung hiện tại và yêu cầu Mod thì PHẢI ưu tiên yêu cầu Mod.
-Tuy nhiên, tên biến MVU/Zod KHÔNG ĐƯỢC thay đổi — chỉ thay đổi nội dung prose.
+Nếu đổi tên biến → phải đổi ĐỒNG LOẠT ở mọi nơi (YAML key, z.object, data-var, getvar, setvar, macros).
 
 ${modInstructions.trim()}`;
 
     // Inject MVU dict for code protection (even in standalone mod)
-    const effectiveSchema = customSchema?.trim()
-      ? customSchema
-      : liveSchemaContext || undefined;
-
-    if (!expertMode && enableMvuSync && Object.keys(mvuDictionary).length > 0) {
+    // Always inject in mod mode (both expert and legacy) for safety
+    if (enableMvuSync && Object.keys(mvuDictionary).length > 0) {
       const isBatchMode = batchFields && batchFields.length > 0;
       const checkLogic = isBatchMode
         ? batchFields.some(isLogicField)
@@ -409,10 +413,48 @@ ${modInstructions.trim()}`;
       modPrompt += buildMvuDictInjection(mvuDictionary, checkLogic);
     }
 
+    // Inject Entry Name Dictionary for EJS auto-trigger sync (standalone mod)
+    if (entryNameDictionary && Object.keys(entryNameDictionary).length > 0) {
+      const entryList = Object.entries(entryNameDictionary)
+        .map(([orig, translated]) => `  "${orig}" → "${translated}"`)
+        .join('\n');
+      modPrompt += `\n\nENTRY NAME DICTIONARY (EJS AUTO-TRIGGER — PHẢI ĐỒNG BỘ):
+Card này sử dụng EJS Entry Jumping System — lorebook entries được kích hoạt khi TÊN ENTRY xuất hiện trong text.
+Khi chỉnh sửa nội dung narrative/prose, nếu bạn gặp các tên entry dưới đây, PHẢI giữ nguyên hoặc dùng đúng tên đã dịch:
+${entryList}
+Nếu bạn thay đổi hoặc bỏ mất tên entry trong text, EJS sẽ KHÔNG kích hoạt lorebook → card bị hỏng.`;
+    }
+
+    // Inject RAG Context for cross-field awareness (standalone mod)
+    const effectiveSchema = customSchema?.trim()
+      ? customSchema
+      : liveSchemaContext || undefined;
+    let schemaForApi: string | undefined = effectiveSchema;
+    let glossaryForApi: GlossaryEntry[] = glossary;
+
+    if (enableRAGContext && allFields) {
+      const isBatchMode = batchFields && batchFields.length > 0;
+      const ragCtx = buildUnifiedRAGContext({
+        currentField: isBatchMode ? batchFields[0] : field,
+        allFields,
+        glossary,
+        mvuDictionary: enableMvuSync ? mvuDictionary : undefined,
+        customSchema: effectiveSchema,
+        entryNameDictionary,
+        maxFields: isBatchMode ? Math.min(ragMaxFields, 3) : ragMaxFields,
+        maxChars: isBatchMode ? Math.min(ragMaxChars, 2000) : ragMaxChars,
+      });
+      if (ragCtx) {
+        modPrompt += ragCtx;
+        schemaForApi = undefined;
+        glossaryForApi = [];
+      }
+    }
+
     return {
       effectivePrompt: modPrompt,
-      schemaForApi: effectiveSchema,
-      glossaryForApi: glossary,
+      schemaForApi,
+      glossaryForApi,
     };
   }
 
@@ -460,7 +502,8 @@ ${modInstructions.trim()}`;
   if (isModActive) {
     prompt += `\n\n[CRITICAL OVERRIDE: MODIFICATION & REWRITE MODE]
 CHÚ Ý: ĐÂY LÀ CHẾ ĐỘ CHỈNH SỬA VÀ VIẾT LẠI (MOD). Bạn KHÔNG BỊ RÀNG BUỘC phải dịch đúng nghĩa đen của nguyên tác.
-Bạn ĐƯỢC TOÀN QUYỀN THAY ĐỔI cốt truyện, bối cảnh, xưng hô, tính cách, nội dung mô tả, và CÁC BIẾN SỐ (MVU) để tuân thủ tuyệt đối yêu cầu Mod dưới đây.
+Bạn ĐƯỢC TOÀN QUYỀN THAY ĐỔI mọi thứ TRỪ code syntax: cốt truyện, bối cảnh, xưng hô, tính cách, nội dung, tên biến, giá trị biến.
+Nếu đổi tên biến → phải đổi ĐỒNG LOẠT ở mọi nơi (YAML key, z.object, data-var, getvar, setvar, macros) để đảm bảo đồng bộ.
 Mọi mâu thuẫn giữa nguyên tác và yêu cầu Mod thì PHẢI ưu tiên yêu cầu Mod.
 YÊU CẦU MOD CỦA NGƯỜI DÙNG:
 ${modInstructions.trim()}`;

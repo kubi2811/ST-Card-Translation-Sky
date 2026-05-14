@@ -26,10 +26,20 @@ export function extractZodSchemas(card: CharacterCard): DetectedZodSchema[] {
 
   const allScripts: { content: string; index: number }[] = [];
 
-  // TavernHelper v2
-  const th = data.extensions?.tavern_helper as { scripts?: { content: string }[] } | undefined;
-  if (th?.scripts) {
-    th.scripts.forEach((s, i) => { if (s.content) allScripts.push({ content: s.content, index: i }); });
+  // TavernHelper — support all formats
+  const thRaw = data.extensions?.tavern_helper as any;
+  if (Array.isArray(thRaw)) {
+    // Tuple format: [ ["scripts", [{content:...}, ...]] ]
+    for (const item of thRaw) {
+      if (Array.isArray(item) && item[0] === 'scripts' && Array.isArray(item[1])) {
+        (item[1] as any[]).forEach((s: any, i: number) => { if (s?.content) allScripts.push({ content: s.content, index: i }); });
+      } else if (item && typeof item === 'object' && !Array.isArray(item) && (item as any).content) {
+        allScripts.push({ content: (item as any).content, index: allScripts.length });
+      }
+    }
+  } else if (thRaw?.scripts && Array.isArray(thRaw.scripts)) {
+    // V2 object format: { scripts: [...] }
+    thRaw.scripts.forEach((s: any, i: number) => { if (s.content) allScripts.push({ content: s.content, index: i }); });
   }
   // Legacy TavernHelper
   const legacy = data.extensions?.TavernHelper_scripts as { content: string }[] | undefined;

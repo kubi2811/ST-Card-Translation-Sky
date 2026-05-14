@@ -161,11 +161,23 @@ export function syncMvuVariables(
   // 1. Xử lý TavernHelper Scripts (Zod Schema) — code context
   if (!enabledGroups || enabledGroups.includes('tavern_helper')) {
     const tavernHelper = result.data.extensions?.tavern_helper as any;
-    if (tavernHelper?.scripts) {
+    // V2 object format: { scripts: [...] }
+    if (tavernHelper?.scripts && Array.isArray(tavernHelper.scripts)) {
       tavernHelper.scripts = tavernHelper.scripts.map((script: any) => ({
         ...script,
         content: replaceInCode(script.content)
       }));
+    }
+    // Tuple format: [ ["scripts", [...]] ]
+    else if (Array.isArray(tavernHelper)) {
+      for (const item of tavernHelper) {
+        if (Array.isArray(item) && item[0] === 'scripts' && Array.isArray(item[1])) {
+          item[1] = item[1].map((script: any) => ({
+            ...script,
+            content: replaceInCode(script.content)
+          }));
+        }
+      }
     }
     // Hỗ trợ phiên bản cũ của TavernHelper
     const tavernHelperLegacy = result.data.extensions?.TavernHelper_scripts as any;
@@ -574,19 +586,31 @@ export function extractPotentialMvuKeys(card: CharacterCard): MvuKeyInfo[] {
   // ═══════════════════════════════════════════════════════════
   // SOURCE 2: TavernHelper scripts (Zod schema, MVU logic)
   // ═══════════════════════════════════════════════════════════
-  const tavernHelper = data.extensions?.tavern_helper as { scripts?: { content: string }[] } | undefined;
-  if (tavernHelper?.scripts) {
-    for (const script of tavernHelper.scripts) {
-      // ALL code scanners (NO YAML — scripts are JS code, not YAML)
-      scanZodFields(script.content);
-      scanMacros(script.content);
-      scanEjsCalls(script.content);
-      scanDataVar(script.content);
-      scanZodEnumAndDefaultValues(script.content);
-      scanBracketAccess(script.content);
-      scanStringLiteralComparisons(script.content);
-      scanLodashAccess(script.content);
+  const tavernHelperRaw = data.extensions?.tavern_helper as any;
+  // Collect all TavernHelper scripts regardless of format
+  const thScripts: { content: string }[] = [];
+  if (Array.isArray(tavernHelperRaw)) {
+    // Tuple format: [ ["scripts", [{content:...}, ...]] ]
+    for (const item of tavernHelperRaw) {
+      if (Array.isArray(item) && item[0] === 'scripts' && Array.isArray(item[1])) {
+        thScripts.push(...item[1].filter((s: any) => s?.content));
+      } else if (item && typeof item === 'object' && !Array.isArray(item) && item.content) {
+        thScripts.push(item);
+      }
     }
+  } else if (tavernHelperRaw?.scripts && Array.isArray(tavernHelperRaw.scripts)) {
+    thScripts.push(...tavernHelperRaw.scripts.filter((s: any) => s?.content));
+  }
+  for (const script of thScripts) {
+    // ALL code scanners (NO YAML — scripts are JS code, not YAML)
+    scanZodFields(script.content);
+    scanMacros(script.content);
+    scanEjsCalls(script.content);
+    scanDataVar(script.content);
+    scanZodEnumAndDefaultValues(script.content);
+    scanBracketAccess(script.content);
+    scanStringLiteralComparisons(script.content);
+    scanLodashAccess(script.content);
   }
   const tavernHelperLegacy = data.extensions?.TavernHelper_scripts as { content: string }[] | undefined;
   if (Array.isArray(tavernHelperLegacy)) {
@@ -657,7 +681,7 @@ export function extractPotentialMvuKeys(card: CharacterCard): MvuKeyInfo[] {
   // ═══════════════════════════════════════════════════════════
   let zodDescriptions: Record<string, string> = {};
   const allScripts = [
-    ...(tavernHelper?.scripts || []),
+    ...thScripts,
     ...(Array.isArray(tavernHelperLegacy) ? tavernHelperLegacy : []),
   ];
   for (const script of allScripts) {

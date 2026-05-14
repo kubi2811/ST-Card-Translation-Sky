@@ -143,12 +143,23 @@ export function extractSystemReferences(card: CharacterCard): SystemReference[] 
   }
 
   // Scan TavernHelper scripts
-  const th = data.extensions?.tavern_helper as any;
-  if (th?.scripts) {
-    th.scripts.forEach((script: any, i: number) => {
-      scan(script.content, `tavernHelper[${i}].content`);
-    });
+  const thRaw = data.extensions?.tavern_helper as any;
+  const thScriptsForVerify: any[] = [];
+  if (Array.isArray(thRaw)) {
+    // Tuple format: [ ["scripts", [{content:...}, ...]] ]
+    for (const item of thRaw) {
+      if (Array.isArray(item) && item[0] === 'scripts' && Array.isArray(item[1])) {
+        thScriptsForVerify.push(...item[1].filter((s: any) => s?.content));
+      } else if (item && typeof item === 'object' && !Array.isArray(item) && (item as any).content) {
+        thScriptsForVerify.push(item);
+      }
+    }
+  } else if (thRaw?.scripts && Array.isArray(thRaw.scripts)) {
+    thScriptsForVerify.push(...thRaw.scripts.filter((s: any) => s?.content));
   }
+  thScriptsForVerify.forEach((script: any, i: number) => {
+    scan(script.content, `tavernHelper[${i}].content`);
+  });
   const thLegacy = data.extensions?.TavernHelper_scripts as any[];
   if (Array.isArray(thLegacy)) {
     thLegacy.forEach((script: any, i: number) => {
@@ -1615,9 +1626,19 @@ export async function aiVerifyCard(
     }
   }
 
-  // Compare TavernHelper scripts (Zod, MVU)
-  const origTH = (origData.extensions?.tavern_helper as any)?.scripts || [];
-  const transTH = (transData.extensions?.tavern_helper as any)?.scripts || [];
+  // Compare TavernHelper scripts (Zod, MVU) — support tuple format
+  const extractTHScripts = (ext: any): any[] => {
+    const raw = ext?.tavern_helper;
+    if (Array.isArray(raw)) {
+      for (const item of raw) {
+        if (Array.isArray(item) && item[0] === 'scripts' && Array.isArray(item[1])) return item[1];
+      }
+      return raw.filter((s: any) => s && typeof s === 'object' && !Array.isArray(s));
+    }
+    return raw?.scripts || [];
+  };
+  const origTH = extractTHScripts(origData.extensions);
+  const transTH = extractTHScripts(transData.extensions);
   for (let i = 0; i < Math.min(origTH.length, transTH.length); i++) {
     sections.push(`## TavernHelper Script[${i}] "${origTH[i].name || ''}":\n### ORIGINAL:\n${origTH[i].content.slice(0, 3000)}\n### TRANSLATED:\n${transTH[i].content.slice(0, 3000)}`);
   }

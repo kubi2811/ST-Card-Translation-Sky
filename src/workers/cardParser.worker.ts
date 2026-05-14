@@ -360,10 +360,21 @@ function extractTranslatableFields(card: any, enabledGroups: string[]): any[] {
       
       let scriptsArray: any[] = [];
       let isDirectArray = false;
+      let basePath = ''; // custom base path for tuple format
       
       if (Array.isArray(extData)) {
-        scriptsArray = extData;
-        isDirectArray = true;
+        // Check for tuple format: [ ["scripts", [{script}, ...]] ]
+        const tupleEntry = extData.find(
+          (item: any) => Array.isArray(item) && item[0] === 'scripts' && Array.isArray(item[1])
+        );
+        if (tupleEntry) {
+          const tupleIndex = extData.indexOf(tupleEntry);
+          scriptsArray = tupleEntry[1];
+          basePath = `data.extensions.${key}[${tupleIndex}][1]`;
+        } else if (extData.length > 0 && extData[0] && typeof extData[0] === 'object' && !Array.isArray(extData[0])) {
+          scriptsArray = extData;
+          isDirectArray = true;
+        }
       } else if (extData && typeof extData === 'object' && 'scripts' in extData && Array.isArray((extData as any).scripts)) {
         scriptsArray = (extData as any).scripts;
       }
@@ -375,9 +386,11 @@ function extractTranslatableFields(card: any, enabledGroups: string[]): any[] {
 
         // Extract script name if translatable
         if (typeof script.name === 'string' && script.name.trim() !== '') {
-          const path = isDirectArray 
-            ? `data.extensions.${key}[${i}].name`
-            : `data.extensions.${key}.scripts[${i}].name`;
+          const path = basePath 
+            ? `${basePath}[${i}].name`
+            : isDirectArray 
+              ? `data.extensions.${key}[${i}].name`
+              : `data.extensions.${key}.scripts[${i}].name`;
           fields.push({
             path,
             label: `tavernHelper[${i}].name${scriptName}`,
@@ -391,9 +404,11 @@ function extractTranslatableFields(card: any, enabledGroups: string[]): any[] {
 
         // Extract script info if translatable
         if (typeof script.info === 'string' && script.info.trim() !== '') {
-          const path = isDirectArray 
-            ? `data.extensions.${key}[${i}].info`
-            : `data.extensions.${key}.scripts[${i}].info`;
+          const path = basePath 
+            ? `${basePath}[${i}].info`
+            : isDirectArray 
+              ? `data.extensions.${key}[${i}].info`
+              : `data.extensions.${key}.scripts[${i}].info`;
           fields.push({
             path,
             label: `tavernHelper[${i}].info${scriptName}`,
@@ -409,9 +424,11 @@ function extractTranslatableFields(card: any, enabledGroups: string[]): any[] {
         if (script.button && Array.isArray(script.button.buttons)) {
           script.button.buttons.forEach((btn: any, j: number) => {
             if (typeof btn.name === 'string' && btn.name.trim() !== '') {
-              const path = isDirectArray 
-                ? `data.extensions.${key}[${i}].button.buttons[${j}].name`
-                : `data.extensions.${key}.scripts[${i}].button.buttons[${j}].name`;
+              const path = basePath 
+                ? `${basePath}[${i}].button.buttons[${j}].name`
+                : isDirectArray 
+                  ? `data.extensions.${key}[${i}].button.buttons[${j}].name`
+                  : `data.extensions.${key}.scripts[${i}].button.buttons[${j}].name`;
               fields.push({
                 path,
                 label: `tavernHelper[${i}].button[${j}]${scriptName}`,
@@ -432,9 +449,11 @@ function extractTranslatableFields(card: any, enabledGroups: string[]): any[] {
                           
         if (contentKey && script[contentKey].trim() !== '') {
           // Skipping hasTranslatableText
-          const path = isDirectArray 
-            ? `data.extensions.${key}[${i}].${contentKey}`
-            : `data.extensions.${key}.scripts[${i}].${contentKey}`;
+          const path = basePath 
+            ? `${basePath}[${i}].${contentKey}`
+            : isDirectArray 
+              ? `data.extensions.${key}[${i}].${contentKey}`
+              : `data.extensions.${key}.scripts[${i}].${contentKey}`;
             
           fields.push({
             path,
@@ -462,9 +481,20 @@ function getCardSummary(card: any) {
   const regexCount = card.data?.extensions?.regex_scripts?.length ?? 0;
   const hasDepthPrompt = !!card.data?.extensions?.depth_prompt?.prompt;
   const spec = card.spec || 'unknown';
-  const tavernHelperCount =
-    ((card.data?.extensions?.tavern_helper as any)?.scripts?.length ?? 0) +
-    (Array.isArray(card.data?.extensions?.TavernHelper_scripts) ? (card.data.extensions!.TavernHelper_scripts as any[]).length : 0);
+  const tavernHelperCount = (() => {
+    let count = 0;
+    const th = card.data?.extensions?.tavern_helper as any;
+    if (Array.isArray(th)) {
+      const tuple = th.find((item: any) => Array.isArray(item) && item[0] === 'scripts' && Array.isArray(item[1]));
+      count += tuple ? tuple[1].length : th.filter((s: any) => s && typeof s === 'object' && !Array.isArray(s)).length;
+    } else if (th?.scripts) {
+      count += th.scripts.length;
+    }
+    if (Array.isArray(card.data?.extensions?.TavernHelper_scripts)) {
+      count += (card.data.extensions!.TavernHelper_scripts as any[]).length;
+    }
+    return count;
+  })();
   return { name, lorebookCount, altGreetingsCount, regexCount, hasDepthPrompt, spec, tavernHelperCount };
 }
 

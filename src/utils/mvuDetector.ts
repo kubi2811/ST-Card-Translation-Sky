@@ -46,8 +46,27 @@ export function getMvuCardSummary(card: CharacterCard): MvuCardSummary {
   let score = 0;
 
   // ─── Check TavernHelper scripts for Zod schema ───
-  const tavernHelper = data.extensions?.tavern_helper as { scripts?: { content: string }[] } | undefined;
-  const scripts: { content: string }[] = [...(tavernHelper?.scripts || (data.extensions?.TavernHelper_scripts as { content: string }[] | undefined) || [])];
+  const tavernHelperRaw = data.extensions?.tavern_helper as any;
+  // Collect scripts from all possible formats
+  const thScriptsList: { content: string }[] = [];
+  if (Array.isArray(tavernHelperRaw)) {
+    // Tuple format: [ ["scripts", [{content:...}, ...]] ]
+    for (const item of tavernHelperRaw) {
+      if (Array.isArray(item) && item[0] === 'scripts' && Array.isArray(item[1])) {
+        thScriptsList.push(...item[1].filter((s: any) => s?.content));
+      } else if (item && typeof item === 'object' && !Array.isArray(item) && (item as any).content) {
+        thScriptsList.push(item as { content: string });
+      }
+    }
+  } else if (tavernHelperRaw?.scripts && Array.isArray(tavernHelperRaw.scripts)) {
+    thScriptsList.push(...tavernHelperRaw.scripts.filter((s: any) => s?.content));
+  }
+  // Also include legacy format
+  const legacyScripts = data.extensions?.TavernHelper_scripts as { content: string }[] | undefined;
+  if (Array.isArray(legacyScripts)) {
+    thScriptsList.push(...legacyScripts.filter((s: any) => s?.content));
+  }
+  const scripts: { content: string }[] = [...thScriptsList];
   
   if (data.extensions?.regex_scripts) {
     for (const rs of data.extensions.regex_scripts) {

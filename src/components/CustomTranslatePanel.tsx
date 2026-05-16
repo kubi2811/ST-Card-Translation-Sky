@@ -4,6 +4,7 @@ import { translateText } from '../utils/apiClient';
 import type { TranslationFieldType } from '../utils/masterPrompt';
 import { applyMvuToText } from '../utils/mvuSync';
 import { buildEffectivePrompt } from '../utils/promptBuilder';
+import { surgicalTranslate } from '../utils/surgical';
 import type { TranslationField } from '../types/card';
 import { Code2, Play, Copy, CheckCircle2, Loader2, Trash2 } from 'lucide-react';
 
@@ -65,21 +66,53 @@ export default function CustomTranslatePanel() {
         modInstructions: translationConfig.modInstructions,
       });
 
-      const result = await translateText(
-        input,
-        'Custom Code',
-        proxy,
-        translationConfig.targetLanguage,
-        translationConfig.sourceLanguage,
-        promptResult.effectivePrompt,
-        undefined, // customSchema
-        abortRef.current.signal,
-        undefined, // contextHint
-        promptResult.glossaryForApi,
-        undefined, // previousTranslation
-        fieldType,
-        translationConfig.enableMvuSync ? translationConfig.mvuDictionary : undefined,
-      );
+      // Tự động tính toán CHUNK_THRESHOLD dựa trên token user nhập
+      const currentMaxTokens = proxy.maxTokens;
+      const currentChunkSize = translationConfig.chunkSize;
+      const CHUNK_THRESHOLD = currentChunkSize && currentChunkSize > 0
+        ? currentChunkSize
+        : (currentMaxTokens && currentMaxTokens > 0 ? Math.min(Math.floor(currentMaxTokens * 3.5), 200000) : 40000);
+
+      let result = '';
+      let usedSurgical = false;
+      let surgicalFallback = false;
+
+      const isEligibleForSurgical = translationConfig.surgicalMode && 
+        (['html_dashboard', 'code_script', 'mixed'].includes(fieldType) || input.includes('`') || input.includes('{') || input.includes('<'));
+
+      if (isEligibleForSurgical) {
+        usedSurgical = true;
+        const sResult = await surgicalTranslate(
+          input,
+          proxy,
+          translationConfig.targetLanguage,
+          abortRef.current.signal
+        );
+        result = sResult.translated;
+        
+        if (!sResult.success) {
+          surgicalFallback = true;
+        }
+      }
+
+      if (!isEligibleForSurgical || surgicalFallback) {
+        result = await translateText(
+          input,
+          'Custom Code',
+          proxy,
+          translationConfig.targetLanguage,
+          translationConfig.sourceLanguage,
+          promptResult.effectivePrompt,
+          undefined, // customSchema
+          abortRef.current.signal,
+          undefined, // contextHint
+          promptResult.glossaryForApi,
+          undefined, // previousTranslation
+          fieldType,
+          translationConfig.enableMvuSync ? translationConfig.mvuDictionary : undefined,
+          CHUNK_THRESHOLD
+        );
+      }
       let finalResult = result;
 
       // Hậu xử lý (Post-process) bắt buộc bằng regex để đảm bảo biến MVU được đồng bộ 100%

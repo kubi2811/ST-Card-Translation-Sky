@@ -48,6 +48,7 @@ interface AppState {
   /** Blob URL for preview — must be revoked on clearCard */
   _blobUrl: string | null;
   setCard: (card: CharacterCard, fileName: string, originalImage?: string | null, contentType?: ContentType, originalWorldbook?: Worldbook | null) => void;
+  updateCard: (card: CharacterCard) => void;
   clearCard: () => void;
   loadStateFromIDB: () => Promise<void>;
 
@@ -157,6 +158,17 @@ export const useStore = create<AppState>((set) => ({
       // But we always set currentBuffer if it's a blob URL from the parser.
       IDB.remove('st-translator-image-data');
     }
+  },
+  updateCard: (card) => {
+    set({ card });
+    // Persist updated card data to IDB (keep existing fileName, contentType, worldbook)
+    const s = useStore.getState();
+    IDB.set('st-translator-card-data', {
+      card,
+      cardFileName: s.cardFileName,
+      contentType: s.contentType,
+      originalWorldbook: s.originalWorldbook,
+    });
   },
   clearCard: () => {
     // Revoke Blob URL to free memory

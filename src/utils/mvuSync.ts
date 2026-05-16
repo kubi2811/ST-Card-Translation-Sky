@@ -84,14 +84,21 @@ export function applyMvuToText(
       
       // ── 6. General standalone occurrences (fallback) ──
       const isAsciiOnly = /^[a-zA-Z0-9_]+$/.test(original);
-      let regex: RegExp;
-      if (isAsciiOnly) {
-        // ASCII keys: sử dụng word boundary để tránh replace nhầm
-        regex = new RegExp(`\\b${escaped}\\b`, 'g');
-      } else {
-        // Unicode keys (Trung/Nhật/Hàn): replace trực tiếp
-        regex = new RegExp(escaped, 'g');
+      let pattern = isAsciiOnly ? `\\b${escaped}\\b` : escaped;
+      
+      // Prevent double replacement if 'translated' contains 'original'
+      // Example: original = "A", translated = "A (B)"
+      // If we see "A", we should only replace it if it's NOT followed by " (B)"
+      if (translated.includes(original)) {
+        const idx = translated.indexOf(original);
+        const prefix = translated.substring(0, idx);
+        const suffix = translated.substring(idx + original.length);
+        
+        if (suffix) pattern = pattern + `(?!${escapeRegExp(suffix)})`;
+        if (prefix) pattern = `(?<!${escapeRegExp(prefix)})` + pattern;
       }
+      
+      const regex = new RegExp(pattern, 'g');
       newText = newText.replace(regex, safeTranslated);
     } else {
       // ── Non-aggressive: chỉ thay thế trong cấu trúc cụ thể ──

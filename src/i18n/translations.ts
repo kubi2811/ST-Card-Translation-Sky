@@ -126,6 +126,12 @@ const en = {
   modRetryErrors: 'Retry Mod Errors',
   modFieldEditor: 'Mod Editor',
   modNoInstructionsWarning: 'No mod instructions set. Configure in the sidebar first.',
+  modGenerateLorebook: 'Generate Lorebook',
+  modGenerateLorebookDesc: 'Auto-generate lorebook entries for new characters/concepts from modded content',
+  modGenerating: 'Generating entries...',
+  modGenerateSuccess: '{count} new lorebook entries created!',
+  modGenerateEmpty: 'No new entries needed — all concepts already have entries.',
+  modGenerateError: 'Failed to generate lorebook entries',
 
   // Log Filter
   all: 'All',
@@ -330,6 +336,12 @@ const vi: TranslationKeys = {
   modRetryErrors: 'Thử lại lỗi Mod',
   modFieldEditor: 'Trình chỉnh sửa Mod',
   modNoInstructionsWarning: 'Chưa có chỉ thị Mod. Hãy cấu hình trong thanh bên trước.',
+  modGenerateLorebook: 'Tạo Lorebook',
+  modGenerateLorebookDesc: 'Tự động tạo lorebook entries cho nhân vật/khái niệm mới từ nội dung đã mod',
+  modGenerating: 'Đang tạo entries...',
+  modGenerateSuccess: 'Đã tạo {count} lorebook entry mới!',
+  modGenerateEmpty: 'Không cần entry mới — tất cả khái niệm đã có entry.',
+  modGenerateError: 'Lỗi khi tạo lorebook entries',
 
   // Log Filter
   all: 'Tất cả',

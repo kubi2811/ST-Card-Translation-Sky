@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { useStore } from '../store';
 import { useTranslation } from '../hooks/useTranslation';
 import { useT } from '../i18n/useLocale';
@@ -19,6 +19,7 @@ import {
   Wand2,
   AlertTriangle,
   FileText,
+  BookPlus,
 } from 'lucide-react';
 
 // ═══════════════════════════════════════════════
@@ -118,9 +119,11 @@ function LogPanel({ logEndRef }: { logEndRef: React.RefObject<HTMLDivElement | n
 
 function ModModePanel() {
   const { fields, phase, logs, startTime, translationConfig } = useStore();
-  const { applyModToAllFields, continueMod, retryAllErrors, cancelTranslation, pauseTranslation, resumeTranslation } = useTranslation();
+  const { applyModToAllFields, continueMod, retryAllErrors, cancelTranslation, pauseTranslation, resumeTranslation, generateModLorebook } = useTranslation();
   const t = useT();
   const logEndRef = useRef<HTMLDivElement>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generatedCount, setGeneratedCount] = useState<number | null>(null);
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -350,6 +353,74 @@ function ModModePanel() {
           </>
         )}
       </div>
+
+      {/* Generate Lorebook */}
+      {(isDone || isCancelled) && hasInstructions && !isGenerating && (
+        <div style={{ marginBottom: '16px' }}>
+          <div style={{
+            padding: '12px 14px',
+            background: 'rgba(52, 152, 219, 0.06)',
+            borderRadius: 'var(--radius-sm)',
+            border: '1px solid rgba(52, 152, 219, 0.2)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <BookPlus size={16} style={{ color: '#3498db' }} />
+                <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#3498db' }}>
+                  {t.modGenerateLorebook}
+                </span>
+              </div>
+              {generatedCount !== null && (
+                <span style={{ fontSize: '0.7rem', color: 'var(--accent-success)', fontWeight: 500 }}>
+                  {t.modGenerateSuccess.replace('{count}', String(generatedCount))}
+                </span>
+              )}
+            </div>
+            <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)', margin: '0 0 10px 0', lineHeight: 1.4 }}>
+              {t.modGenerateLorebookDesc}
+            </p>
+            <button
+              onClick={async () => {
+                setIsGenerating(true);
+                setGeneratedCount(null);
+                try {
+                  const count = await generateModLorebook();
+                  setGeneratedCount(count);
+                } finally {
+                  setIsGenerating(false);
+                }
+              }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '8px',
+                padding: '7px 16px', fontSize: '0.8rem', fontWeight: 600,
+                border: 'none', borderRadius: 'var(--radius-sm)',
+                background: 'linear-gradient(135deg, #3498db, #2980b9)',
+                color: 'white', cursor: 'pointer',
+                transition: 'all 0.2s',
+                boxShadow: '0 2px 8px rgba(52,152,219,0.3)',
+              }}
+            >
+              <BookPlus size={14} />
+              {t.modGenerateLorebook}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Generating state */}
+      {isGenerating && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '10px',
+          padding: '12px 14px', marginBottom: '16px',
+          background: 'rgba(52, 152, 219, 0.08)',
+          borderRadius: 'var(--radius-sm)',
+          border: '1px solid rgba(52, 152, 219, 0.25)',
+          fontSize: '0.8rem', color: '#3498db',
+        }}>
+          <Loader2 size={16} className="spin" />
+          {t.modGenerating}
+        </div>
+      )}
 
       {/* Logs */}
       <LogPanel logEndRef={logEndRef} />

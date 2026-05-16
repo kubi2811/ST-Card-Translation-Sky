@@ -1,4 +1,4 @@
-import type { CharacterCard, TranslationField, FieldGroup, FieldGroupConfig } from '../types/card';
+import type { CharacterCard, CharacterBookEntry, TranslationField, FieldGroup, FieldGroupConfig } from '../types/card';
 
 /* ─── Default Field Group Configs ─── */
 export const DEFAULT_FIELD_GROUPS: FieldGroupConfig[] = [
@@ -615,6 +615,57 @@ export function autoTranslateLorebookTriggerKeys(
 
   if (addedCount > 0) {
     console.log(`[B3 AutoTrigger] Added ${addedCount} translated trigger keys to lorebook entries`);
+  }
+
+  return result;
+}
+
+/**
+ * Inject new lorebook entries into a card.
+ * Creates character_book structure if it doesn't exist.
+ * Returns a deep-cloned updated card (does NOT mutate input).
+ */
+export function injectNewLorebookEntries(
+  card: CharacterCard,
+  newEntries: Partial<CharacterBookEntry>[]
+): CharacterCard {
+  const result = JSON.parse(JSON.stringify(card)) as CharacterCard;
+
+  // Ensure data + character_book structure exists
+  if (!result.data) {
+    (result as any).data = {};
+  }
+  if (!result.data!.character_book) {
+    result.data!.character_book = {
+      entries: [],
+      name: '',
+      description: '',
+    };
+  }
+  if (!Array.isArray(result.data!.character_book!.entries)) {
+    result.data!.character_book!.entries = [];
+  }
+
+  const existingCount = result.data!.character_book!.entries.length;
+
+  for (let i = 0; i < newEntries.length; i++) {
+    const raw = newEntries[i];
+    const entry: CharacterBookEntry = {
+      id: existingCount + i,
+      keys: Array.isArray(raw.keys) ? raw.keys : [],
+      secondary_keys: Array.isArray(raw.secondary_keys) ? raw.secondary_keys : [],
+      comment: typeof raw.comment === 'string' ? raw.comment : '',
+      content: typeof raw.content === 'string' ? raw.content : '',
+      name: typeof raw.name === 'string' ? raw.name : `Entry ${existingCount + i}`,
+      constant: raw.constant ?? false,
+      selective: raw.selective ?? true,
+      insertion_order: raw.insertion_order ?? 100,
+      enabled: raw.enabled ?? true,
+      position: raw.position ?? 'before_char',
+      use_regex: raw.use_regex ?? false,
+      extensions: raw.extensions ?? {},
+    };
+    result.data!.character_book!.entries.push(entry);
   }
 
   return result;

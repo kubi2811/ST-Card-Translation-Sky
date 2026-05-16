@@ -1,4 +1,4 @@
-import type { AIProvider, ProxySettings, GlossaryEntry } from '../types/card';
+import type { AIProvider, ProxySettings, GlossaryEntry, CharacterBookEntry } from '../types/card';
 import {
   buildMasterSystemPrompt,
   extractTranslationFromResponse,
@@ -6,6 +6,7 @@ import {
   type TranslationFieldType,
   type MasterPromptOptions,
 } from './masterPrompt';
+import { LOREBOOK_GENERATION_PROMPT } from './promptBuilder';
 
 /* ─── Error types ─── */
 export class ApiError extends Error {
@@ -2189,4 +2190,70 @@ export function getDefaultProxyUrl(provider: AIProvider): string {
     default:
       return 'http://localhost:8080/v1';
   }
+}
+
+/* ─── Generate new lorebook entries via AI ─── */
+export async function generateLorebookEntries(
+  config: ProxySettings,
+  cardContext: string,
+  existingEntryNames: string[],
+  modInstructions: string,
+  signal?: AbortSignal,
+): Promise<Partial<CharacterBookEntry>[]> {
+  const systemPrompt = LOREBOOK_GENERATION_PROMPT;
+
+  const userMsg = `[MOD INSTRUCTIONS]
+${modInstructions}
+
+[EXISTING LOREBOOK ENTRIES — KHÔNG TẠO TRÙNG]
+${existingEntryNames.length > 0 ? existingEntryNames.map((n, i) => `${i + 1}. ${n}`).join('\n') : '(Chưa có entry nào)'}
+
+[CARD CONTENT — Phân tích để tìm nhân vật/khái niệm/địa điểm cần tạo entry]
+${cardContext}`;
+
+  const raw = await callProvider(config, systemPrompt, userMsg, signal);
+
+  // Strip markdown code fences if present
+  let jsonStr = raw.trim();
+  if (jsonStr.startsWith('```')) {
+    jsonStr = jsonStr.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+  }
+
+  // Parse JSON
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonStr);
+  } catch {
+    // Try to find JSON array in the response
+    const match = jsonStr.match(/\[[\s\S]*\]/);
+    if (match) {
+      try {
+        parsed = JSON.parse(match[0]);
+      } catch {
+        console.error('[generateLorebookEntries] Failed to parse JSON:', jsonStr.slice(0, 500));
+        throw new Error('AI response is not valid JSON');
+      }
+    } else {
+      console.error('[generateLorebookEntries] No JSON array found:', jsonStr.slice(0, 500));
+      throw new Error('AI response does not contain a JSON array');
+    }
+  }
+
+  if (!Array.isArray(parsed)) {
+    throw new Error('AI response is not a JSON array');
+  }
+
+  // Validate each entry has at minimum name and content
+  const entries: Partial<CharacterBookEntry>[] = parsed
+    .filter((e: any) => e && typeof e === 'object' && typeof e.name === 'string' && typeof e.content === 'string')
+    .map((e: any) => ({
+      name: e.name,
+      content: e.content,
+      keys: Array.isArray(e.keys) ? e.keys.map(String) : [e.name],
+      secondary_keys: Array.isArray(e.secondary_keys) ? e.secondary_keys.map(String) : [],
+      comment: typeof e.comment === 'string' ? e.comment : '',
+    }));
+
+  console.log(`[generateLorebookEntries] AI returned ${parsed.length} entries, ${entries.length} valid`);
+  return entries;
 }

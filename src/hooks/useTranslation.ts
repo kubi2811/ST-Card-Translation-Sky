@@ -1,7 +1,7 @@
 import { useCallback, useRef } from 'react';
 import { useStore } from '../store';
-import { translateText, translateBatch, fieldGroupToFieldType } from '../utils/apiClient';
-import { extractTranslatableFields, applyTranslationsToCard, autoTranslateLorebookTriggerKeys } from '../utils/cardFields';
+import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookEntries } from '../utils/apiClient';
+import { extractTranslatableFields, applyTranslationsToCard, autoTranslateLorebookTriggerKeys, injectNewLorebookEntries } from '../utils/cardFields';
 import { syncMvuVariables, postProcessRegexHtml, extractPotentialMvuKeyStrings, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions } from '../utils/mvuSync';
 import { shouldSkipTranslation, detectLanguage } from '../utils/langDetect';
 import { clearRAGCache } from '../utils/ragContext';
@@ -11,6 +11,39 @@ import { buildEffectivePrompt } from '../utils/promptBuilder';
 import { surgicalTranslate } from '../utils/surgical';
 import type { FieldGroup, FieldGroupConfig, TranslationField } from '../types/card';
 
+
+/**
+ * Bake modded/translated fields into the card and update field originals.
+ * After this, store.card reflects the latest modded state, and each
+ * completed field's `original` becomes its modded value (translated cleared).
+ * This ensures subsequent mod operations scan the updated card as the base.
+ */
+function bakeModdedFieldsIntoCard() {
+  const state = useStore.getState();
+  const currentFields = state.fields;
+  const currentCard = state.card;
+  if (!currentCard) return;
+
+  const doneFields = currentFields.filter(f => f.status === 'done' && f.translated);
+  if (doneFields.length === 0) return;
+
+  // Apply all modded translations to get the updated card
+  const updatedCard = applyTranslationsToCard(currentCard, currentFields, 'merge');
+
+  // Update store.card to the new base
+  state.updateCard(updatedCard);
+
+  // Update each done field: original = translated (new base), clear translated
+  for (const field of doneFields) {
+    state.updateField(field.path, {
+      original: field.translated,
+      translated: '',
+      status: 'pending',
+    });
+  }
+
+  state.addLog('info', `📌 Baked ${doneFields.length} modded field(s) into card — new base state set`);
+}
 
 export function useTranslation() {
   const store = useStore();
@@ -1190,6 +1223,66 @@ export function useTranslation() {
     store.addLog('active', `🔧 Modding single field: ${field.label}`);
 
     try {
+      // ═══ MVU variable rename — same as applyModToAllFields ═══
+      // If MVU sync is enabled but no dictionary exists yet (first per-field mod),
+      // run the same scan + AI rename pipeline to build the mapping.
+      if (store.translationConfig.enableMvuSync && store.card) {
+        const existingDict = useStore.getState().translationConfig.mvuDictionary;
+        const hasDict = Object.keys(existingDict).filter(k => existingDict[k] && k !== existingDict[k]).length > 0;
+
+        if (!hasDict) {
+          try {
+            store.addLog('info', '🔧 Single-field Mod: Scanning MVU/Zod variables...');
+            // Build current-state card with already-modded fields applied
+            const currentStateCard = applyTranslationsToCard(store.card!, useStore.getState().fields, 'merge');
+            const extractedKeys = extractPotentialMvuKeyStrings(currentStateCard);
+
+            if (extractedKeys.length > 0) {
+              store.addLog('active', `🤖 Renaming ${extractedKeys.length} variable names with Mod instructions...`);
+
+              let schemaContext = store.translationConfig.customSchema || '';
+              if (!schemaContext.trim() && store.card?.data?.extensions?.tavern_helper?.scripts) {
+                schemaContext = store.card.data.extensions.tavern_helper.scripts.map(s => s.content).join('\n\n');
+              }
+
+              let keyDescriptions: Record<string, string> = {};
+              if (schemaContext) {
+                keyDescriptions = extractZodDescriptions(schemaContext);
+              }
+
+              const renames = await aiRenameMvuKeys(
+                extractedKeys,
+                effectiveLang,
+                modInstructions,
+                store.proxy,
+                controller.signal,
+                schemaContext,
+                keyDescriptions
+              );
+
+              const newDict: Record<string, string> = {};
+              let changedCount = 0;
+              for (const [k, v] of Object.entries(renames)) {
+                if (v && v.trim()) {
+                  newDict[k] = v.trim();
+                  if (k !== v.trim()) changedCount++;
+                }
+              }
+
+              if (changedCount > 0) {
+                store.setTranslationConfig({ mvuDictionary: newDict });
+                store.addLog('success', `✅ Mod: ${changedCount} variable(s) will be renamed during sync`);
+              } else {
+                store.addLog('info', 'Mod instructions did not change any variable names');
+              }
+            }
+          } catch (mvuErr) {
+            const mvuMsg = mvuErr instanceof Error ? mvuErr.message : String(mvuErr);
+            store.addLog('warning', `⚠️ MVU rename scan failed (non-critical): ${mvuMsg}`);
+          }
+        }
+      }
+
       // Contextual keyword translation for lorebook_keys
       let contextHint: string | undefined;
       if (field.group === 'lorebook_keys') {
@@ -1288,6 +1381,9 @@ export function useTranslation() {
       store.updateField(path, { status: 'done', translated: result });
       store.addLog('success', `🔧 Modded: ${field.label}`);
       store.addToast('success', `Mod applied to ${field.label}`);
+
+      // ═══ Bake single modded field into card so next operations use updated base ═══
+      bakeModdedFieldsIntoCard();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       store.updateField(path, { status: 'error', error: msg });
@@ -1372,7 +1468,9 @@ export function useTranslation() {
     if (store.translationConfig.enableMvuSync && store.card) {
       try {
         store.addLog('info', '🔧 Mod: Scanning MVU/Zod variables...');
-        const extractedKeys = extractPotentialMvuKeyStrings(store.card);
+        // Build current-state card with already-modded fields applied
+        const currentStateCard = applyTranslationsToCard(store.card!, useStore.getState().fields, 'merge');
+        const extractedKeys = extractPotentialMvuKeyStrings(currentStateCard);
 
         if (extractedKeys.length > 0) {
           store.addLog('active', `🤖 Renaming ${extractedKeys.length} variable names with Mod instructions...`);
@@ -1859,6 +1957,9 @@ export function useTranslation() {
       }
     }
 
+    // ═══ Bake all modded fields into card so next operations use updated base ═══
+    bakeModdedFieldsIntoCard();
+
     // Only set to 'done' if not already cancelled
     if (useStore.getState().phase === 'translating') {
       store.setPhase('done');
@@ -1874,6 +1975,182 @@ export function useTranslation() {
     await applyModToAllFields(true);
   }, [applyModToAllFields]);
 
+  /**
+   * Generate new lorebook entries based on modded card content.
+   * Analyzes the card to find characters/concepts/locations without entries
+   * and creates new ones via AI.
+   */
+  const generateModLorebook = useCallback(async (): Promise<number> => {
+    const currentCard = useStore.getState().card;
+    const currentFields = useStore.getState().fields;
+    const config = useStore.getState().translationConfig;
+
+    if (!currentCard) {
+      store.addLog('error', '[Lorebook Gen] No card loaded');
+      return 0;
+    }
+
+    const modInstructions = config.modInstructions || '';
+    if (!modInstructions.trim()) {
+      store.addLog('warning', '[Lorebook Gen] No mod instructions set');
+      return 0;
+    }
+
+    store.addLog('info', '📚 Starting lorebook entry generation...');
+    store.setPhase('translating');
+
+    try {
+      // 1. Collect card context (use translated values where available)
+      const contextParts: string[] = [];
+      const coreFields = ['data.name', 'data.description', 'data.personality', 'data.scenario'];
+      const messageFields = ['data.first_mes', 'data.mes_example'];
+      const systemFields = ['data.system_prompt', 'data.post_history_instructions'];
+
+      for (const path of [...coreFields, ...messageFields, ...systemFields]) {
+        const field = currentFields.find(f => f.path === path);
+        const content = field?.translated || field?.original || '';
+        if (content.trim()) {
+          contextParts.push(`[${path}]\n${content.slice(0, 5000)}`);
+        }
+      }
+
+      // Add existing lorebook content (summarized)
+      const lorebookFields = currentFields.filter(f => f.group === 'lorebook' && f.path.endsWith('.content'));
+      for (const lf of lorebookFields.slice(0, 30)) {
+        const content = lf.translated || lf.original || '';
+        if (content.trim()) {
+          contextParts.push(`[${lf.path}]\n${content.slice(0, 2000)}`);
+        }
+      }
+
+      const cardContext = contextParts.join('\n\n---\n\n');
+
+      // 2. Get existing entry names
+      const entries = currentCard.data?.character_book?.entries || [];
+      const existingNames = entries
+        .map(e => e.name || e.comment || `Entry ${e.id}`)
+        .filter(Boolean);
+
+      // 3. Call AI — use store.proxy for API settings
+      const abortCtrl = new AbortController();
+      abortRef.current = abortCtrl;
+
+      const proxySettings = useStore.getState().proxy;
+
+      const newEntries = await generateLorebookEntries(
+        proxySettings,
+        cardContext,
+        existingNames,
+        modInstructions,
+        abortCtrl.signal,
+      );
+
+      if (newEntries.length === 0) {
+        store.addLog('info', '📚 No new entries needed — all concepts already have entries.');
+        store.setPhase('done');
+        return 0;
+      }
+
+      // 4. Inject entries into card
+      const updatedCard = injectNewLorebookEntries(currentCard, newEntries);
+      useStore.getState().updateCard(updatedCard);
+
+      // 5. Create TranslationField records for new entries
+      const baseIndex = entries.length;
+      const newFields: TranslationField[] = [];
+
+      for (let i = 0; i < newEntries.length; i++) {
+        const idx = baseIndex + i;
+        const entry = newEntries[i];
+        const entryLabel = entry.name || `Entry ${idx}`;
+
+        // Name field
+        if (entry.name) {
+          newFields.push({
+            path: `data.character_book.entries[${idx}].name`,
+            label: `LB[${idx}] ${entryLabel} → name`,
+            original: entry.name,
+            translated: entry.name,
+            status: 'done',
+            group: 'lorebook',
+            retries: 0,
+          });
+        }
+
+        // Content field
+        if (entry.content) {
+          newFields.push({
+            path: `data.character_book.entries[${idx}].content`,
+            label: `LB[${idx}] ${entryLabel} → content`,
+            original: entry.content,
+            translated: entry.content,
+            status: 'done',
+            group: 'lorebook',
+            retries: 0,
+          });
+        }
+
+        // Comment field
+        if (entry.comment) {
+          newFields.push({
+            path: `data.character_book.entries[${idx}].comment`,
+            label: `LB[${idx}] ${entryLabel} → comment`,
+            original: entry.comment,
+            translated: entry.comment,
+            status: 'done',
+            group: 'lorebook',
+            retries: 0,
+          });
+        }
+
+        // Keys field
+        if (entry.keys && entry.keys.length > 0) {
+          const keysStr = entry.keys.join(', ');
+          newFields.push({
+            path: `data.character_book.entries[${idx}].keys`,
+            label: `LB[${idx}] ${entryLabel} → keys`,
+            original: keysStr,
+            translated: keysStr,
+            status: 'done',
+            group: 'lorebook_keys',
+            retries: 0,
+          });
+        }
+
+        // Secondary keys
+        if (entry.secondary_keys && entry.secondary_keys.length > 0) {
+          const secKeysStr = entry.secondary_keys.join(', ');
+          newFields.push({
+            path: `data.character_book.entries[${idx}].secondary_keys`,
+            label: `LB[${idx}] ${entryLabel} → secondary_keys`,
+            original: secKeysStr,
+            translated: secKeysStr,
+            status: 'done',
+            group: 'lorebook_keys',
+            retries: 0,
+          });
+        }
+      }
+
+      // 6. Update store fields
+      const allFields = [...useStore.getState().fields, ...newFields];
+      store.setFields(allFields);
+      store.saveTranslationCache();
+
+      store.addLog('info', `📚 Generated ${newEntries.length} new lorebook entries (${newFields.length} fields)`);
+      store.addToast('success', `Created ${newEntries.length} new lorebook entries!`);
+      store.setPhase('done');
+
+      return newEntries.length;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      store.addLog('error', `[Lorebook Gen] Failed: ${msg}`);
+      store.addToast('error', `Lorebook generation failed: ${msg}`);
+      store.setPhase('done');
+      return 0;
+    }
+  }, [store, prepareFields]);
+
   return {
     prepareFields,
     startTranslation,
@@ -1887,5 +2164,6 @@ export function useTranslation() {
     applyModToField,
     applyModToAllFields,
     continueMod,
+    generateModLorebook,
   };
 }

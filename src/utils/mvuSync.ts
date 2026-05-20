@@ -3,6 +3,44 @@ import { extractPatchFieldNames } from './jsonPatchValidator';
 import { getMaxOutputTokens } from './apiClient';
 
 /**
+ * Trích xuất và parse JSON từ phản hồi của AI một cách an toàn.
+ * Xử lý trường hợp AI trả về markdown code blocks hoặc có văn bản bao quanh.
+ */
+function parseJsonFromAi(responseText: string): any {
+  let text = responseText.trim();
+  
+  // Try to find markdown json block
+  const markdownMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (markdownMatch && markdownMatch[1]) {
+    text = markdownMatch[1].trim();
+  } else {
+    // If no markdown block, try to find the outermost JSON object/array
+    const firstBrace = text.indexOf('{');
+    const lastBrace = text.lastIndexOf('}');
+    const firstBracket = text.indexOf('[');
+    const lastBracket = text.lastIndexOf(']');
+    
+    // Choose the outermost structure
+    let startIdx = -1;
+    let endIdx = -1;
+    
+    if (firstBrace !== -1 && lastBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) {
+      startIdx = firstBrace;
+      endIdx = lastBrace;
+    } else if (firstBracket !== -1 && lastBracket !== -1) {
+      startIdx = firstBracket;
+      endIdx = lastBracket;
+    }
+    
+    if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
+      text = text.substring(startIdx, endIdx + 1);
+    }
+  }
+  
+  return JSON.parse(text);
+}
+
+/**
  * Áp dụng logic thay thế biến MVU/Zod vào một đoạn văn bản (text).
  * @param text Văn bản cần xử lý
  * @param variableDictionary Từ điển biến { gốc: dịch }
@@ -168,31 +206,35 @@ export function syncMvuVariables(
   // 1. Xử lý TavernHelper Scripts (Zod Schema) — code context
   if (!enabledGroups || enabledGroups.includes('tavern_helper')) {
     const tavernHelper = result.data.extensions?.tavern_helper as any;
+    
+    const replaceScriptContent = (script: any) => {
+      if (!script || typeof script !== 'object') return script;
+      const res = { ...script };
+      if (typeof res.content === 'string') res.content = replaceInCode(res.content);
+      if (typeof res.script === 'string') res.script = replaceInCode(res.script);
+      if (typeof res.code === 'string') res.code = replaceInCode(res.code);
+      return res;
+    };
+
     // V2 object format: { scripts: [...] }
     if (tavernHelper?.scripts && Array.isArray(tavernHelper.scripts)) {
-      tavernHelper.scripts = tavernHelper.scripts.map((script: any) => ({
-        ...script,
-        content: replaceInCode(script.content)
-      }));
+      tavernHelper.scripts = tavernHelper.scripts.map(replaceScriptContent);
     }
     // Tuple format: [ ["scripts", [...]] ]
     else if (Array.isArray(tavernHelper)) {
       for (const item of tavernHelper) {
         if (Array.isArray(item) && item[0] === 'scripts' && Array.isArray(item[1])) {
-          item[1] = item[1].map((script: any) => ({
-            ...script,
-            content: replaceInCode(script.content)
-          }));
+          item[1] = item[1].map(replaceScriptContent);
+        } else if (item && typeof item === 'object' && !Array.isArray(item) && (item.content || item.script || item.code)) {
+          // Direct array of scripts
+          Object.assign(item, replaceScriptContent(item));
         }
       }
     }
     // Hỗ trợ phiên bản cũ của TavernHelper
     const tavernHelperLegacy = result.data.extensions?.TavernHelper_scripts as any;
     if (Array.isArray(tavernHelperLegacy)) {
-      result.data.extensions!.TavernHelper_scripts = tavernHelperLegacy.map((script: any) => ({
-        ...script,
-        content: replaceInCode(script.content)
-      }));
+      result.data.extensions!.TavernHelper_scripts = tavernHelperLegacy.map(replaceScriptContent);
     }
   }
 
@@ -937,12 +979,7 @@ ${currentVarList}${retryHint}`;
         }
 
         // Parse JSON response
-        let jsonStr = responseText.trim();
-        if (jsonStr.startsWith('```')) {
-          jsonStr = jsonStr.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
-        }
-
-        const parsed = JSON.parse(jsonStr);
+        const parsed = parseJsonFromAi(responseText);
         const translations = parsed.translations || parsed;
 
         // --- CJK Validation: accept good keys, collect bad ones ---
@@ -1149,12 +1186,7 @@ ${varList}`;
           responseText = json.choices?.[0]?.message?.content || '';
         }
 
-        let jsonStr = responseText.trim();
-        if (jsonStr.startsWith('```')) {
-          jsonStr = jsonStr.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
-        }
-
-        const parsed = JSON.parse(jsonStr);
+        const parsed = parseJsonFromAi(responseText);
         const renames = parsed.renames || parsed.translations || parsed;
 
         for (const [k, v] of Object.entries(renames)) {
@@ -1287,12 +1319,7 @@ RULES:
     else if (proxy.provider === 'google') responseText = json.candidates?.[0]?.content?.parts?.[0]?.text || '';
     else responseText = json.choices?.[0]?.message?.content || '';
 
-    let jsonStr = responseText.trim();
-    if (jsonStr.startsWith('\`\`\`')) {
-      jsonStr = jsonStr.replace(/^\`\`\`(?:json)?\s*\n?/, '').replace(/\n?\`\`\`\s*$/, '');
-    }
-
-    const parsed = JSON.parse(jsonStr);
+    const parsed = parseJsonFromAi(responseText);
     const result: Record<string, string> = {};
     const glossary = parsed.glossary || parsed;
     for (const [k, v] of Object.entries(glossary)) {

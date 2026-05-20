@@ -95,8 +95,21 @@ export default function MvuSyncPanel() {
     setIsAutoTranslating(true);
     try {
       let schemaContext = translationConfig.customSchema || '';
-      if (!schemaContext.trim() && card?.data?.extensions?.tavern_helper?.scripts) {
-        schemaContext = card.data.extensions.tavern_helper.scripts.map((s: any) => s.content).join('\n\n');
+      if (!schemaContext.trim() && card?.data?.extensions?.tavern_helper) {
+        const th = card.data.extensions.tavern_helper as any;
+        let scripts: any[] = [];
+        if (Array.isArray(th)) {
+          for (const item of th) {
+            if (Array.isArray(item) && item[0] === 'scripts' && Array.isArray(item[1])) {
+              scripts.push(...item[1]);
+            } else if (item && typeof item === 'object' && !Array.isArray(item) && item.content) {
+              scripts.push(item);
+            }
+          }
+        } else if (th?.scripts && Array.isArray(th.scripts)) {
+          scripts = th.scripts;
+        }
+        schemaContext = scripts.map((s: any) => s.content || '').join('\n\n');
       }
 
       // Extract Zod descriptions for richer context

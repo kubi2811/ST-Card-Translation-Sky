@@ -97,6 +97,45 @@ export function useTranslation() {
       }
     }
 
+    if (store.translationConfig.enableMvuSync) {
+      const MVU_GROUP_ORDER: Record<string, number> = {
+        tavern_helper: 0,
+        lorebook: 1,
+        lorebook_keys: 2,
+        regex: 3,
+        system: 4,
+        core: 5,
+        messages: 6,
+        depth_prompt: 7,
+        creator: 8,
+      };
+      
+      const TYPE_ORDER: Record<string, number> = {
+        initvar: 0,
+        controller: 1,
+        mvu_logic: 2,
+        rules: 3,
+        narrative: 4,
+        other: 5
+      };
+
+      mergedFields.sort((a, b) => {
+        const orderA = MVU_GROUP_ORDER[a.group] ?? 99;
+        const orderB = MVU_GROUP_ORDER[b.group] ?? 99;
+        
+        if (orderA !== orderB) return orderA - orderB;
+        
+        // If both are lorebook or lorebook_keys, sort by entryType so initvar is at the top
+        if (a.group === 'lorebook' || a.group === 'lorebook_keys') {
+          const tA = TYPE_ORDER[a.entryType || 'other'] ?? 99;
+          const tB = TYPE_ORDER[b.entryType || 'other'] ?? 99;
+          if (tA !== tB) return tA - tB;
+        }
+        
+        return 0; // maintain relative order
+      });
+    }
+
     store.setFields(mergedFields);
     return mergedFields;
   }, [store]);
@@ -747,15 +786,7 @@ export function useTranslation() {
     }
 
     // ═══ Reorder fields for Strategy B (MVU-optimized) ═══
-    // Khi bật MVU Sync, thứ tự dịch tối ưu:
-    // 1. tavern_helper → Zod schema, JS logic (quan trọng nhất — thiết lập biến MVU)
-    // 2. lorebook → initvar, mvu_update, rules (tham chiếu biến)
-    // 3. lorebook_keys → keywords
-    // 4. regex → HTML dashboard UI (sử dụng biến đã dịch)
-    // 5. system → OP/system prompt (ngữ cảnh tổng quát)
-    // 6. core (name, description) → thông tin nhân vật
-    // 7. messages → dialogue examples
-    // 8. depth_prompt, creator → phụ trợ
+    // (Already sorted in prepareFields, but we ensure consistency here)
     if (store.translationConfig.enableMvuSync) {
       const MVU_GROUP_ORDER: Record<string, number> = {
         tavern_helper: 0,
@@ -768,10 +799,24 @@ export function useTranslation() {
         depth_prompt: 7,
         creator: 8,
       };
+      const TYPE_ORDER: Record<string, number> = {
+        initvar: 0,
+        controller: 1,
+        mvu_logic: 2,
+        rules: 3,
+        narrative: 4,
+        other: 5
+      };
       fields.sort((a, b) => {
         const orderA = MVU_GROUP_ORDER[a.group] ?? 99;
         const orderB = MVU_GROUP_ORDER[b.group] ?? 99;
-        return orderA - orderB;
+        if (orderA !== orderB) return orderA - orderB;
+        if (a.group === 'lorebook' || a.group === 'lorebook_keys') {
+          const tA = TYPE_ORDER[a.entryType || 'other'] ?? 99;
+          const tB = TYPE_ORDER[b.entryType || 'other'] ?? 99;
+          if (tA !== tB) return tA - tB;
+        }
+        return 0;
       });
       store.addLog('info', '📋 Strategy B: Reordered fields → schema → lorebook → regex → OP → rest');
     } else {
@@ -1728,10 +1773,24 @@ export function useTranslation() {
         depth_prompt: 7,
         creator: 8,
       };
+      const TYPE_ORDER: Record<string, number> = {
+        initvar: 0,
+        controller: 1,
+        mvu_logic: 2,
+        rules: 3,
+        narrative: 4,
+        other: 5
+      };
       targetFields.sort((a, b) => {
         const orderA = MVU_GROUP_ORDER[a.group] ?? 99;
         const orderB = MVU_GROUP_ORDER[b.group] ?? 99;
-        return orderA - orderB;
+        if (orderA !== orderB) return orderA - orderB;
+        if (a.group === 'lorebook' || a.group === 'lorebook_keys') {
+          const tA = TYPE_ORDER[a.entryType || 'other'] ?? 99;
+          const tB = TYPE_ORDER[b.entryType || 'other'] ?? 99;
+          if (tA !== tB) return tA - tB;
+        }
+        return 0;
       });
       store.addLog('info', '📋 Mod: MVU field ordering → schema → lorebook → regex → OP → rest');
     } else {

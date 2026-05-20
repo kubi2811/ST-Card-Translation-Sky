@@ -912,7 +912,8 @@ export function chunkText(text: string, maxChars?: number, _maxTokens?: number):
     }
 
     chunks.push(remaining.slice(0, splitIdx));
-    remaining = isHtml ? remaining.slice(splitIdx) : remaining.slice(splitIdx).trimStart();
+    // Never trimStart to ensure exact reconstruction when joining with ''
+    remaining = remaining.slice(splitIdx);
   }
 
   return chunks;
@@ -934,11 +935,12 @@ export function getMaxOutputTokens(modelId: string, maxTokensFromConfig?: number
     return 4096;
   }
   
-  // Google Models — Gemini 2.5 Pro supports 65535 max output tokens
-  if (model.includes('gemini-2.5-pro') || model.includes('gemini-3.1-pro')) {
+  // Google Models
+  // Nếu model chứa "-pro" (ví dụ: gemini-3.1-pro, gemini-2.5-pro) thì hỗ trợ 65535 tokens
+  if (model.includes('-pro') || model.includes('gemini-3.1-pro') || model.includes('gemini-2.5-pro')) {
     return 65535;
   }
-  if (model.includes('gemini-2.5-flash') || model.includes('gemini-3.1-flash') || model.includes('gemini-3.') || model.includes('gemini-2.0') || model.includes('gemini-1.5')) {
+  if (model.includes('flash') || model.includes('gemini-3.') || model.includes('gemini-2.0') || model.includes('gemini-1.5')) {
     return 8192;
   }
   
@@ -953,8 +955,8 @@ export function getMaxOutputTokens(modelId: string, maxTokensFromConfig?: number
     return 8192;
   }
   
-  // Default
-  return 8192; 
+  // Default fallback
+  return 8192;
 }
 
 /* ─── OpenAI-compatible API call ─── */
@@ -1482,44 +1484,47 @@ function cleanTranslationResponse(original: string, translated: string, isExpert
 
   // Pattern 1: Full text "original → translation" or "original -> translation"
   // The AI sometimes returns "Chinese text → Vietnamese text"
-
-  // Check if the response contains the original text with an arrow separator
-  // Split by various arrow characters
-  const arrowSeparators = ['→', '➜', '➡', '⇒', '->'];
-  for (const sep of arrowSeparators) {
-    if (cleaned.includes(sep)) {
-      // Split by the separator and check if the left side looks like original text
-      const parts = cleaned.split(sep);
-      if (parts.length === 2) {
-        const leftTrimmed = parts[0].trim();
-        const rightTrimmed = parts[1].trim();
-        // If left side significantly overlaps with the original, take only the right side
-        // BUT only if the right side is substantial (at least 10% of the original length)
-        if (leftTrimmed.length > 0 && rightTrimmed.length > 0 && rightTrimmed.length >= original.length * 0.1) {
-          const overlapRatio = calculateOverlap(original, leftTrimmed);
-          if (overlapRatio > 0.5) { // Raised threshold from 0.3 to 0.5 to be less aggressive
-            cleaned = rightTrimmed;
-          }
-        }
-      } else if (parts.length > 2) {
-        // Multiple arrows - likely "line1_orig → line1_trans\nline2_orig → line2_trans"
-        // Process line by line
-        const lines = cleaned.split('\n');
-        const cleanedLines: string[] = [];
-        for (const line of lines) {
-          let processedLine = line;
-          for (const s of arrowSeparators) {
-            if (processedLine.includes(s)) {
-              const lineParts = processedLine.split(s);
-              if (lineParts.length === 2 && lineParts[1].trim().length > 0) {
-                processedLine = lineParts[1].trim();
-                break;
-              }
+  // This hallucination mostly happens on short texts. For very long texts (>2000 chars),
+  // it's almost certainly a legitimate arrow in the code/regex.
+  if (original.length < 2000) {
+    // Check if the response contains the original text with an arrow separator
+    // Split by various arrow characters
+    const arrowSeparators = ['→', '➜', '➡', '⇒', '->'];
+    for (const sep of arrowSeparators) {
+      if (cleaned.includes(sep)) {
+        // Split by the separator and check if the left side looks like original text
+        const parts = cleaned.split(sep);
+        if (parts.length === 2) {
+          const leftTrimmed = parts[0].trim();
+          const rightTrimmed = parts[1].trim();
+          // If left side significantly overlaps with the original, take only the right side
+          // BUT only if the right side is substantial (at least 10% of the original length)
+          if (leftTrimmed.length > 0 && rightTrimmed.length > 0 && rightTrimmed.length >= original.length * 0.1) {
+            const overlapRatio = calculateOverlap(original, leftTrimmed);
+            if (overlapRatio > 0.5) { // Raised threshold from 0.3 to 0.5 to be less aggressive
+              cleaned = rightTrimmed;
             }
           }
-          cleanedLines.push(processedLine);
+        } else if (parts.length > 2) {
+          // Multiple arrows - likely "line1_orig → line1_trans\nline2_orig → line2_trans"
+          // Process line by line
+          const lines = cleaned.split('\n');
+          const cleanedLines: string[] = [];
+          for (const line of lines) {
+            let processedLine = line;
+            for (const s of arrowSeparators) {
+              if (processedLine.includes(s)) {
+                const lineParts = processedLine.split(s);
+                if (lineParts.length === 2 && lineParts[1].trim().length > 0) {
+                  processedLine = lineParts[1].trim();
+                  break;
+                }
+              }
+            }
+            cleanedLines.push(processedLine);
+          }
+          cleaned = cleanedLines.join('\n');
         }
-        cleaned = cleanedLines.join('\n');
       }
     }
   }
@@ -1545,14 +1550,25 @@ function cleanTranslationResponse(original: string, translated: string, isExpert
 
 /* ─── Calculate character overlap ratio ─── */
 function calculateOverlap(a: string, b: string): number {
-  // Simple character-level overlap check
-  const aChars = new Set(a.split(''));
-  const bChars = new Set(b.split(''));
+  const normalize = (str: string) => str.replace(/\s+/g, '').toLowerCase();
+  const aNorm = normalize(a);
+  const bNorm = normalize(b);
+  
+  if (!aNorm || !bNorm) return 0;
+  if (aNorm === bNorm) return 1.0;
+  
+  // If b is a large substring of a
+  if (aNorm.includes(bNorm)) return bNorm.length / aNorm.length;
+  if (bNorm.includes(aNorm)) return aNorm.length / bNorm.length;
+  
+  // Use word-level overlap instead of character sets (which fails for long strings)
+  const aWords = new Set(a.toLowerCase().split(/\W+/).filter(w => w.length > 2));
+  const bWords = new Set(b.toLowerCase().split(/\W+/).filter(w => w.length > 2));
   let overlap = 0;
-  for (const ch of bChars) {
-    if (aChars.has(ch)) overlap++;
+  for (const w of bWords) {
+    if (aWords.has(w)) overlap++;
   }
-  return overlap / Math.max(aChars.size, 1);
+  return overlap / Math.max(aWords.size, 1);
 }
 
 /* ─── Translate a single chunk with retry + truncation detection ─── */
@@ -1605,10 +1621,10 @@ async function translateChunk(
       }
 
       // ─── Multi-round truncation detection & continuation ───
-      // Nếu AI trả về < 70% input → gần chắc chắn bị cắt do max output tokens.
-      // Loop tối đa 5 lần, mỗi lần yêu cầu AI dịch tiếp phần còn lại.
-      // Code-heavy content thường có tỷ lệ 1:1 (code giữ nguyên), nên 70% threshold.
-      const CONT_THRESHOLD = 0.7; // 70% — code-heavy content cần ratio cao hơn
+      // Nếu AI trả về < input → gần chắc chắn bị cắt do max output tokens.
+      // Code-heavy content (như Regex, Custom Code) thường có tỷ lệ 1:1 do code giữ nguyên. User yêu cầu bắt buộc >= 100%.
+      const isCodeHeavy = fieldName.toLowerCase().includes('regex') || fieldName.toLowerCase().includes('code') || fieldName.toLowerCase().includes('script') || fieldName.toLowerCase().includes('helper');
+      const CONT_THRESHOLD = isCodeHeavy ? 1.0 : 0.7;
       const MAX_CONT_ROUNDS = 5;
 
       if (chunk.length > 500 && result.length > 0) {
@@ -1967,11 +1983,11 @@ export async function translateText(
   // When resuming, only verify seams that include newly-translated chunks
   const verifiedChunks = await verifySeams(translatedChunks, chunks, config, targetLang, signal);
 
-  // For HTML content, join without separator to avoid injecting text nodes
-  // that break <table>, <ul>, and other structural elements.
-  // For plain text, use \n\n to maintain paragraph separation.
+  // For HTML and Code/Regex content, join without separator to avoid injecting text nodes
+  // that break code structure. For plain text, use \n\n as a fallback to maintain paragraph separation.
   const isHtmlContent = /<[a-z][^>]*>/i.test(maskedText) && /<\/[a-z]+>/i.test(maskedText);
-  const joiner = isHtmlContent ? '' : '\n\n';
+  const isCodeHeavy = fieldName.toLowerCase().includes('regex') || fieldName.toLowerCase().includes('code') || fieldName.toLowerCase().includes('script') || fieldName.toLowerCase().includes('helper');
+  const joiner = (isHtmlContent || isCodeHeavy) ? '' : '\n\n';
   const rawResult = verifiedChunks.join(joiner);
   // Chunks already individually cleaned above — only unmask secrets here
   let cleaned = unmaskSecrets(rawResult, secretMap);

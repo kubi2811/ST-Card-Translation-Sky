@@ -1,4 +1,4 @@
-import { useEffect, lazy, Suspense } from 'react';
+import { useEffect, useState, lazy, Suspense } from 'react';
 import UpdateButton from './components/UpdateButton';
 import ProxyConfig from './components/ProxyConfig';
 import FileUpload from './components/FileUpload';
@@ -15,10 +15,12 @@ const FieldEditor = lazy(() => import('./components/FieldEditor'));
 const ExportPanel = lazy(() => import('./components/ExportPanel'));
 const VerifyPanel = lazy(() => import('./components/VerifyPanel'));
 const CustomTranslatePanel = lazy(() => import('./components/CustomTranslatePanel'));
+const EjsCreatorPanel = lazy(() => import('./components/EjsCreatorPanel'));
 
 export default function App() {
   const { toasts, removeToast, card, locale, setLocale, loadStateFromIDB } = useStore();
   const t = useT();
+  const [showEjsCreator, setShowEjsCreator] = useState(false);
 
   useEffect(() => {
     loadStateFromIDB();
@@ -71,6 +73,34 @@ export default function App() {
         <ProxyConfig />
         <FileUpload />
         <TranslateConfig />
+        
+        {/* Nút mở EJS Creator Modal */}
+        {card && (
+          <div style={{ padding: '0 20px', marginTop: '10px', marginBottom: '10px' }}>
+            <button
+              onClick={() => setShowEjsCreator(true)}
+              style={{
+                width: '100%',
+                padding: '10px',
+                background: 'var(--bg-elevated)',
+                border: '1px solid var(--border-default)',
+                borderRadius: 'var(--radius-md)',
+                color: 'var(--accent-primary)',
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                transition: 'all 0.2s'
+              }}
+              onMouseOver={e => e.currentTarget.style.borderColor = 'var(--accent-primary)'}
+              onMouseOut={e => e.currentTarget.style.borderColor = 'var(--border-default)'}
+            >
+              <Globe size={16} /> EJS Creator / Lorebook
+            </button>
+          </div>
+        )}
       </aside>
 
       {/* ─── Main Content ─── */}
@@ -141,6 +171,13 @@ export default function App() {
               <CustomTranslatePanel />
             </Suspense>
           </div>
+        )}
+
+        {/* EJS Creator Modal */}
+        {showEjsCreator && (
+          <Suspense fallback={<LazyFallback />}>
+            <EjsCreatorPanel onClose={() => setShowEjsCreator(false)} />
+          </Suspense>
         )}
 
         {/* Footer */}

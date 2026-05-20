@@ -245,7 +245,27 @@ Tin nhắn đầu: ${newCard.data.first_mes || ''}`;
     }
   }
 
-  // 3.3: Tiêm TavernHelper Scripts
+  // 3.3: Tiêm TavernHelper Scripts (CẢ HAI format để tương thích mọi phiên bản ST)
+  // Format 1 (mới, ưu tiên): data.extensions.tavern_helper.scripts
+  if (!newCard.data.extensions.tavern_helper) {
+    newCard.data.extensions.tavern_helper = { scripts: [] };
+  }
+  const tavernHelper = newCard.data.extensions.tavern_helper as { scripts: TavernHelperScript[]; [key: string]: unknown };
+  if (!tavernHelper.scripts) {
+    tavernHelper.scripts = [];
+  }
+  // Remove old MVU scripts if exists
+  tavernHelper.scripts = tavernHelper.scripts.filter(
+    s => s.name !== 'MVU Zod Schema' && s.name !== 'MVU'
+  );
+  tavernHelper.scripts.push(MVU_RUNTIME_SCRIPT);
+  tavernHelper.scripts.push({
+    ...ZOD_SCHEMA_SCRIPT_TEMPLATE,
+    content: zodSchemaStr,
+    id: generateUUID(),
+  });
+
+  // Format 2 (legacy, fallback): data.extensions.TavernHelper_scripts
   if (!newCard.data.extensions.TavernHelper_scripts) {
     newCard.data.extensions.TavernHelper_scripts = [];
   }
@@ -253,7 +273,6 @@ Tin nhắn đầu: ${newCard.data.first_mes || ''}`;
   newCard.data.extensions.TavernHelper_scripts = newCard.data.extensions.TavernHelper_scripts.filter(
     s => s.name !== 'MVU Zod Schema' && s.name !== 'MVU'
   );
-  
   newCard.data.extensions.TavernHelper_scripts.push(MVU_RUNTIME_SCRIPT);
   newCard.data.extensions.TavernHelper_scripts.push({
     ...ZOD_SCHEMA_SCRIPT_TEMPLATE,

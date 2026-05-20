@@ -1097,6 +1097,7 @@ function init() { ... }
 - **Content format:** Bọc trong tag XML tùy chỉnh (VD: `<Quy tắc kiểm định>...</Quy tắc kiểm định>`)
 - **Keys rõ ràng:** Mỗi entry có keywords cụ thể
 - **Tránh trùng lặp:** Mỗi domain knowledge 1 entry duy nhất
+- **EJS Preprocessing:** Tích hợp tag `@@preprocessing` ở đầu content để kiểm soát nạp động entry nhằm tiết kiệm token.
 
 ---
 
@@ -1119,18 +1120,22 @@ Bạn là Narrator — người kể chuyện kiêm Game Master cho thế giới
 - Hậu quả mọi hành động đều tồn tại — không reset
 
 ## Keyword UI (BẮT BUỘC)
-- Cuối MỖI phản hồi, LUÔN LUÔN thêm keyword: [KEYWORD_TRIGGER]
+- Cuối MỖI phản hồi, LUÔN LUÔN thêm keyword: <StatusPlaceHolderImpl/>
 - Keyword này bị Regex thay bằng dashboard UI, người chơi không thấy
 - TUYỆT ĐỐI KHÔNG quên keyword
 
 ## Biến trạng thái (MVU)
 - Khi sự kiện ảnh hưởng trạng thái, đính kèm:
   <UpdateVariable>
+  <Analysis>
+  (Phân tích ngắn gọn bằng tiếng Anh về sự thay đổi, thực hiện check lịch sử xem sự kiện đã được cập nhật chưa để tránh trùng lặp)
+  </Analysis>
   <JSONPatch>
-  [{"op":"replace","path":"/path","value":new_value}]
+  [{"op":"replace","path":"/Người_Chơi/HP","value":85}]
   </JSONPatch>
   </UpdateVariable>
-- Tag này bị Regex ẩn khỏi người chơi
+- Tag này bị Regex ẩn khỏi người chơi. Đường dẫn path trong JSON Patch TUYỆT ĐỐI không chứa tiền tố "stat_data".
+- Cấm cập nhật các biến chỉ đọc có tiền tố "_" ở tên biến.
 
 ## Phong cách viết
 - Tiếng Việt, giọng sử thi dễ hiểu
@@ -1153,13 +1158,15 @@ Bạn là Narrator — người kể chuyện kiêm Game Master cho thế giới
 ## 11.1 Template chuẩn
 
 ```html
+Nhấn vào nút bên dưới để bắt đầu:
 ```html
 <!DOCTYPE html>
 <html lang="vi-VN">
 <head>
 <meta charset="UTF-8">
 <style>
-  .splash { text-align: center; padding: 40px; background: #1a1d2e; color: #e5e9f0; }
+  body { margin: 0; padding: 0; background: #1a1d2e; color: #e5e9f0; font-family: 'Lora', serif; }
+  .splash { text-align: center; padding: 40px; }
   .splash h1 { font-family: 'Cinzel', serif; font-size: 2.5em; color: #ffd700; }
   .splash-form { margin-top: 30px; }
   .splash-select {
@@ -1197,17 +1204,14 @@ Bạn là Narrator — người kể chuyện kiêm Game Master cho thế giới
   </div>
 </div>
 
-<script>
+<script type="module">
 document.getElementById('btn-start').addEventListener('click', () => {
   const race = document.getElementById('select-race').value;
   const region = document.getElementById('select-region').value;
   const cmd = '/sys Bắt đầu. Tôi là ' + race + ', tại ' + region + '. Mô tả bối cảnh.';
 
-  if (typeof triggerSlash === 'function' && typeof getCurrentMessageId === 'function') {
-    const msgId = getCurrentMessageId();
+  if (typeof triggerSlash === 'function') {
     triggerSlash(cmd);
-    setTimeout(() => triggerSlash('/trigger'), 500);
-    setTimeout(() => triggerSlash('/cut ' + msgId), 1500);
   }
 });
 </script>
@@ -1221,7 +1225,7 @@ document.getElementById('btn-start').addEventListener('click', () => {
 1. **Không chứa logic game** — chỉ UI chào mừng + form
 2. **CSS tự chứa** — không phụ thuộc main app CSS
 3. **Hướng dẫn người dùng** — notes về plugin, cài đặt
-4. **Nút bấm** → `triggerSlash('/sys ...')` → `/trigger` → `/cut msgId`
+4. **Nút bấm** → `triggerSlash('/sys ...')`
 
 ---
 
@@ -1246,18 +1250,20 @@ document.getElementById('btn-start').addEventListener('click', () => {
 
 ## 12.3 Kiểm tra CSS (NGHIÊM NGẶT)
 
-- [ ] `body { margin: 0; padding: 0; }` — padding **PHẢI** là 0
-- [ ] Nếu cần lề → dùng margin cho phần tử chứa, KHÔNG padding cho body
-- [ ] Style phù hợp yêu cầu UI
-- [ ] Không phá vỡ bố cục
+- [ ] `body { margin: 0; padding: 0; }` — margin/padding **PHẢI** là 0.
+- [ ] Nếu cần lề → dùng margin/padding cho phần tử chứa bên trong (ví dụ `.container` / `.wrapper`), tuyệt đối KHÔNG set padding cho body.
+- [ ] Thiết lập CSS variables cho dark/light themes.
+- [ ] Style mượt mà, hỗ trợ responsive với breakpoint `@media (max-width: 992px)`.
 
 ## 12.4 Kiểm tra biến MVU (TRỌNG ĐIỂM)
 
 - [ ] Dùng `getAllVariables()`?
-- [ ] Tất cả đường dẫn biến bắt đầu bằng `stat_data.`?
+- [ ] Tất cả đường dẫn biến bắt đầu bằng `stat_data.` khi đọc trạng thái?
 - [ ] Dùng `_.get(vars, 'stat_data.xxx', default_value)`?
 - [ ] Biến mảng: duyệt đúng + hiển thị nội dung?
 - [ ] Object lồng: dùng `_.get` truy cập đường dẫn?
+- [ ] Các đường dẫn trong cập nhật JSON Patch không được có tiền tố `stat_data` (ví dụ: `/Người_Chơi/HP`).
+- [ ] Đã hỗ trợ readonly prefix `_` cho các biến nhạy cảm và history deduplication check trong prompt.
 
 ## 12.5 Kiểm tra khởi tạo (LOGIC CỐT LÕI)
 
@@ -1272,16 +1278,17 @@ document.getElementById('btn-start').addEventListener('click', () => {
 - [ ] Kết thúc: `$(() => { registerMvuSchema(Schema); })`?
 - [ ] Cú pháp JS đúng (ngoặc, phẩy, nháy)?
 - [ ] KHÔNG dùng `.strict()` / `.passthrough()`?
-- [ ] KHÔNG lạm dụng `.optional()`?
+- [ ] KHÔNG dùng `.optional()` ở gốc schema?
 - [ ] Dùng `z.coerce.number()` thay `z.number()`?
-- [ ] Dùng `.prefault()` thay `.default()`?
+- [ ] Dùng `.prefault(value)` thay `.default(value)`?
+- [ ] Mọi trường con và object/array lồng bắt buộc phải có `.prefault()` để đảm bảo khởi tạo đầy đủ.
 - [ ] Dùng `.transform(v => _.clamp())` thay `.min()/.max()`?
 - [ ] Chỉ import `registerMvuSchema` (z và _ đã sẵn)?
 - [ ] Tính lũy đẳng: `parse(parse(x)) === parse(x)`?
 
 ## 12.7 Kiểm tra biến khởi tạo (initvar)
 
-- [ ] Đặt trong entry WB riêng, trạng thái **disabled**?
+- [ ] Đặt trong entry Worldbook riêng, trạng thái **disabled** (`enabled: false`)?
 - [ ] Tên: `[initvar] Tên_mô_tả`?
 - [ ] YAML cú pháp đúng?
 - [ ] Cấu trúc tương ứng với Zod Schema?
@@ -1292,6 +1299,7 @@ document.getElementById('btn-start').addEventListener('click', () => {
 - [ ] Entries quy tắc cốt lõi: `constant: true`?
 - [ ] `scan_depth`, `position` phù hợp?
 - [ ] `recursive: true` cho entries cần thiết?
+- [ ] Tích hợp EJS Preprocessing `@@preprocessing` để ẩn/hiện động entry.
 
 ## 12.9 Testing cuối cùng
 
@@ -1312,7 +1320,7 @@ document.getElementById('btn-start').addEventListener('click', () => {
 | HTML hiện dạng code, không render | Thiếu bọc `` ```html ``` `` | Bọc replaceString trong fenced code block |
 | Chữ Việt bị `á»`, `Ä` | Sai encoding | Re-encode cp1252 → utf-8 |
 | Chữ hiện `\u1eadp` | Dùng escape Unicode | Viết UTF-8 trực tiếp |
-| Form hiện ở mọi tin nhắn | findRegex match quá rộng | Dùng keyword duy nhất |
+| Form hiện ở mỗi tin nhắn | findRegex match quá rộng | Dùng keyword duy nhất |
 | Nút bấm không hoạt động (MVU) | Dùng DOM API trong iframe | Dùng `triggerSlash()` |
 | UI bị treo/freeze | Regex loop vô hạn hoặc JS nặng | Kiểm tra regex, dùng async |
 | Card conflict với Preset plugin | Plugin ghi đè regex | Tắt plugin Preset |
@@ -1320,9 +1328,9 @@ document.getElementById('btn-start').addEventListener('click', () => {
 | Mobile layout vỡ | Thiếu responsive | Thêm `@media` rules |
 | localStorage mất | User clear browser data | Thêm export/import backup |
 | CDN không load | Bị block/timeout | Pin version, inline fallback |
-| Biến MVU không cập nhật | Thiếu `stat_data.` prefix | Thêm prefix đúng |
+| Biến MVU không cập nhật | Thiếu `stat_data.` prefix khi đọc hoặc có `stat_data.` trong patch | Thêm prefix đúng khi đọc, xóa prefix trong patch |
 | Frontend không hiện | Thiếu `waitGlobalInitialized('Mvu')` | Thêm await init |
-| Zod parse lỗi | Dùng `.strict()` / `.optional()` sai | Tuân thủ Zod 4 rules |
+| Zod parse lỗi | Thiếu `.prefault()` ở trường con hoặc dùng `.strict()` | Tuân thủ Zod 4 rules |
 
 ---
 
@@ -1421,7 +1429,8 @@ Tạo Zod Schema cho card [TÊN CARD].
 ## Yêu cầu
 - Tuân thủ Zod 4 rules (xem CARD_MASTERY_COMPLETE.md mục 5.3)
 - z.coerce.number() thay z.number()
-- .prefault() thay .default()
+- .prefault(default_value) thay .default()
+- Mọi trường con, object, array lồng bắt buộc phải có .prefault()
 - .transform(v => _.clamp(v, min, max)) thay .min()/.max()
 - z.record() ưu tiên hơn z.array()
 - Chỉ import registerMvuSchema
@@ -1550,25 +1559,26 @@ import { registerMvuSchema } from 'https://testingcf.jsdelivr.net/gh/StageDog/ta
 export const Schema = z.object({
   Nhân_vật: z.object({
     Tên: z.string().prefault('Chưa_đặt'),
-    HP: z.coerce.number().transform(v => _.clamp(v, 0, 999)),
-    Max_HP: z.coerce.number().transform(v => _.clamp(v, 1, 999)),
-    Vàng: z.coerce.number().transform(v => Math.max(v, 0)),
+    HP: z.coerce.number().transform(v => _.clamp(v, 0, 999)).prefault(100),
+    Max_HP: z.coerce.number().transform(v => _.clamp(v, 1, 999)).prefault(100),
+    Vàng: z.coerce.number().transform(v => Math.max(v, 0)).prefault(0),
     Vị_trí: z.string().prefault('Chưa_chọn'),
-    Độ_hảo_cảm: z.coerce.number().transform(v => _.clamp(v, 0, 100)),
+    Độ_hảo_cảm: z.coerce.number().transform(v => _.clamp(v, 0, 100)).prefault(0),
     Túi_đồ: z.record(
       z.string().describe('Tên_vật_phẩm'),
       z.object({
-        Mô_tả: z.string(),
+        Mô_tả: z.string().prefault('Chờ cập nhật'),
         Số_lượng: z.coerce.number().prefault(1),
-      })
-    ).transform(data => _.pickBy(data, ({Số_lượng}) => Số_lượng > 0)),
-  }),
-});
+      }).prefault({})
+    ).transform(data => _.pickBy(data, ({Số_lượng}) => Số_lượng > 0)).prefault({}),
+  }).prefault({}),
+}).prefault({});
 
 $(() => { registerMvuSchema(Schema); });
 ```
 
 ---
 
-> **Cập nhật lần cuối:** 2026-04-13
+> **Cập nhật lần cuối:** 2026-05-20
 > **Nguồn tham chiếu:** World Book Tạo Thẻ TMN.json (31 entries), CARD_BUILDING_GUIDE.md, LOREBOOK_CARD_PROMPT.md, MVUZOD_TUTORIAL.md, FRONTEND_TUTORIAL.md, chuyển sinh thành slimev5.42.json
+

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useStore } from '../store';
 import { useT } from '../i18n/useLocale';
 import Editor from '@monaco-editor/react';
-import { X, Copy, Save, Plus, Book, Sparkles, Upload, FileJson, ArrowRight, AlertTriangle, Check, Send, RotateCcw, PenTool, Cpu } from 'lucide-react';
+import { X, Copy, Save, Plus, Book, Sparkles, Upload, FileJson, ArrowRight, AlertTriangle, Check, Send, RotateCcw, PenTool, Cpu, Trash2 } from 'lucide-react';
 import type { CharacterBookEntry } from '../types/card';
 import { callProvider } from '../utils/apiClient';
 import { isWorldbookFormat } from '../utils/worldbookParser';
@@ -324,6 +324,54 @@ export default function EjsCreatorPanel({ onClose }: { onClose: () => void }) {
   
   const [activeTab, setActiveTab] = useState<'reference' | 'ai' | 'toolkit'>('reference');
   
+  // Cẩm nang (Snippets) States
+  const [snippets, setSnippets] = useState<{ title: string; desc: string; code: string }[]>(() => {
+    const saved = localStorage.getItem('ejs_snippets');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error('Failed to parse saved ejs_snippets', e);
+      }
+    }
+    return EJS_SNIPPETS;
+  });
+
+  useEffect(() => {
+    localStorage.setItem('ejs_snippets', JSON.stringify(snippets));
+  }, [snippets]);
+
+  const [newSnipTitle, setNewSnipTitle] = useState('');
+  const [newSnipDesc, setNewSnipDesc] = useState('');
+  const [newSnipCode, setNewSnipCode] = useState('');
+  const [isAddingSnippet, setIsAddingSnippet] = useState(false);
+
+  const handleAddSnippet = () => {
+    if (!newSnipTitle.trim() || !newSnipCode.trim()) {
+      addToast('error', 'Tiêu đề và mã code không được bỏ trống.');
+      return;
+    }
+    const newSnip = {
+      title: newSnipTitle.trim(),
+      desc: newSnipDesc.trim(),
+      code: newSnipCode
+    };
+    setSnippets([newSnip, ...snippets]);
+    setNewSnipTitle('');
+    setNewSnipDesc('');
+    setNewSnipCode('');
+    setIsAddingSnippet(false);
+    addToast('success', 'Đã thêm phần cẩm nang mới!');
+  };
+
+  const handleDeleteSnippet = (index: number) => {
+    if (window.confirm('Bạn có chắc chắn muốn xóa phần cẩm nang này không?')) {
+      const next = snippets.filter((_, i) => i !== index);
+      setSnippets(next);
+      addToast('success', 'Đã xóa phần cẩm nang.');
+    }
+  };
+
   // Prompt Builder States
   const [systemType, setSystemType] = useState<'general' | 'combat' | 'survival' | 'relationship' | 'npc_router'>('general');
   const [chatInput, setChatInput] = useState('');
@@ -820,22 +868,95 @@ If you return a single EJS block, do NOT wrap it in a JSON array, just return th
           <div style={{ flex: 1, overflowY: 'auto', padding: '16px', background: 'var(--bg-primary)', display: 'flex', flexDirection: 'column', gap: '16px', minHeight: 0 }}>
             {activeTab === 'reference' && (
               <div>
-                <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '16px' }}>
-                  Dưới đây là các cú pháp thường dùng của <strong>ST-Prompt-Template</strong>.
-                </p>
-                {EJS_SNIPPETS.map((snip, i) => (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                  <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: 0 }}>
+                    Cú pháp thường dùng của <strong>ST-Prompt-Template</strong>.
+                  </p>
+                  <button
+                    onClick={() => setIsAddingSnippet(!isAddingSnippet)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 10px',
+                      background: 'var(--accent-primary)', color: 'white', border: 'none', borderRadius: '4px',
+                      fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer'
+                    }}
+                  >
+                    <Plus size={14} /> Thêm phần mới
+                  </button>
+                </div>
+
+                {isAddingSnippet && (
+                  <div style={{
+                    background: 'var(--bg-secondary)', border: '1px dashed var(--accent-primary)',
+                    borderRadius: '8px', padding: '12px', marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '10px'
+                  }}>
+                    <h4 style={{ margin: 0, fontSize: '0.82rem', color: 'var(--text-primary)' }}>Thêm Cẩm Nang Mới</h4>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <label style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Tiêu đề *</label>
+                      <input
+                        type="text"
+                        placeholder="VD: Kiểm tra quan hệ"
+                        value={newSnipTitle}
+                        onChange={e => setNewSnipTitle(e.target.value)}
+                        style={{ padding: '6px', fontSize: '0.75rem', background: 'var(--bg-primary)', border: '1px solid var(--border-subtle)', borderRadius: '4px', color: 'var(--text-primary)' }}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <label style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Mô tả ngắn</label>
+                      <input
+                        type="text"
+                        placeholder="VD: Cú pháp kiểm tra hảo cảm và tình trạng"
+                        value={newSnipDesc}
+                        onChange={e => setNewSnipDesc(e.target.value)}
+                        style={{ padding: '6px', fontSize: '0.75rem', background: 'var(--bg-primary)', border: '1px solid var(--border-subtle)', borderRadius: '4px', color: 'var(--text-primary)' }}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <label style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Mã code *</label>
+                      <textarea
+                        placeholder="VD: <%_ if (getvar('stat_data.hp') <= 0) { _%> ..."
+                        value={newSnipCode}
+                        onChange={e => setNewSnipCode(e.target.value)}
+                        style={{ padding: '6px', fontSize: '0.75rem', height: '100px', fontFamily: 'monospace', background: 'var(--bg-primary)', border: '1px solid var(--border-subtle)', borderRadius: '4px', color: 'var(--text-primary)', resize: 'vertical' }}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '4px' }}>
+                      <button
+                        onClick={() => setIsAddingSnippet(false)}
+                        style={{ padding: '5px 10px', fontSize: '0.72rem', background: 'var(--bg-elevated)', border: '1px solid var(--border-default)', borderRadius: '4px', color: 'var(--text-primary)', cursor: 'pointer' }}
+                      >
+                        Hủy
+                      </button>
+                      <button
+                        onClick={handleAddSnippet}
+                        style={{ padding: '5px 10px', fontSize: '0.72rem', background: 'var(--accent-primary)', border: 'none', borderRadius: '4px', color: 'white', fontWeight: 600, cursor: 'pointer' }}
+                      >
+                        Lưu lại
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {snippets.map((snip, i) => (
                   <div key={i} style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-default)', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
                       <div>
                         <h4 style={{ margin: 0, fontSize: '0.9rem' }}>{snip.title}</h4>
                         <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{snip.desc}</div>
                       </div>
-                      <button onClick={() => handleCopySnippet(snip.code)} style={{
-                        background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: '4px',
-                        padding: '4px 8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--text-secondary)'
-                      }}>
-                        <Copy size={14} />
-                      </button>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <button onClick={() => handleCopySnippet(snip.code)} title="Sao chép mã" style={{
+                          background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: '4px',
+                          padding: '4px 8px', cursor: 'pointer', display: 'flex', alignItems: 'center', color: 'var(--text-secondary)'
+                        }}>
+                          <Copy size={14} />
+                        </button>
+                        <button onClick={() => handleDeleteSnippet(i)} title="Xóa phần này" style={{
+                          background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', borderRadius: '4px',
+                          padding: '4px 8px', cursor: 'pointer', display: 'flex', alignItems: 'center', color: 'var(--accent-danger)'
+                        }}>
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
                     </div>
                     <pre style={{ margin: 0, background: '#1e1e1e', color: '#d4d4d4', padding: '8px', borderRadius: '4px', fontSize: '0.8rem', overflowX: 'auto', fontFamily: 'monospace' }}>
                       {snip.code}

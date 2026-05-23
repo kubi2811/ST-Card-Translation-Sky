@@ -58,6 +58,8 @@ interface AppState {
   setProxy: (partial: Partial<ProxySettings>) => void;
   connectionStatus: ConnectionStatus;
   setConnectionStatus: (s: ConnectionStatus) => void;
+  scannedModels: string[];
+  setScannedModels: (models: string[]) => void;
 
   // Translation config
   translationConfig: TranslationConfig;
@@ -107,6 +109,8 @@ interface AppState {
   // Per-file translation cache
   saveTranslationCache: () => void;
   loadTranslationCache: (fileName: string) => Promise<boolean>;
+  deleteCurrentCardCache: () => Promise<void>;
+  deleteAllCaches: () => Promise<void>;
 }
 
 export const useStore = create<AppState>((set) => ({
@@ -281,20 +285,31 @@ export const useStore = create<AppState>((set) => ({
   },
   connectionStatus: 'untested',
   setConnectionStatus: (s) => set({ connectionStatus: s }),
+  scannedModels: LS.get('st-translator-scanned-models', []),
+  setScannedModels: (models) => {
+    LS.set('st-translator-scanned-models', models);
+    set({ scannedModels: models });
+  },
 
   // ─── Translation Config ───
   translationConfig: {
     sourceLanguage: LS.get('st-translator-source-lang', '中文'),
     targetLanguage: LS.get('st-translator-target-lang', 'Tiếng Việt'),
     translationPrompt: LS.get('st-translator-custom-prompt', ''),
-    mode: 'field',
-    lorebookStrategy: 'single',
-    lorebookBatchSize: 5,
-    concurrentBatches: 1,
-    skipAlreadyTranslated: true,
-    fieldGroups: [...DEFAULT_FIELD_GROUPS],
+    mode: LS.get('st-translator-translation-mode', 'field') as any,
+    lorebookStrategy: LS.get('st-translator-lorebook-strategy', 'single') as any,
+    lorebookBatchSize: LS.get('st-translator-lorebook-batch-size', 5),
+    concurrentBatches: LS.get('st-translator-concurrent-batches', 1),
+    skipAlreadyTranslated: LS.get('st-translator-skip-already-translated', true),
+    fieldGroups: (() => {
+      const saved = LS.get<Record<string, boolean>>('st-translator-field-groups-enabled', {});
+      return DEFAULT_FIELD_GROUPS.map(g => ({
+        ...g,
+        enabled: saved[g.id] !== undefined ? saved[g.id] : g.enabled
+      }));
+    })(),
     customSchema: LS.get('st-translator-custom-schema', ''),
-    exportKeyMode: 'merge' as ExportKeyMode,
+    exportKeyMode: LS.get('st-translator-export-key-mode', 'merge') as ExportKeyMode,
     glossary: LS.get('st-translator-glossary', []) as GlossaryEntry[],
     enableMvuSync: false,
     mvuDictionary: LS.get('st-translator-mvu-dict', {}) as Record<string, string>,
@@ -388,17 +403,43 @@ export const useStore = create<AppState>((set) => ({
       if ('enableEjsThinking' in partial) {
         LS.set('st-translator-ejs-thinking', next.enableEjsThinking);
       }
+      if ('mode' in partial) {
+        LS.set('st-translator-translation-mode', next.mode);
+      }
+      if ('lorebookStrategy' in partial) {
+        LS.set('st-translator-lorebook-strategy', next.lorebookStrategy);
+      }
+      if ('lorebookBatchSize' in partial) {
+        LS.set('st-translator-lorebook-batch-size', next.lorebookBatchSize);
+      }
+      if ('concurrentBatches' in partial) {
+        LS.set('st-translator-concurrent-batches', next.concurrentBatches);
+      }
+      if ('skipAlreadyTranslated' in partial) {
+        LS.set('st-translator-skip-already-translated', next.skipAlreadyTranslated);
+      }
+      if ('exportKeyMode' in partial) {
+        LS.set('st-translator-export-key-mode', next.exportKeyMode);
+      }
       return { translationConfig: next };
     }),
   toggleFieldGroup: (id) =>
-    set((s) => ({
-      translationConfig: {
-        ...s.translationConfig,
-        fieldGroups: s.translationConfig.fieldGroups.map((g: FieldGroupConfig) =>
-          g.id === id ? { ...g, enabled: !g.enabled } : g
-        ),
-      },
-    })),
+    set((s) => {
+      const updatedGroups = s.translationConfig.fieldGroups.map((g: FieldGroupConfig) =>
+        g.id === id ? { ...g, enabled: !g.enabled } : g
+      );
+      const enabledMap = updatedGroups.reduce((acc, g) => {
+        acc[g.id] = g.enabled;
+        return acc;
+      }, {} as Record<string, boolean>);
+      LS.set('st-translator-field-groups-enabled', enabledMap);
+      return {
+        translationConfig: {
+          ...s.translationConfig,
+          fieldGroups: updatedGroups,
+        },
+      };
+    }),
 
   // ─── Translation State ───
   fields: [],
@@ -494,5 +535,39 @@ export const useStore = create<AppState>((set) => ({
       return true;
     }
     return false;
+  },
+  deleteCurrentCardCache: async () => {
+    const s = useStore.getState();
+    if (s.cardFileName) {
+      // Remove cache key in IDB
+      await IDB.remove(`st-cache-${s.cardFileName}`);
+      // Reset translation state of all fields in the active store
+      if (s.fields.length > 0) {
+        const resetFields = s.fields.map(f => ({
+          ...f,
+          translated: '',
+          status: 'pending' as const,
+          error: undefined,
+        }));
+        set({ fields: resetFields, phase: 'idle', currentFieldIndex: 0 });
+        IDB.set('st-translator-fields-data', { fields: resetFields, phase: 'idle' });
+      }
+    }
+  },
+  deleteAllCaches: async () => {
+    // Remove all cache keys starting with 'st-cache-'
+    await IDB.clearPrefix('st-cache-');
+    // Also reset current fields and phase in active session
+    const s = useStore.getState();
+    if (s.fields.length > 0) {
+      const resetFields = s.fields.map(f => ({
+        ...f,
+        translated: '',
+        status: 'pending' as const,
+        error: undefined,
+      }));
+      set({ fields: resetFields, phase: 'idle', currentFieldIndex: 0 });
+      IDB.set('st-translator-fields-data', { fields: resetFields, phase: 'idle' });
+    }
   },
 }));

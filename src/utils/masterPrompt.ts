@@ -543,7 +543,14 @@ RULE C12 — XML/YAML/Markdown Structure & Key Translation (Vietnamese Specific)
   5. Không thêm, không bớt nội dung, không giải thích thêm.
   6. Trả về toàn bộ đoạn văn bản gốc sau khi đã thay thế tất cả tiếng Trung bằng tiếng Việt.
   
-  7. LƯU Ý QUAN TRỌNG: Tuyệt đối KHÔNG dịch các đường link, URL, hoặc đường dẫn file ngay cả khi chúng chứa chữ tiếng Trung. Việc dịch đường link sẽ làm hỏng thẻ. Phải giữ nguyên 100% các chuỗi URL này.`;
+  7. LƯU Ý QUAN TRỌNG: Tuyệt đối KHÔNG dịch các đường link, URL, hoặc đường dẫn file ngay cả khi chúng chứa chữ tiếng Trung. Việc dịch đường link sẽ làm hỏng thẻ. Phải giữ nguyên 100% các chuỗi URL này.
+
+RULE C13 — Grammar and Word Order of Placeholders/Macros (Vietnamese Specific):
+  Khi dịch hoặc xử lý văn bản chứa các placeholder/macro như {{user}}, {{char}}, bạn BẮT BUỘC phải tuân thủ đúng ngữ pháp và trật tự từ tiếng Việt. Tuyệt đối KHÔNG đặt các placeholder sai vị trí, lệch vị trí chủ-vị, hoặc tự ý đẩy chúng xuống cuối/đầu câu/dòng, đặc biệt khi dịch từ cấu trúc sở hữu tiếng Trung (A的B).
+  - Với cấu trúc sở hữu (A的B, ví dụ {{user}}的茶会肉便器 / 承受{{user}}的侵犯 / 夹紧{{user}}的肉棒): A là placeholder ({{user}}) thì phải dịch theo đúng trật tự tiếng Việt "B của A" (B của {{user}}).
+  - Ví dụ sai chủ-vị/thiếu liên kết: "{{user}}Đồ nội thất bằng thịt của tiệc trà" ➔ Sửa đúng: "tiệc trà đồ nội thất bằng thịt của {{user}}"
+  - Ví dụ sai vị trí placeholder / thừa dấu gạch ngang: "...chịu đựng sự xâm phạm của - , vừa hát khúc hát ru cho cậu.{{user}}" ➔ Sửa đúng: "...chịu đựng sự xâm phạm của {{user}}, vừa hát khúc hát ru cho cậu"
+  - Ví dụ sai trật tự từ: "...đôi chân đang kẹp chặt - gậy thịt của cô sẽ run rẩy không thể kiềm chế.{{user}}" ➔ Sửa đúng: "...đôi chân đang kẹp chặt gậy thịt của {{user}} - cô sẽ run rẩy không thể kiềm chế."`;
   }
 
   return rules;

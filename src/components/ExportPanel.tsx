@@ -1,9 +1,11 @@
+import { useMemo } from 'react';
 import { useStore } from '../store';
 import { useTranslation } from '../hooks/useTranslation';
 import { useT } from '../i18n/useLocale';
-import { Download, AlertTriangle, Image as ImageIcon, KeyRound } from 'lucide-react';
+import { Download, AlertTriangle, Image as ImageIcon, KeyRound, Code } from 'lucide-react';
 import { embedCharaToPNG } from '../utils/pngHandler';
 import { cardToWorldbook } from '../utils/worldbookParser';
+import { setNestedValue } from '../utils/cardFields';
 import type { ExportKeyMode } from '../types/card';
 
 const KEY_MODE_OPTIONS: { value: ExportKeyMode; labelEn: string; labelVi: string; desc: string }[] = [
@@ -91,6 +93,219 @@ export default function ExportPanel() {
       console.error('Failed to export PNG:', e);
       alert('Failed to export PNG');
     }
+  };
+
+  // Reconstruct translated regex scripts
+  const translatedRegexes = useMemo(() => {
+    if (!card || !card.data || !card.data.extensions || !card.data.extensions.regex_scripts) {
+      return [];
+    }
+    const originalRegexScripts = card.data.extensions.regex_scripts;
+    
+    // Find all fields in group 'regex' with status === 'done' and non-empty translated content
+    const doneRegexFields = fields.filter(
+      (f) => f.group === 'regex' && f.status === 'done' && f.translated
+    );
+    
+    if (doneRegexFields.length === 0) return [];
+    
+    // Group fields by script index
+    const fieldsByScriptIndex: Record<number, typeof doneRegexFields> = {};
+    for (const field of doneRegexFields) {
+      const match = field.path.match(/^data\.extensions\.regex_scripts\[(\d+)\]\.(.+)$/);
+      if (match) {
+        const idx = parseInt(match[1], 10);
+        if (!fieldsByScriptIndex[idx]) {
+          fieldsByScriptIndex[idx] = [];
+        }
+        fieldsByScriptIndex[idx].push(field);
+      }
+    }
+    
+    // Reconstruct
+    const results = [];
+    for (const idxStr of Object.keys(fieldsByScriptIndex)) {
+      const idx = parseInt(idxStr, 10);
+      const originalScript = originalRegexScripts[idx];
+      if (!originalScript) continue;
+      
+      const cloned = JSON.parse(JSON.stringify(originalScript));
+      const scriptFields = fieldsByScriptIndex[idx];
+      for (const field of scriptFields) {
+        const match = field.path.match(/^data\.extensions\.regex_scripts\[(\d+)\]\.(.+)$/);
+        if (match) {
+          const relativePath = match[2];
+          setNestedValue(cloned, relativePath, field.translated);
+        }
+      }
+      results.push({
+        index: idx,
+        scriptName: cloned.scriptName || `Regex Script ${idx}`,
+        script: cloned,
+      });
+    }
+    return results;
+  }, [card, fields]);
+
+  // Reconstruct translated TavernHelper scripts
+  const translatedTavernHelpers = useMemo(() => {
+    if (!card || !card.data || !card.data.extensions) {
+      return [];
+    }
+    const doneTavernHelperFields = fields.filter(
+      (f) => f.group === 'tavern_helper' && f.status === 'done' && f.translated
+    );
+    
+    if (doneTavernHelperFields.length === 0) return [];
+    
+    const fieldsByScript: Record<string, { key: string; scriptIndex: number; fields: typeof doneTavernHelperFields }> = {};
+    
+    for (const field of doneTavernHelperFields) {
+      let key = '';
+      let scriptIndex = -1;
+      
+      // Pattern 1: Tuple format
+      const matchTuple = field.path.match(/^data\.extensions\.([a-zA-Z0-9_]+)\[\d+\]\[1\]\[(\d+)\]\.(.+)$/);
+      if (matchTuple) {
+        key = matchTuple[1];
+        scriptIndex = parseInt(matchTuple[2], 10);
+      } else {
+        // Pattern 2: scripts array format
+        const matchScripts = field.path.match(/^data\.extensions\.([a-zA-Z0-9_]+)\.scripts\[(\d+)\]\.(.+)$/);
+        if (matchScripts) {
+          key = matchScripts[1];
+          scriptIndex = parseInt(matchScripts[2], 10);
+        } else {
+          // Pattern 3: direct array format
+          const matchDirect = field.path.match(/^data\.extensions\.([a-zA-Z0-9_]+)\[(\d+)\]\.(.+)$/);
+          if (matchDirect && matchDirect[1] !== 'regex_scripts') {
+            key = matchDirect[1];
+            scriptIndex = parseInt(matchDirect[2], 10);
+          }
+        }
+      }
+      
+      if (key && scriptIndex !== -1) {
+        const id = `${key}_${scriptIndex}`;
+        if (!fieldsByScript[id]) {
+          fieldsByScript[id] = { key, scriptIndex, fields: [] };
+        }
+        fieldsByScript[id].fields.push(field);
+      }
+    }
+    
+    const results = [];
+    for (const id of Object.keys(fieldsByScript)) {
+      const { key, scriptIndex, fields: scriptFields } = fieldsByScript[id];
+      const extData = card.data.extensions[key];
+      if (!extData) continue;
+      
+      let originalScript: any = null;
+      if (Array.isArray(extData)) {
+        const tupleEntry = extData.find(
+          (item: any) => Array.isArray(item) && item[0] === 'scripts' && Array.isArray(item[1])
+        );
+        if (tupleEntry) {
+          originalScript = tupleEntry[1][scriptIndex];
+        } else {
+          originalScript = extData[scriptIndex];
+        }
+      } else if (extData && typeof extData === 'object' && 'scripts' in extData && Array.isArray((extData as any).scripts)) {
+        originalScript = (extData as any).scripts[scriptIndex];
+      }
+      
+      if (!originalScript) continue;
+      
+      const cloned = JSON.parse(JSON.stringify(originalScript));
+      for (const field of scriptFields) {
+        let relPath = '';
+        const matchT = field.path.match(/^data\.extensions\.([a-zA-Z0-9_]+)\[\d+\]\[1\]\[(\d+)\]\.(.+)$/);
+        if (matchT) relPath = matchT[3];
+        else {
+          const matchS = field.path.match(/^data\.extensions\.([a-zA-Z0-9_]+)\.scripts\[(\d+)\]\.(.+)$/);
+          if (matchS) relPath = matchS[3];
+          else {
+            const matchD = field.path.match(/^data\.extensions\.([a-zA-Z0-9_]+)\[(\d+)\]\.(.+)$/);
+            if (matchD) relPath = matchD[3];
+          }
+        }
+        
+        if (relPath) {
+          setNestedValue(cloned, relPath, field.translated);
+        }
+      }
+      results.push({
+        key,
+        index: scriptIndex,
+        name: cloned.name || `TavernHelper Script ${scriptIndex}`,
+        script: cloned,
+      });
+    }
+    return results;
+  }, [card, fields]);
+
+  const handleExportSingleRegex = (script: any, name: string) => {
+    const json = JSON.stringify(script, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    
+    const baseName = cardFileName.replace(/\.(json|png)$/i, '');
+    const cleanName = name.replace(/[^a-zA-Z0-9_\u00C0-\u1EF9-]/g, '_');
+    const fileName = `${baseName}_regex_${cleanName}.json`;
+    
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportAllRegex = () => {
+    const scripts = translatedRegexes.map(r => r.script);
+    const json = JSON.stringify(scripts, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    
+    const baseName = cardFileName.replace(/\.(json|png)$/i, '');
+    const fileName = `${baseName}_regex_all.json`;
+    
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportSingleTavernHelper = (script: any, name: string) => {
+    const json = JSON.stringify(script, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    
+    const baseName = cardFileName.replace(/\.(json|png)$/i, '');
+    const cleanName = name.replace(/[^a-zA-Z0-9_\u00C0-\u1EF9-]/g, '_');
+    const fileName = `${baseName}_th_${cleanName}.json`;
+    
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportAllTavernHelper = () => {
+    const scripts = translatedTavernHelpers.map(t => t.script);
+    const json = JSON.stringify(scripts, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    
+    const baseName = cardFileName.replace(/\.(json|png)$/i, '');
+    const fileName = `${baseName}_th_all.json`;
+    
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -203,6 +418,220 @@ export default function ExportPanel() {
           </button>
         )}
       </div>
+
+      {/* Script Export Section */}
+      {(translatedRegexes.length > 0 || translatedTavernHelpers.length > 0) && (
+        <div style={{ marginTop: '20px', borderTop: '1px solid var(--border-subtle)', paddingTop: '15px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', fontWeight: 600, marginBottom: '12px', color: 'var(--text-primary)' }}>
+            <Code size={15} style={{ color: 'var(--accent-primary)' }} />
+            {locale === 'vi' ? 'Xuất Script đã Dịch/Mod' : 'Export Translated/Modded Scripts'}
+          </div>
+          
+          {translatedRegexes.length > 0 && (
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>Regex Scripts ({translatedRegexes.length})</span>
+                {translatedRegexes.length > 1 && (
+                  <button
+                    onClick={handleExportAllRegex}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--accent-primary)',
+                      fontSize: '0.7rem',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: '2px 6px',
+                      borderRadius: 'var(--radius-sm)',
+                      transition: 'background 0.2s',
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(124, 106, 240, 0.1)'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
+                    title={locale === 'vi' ? 'Xuất toàn bộ regex thành file JSON mảng' : 'Export all regex as a single JSON array file'}
+                  >
+                    <Download size={11} />
+                    {locale === 'vi' ? 'Tải tất cả' : 'Download all'}
+                  </button>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: '6px', flexDirection: 'column' }}>
+                {translatedRegexes.map((item) => (
+                  <div 
+                    key={`regex-${item.index}`} 
+                    style={{ 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      justifyContent: 'space-between', 
+                      padding: '6px 10px', 
+                      background: 'var(--bg-secondary)', 
+                      borderRadius: 'var(--radius-sm)', 
+                      border: '1px solid var(--border-subtle)',
+                      transition: 'border-color 0.2s, background-color 0.2s'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.borderColor = 'rgba(124, 106, 240, 0.3)';
+                      e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.05)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.borderColor = 'var(--border-subtle)';
+                      e.currentTarget.style.backgroundColor = 'var(--bg-secondary)';
+                    }}
+                  >
+                    <span 
+                      style={{ 
+                        fontSize: '0.7rem', 
+                        color: 'var(--text-primary)', 
+                        fontWeight: 500,
+                        overflow: 'hidden', 
+                        textOverflow: 'ellipsis', 
+                        whiteSpace: 'nowrap', 
+                        maxWidth: '220px' 
+                      }} 
+                      title={item.scriptName}
+                    >
+                      {item.scriptName}
+                    </span>
+                    <button
+                      onClick={() => handleExportSingleRegex(item.script, item.scriptName)}
+                      style={{ 
+                        padding: '4px 8px', 
+                        cursor: 'pointer', 
+                        background: 'rgba(124, 106, 240, 0.1)', 
+                        border: '1px solid rgba(124, 106, 240, 0.2)', 
+                        borderRadius: 'var(--radius-sm)',
+                        color: 'var(--accent-primary)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        fontSize: '0.65rem',
+                        fontWeight: 600,
+                        transition: 'all 0.2s'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = 'rgba(124, 106, 240, 0.2)';
+                        e.currentTarget.style.borderColor = 'rgba(124, 106, 240, 0.4)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = 'rgba(124, 106, 240, 0.1)';
+                        e.currentTarget.style.borderColor = 'rgba(124, 106, 240, 0.2)';
+                      }}
+                      title={locale === 'vi' ? 'Tải Regex JSON' : 'Download Regex JSON'}
+                    >
+                      <Download size={11} />
+                      JSON
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {translatedTavernHelpers.length > 0 && (
+            <div>
+              <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>TavernHelper Scripts ({translatedTavernHelpers.length})</span>
+                {translatedTavernHelpers.length > 1 && (
+                  <button
+                    onClick={handleExportAllTavernHelper}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--accent-primary)',
+                      fontSize: '0.7rem',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: '2px 6px',
+                      borderRadius: 'var(--radius-sm)',
+                      transition: 'background 0.2s',
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(124, 106, 240, 0.1)'}
+                    onMouseLeave={(e) => e.currentTarget.style.background = 'none'}
+                    title={locale === 'vi' ? 'Xuất toàn bộ TavernHelper thành file JSON mảng' : 'Export all TavernHelper as a single JSON array file'}
+                  >
+                    <Download size={11} />
+                    {locale === 'vi' ? 'Tải tất cả' : 'Download all'}
+                  </button>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: '6px', flexDirection: 'column' }}>
+                {translatedTavernHelpers.map((item) => (
+                  <div 
+                    key={`th-${item.key}-${item.index}`} 
+                    style={{ 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      justifyContent: 'space-between', 
+                      padding: '6px 10px', 
+                      background: 'var(--bg-secondary)', 
+                      borderRadius: 'var(--radius-sm)', 
+                      border: '1px solid var(--border-subtle)',
+                      transition: 'border-color 0.2s, background-color 0.2s'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.borderColor = 'rgba(124, 106, 240, 0.3)';
+                      e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.05)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.borderColor = 'var(--border-subtle)';
+                      e.currentTarget.style.backgroundColor = 'var(--bg-secondary)';
+                    }}
+                  >
+                    <span 
+                      style={{ 
+                        fontSize: '0.7rem', 
+                        color: 'var(--text-primary)', 
+                        fontWeight: 500,
+                        overflow: 'hidden', 
+                        textOverflow: 'ellipsis', 
+                        whiteSpace: 'nowrap', 
+                        maxWidth: '220px' 
+                      }} 
+                      title={item.name}
+                    >
+                      {item.name}
+                    </span>
+                    <button
+                      onClick={() => handleExportSingleTavernHelper(item.script, item.name)}
+                      style={{ 
+                        padding: '4px 8px', 
+                        cursor: 'pointer', 
+                        background: 'rgba(124, 106, 240, 0.1)', 
+                        border: '1px solid rgba(124, 106, 240, 0.2)', 
+                        borderRadius: 'var(--radius-sm)',
+                        color: 'var(--accent-primary)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        fontSize: '0.65rem',
+                        fontWeight: 600,
+                        transition: 'all 0.2s'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = 'rgba(124, 106, 240, 0.2)';
+                        e.currentTarget.style.borderColor = 'rgba(124, 106, 240, 0.4)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = 'rgba(124, 106, 240, 0.1)';
+                        e.currentTarget.style.borderColor = 'rgba(124, 106, 240, 0.2)';
+                      }}
+                      title={locale === 'vi' ? 'Tải TavernHelper JSON' : 'Download TavernHelper JSON'}
+                    >
+                      <Download size={11} />
+                      JSON
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

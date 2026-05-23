@@ -74,7 +74,7 @@ export default function CustomTranslatePanel() {
       const currentChunkSize = translationConfig.chunkSize;
       const CHUNK_THRESHOLD = currentChunkSize && currentChunkSize > 0
         ? currentChunkSize
-        : (proxy.maxTokens && proxy.maxTokens > 0 ? Math.min(Math.floor(proxy.maxTokens * 3.5), 200000) : 40000);
+        : (proxy.maxTokens && proxy.maxTokens > 0 ? Math.min(Math.floor(proxy.maxTokens * 3.5), 200000) : 100000);
 
       let result = '';
       let usedSurgical = false;

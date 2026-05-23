@@ -1,12 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 
 import { useStore } from '../store';
 import { useT } from '../i18n/useLocale';
-import { TARGET_LANGUAGES, SOURCE_LANGUAGES } from '../utils/cardFields';
+import { TARGET_LANGUAGES, SOURCE_LANGUAGES, extractTranslatableFields } from '../utils/cardFields';
 import { getDefaultTranslationPrompt, getModelSuggestions } from '../utils/apiClient';
 import { aiExtractGlossaryTerms } from '../utils/mvuSync';
 import type { TranslationMode, LorebookStrategy, FieldGroupConfig, FieldGroup, GlossaryEntry } from '../types/card';
-import { Languages, Settings2, FileJson, BookOpen, Plus, Trash2, Download, Upload, Bot, Loader2, Save, RotateCcw, CheckCircle } from 'lucide-react';
+import { Languages, Settings2, FileJson, BookOpen, Plus, Trash2, Download, Upload, Bot, Loader2, Save, RotateCcw, CheckCircle, Zap } from 'lucide-react';
 import MvuSyncPanel from './MvuSyncPanel';
 
 /** Map field group IDs to i18n keys */
@@ -26,12 +26,42 @@ function useGroupLabels() {
   return map;
 }
 
+const getFieldBaseKey = (path: string) => {
+  const lastPart = path.split('.').pop() || '';
+  return lastPart.replace(/\[\d+\]$/, '');
+};
+
 export default function TranslateConfig() {
-  const { translationConfig, setTranslationConfig, toggleFieldGroup, card, locale, proxy, addToast, fields } = useStore();
+  const { translationConfig, setTranslationConfig, toggleFieldGroup, card, locale, proxy, addToast, fields, deleteCurrentCardCache, deleteAllCaches, scannedModels } = useStore();
+
+  const allAvailableFields = useMemo(() => {
+    if (!card) return [];
+    const groups: FieldGroup[] = ['core', 'messages', 'system', 'creator', 'lorebook', 'lorebook_keys', 'regex', 'depth_prompt', 'tavern_helper'];
+    return extractTranslatableFields(card, groups);
+  }, [card]);
+
+  const handleApplyToAllSimilar = (currentValue: string, fieldPath: string, groupId: string) => {
+    const baseKey = getFieldBaseKey(fieldPath);
+    const targetFields = allAvailableFields.filter(f => f.group === groupId && getFieldBaseKey(f.path) === baseKey);
+    
+    const newEntryRouting = { ...translationConfig.entryModelRouting };
+    targetFields.forEach(f => {
+      newEntryRouting[f.path] = currentValue;
+    });
+    
+    setTranslationConfig({ entryModelRouting: newEntryRouting });
+    addToast('success', locale === 'vi' 
+      ? `Đã áp dụng model cho tất cả các trường ${baseKey}` 
+      : `Applied model to all ${baseKey} fields`
+    );
+  };
 
   const t = useT();
   const groupLabels = useGroupLabels();
-  const modelSuggestions = getModelSuggestions(proxy.provider);
+  const modelSuggestions = [
+    ...scannedModels,
+    ...getModelSuggestions(proxy.provider).filter(s => !scannedModels.includes(s))
+  ];
   const [isAutoExtractingGlossary, setIsAutoExtractingGlossary] = useState(false);
   const defaultPrompt = getDefaultTranslationPrompt(translationConfig.sourceLanguage, translationConfig.targetLanguage);
   const [promptDraft, setPromptDraft] = useState<string>(translationConfig.translationPrompt || '');
@@ -40,6 +70,7 @@ export default function TranslateConfig() {
   const [promptSaved, setPromptSaved] = useState(false);
   const [schemaSaved, setSchemaSaved] = useState(false);
   const [modInstructionsSaved, setModInstructionsSaved] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
 
   // Track whether drafts differ from saved values
   const promptDirty = promptDraft !== (translationConfig.translationPrompt || '');
@@ -535,99 +566,93 @@ export default function TranslateConfig() {
                     {modelSuggestions.map(s => <option key={s} value={s} />)}
                   </datalist>
 
-                  {/* Group Routing */}
+                  {/* Group & Entry Routing */}
                   <div style={{ padding: '8px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)' }}>
-                    <label className="label" style={{ marginBottom: '8px', fontSize: '0.8rem' }}>{t.groupModels || 'Group Models'}</label>
-                    {translationConfig.fieldGroups.filter(g => g.enabled).map(group => {
+                    <label className="label" style={{ marginBottom: '12px', fontSize: '0.8rem', fontWeight: 600 }}>{t.groupModels || 'Model theo nhóm'}</label>
+                    {translationConfig.fieldGroups.map(group => {
                       const labels = groupLabels[group.id];
+                      const groupFields = allAvailableFields.filter(f => f.group === group.id);
+                      const isExpanded = !!expandedGroups[group.id];
+
                       return (
-                      <div key={group.id} style={{ display: 'flex', alignItems: 'center', marginBottom: '6px', gap: '8px' }}>
-                        <span style={{ width: '120px', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{labels?.label || group.label}</span>
-                        <input
-                          type="text"
-                          list="model-suggestions-list"
-                          placeholder={t.globalModel || 'Global Model'}
-                          value={translationConfig.groupModelRouting[group.id] || ''}
-                          onChange={(e) => setTranslationConfig({
-                            groupModelRouting: { ...translationConfig.groupModelRouting, [group.id]: e.target.value }
-                          })}
-                          className="input"
-                          style={{ flex: 1, padding: '4px 8px', fontSize: '0.75rem' }}
-                        />
-                      </div>
-                    )})}
-                  </div>
+                        <div key={group.id} style={{ marginBottom: '12px', borderBottom: '1px solid rgba(255,255,255,0.03)', paddingBottom: '10px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            {groupFields.length > 0 ? (
+                              <button
+                                onClick={() => setExpandedGroups(prev => ({ ...prev, [group.id]: !prev[group.id] }))}
+                                className="btn btn-ghost"
+                                style={{ padding: '2px 4px', minHeight: 'auto', height: 'auto', display: 'flex', alignItems: 'center', color: 'var(--text-secondary)' }}
+                                title={isExpanded ? "Thu gọn mục nhỏ" : "Hiển thị mục nhỏ"}
+                              >
+                                <span style={{ 
+                                  fontSize: '0.65rem', 
+                                  transform: isExpanded ? 'rotate(90deg)' : 'none', 
+                                  transition: 'transform 0.15s', 
+                                  display: 'inline-block' 
+                                }}>▶</span>
+                              </button>
+                            ) : (
+                              <div style={{ width: '18px' }} />
+                            )}
+                            <span style={{ flex: '0 0 120px', fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {labels?.label || group.label}
+                            </span>
+                            <input
+                              type="text"
+                              list="model-suggestions-list"
+                              placeholder={t.globalModel || 'Global Model'}
+                              value={translationConfig.groupModelRouting[group.id] || ''}
+                              onChange={(e) => setTranslationConfig({
+                                groupModelRouting: { ...translationConfig.groupModelRouting, [group.id]: e.target.value }
+                              })}
+                              className="input"
+                              style={{ flex: 1, padding: '4px 8px', fontSize: '0.75rem' }}
+                            />
+                          </div>
 
-                  {/* Entry Routing */}
-                  <div style={{ padding: '8px', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)' }}>
-                    <label className="label" style={{ marginBottom: '8px', fontSize: '0.8rem' }}>{t.entryModels || 'Entry Models'}</label>
-                    {Object.entries(translationConfig.entryModelRouting).map(([path, model]) => (
-                      <div key={path} style={{ display: 'flex', alignItems: 'center', marginBottom: '6px', gap: '8px' }}>
-                        <input
-                          type="text"
-                          value={path}
-                          readOnly
-                          className="input"
-                          style={{ flex: 2, padding: '4px 8px', fontSize: '0.7rem', opacity: 0.8 }}
-                          title={path}
-                        />
-                        <input
-                          type="text"
-                          list="model-suggestions-list"
-                          placeholder={t.globalModel || 'Global Model'}
-                          value={model}
-                          onChange={(e) => setTranslationConfig({
-                            entryModelRouting: { ...translationConfig.entryModelRouting, [path]: e.target.value }
-                          })}
-                          className="input"
-                          style={{ flex: 1, padding: '4px 8px', fontSize: '0.75rem' }}
-                        />
-                        <button
-                          onClick={() => {
-                            const newRouting = { ...translationConfig.entryModelRouting };
-                            delete newRouting[path];
-                            setTranslationConfig({ entryModelRouting: newRouting });
-                          }}
-                          className="btn btn-secondary"
-                          style={{ padding: '4px 8px', borderColor: 'var(--accent-danger)', color: 'var(--accent-danger)' }}
-                        >
-                          <Trash2 size={12} />
-                        </button>
-                      </div>
-                    ))}
-
-                    <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-                      <select
-                        id="new-routing-path"
-                        className="input"
-                        style={{ flex: 2, padding: '4px 8px', fontSize: '0.75rem' }}
-                      >
-                        <option value="">{t.selectEntryToOverride || 'Select entry to override...'}</option>
-                        {fields && fields.length > 0 
-                          ? fields.map(f => <option key={f.path} value={f.path}>{f.label}</option>)
-                          : (card.data?.character_book?.entries || []).map((e, i) => (
-                              <option key={`data.character_book.entries[${i}].content`} value={`data.character_book.entries[${i}].content`}>
-                                lorebook[{i}].content ({e.name || 'Unnamed'})
-                              </option>
-                            ))
-                        }
-                      </select>
-                      <button
-                        onClick={() => {
-                          const select = document.getElementById('new-routing-path') as HTMLSelectElement;
-                          if (select && select.value) {
-                            setTranslationConfig({
-                              entryModelRouting: { ...translationConfig.entryModelRouting, [select.value]: '' }
-                            });
-                            select.value = '';
-                          }
-                        }}
-                        className="btn btn-primary"
-                        style={{ padding: '4px 12px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}
-                      >
-                        <Plus size={12} /> {t.addModel || 'Add'}
-                      </button>
-                    </div>
+                          {/* Nested small fields */}
+                          {isExpanded && groupFields.length > 0 && (
+                            <div style={{ marginLeft: '22px', marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '8px', borderLeft: '1px dashed rgba(255,255,255,0.1)', paddingLeft: '12px' }}>
+                              {groupFields.map(field => {
+                                const lastKey = getFieldBaseKey(field.path);
+                                const matchingFields = groupFields.filter(f => getFieldBaseKey(f.path) === lastKey && f.path !== field.path);
+                                return (
+                                  <div key={field.path} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <span
+                                      style={{ flex: '0 0 160px', fontSize: '0.7rem', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                                      title={field.label}
+                                    >
+                                      {field.label}
+                                    </span>
+                                    <input
+                                      type="text"
+                                      list="model-suggestions-list"
+                                      placeholder={translationConfig.groupModelRouting[group.id] || t.globalModel || 'Model chung'}
+                                      value={translationConfig.entryModelRouting[field.path] || ''}
+                                      onChange={(e) => setTranslationConfig({
+                                        entryModelRouting: { ...translationConfig.entryModelRouting, [field.path]: e.target.value }
+                                      })}
+                                      className="input"
+                                      style={{ flex: 1, padding: '3px 6px', fontSize: '0.7rem', height: '24px' }}
+                                    />
+                                    {matchingFields.length > 0 && (
+                                      <button
+                                        onClick={() => handleApplyToAllSimilar(translationConfig.entryModelRouting[field.path] || '', field.path, group.id)}
+                                        className="btn btn-secondary tooltip"
+                                        data-tooltip={locale === 'vi' ? `Áp dụng cho tất cả ${lastKey}` : `Apply to all ${lastKey}`}
+                                        style={{ padding: '3px 6px', height: '24px', minHeight: 'auto', display: 'flex', alignItems: 'center', borderColor: 'var(--border-strong)', color: 'var(--text-secondary)' }}
+                                      >
+                                        <Zap size={10} />
+                                      </button>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -991,6 +1016,41 @@ export default function TranslateConfig() {
             </div>
           </>
         )}
+
+        {/* ═══ Cache Management ═══ */}
+        <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '10px', marginTop: '4px' }}>
+          <label className="label" style={{ display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '8px', fontWeight: 600 }}>
+            💾 {locale === 'vi' ? 'Quản lý Cache Dịch' : 'Translation Cache'}
+          </label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {card && (
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={async () => {
+                  if (confirm(locale === 'vi' ? 'Bạn có chắc chắn muốn đặt lại thẻ này và xóa cache dịch của nó không? Hành động này không thể hoàn tác.' : 'Are you sure you want to reset this card and delete its translation cache? This cannot be undone.')) {
+                    await deleteCurrentCardCache();
+                    addToast('success', locale === 'vi' ? 'Đã xóa thành công cache dịch của thẻ này' : 'Translation cache cleared successfully');
+                  }
+                }}
+                style={{ width: '100%', fontSize: '0.75rem', borderColor: 'var(--accent-warning)', color: 'var(--accent-warning)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}
+              >
+                <RotateCcw size={12} /> {locale === 'vi' ? 'Đặt lại thẻ & Xóa cache thẻ này' : 'Reset card & Clear this cache'}
+              </button>
+            )}
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={async () => {
+                if (confirm(locale === 'vi' ? 'Bạn có chắc chắn muốn xóa toàn bộ cache dịch của tất cả các thẻ không? Hành động này không thể hoàn tác.' : 'Are you sure you want to delete all translation caches for all cards? This cannot be undone.')) {
+                  await deleteAllCaches();
+                  addToast('success', locale === 'vi' ? 'Đã xóa thành công toàn bộ cache dịch' : 'All translation caches cleared successfully');
+                }
+              }}
+              style={{ width: '100%', fontSize: '0.75rem', borderColor: 'var(--accent-danger)', color: 'var(--accent-danger)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}
+            >
+              <Trash2 size={12} /> {locale === 'vi' ? 'Xóa toàn bộ cache dịch' : 'Clear all translation caches'}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

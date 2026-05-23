@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useStore } from '../store';
 import { useT } from '../i18n/useLocale';
-import { testConnection, getModelSuggestions, getDefaultProxyUrl } from '../utils/apiClient';
+import { testConnection, getModelSuggestions, getDefaultProxyUrl, fetchModelsFromProxy } from '../utils/apiClient';
 import type { AIProvider } from '../types/card';
 import {
   Settings,
@@ -28,7 +28,7 @@ const PROVIDERS: { value: AIProvider; label: string }[] = [
 ];
 
 export default function ProxyConfig() {
-  const { proxy, setProxy, connectionStatus, setConnectionStatus } = useStore();
+  const { proxy, setProxy, connectionStatus, setConnectionStatus, scannedModels, setScannedModels, addToast, locale } = useStore();
   const t = useT();
   const [showKey, setShowKey] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -36,8 +36,12 @@ export default function ProxyConfig() {
   const [testMessage, setTestMessage] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [showKeyRotation, setShowKeyRotation] = useState(false);
+  const [scanning, setScanning] = useState(false);
 
-  const suggestions = getModelSuggestions(proxy.provider);
+  const suggestions = [
+    ...scannedModels,
+    ...getModelSuggestions(proxy.provider).filter(s => !scannedModels.includes(s))
+  ];
 
   const handleProviderChange = (provider: AIProvider) => {
     setProxy({
@@ -47,6 +51,26 @@ export default function ProxyConfig() {
     });
     setConnectionStatus('untested');
     setTestMessage('');
+    setScannedModels([]);
+  };
+
+  const handleScanModels = async () => {
+    setScanning(true);
+    try {
+      const models = await fetchModelsFromProxy(proxy);
+      setScannedModels(models);
+      const successMsg = locale === 'vi'
+        ? `Đã tải thành công ${models.length} mô hình từ proxy!`
+        : `Successfully loaded ${models.length} models from proxy!`;
+      addToast('success', successMsg);
+    } catch (err: any) {
+      const errorMsg = locale === 'vi'
+        ? `Lỗi khi quét mô hình: ${err.message || String(err)}`
+        : `Failed to scan models: ${err.message || String(err)}`;
+      addToast('error', errorMsg);
+    } finally {
+      setScanning(false);
+    }
   };
 
   const handleTest = async () => {
@@ -194,7 +218,32 @@ export default function ProxyConfig() {
 
         {/* Model */}
         <div style={{ position: 'relative' }}>
-          <label className="label">{t.model}</label>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+            <label className="label" style={{ marginBottom: 0 }}>{t.model}</label>
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs"
+              onClick={handleScanModels}
+              disabled={scanning || !proxy.proxyUrl}
+              style={{
+                fontSize: '0.7rem',
+                padding: '2px 6px',
+                color: 'var(--accent-primary)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                height: 'auto',
+                minHeight: 'auto',
+              }}
+            >
+              {scanning ? (
+                <Loader2 size={11} className="animate-spin" />
+              ) : (
+                <RefreshCw size={11} />
+              )}
+              {scanning ? t.scanningModels : t.scanModels}
+            </button>
+          </div>
           <input
             className="input input-mono"
             value={proxy.model}

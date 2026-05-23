@@ -123,6 +123,12 @@ CHỈ BẢO TOÀN CODE SYNTAX (TUYỆT ĐỐI):
 7. GIỮ NGUYÊN số lượng getvar()/setvar()/addvar() calls — KHÔNG thêm, KHÔNG bớt
 8. KHÔNG wrap output trong markdown code fences
 9. KHÔNG convert ASCII sang full-width Unicode
+10. BẢO TOÀN VỊ TRÍ VÀ NGỮ PHÁP PLACEHOLDER (VIETNAMESE SPECIFIC): Khi viết lại/chỉnh sửa câu, BẮT BUỘC giữ các placeholder như {{user}} và {{char}} ở đúng vị trí ngữ pháp (chủ-vị, bổ ngữ) phù hợp với tiếng Việt. Tuyệt đối không đặt sai vị trí, lệch vị trí chủ-vị, hoặc tự ý đẩy chúng xuống cuối/đầu dòng một cách bất hợp lý.
+    - Với cấu trúc sở hữu (ví dụ {{user}}의 / {{user}}的 / {{user}}'s): phải dịch/giữ theo trật tự tiếng Việt là "B của {{user}}".
+    - Ví dụ sai chủ-vị/thiếu liên kết: "{{user}}Đồ nội thất bằng thịt của tiệc trà" ➔ Sửa đúng: "tiệc trà đồ nội thất bằng thịt của {{user}}"
+    - Ví dụ sai vị trí placeholder / thừa dấu gạch ngang: "...chịu đựng sự xâm phạm của - , vừa hát khúc hát ru cho cậu.{{user}}" ➔ Sửa đúng: "...chịu đựng sự xâm phạm của {{user}}, vừa hát khúc hát ru cho cậu"
+    - Ví dụ sai trật tự từ: "...đôi chân đang kẹp chặt - gậy thịt của cô sẽ run rẩy không thể kiềm chế.{{user}}" ➔ Sửa đúng: "...đôi chân đang kẹp chặt gậy thịt của {{user}} - cô sẽ run rẩy không thể kiềm chế."
+
 
 ƯU TIÊN:
 P1 (CAO NHẤT): Code syntax phải sống sót nguyên vẹn

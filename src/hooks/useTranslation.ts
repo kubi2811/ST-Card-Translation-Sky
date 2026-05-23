@@ -162,7 +162,7 @@ export function useTranslation() {
     const currentChunkSize = store.translationConfig.chunkSize;
     const CHUNK_THRESHOLD = currentChunkSize && currentChunkSize > 0
       ? currentChunkSize
-      : (currentMaxTokens && currentMaxTokens > 0 ? Math.min(Math.floor(currentMaxTokens * 3.5), 200000) : 40000);
+      : (currentMaxTokens && currentMaxTokens > 0 ? Math.min(Math.floor(currentMaxTokens * 3.5), 200000) : 100000);
       
     const targetModel = store.translationConfig.enableModelRouting
       ? (store.translationConfig.entryModelRouting[field.path] || store.translationConfig.groupModelRouting[field.group] || store.proxy.model)
@@ -229,8 +229,21 @@ export function useTranslation() {
       let usedSurgical = false;
       let surgicalFallback = false;
 
-      const isEligibleForSurgical = store.translationConfig.surgicalMode && 
-        (field.group === 'regex' || field.group === 'tavern_helper' || field.original.includes('`') || field.original.includes('{') || field.original.includes('<'));
+      const isEligibleForSurgical = (() => {
+        if (!store.translationConfig.surgicalMode) return false;
+        if (field.group === 'regex' || field.group === 'tavern_helper') return true;
+        if (field.group === 'lorebook') {
+          if (field.entryType === 'initvar' || field.entryType === 'controller' || field.entryType === 'mvu_logic') {
+            return true;
+          }
+        }
+        const text = field.original;
+        if (text.includes('<%') && text.includes('%>')) return true;
+        if (/<script[\s\S]*?>/i.test(text)) return true;
+        if (/<style[\s\S]*?>/i.test(text)) return true;
+        if (text.includes('```')) return true;
+        return false;
+      })();
 
       if (isEligibleForSurgical) {
         usedSurgical = true;

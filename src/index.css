@@ -365,6 +365,20 @@ select.input {
   font-size: 10px;
   font-weight: 700;
 }
+.checkbox-wrapper input[type="checkbox"]:indeterminate {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+}
+.checkbox-wrapper input[type="checkbox"]:indeterminate::after {
+  content: '—';
+  position: absolute;
+  top: 45%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: white;
+  font-size: 10px;
+  font-weight: 700;
+}
 
 /* ─── Slider & Toggle Switch ─── */
 .toggle-switch {

@@ -104,5 +104,42 @@ export const IDB = {
         } catch (e) {
             console.error('IDB Remove Error', e);
         }
+    },
+
+    async clearPrefix(prefix: string): Promise<void> {
+        try {
+            const db = await this.init();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(this.storeName, 'readwrite');
+                const store = tx.objectStore(this.storeName);
+                
+                // Clear any pending debounced writes for matching keys
+                for (const key of _debounceTimers.keys()) {
+                    if (key.startsWith(prefix)) {
+                        const timer = _debounceTimers.get(key);
+                        if (timer) clearTimeout(timer);
+                        _debounceTimers.delete(key);
+                    }
+                }
+
+                // Use key cursor to find and delete keys with prefix
+                const req = store.openKeyCursor();
+                req.onsuccess = (e: any) => {
+                    const cursor = e.target.result;
+                    if (cursor) {
+                        const key = cursor.key;
+                        if (typeof key === 'string' && key.startsWith(prefix)) {
+                            store.delete(key);
+                        }
+                        cursor.continue();
+                    } else {
+                        resolve();
+                    }
+                };
+                req.onerror = () => reject(req.error);
+            });
+        } catch (e) {
+            console.error('IDB Clear Prefix Error', e);
+        }
     }
 };

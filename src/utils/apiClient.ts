@@ -136,6 +136,10 @@ export function getDefaultTranslationPrompt(sourceLang: string, targetLang: stri
     - For Japanese proper nouns (names, places), use standard Romaji transliteration (e.g. 田中 → Tanaka, 桜 → Sakura). Do NOT apply Hán Việt to Japanese names.
     - WESTERN/FANTASY NAMES EXCEPTION: For non-Chinese names (Western, European, Fantasy, Sci-fi) phonetically transcribed into Chinese characters (e.g., 维拉→Vera, 塞勒涅→Selene, 亚瑟→Arthur, 艾琳→Irene), restore them to their original Latin spelling. NEVER apply Hán Việt to these phonetic transcriptions (e.g., NEVER output "Vi Lạp", "Tắc Lặc Niết"). Hán Việt applies EXCLUSIVELY to native Chinese names.
     - Use natural roleplay pronouns (e.g., tôi/bạn, anh/em, hắn/nàng/y) suitable for the context, avoiding rigid direct translation of pronouns (like 'ngươi/ta' unless it's a historical setting).
+    - Ensure correct Vietnamese word order and grammar for placeholders/macros like {{user}} or {{char}}. For possessive/object constructs (e.g., A's B / A的B), translate as "B của A" (e.g., "B của {{user}}") instead of placing {{user}} at the beginning/end or displacing it.
+      * Example: "{{user}}的茶会肉便器" ➔ "tiệc trà đồ nội thất bằng thịt của {{user}}" (NOT: "{{user}}Đồ nội thất bằng thịt của tiệc trà").
+      * Example: "承受{{user}}的侵犯" ➔ "chịu đựng sự xâm phạm của {{user}}" (NOT: "chịu đựng sự xâm phạm của - ... {{user}}").
+      * Example: "夹紧{{user}}肉棒的双腿" ➔ "đôi chân đang kẹp chặt gậy thịt của {{user}}" (NOT: "đôi chân đang kẹp chặt - ... {{user}}").
     - Ensure a smooth, natural literary flow (văn phong mượt mà) suitable for fiction/roleplay. Avoid word-by-word literal translation.`
     : '';
 
@@ -752,11 +756,11 @@ function findSafeBoundary(text: string, targetPos: number, minPos: number): numb
 }
 
 export function chunkText(text: string, maxChars?: number, _maxTokens?: number): string[] {
-  // Default 40K per chunk for ALL models.
+  // Default 100K per chunk for ALL models.
   // Chunk quá lớn (100K+) sẽ khiến AI chạm giới hạn max output tokens → mất đuôi.
-  // 40K chars ≈ 12K tokens (mixed content) — an toàn cho mọi model kể cả code-heavy.
+  // 100K chars ≈ 30K tokens — phù hợp và an toàn cho mọi model hiện đại.
   if (maxChars === undefined) {
-    maxChars = 40000;
+    maxChars = 100000;
   }
 
   // ═══ HARD CAP: 500K chars per chunk ═══
@@ -2277,6 +2281,62 @@ export function getDefaultProxyUrl(provider: AIProvider): string {
     default:
       return 'http://localhost:8080/v1';
   }
+}
+
+/* ─── Fetch models from proxy ─── */
+export async function fetchModelsFromProxy(config: ProxySettings): Promise<string[]> {
+  let rawUrl = config.proxyUrl.replace(/\/+$/, '') + '/models';
+  
+  if (config.provider === 'google') {
+    rawUrl = `${config.proxyUrl.replace(/\/+$/, '')}/models?key=${config.apiKey}`;
+  }
+  
+  const url = corsProxyUrl(rawUrl, config.useCorsProxy);
+  const headers: Record<string, string> = {
+    'Accept': 'application/json',
+  };
+  
+  if (config.apiKey && config.provider !== 'google') {
+    headers['Authorization'] = `Bearer ${config.apiKey}`;
+    if (config.provider === 'anthropic') {
+      headers['x-api-key'] = config.apiKey;
+      headers['anthropic-version'] = '2023-06-01';
+    }
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'GET',
+      headers,
+    });
+  } catch (err) {
+    throw wrapCorsError(err, rawUrl, config.useCorsProxy);
+  }
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    if (res.status === 401) throw new ApiError('Invalid API key', 401);
+    throw new ApiError(`HTTP ${res.status}: ${errText || res.statusText}`, res.status);
+  }
+
+  const data = await res.json();
+  
+  let models: string[] = [];
+  if (data && Array.isArray(data.data)) {
+    models = data.data.map((m: any) => m.id).filter((id: any) => typeof id === 'string');
+  } else if (data && Array.isArray(data.models)) {
+    models = data.models.map((m: any) => {
+      const name = m.name || '';
+      return name.startsWith('models/') ? name.substring(7) : name;
+    }).filter(Boolean);
+  } else if (data && Array.isArray(data)) {
+    models = data.map((m: any) => typeof m === 'string' ? m : m.id || m.name).filter(Boolean);
+  } else {
+    throw new Error('Unsupported response format from /models. Expected data array.');
+  }
+
+  return models;
 }
 
 /* ─── Generate new lorebook entries via AI ─── */

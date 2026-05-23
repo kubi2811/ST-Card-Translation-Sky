@@ -1,10 +1,15 @@
-import { useState, useMemo, useRef, useCallback } from 'react';
+import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { useStore } from '../store';
 import { useTranslation } from '../hooks/useTranslation';
 import { useT } from '../i18n/useLocale';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import type { FieldGroup } from '../types/card';
-import { RotateCcw, AlertTriangle, CheckCircle2, Clock, ArrowLeftRight, BarChart3, Ban, Search, X, Copy, Check, Eye, Wand2 } from 'lucide-react';
+import type { FieldGroup, TranslationStatus } from '../types/card';
+import { RotateCcw, AlertTriangle, CheckCircle2, Clock, ArrowLeftRight, BarChart3, Ban, Search, X, Copy, Check, Eye, Wand2, Zap } from 'lucide-react';
+
+const getFieldBaseKey = (path: string) => {
+  const lastPart = path.split('.').pop() || '';
+  return lastPart.replace(/\[\d+\]$/, '');
+};
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -446,7 +451,58 @@ function VirtualTableView({
   t: Record<string, string>;
   modEnabled: boolean;
 }) {
+  const { setFields, fields: allFields, addToast, locale } = useStore();
   const parentRef = useRef<HTMLDivElement>(null);
+  const headerCheckboxRef = useRef<HTMLInputElement>(null);
+
+  const activeFields = useMemo(() => fields.filter(f => f.status !== 'translating'), [fields]);
+  const allChecked = useMemo(() => {
+    if (activeFields.length === 0) return false;
+    return activeFields.every(f => f.status !== 'ignored');
+  }, [activeFields]);
+
+  const someChecked = useMemo(() => {
+    return activeFields.some(f => f.status !== 'ignored');
+  }, [activeFields]);
+
+  const isIndeterminate = someChecked && !allChecked;
+
+  useEffect(() => {
+    if (headerCheckboxRef.current) {
+      headerCheckboxRef.current.indeterminate = isIndeterminate;
+    }
+  }, [isIndeterminate]);
+
+  const handleHeaderCheckboxChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const checked = e.target.checked;
+    const targetPaths = new Set(activeFields.map(f => f.path));
+    const nextFields = allFields.map(f => {
+      if (targetPaths.has(f.path)) {
+        if (checked) {
+          if (f.status === 'ignored') {
+            const nextStatus: TranslationStatus = f.translated?.trim() ? 'done' : 'pending';
+            return { ...f, status: nextStatus };
+          }
+        } else {
+          if (f.status !== 'ignored') {
+            const nextStatus: TranslationStatus = 'ignored';
+            return { ...f, status: nextStatus };
+          }
+        }
+      }
+      return f;
+    });
+    setFields(nextFields);
+  };
+
+  const handleRowCheckboxChange = (field: any, checked: boolean) => {
+    if (checked) {
+      const nextStatus = field.translated?.trim() ? 'done' : 'pending';
+      updateField(field.path, { status: nextStatus });
+    } else {
+      updateField(field.path, { status: 'ignored' });
+    }
+  };
 
   const virtualizer = useVirtualizer({
     count: fields.length,
@@ -468,7 +524,20 @@ function VirtualTableView({
       <table className="field-table" style={{ tableLayout: 'fixed', width: '100%' }}>
         <thead>
           <tr>
-            <th style={{ width: '180px' }}>{t.field}</th>
+            <th style={{ width: '180px' }}>
+              <label className="checkbox-wrapper" style={{ display: 'inline-flex', cursor: phase === 'translating' ? 'not-allowed' : 'pointer' }}>
+                <input
+                  type="checkbox"
+                  ref={headerCheckboxRef}
+                  checked={allChecked}
+                  onChange={handleHeaderCheckboxChange}
+                  disabled={phase === 'translating' || activeFields.length === 0}
+                />
+                <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)' }}>
+                  {t.field}
+                </span>
+              </label>
+            </th>
             <th style={{ width: '40%' }}>{t.original}</th>
             <th>{modEnabled ? t.modResult : t.translated}</th>
             <th style={{ width: '100px', textAlign: 'center' }}>{t.actions}</th>
@@ -501,10 +570,71 @@ function VirtualTableView({
             >
               <table className="field-table" style={{ tableLayout: 'fixed', width: '100%' }}>
                 <tbody>
-                  <tr className={field.status === 'error' ? 'field-error' : ''}>
+                  <tr
+                    className={field.status === 'error' ? 'field-error' : ''}
+                    style={{
+                      opacity: field.status === 'ignored' ? 0.5 : 1,
+                      transition: 'opacity 0.2s ease',
+                    }}
+                  >
                     {/* Field name */}
                     <td style={{ width: '180px' }}>
-                      <div className="field-name">{field.label}</div>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', marginTop: '2px', flexShrink: 0 }}>
+                          <label className="checkbox-wrapper" style={{ cursor: phase === 'translating' ? 'not-allowed' : 'pointer' }}>
+                            <input
+                              type="checkbox"
+                              checked={field.status !== 'ignored'}
+                              onChange={(e) => handleRowCheckboxChange(field, e.target.checked)}
+                              disabled={phase === 'translating'}
+                            />
+                          </label>
+                          {(() => {
+                            const baseKey = getFieldBaseKey(field.path);
+                            const matchingFields = allFields.filter(f => getFieldBaseKey(f.path) === baseKey && f.path !== field.path);
+                            if (matchingFields.length === 0) return null;
+                            return (
+                              <button
+                                className="btn btn-ghost tooltip"
+                                data-tooltip={locale === 'vi' ? `Áp dụng trạng thái chọn cho tất cả ${baseKey}` : `Apply selection to all ${baseKey}`}
+                                onClick={() => {
+                                  const targetStatus = field.status;
+                                  const nextFields = allFields.map(f => {
+                                    if (getFieldBaseKey(f.path) === baseKey) {
+                                      if (targetStatus === 'ignored') {
+                                        return { ...f, status: 'ignored' as const };
+                                      } else {
+                                        const activeStatus = f.translated?.trim() ? 'done' as const : 'pending' as const;
+                                        return { ...f, status: activeStatus };
+                                      }
+                                    }
+                                    return f;
+                                  });
+                                  setFields(nextFields);
+                                  addToast('success', locale === 'vi' 
+                                    ? `Đã áp dụng chọn cho tất cả các trường ${baseKey}` 
+                                    : `Applied selection to all ${baseKey} fields`
+                                  );
+                                }}
+                                disabled={phase === 'translating'}
+                                style={{ padding: '2px', height: '18px', width: '18px', minHeight: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-primary)', opacity: 0.8 }}
+                                title={locale === 'vi' ? `Áp dụng trạng thái chọn cho tất cả ${baseKey}` : `Apply selection to all ${baseKey}`}
+                              >
+                                <Zap size={10} />
+                              </button>
+                            );
+                          })()}
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div
+                            className="field-name"
+                            style={{
+                              textDecoration: field.status === 'ignored' ? 'line-through' : 'none',
+                              color: field.status === 'ignored' ? 'var(--text-muted)' : 'var(--accent-secondary)',
+                            }}
+                          >
+                            {field.label}
+                          </div>
                       <div style={{ marginTop: '4px', display: 'flex', flexWrap: 'wrap', gap: '3px', alignItems: 'center' }}>
                         {field.entryType === 'json_patch' && (
                           <span style={{ fontSize: '0.55rem', padding: '1px 4px', background: 'rgba(236,72,153,0.1)', color: '#f472b6', borderRadius: '3px', fontWeight: 600 }}>PATCH</span>
@@ -549,6 +679,8 @@ function VirtualTableView({
                           </span>
                         </div>
                       )}
+                        </div>
+                      </div>
                     </td>
 
                     {/* Original */}
@@ -567,7 +699,14 @@ function VirtualTableView({
                     <td className="field-translated">
                       <textarea
                         value={field.translated}
-                        onChange={(e) => updateField(field.path, { translated: e.target.value })}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          updateField(field.path, {
+                            translated: val,
+                            status: val.trim() ? 'done' : 'pending',
+                            error: undefined
+                          });
+                        }}
                         placeholder={field.status === 'pending' ? 'Not translated yet' : ''}
                         rows={Math.min(Math.max(field.original.split('\n').length, 2), 8)}
                       />
@@ -652,7 +791,58 @@ function VirtualDiffView({
   t: Record<string, string>;
   modEnabled: boolean;
 }) {
+  const { setFields, fields: allFields, addToast, locale } = useStore();
   const parentRef = useRef<HTMLDivElement>(null);
+  const headerCheckboxRef = useRef<HTMLInputElement>(null);
+
+  const activeFields = useMemo(() => fields.filter(f => f.status !== 'translating'), [fields]);
+  const allChecked = useMemo(() => {
+    if (activeFields.length === 0) return false;
+    return activeFields.every(f => f.status !== 'ignored');
+  }, [activeFields]);
+
+  const someChecked = useMemo(() => {
+    return activeFields.some(f => f.status !== 'ignored');
+  }, [activeFields]);
+
+  const isIndeterminate = someChecked && !allChecked;
+
+  useEffect(() => {
+    if (headerCheckboxRef.current) {
+      headerCheckboxRef.current.indeterminate = isIndeterminate;
+    }
+  }, [isIndeterminate]);
+
+  const handleHeaderCheckboxChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const checked = e.target.checked;
+    const targetPaths = new Set(activeFields.map(f => f.path));
+    const nextFields = allFields.map(f => {
+      if (targetPaths.has(f.path)) {
+        if (checked) {
+          if (f.status === 'ignored') {
+            const nextStatus: TranslationStatus = f.translated?.trim() ? 'done' : 'pending';
+            return { ...f, status: nextStatus };
+          }
+        } else {
+          if (f.status !== 'ignored') {
+            const nextStatus: TranslationStatus = 'ignored';
+            return { ...f, status: nextStatus };
+          }
+        }
+      }
+      return f;
+    });
+    setFields(nextFields);
+  };
+
+  const handleRowCheckboxChange = (field: any, checked: boolean) => {
+    if (checked) {
+      const nextStatus = field.translated?.trim() ? 'done' : 'pending';
+      updateField(field.path, { status: nextStatus });
+    } else {
+      updateField(field.path, { status: 'ignored' });
+    }
+  };
 
   const virtualizer = useVirtualizer({
     count: fields.length,
@@ -666,6 +856,29 @@ function VirtualDiffView({
       ref={parentRef}
       style={{ padding: '12px 20px', maxHeight: '700px', overflowY: 'auto' }}
     >
+      {/* Bulk selection header for Diff View */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
+        padding: '0 8px 12px 8px',
+        borderBottom: '1px solid var(--border-subtle)',
+        marginBottom: '12px',
+      }}>
+        <label className="checkbox-wrapper" style={{ display: 'inline-flex', cursor: phase === 'translating' ? 'not-allowed' : 'pointer' }}>
+          <input
+            type="checkbox"
+            ref={headerCheckboxRef}
+            checked={allChecked}
+            onChange={handleHeaderCheckboxChange}
+            disabled={phase === 'translating' || activeFields.length === 0}
+          />
+          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+            {allChecked ? 'Deselect All' : 'Select All'}
+          </span>
+        </label>
+      </div>
+
       <div
         style={{
           height: `${virtualizer.getTotalSize()}px`,
@@ -695,6 +908,8 @@ function VirtualDiffView({
                   background: 'var(--bg-primary)',
                   borderRadius: 'var(--radius-md)',
                   border: `1px solid ${field.status === 'error' ? 'var(--accent-danger)' : 'var(--border-subtle)'}`,
+                  opacity: field.status === 'ignored' ? 0.5 : 1,
+                  transition: 'opacity 0.2s ease',
                 }}
               >
                 <div style={{
@@ -702,7 +917,59 @@ function VirtualDiffView({
                   marginBottom: '8px',
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ fontWeight: 600, fontSize: '0.8rem' }}>{field.label}</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                      <label className="checkbox-wrapper" style={{ cursor: phase === 'translating' ? 'not-allowed' : 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={field.status !== 'ignored'}
+                          onChange={(e) => handleRowCheckboxChange(field, e.target.checked)}
+                          disabled={phase === 'translating'}
+                        />
+                      </label>
+                      {(() => {
+                        const baseKey = getFieldBaseKey(field.path);
+                        const matchingFields = allFields.filter(f => getFieldBaseKey(f.path) === baseKey && f.path !== field.path);
+                        if (matchingFields.length === 0) return null;
+                        return (
+                          <button
+                            className="btn btn-ghost tooltip"
+                            data-tooltip={locale === 'vi' ? `Áp dụng trạng thái chọn cho tất cả ${baseKey}` : `Apply selection to all ${baseKey}`}
+                            onClick={() => {
+                              const targetStatus = field.status;
+                              const nextFields = allFields.map(f => {
+                                if (getFieldBaseKey(f.path) === baseKey) {
+                                  if (targetStatus === 'ignored') {
+                                    return { ...f, status: 'ignored' as const };
+                                  } else {
+                                    const activeStatus = f.translated?.trim() ? 'done' as const : 'pending' as const;
+                                    return { ...f, status: activeStatus };
+                                  }
+                                }
+                                return f;
+                              });
+                              setFields(nextFields);
+                              addToast('success', locale === 'vi' 
+                                ? `Đã áp dụng chọn cho tất cả các trường ${baseKey}` 
+                                : `Applied selection to all ${baseKey} fields`
+                              );
+                            }}
+                            disabled={phase === 'translating'}
+                            style={{ padding: '2px', height: '18px', width: '18px', minHeight: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-primary)', opacity: 0.8 }}
+                            title={locale === 'vi' ? `Áp dụng trạng thái chọn cho tất cả ${baseKey}` : `Apply selection to all ${baseKey}`}
+                          >
+                            <Zap size={10} />
+                          </button>
+                        );
+                      })()}
+                    </div>
+                    <span style={{
+                      fontWeight: 600,
+                      fontSize: '0.8rem',
+                      textDecoration: field.status === 'ignored' ? 'line-through' : 'none',
+                      color: field.status === 'ignored' ? 'var(--text-muted)' : 'var(--text-primary)',
+                    }}>
+                      {field.label}
+                    </span>
                     {field.entryType === 'json_patch' && (
                       <span style={{ fontSize: '0.55rem', padding: '1px 4px', background: 'rgba(236,72,153,0.1)', color: '#f472b6', borderRadius: '3px', fontWeight: 600 }}>PATCH</span>
                     )}

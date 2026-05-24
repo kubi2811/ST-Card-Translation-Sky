@@ -421,6 +421,40 @@ export function extractZodDescriptions(schemaText: string): Record<string, strin
   return result;
 }
 
+/**
+ * Robustly extract schema context (TavernHelper scripts) from a card.
+ * Handles different TavernHelper formats (V2 object, V1 tuples, Legacy).
+ */
+export function extractSchemaContextFromCard(card: CharacterCard | null | undefined): string {
+  if (!card?.data?.extensions) return '';
+  const data = card.data;
+  
+  const thScripts: { content?: string; script?: string; code?: string }[] = [];
+  
+  // 1. Current tavern_helper
+  const tavernHelperRaw = data.extensions?.tavern_helper as any;
+  if (Array.isArray(tavernHelperRaw)) {
+    // Tuple format: [ ["scripts", [{content:...}, ...]] ]
+    for (const item of tavernHelperRaw) {
+      if (Array.isArray(item) && item[0] === 'scripts' && Array.isArray(item[1])) {
+        thScripts.push(...item[1].filter((s: any) => s?.content || s?.script || s?.code));
+      } else if (item && typeof item === 'object' && !Array.isArray(item) && (item.content || item.script || item.code)) {
+        thScripts.push(item);
+      }
+    }
+  } else if (tavernHelperRaw?.scripts && Array.isArray(tavernHelperRaw.scripts)) {
+    thScripts.push(...tavernHelperRaw.scripts.filter((s: any) => s?.content || s?.script || s?.code));
+  }
+
+  // 2. Legacy TavernHelper_scripts
+  const tavernHelperLegacy = data.extensions?.TavernHelper_scripts as any;
+  if (Array.isArray(tavernHelperLegacy)) {
+    thScripts.push(...tavernHelperLegacy.filter((s: any) => s?.content || s?.script || s?.code));
+  }
+  
+  return thScripts.map(s => s.content || s.script || s.code || '').filter(Boolean).join('\n\n');
+}
+
 export function extractPotentialMvuKeys(card: CharacterCard): MvuKeyInfo[] {
   const keys = new Set<string>();
   // Track key sources for cross-validation

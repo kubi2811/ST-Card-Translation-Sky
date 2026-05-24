@@ -481,7 +481,29 @@ RULE C3.3 — BRACKET NOTATION FOR KEYS WITH SPACES (CRITICAL FOR VIETNAMESE/MUL
    ROOT CAUSE: Chinese keys like 系统, 角色 are single tokens without spaces,
    so obj.系统 works in JS. Vietnamese translations often have spaces ("Hệ Thống"),
    making obj.Hệ Thống a SYNTAX ERROR. ALWAYS use bracket notation for multi-word keys.
-   This applies to ALL JavaScript code: EJS blocks, TavernHelper scripts, and inline JS.`;
+    This applies to ALL JavaScript code: EJS blocks, TavernHelper scripts, and inline JS.
+
+RULE C3.4 — safeString HELPER (ZOD SCHEMA RESILIENCE):
+   When translating a TavernHelper script that defines a Zod schema (z.object({...})),
+   you MUST inject a safeString helper at the TOP of the script (BEFORE any z.object call),
+   then use safeString() in place of z.string() for ALL string-type fields:
+
+   const safeString = () => z.preprocess(
+     (val) => {
+       if (val === null || val === undefined) return '';
+       if (typeof val === 'string') return val;
+       if (typeof val === 'object') {
+         try { return JSON.stringify(val); } catch { return String(val); }
+       }
+       return String(val);
+     },
+     z.string()
+   );
+
+   THEN: z.object({ "Tên": safeString().prefault("...") }) instead of z.string().prefault("...")
+   WHY: MVU engine may feed truncated Objects to Zod. safeString() silently recovers them.
+   RULES: Inject ONCE at top. Use for ALL z.string() fields only. Preserve .prefault()/.describe() chains.
+   If the script already has safeString or a similar preprocess wrapper, do NOT duplicate it.`;
 }
 
 /* ════════════════════════════════════════════════════════════════════

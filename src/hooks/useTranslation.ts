@@ -2,7 +2,7 @@ import { useCallback, useRef } from 'react';
 import { useStore } from '../store';
 import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookEntries, ChunkError } from '../utils/apiClient';
 import { extractTranslatableFields, applyTranslationsToCard, autoTranslateLorebookTriggerKeys, injectNewLorebookEntries } from '../utils/cardFields';
-import { syncMvuVariables, postProcessRegexHtml, extractPotentialMvuKeyStrings, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions } from '../utils/mvuSync';
+import { syncMvuVariables, postProcessRegexHtml, extractPotentialMvuKeyStrings, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard } from '../utils/mvuSync';
 import { shouldSkipTranslation, detectLanguage } from '../utils/langDetect';
 import { clearRAGCache } from '../utils/ragContext';
 import { getMvuCardSummary } from '../utils/mvuDetector';
@@ -855,8 +855,8 @@ export function useTranslation() {
                 if (allTranslatedSchemas.trim()) {
                   schemaContext = allTranslatedSchemas;
                   store.addLog('info', '📋 Used translated TavernHelper scripts as context for variable translation');
-                } else if (store.card?.data?.extensions?.tavern_helper?.scripts) {
-                  schemaContext = store.card.data.extensions.tavern_helper.scripts.map(s => s.content).join('\n\n');
+                } else {
+                  schemaContext = extractSchemaContextFromCard(store.card);
                 }
               }
 

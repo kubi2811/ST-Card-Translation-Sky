@@ -1,4 +1,5 @@
 import type { CharacterCard, ProxySettings, TranslationField } from '../types/card';
+import { detectStructuralTruncation } from './apiClient';
 
 /* ═══ Types ═══ */
 
@@ -276,7 +277,7 @@ export function quickVerify(
 
 export interface FieldIssue extends VerifyIssue {
   fieldPath: string;
-  category: 'residual_source' | 'html_broken' | 'bracket_mismatch' | 'macro_damaged' | 'json_broken' | 'mvu_inconsistent' | 'length_anomaly' | 'empty_translation' | 'regex_broken' | 'code_splice';
+  category: 'residual_source' | 'html_broken' | 'bracket_mismatch' | 'macro_damaged' | 'json_broken' | 'mvu_inconsistent' | 'length_anomaly' | 'empty_translation' | 'regex_broken' | 'code_splice' | 'structural_truncation';
 }
 
 /** Count CJK characters in text */
@@ -801,12 +802,17 @@ export function verifyFields(
     // ─── 6. Length anomaly ───
     if (orig.length > 20) {
       const ratio = trans.length / orig.length;
-      if (ratio < 0.15) {
+      const isCodeHeavy = field.group === 'regex' || field.group === 'tavern_helper' || field.path.toLowerCase().includes('regex') || field.path.toLowerCase().includes('code') || field.path.toLowerCase().includes('script') || field.path.toLowerCase().includes('helper');
+      const minRatio = isCodeHeavy ? 0.8 : 0.15;
+      
+      if (ratio < minRatio) {
         issues.push({
           id: crypto.randomUUID(), fieldPath: field.path,
           severity: 'error', category: 'length_anomaly',
           location: field.label,
-          description: `Translation is suspiciously short: ${trans.length} chars vs ${orig.length} original (${Math.round(ratio * 100)}%).`,
+          description: isCodeHeavy
+            ? `Code/Regex translation is suspiciously short: ${trans.length} chars vs ${orig.length} original (${Math.round(ratio * 100)}%). Expected at least 80% length preservation.`
+            : `Translation is suspiciously short: ${trans.length} chars vs ${orig.length} original (${Math.round(ratio * 100)}%).`,
           original: `${orig.length} chars`,
           current: `${trans.length} chars (${Math.round(ratio * 100)}%)`,
           suggestion: 'Translation may be truncated or incomplete. Consider re-translating.',
@@ -823,6 +829,23 @@ export function verifyFields(
           suggestion: 'Translation may contain duplicate content or excessive explanations.',
           autoFixable: false,
         });
+      }
+
+      // Structural truncation check for code-heavy fields
+      if (isCodeHeavy) {
+        const structuralCheck = detectStructuralTruncation(orig, trans);
+        if (structuralCheck.isTruncated) {
+          issues.push({
+            id: crypto.randomUUID(), fieldPath: field.path,
+            severity: 'error', category: 'structural_truncation',
+            location: field.label,
+            description: `Translation has structural truncation: ${structuralCheck.reason}`,
+            original: orig.slice(-100),
+            current: trans.slice(-100),
+            suggestion: 'Translation is missing closing tags/brackets or ends mid-word. Re-translate this field.',
+            autoFixable: false,
+          });
+        }
       }
     }
 

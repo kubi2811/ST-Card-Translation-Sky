@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useStore } from '../store';
 import { useT } from '../i18n/useLocale';
-import { extractPotentialMvuKeys, aiTranslateMvuKeys, extractZodDescriptions, type MvuKeyInfo } from '../utils/mvuSync';
+import { extractPotentialMvuKeys, aiTranslateMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, type MvuKeyInfo } from '../utils/mvuSync';
 import { isMvuCard, getMvuZodSummary } from '../utils/mvuDetector';
 import { Settings, Plus, Trash2, Wand2, Info, Loader2, Bot, Search, Download, Upload, BarChart3, Zap, AlertTriangle } from 'lucide-react';
 
@@ -95,21 +95,8 @@ export default function MvuSyncPanel() {
     setIsAutoTranslating(true);
     try {
       let schemaContext = translationConfig.customSchema || '';
-      if (!schemaContext.trim() && card?.data?.extensions?.tavern_helper) {
-        const th = card.data.extensions.tavern_helper as any;
-        let scripts: any[] = [];
-        if (Array.isArray(th)) {
-          for (const item of th) {
-            if (Array.isArray(item) && item[0] === 'scripts' && Array.isArray(item[1])) {
-              scripts.push(...item[1]);
-            } else if (item && typeof item === 'object' && !Array.isArray(item) && item.content) {
-              scripts.push(item);
-            }
-          }
-        } else if (th?.scripts && Array.isArray(th.scripts)) {
-          scripts = th.scripts;
-        }
-        schemaContext = scripts.map((s: any) => s.content || '').join('\n\n');
+      if (!schemaContext.trim()) {
+        schemaContext = extractSchemaContextFromCard(card);
       }
 
       // Extract Zod descriptions for richer context

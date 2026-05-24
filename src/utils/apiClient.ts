@@ -1607,6 +1607,210 @@ function calculateOverlap(a: string, b: string): number {
   return overlap / Math.max(aWords.size, 1);
 }
 
+export interface StructuralCheckResult {
+  isTruncated: boolean;
+  reason: string;
+}
+
+export function isStructuralChar(char: string): boolean {
+  return /[\{\}\[\]\(\):,;'"\`<>\/]/.test(char);
+}
+
+export function getStructure(str: string): string {
+  let struct = '';
+  for (let i = 0; i < str.length; i++) {
+    const char = str[i];
+    if (isStructuralChar(char)) {
+      struct += char;
+    }
+  }
+  return struct;
+}
+
+function getLcpLength(a: string, b: string): number {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) {
+    i++;
+  }
+  return i;
+}
+
+export function recoverTruncatedTail(original: string, translation: string): string {
+  const origStruct = getStructure(original);
+  const transStruct = getStructure(translation);
+  const lcpLength = getLcpLength(transStruct, origStruct);
+  
+  let structCount = 0;
+  let splitIdx = 0;
+  
+  if (lcpLength > 0) {
+    for (let i = 0; i < original.length; i++) {
+      const char = original[i];
+      if (isStructuralChar(char)) {
+        structCount++;
+        if (structCount === lcpLength) {
+          splitIdx = i + 1;
+          break;
+        }
+      }
+    }
+  } else {
+    splitIdx = Math.min(original.length, translation.length);
+  }
+
+  const tail = original.slice(splitIdx);
+  
+  // Adjust quote seam
+  const trimmedTrans = translation.trimEnd();
+  const trimmedTail = tail.trimStart();
+  
+  if (trimmedTrans && trimmedTail) {
+    const lastChar = trimmedTrans.slice(-1);
+    const firstChar = trimmedTail.slice(0, 1);
+    if ((lastChar === "'" || lastChar === '"' || lastChar === '`') && firstChar === lastChar) {
+      return translation + tail.slice(tail.indexOf(firstChar) + 1);
+    }
+  }
+  
+  return translation + tail;
+}
+
+export function detectStructuralTruncation(original: string, translation: string): StructuralCheckResult {
+  if (!original || !translation) {
+    return { isTruncated: false, reason: '' };
+  }
+
+  const trimmedTrans = translation.trim();
+  const trimmedOrig = original.trim();
+  if (trimmedTrans.endsWith('...') && !trimmedOrig.endsWith('...')) {
+    return { isTruncated: true, reason: 'Ends with literal ellipsis "..."' };
+  }
+
+  // Bracket Balance Checks (paren, bracket, brace)
+  const getBracketBalances = (str: string) => {
+    let paren = 0;
+    let bracket = 0;
+    let brace = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str[i];
+      if (i > 0 && str[i - 1] === '\\') continue;
+      if (char === '(') paren++;
+      else if (char === ')') paren--;
+      else if (char === '[') bracket++;
+      else if (char === ']') bracket--;
+      else if (char === '{') brace++;
+      else if (char === '}') brace--;
+    }
+    return { paren, bracket, brace };
+  };
+
+  const origBrackets = getBracketBalances(original);
+  const transBrackets = getBracketBalances(translation);
+
+  if (transBrackets.paren > Math.max(0, origBrackets.paren)) {
+    return { isTruncated: true, reason: `Unbalanced parentheses (excess open: ${transBrackets.paren} vs original: ${origBrackets.paren})` };
+  }
+  if (transBrackets.bracket > Math.max(0, origBrackets.bracket)) {
+    return { isTruncated: true, reason: `Unbalanced square brackets (excess open: ${transBrackets.bracket} vs original: ${origBrackets.bracket})` };
+  }
+  if (transBrackets.brace > Math.max(0, origBrackets.brace)) {
+    return { isTruncated: true, reason: `Unbalanced curly braces (excess open: ${transBrackets.brace} vs original: ${origBrackets.brace})` };
+  }
+
+  // String Quote Balance Checks
+  const getQuoteCounts = (str: string) => {
+    let single = 0;
+    let double = 0;
+    let backtick = 0;
+    let escaped = false;
+    for (let i = 0; i < str.length; i++) {
+      const char = str[i];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === '\\') {
+        escaped = true;
+      } else if (char === "'") {
+        single++;
+      } else if (char === '"') {
+        double++;
+      } else if (char === '`') {
+        backtick++;
+      }
+    }
+    return { single, double, backtick };
+  };
+
+  const origQuotes = getQuoteCounts(original);
+  const transQuotes = getQuoteCounts(translation);
+
+  if (origQuotes.single % 2 === 0 && transQuotes.single % 2 !== 0) {
+    return { isTruncated: true, reason: 'Odd number of single quotes (unclosed string)' };
+  }
+  if (origQuotes.double % 2 === 0 && transQuotes.double % 2 !== 0) {
+    return { isTruncated: true, reason: 'Odd number of double quotes (unclosed string)' };
+  }
+  if (origQuotes.backtick % 2 === 0 && transQuotes.backtick % 2 !== 0) {
+    return { isTruncated: true, reason: 'Odd number of backticks (unclosed template literal)' };
+  }
+
+  // HTML tag balance checks
+  const getHtmlTagBalances = (str: string) => {
+    const counts: { [tag: string]: number } = {};
+    const tagRegex = /<\/?([a-zA-Z1-6]+)(?:\s+[^>]*)*>/g;
+    let match;
+    const selfClosing = ['br', 'img', 'hr', 'input', 'link', 'meta', 'col', 'embed', 'source', 'track', 'wbr'];
+    
+    while ((match = tagRegex.exec(str)) !== null) {
+      const fullTag = match[0];
+      const isClose = fullTag.startsWith('</');
+      const tagName = match[1].toLowerCase();
+      
+      if (selfClosing.includes(tagName) || fullTag.endsWith('/>')) {
+        continue;
+      }
+      
+      if (!counts[tagName]) counts[tagName] = 0;
+      if (isClose) {
+        counts[tagName]--;
+      } else {
+        counts[tagName]++;
+      }
+    }
+    return counts;
+  };
+
+  const origTags = getHtmlTagBalances(original);
+  const transTags = getHtmlTagBalances(translation);
+
+  for (const tag in transTags) {
+    const origVal = origTags[tag] || 0;
+    const transVal = transTags[tag] || 0;
+    if (transVal > Math.max(0, origVal)) {
+      return { isTruncated: true, reason: `Unclosed HTML tag <${tag}> (excess open: ${transVal} vs original: ${origVal})` };
+    }
+  }
+
+  // Sudden ending checks
+  if (original.length > 50) {
+    const lastCharOrig = trimmedOrig.slice(-1);
+    const lastCharTrans = trimmedTrans.slice(-1);
+    const isPunctuation = (c: string) => /[;\}\]\)>\.\?\!"'`\n]/.test(c);
+    
+    if (isPunctuation(lastCharOrig) && !isPunctuation(lastCharTrans)) {
+      if (/[,:\[\(\{]/.test(lastCharTrans)) {
+        return { isTruncated: true, reason: `Ends abruptly with invalid trailing character "${lastCharTrans}"` };
+      }
+      if (/[\}\]\)>'"`]/.test(lastCharOrig) && /\w/.test(lastCharTrans)) {
+        return { isTruncated: true, reason: `Ends with word character "${lastCharTrans}" but original ends with closing structural character "${lastCharOrig}"` };
+      }
+    }
+  }
+
+  return { isTruncated: false, reason: '' };
+}
+
 /* ─── Translate a single chunk with retry + truncation detection ─── */
 async function translateChunk(
   chunk: string,
@@ -1660,15 +1864,22 @@ async function translateChunk(
       // Nếu AI trả về < input → gần chắc chắn bị cắt do max output tokens.
       // Code-heavy content (như Regex, Custom Code) thường có tỷ lệ 1:1 do code giữ nguyên. User yêu cầu bắt buộc >= 100%.
       const isCodeHeavy = fieldName.toLowerCase().includes('regex') || fieldName.toLowerCase().includes('code') || fieldName.toLowerCase().includes('script') || fieldName.toLowerCase().includes('helper');
-      const CONT_THRESHOLD = isCodeHeavy ? 1.0 : 0.7;
+      const CONT_THRESHOLD = isCodeHeavy ? 0.85 : 0.7;
       const MAX_CONT_ROUNDS = 5;
 
       if (chunk.length > 500 && result.length > 0) {
         for (let contRound = 0; contRound < MAX_CONT_ROUNDS; contRound++) {
           const responseRatio = result.length / chunk.length;
-          if (responseRatio >= CONT_THRESHOLD) break;
+          
+          if (responseRatio >= CONT_THRESHOLD) {
+            const structuralCheck = detectStructuralTruncation(chunk, result);
+            if (!structuralCheck.isTruncated) {
+              break;
+            }
+            console.log(`[translateChunk] Structural truncation detected in ${fieldName} chunk ${chunkIdx + 1}/${totalChunks} despite ratio ${(responseRatio * 100).toFixed(0)}%: ${structuralCheck.reason}`);
+          }
 
-          console.log(`[translateChunk] ${fieldName} chunk ${chunkIdx + 1}/${totalChunks}: response ${(responseRatio * 100).toFixed(0)}% < ${(CONT_THRESHOLD * 100).toFixed(0)}% → continuation round ${contRound + 1}/${MAX_CONT_ROUNDS}...`);
+          console.log(`[translateChunk] ${fieldName} chunk ${chunkIdx + 1}/${totalChunks}: response ${(responseRatio * 100).toFixed(0)}% < ${(CONT_THRESHOLD * 100).toFixed(0)}% (or structural issue) → continuation round ${contRound + 1}/${MAX_CONT_ROUNDS}...`);
 
           // Estimate where in the original text we need to pick up
           // Use the accumulated result length as a better coverage indicator
@@ -1906,6 +2117,7 @@ export async function translateText(
   const { maskedText, map: secretMap } = maskSecrets(text);
 
   const isExpert = config.expertMode;
+  const isCodeHeavy = fieldName.toLowerCase().includes('regex') || fieldName.toLowerCase().includes('code') || fieldName.toLowerCase().includes('script') || fieldName.toLowerCase().includes('helper');
   const chunks = chunkText(maskedText, chunkSize && chunkSize > 0 ? chunkSize : undefined, config.maxTokens);
 
   // ═══ SINGLE CHUNK — fast path (no parallelism needed) ═══
@@ -1921,6 +2133,14 @@ export async function translateText(
     );
     let cleaned = cleanTranslationResponse(maskedText, result, isExpert);
     cleaned = unmaskSecrets(cleaned, secretMap); // Unmask before residual check
+    
+    if (isCodeHeavy) {
+      const structuralTrunc = detectStructuralTruncation(maskedText, cleaned);
+      if (structuralTrunc.isTruncated) {
+        console.warn(`[translateText] Structural truncation detected in single chunk for ${fieldName}: ${structuralTrunc.reason}`);
+        cleaned = recoverTruncatedTail(maskedText, cleaned);
+      }
+    }
     
     // RESIDUAL CJK CHECK: auto-retry if Chinese text remains
     return postTranslationResidualCheck(
@@ -2022,11 +2242,18 @@ export async function translateText(
   // For HTML and Code/Regex content, join without separator to avoid injecting text nodes
   // that break code structure. For plain text, use \n\n as a fallback to maintain paragraph separation.
   const isHtmlContent = /<[a-z][^>]*>/i.test(maskedText) && /<\/[a-z]+>/i.test(maskedText);
-  const isCodeHeavy = fieldName.toLowerCase().includes('regex') || fieldName.toLowerCase().includes('code') || fieldName.toLowerCase().includes('script') || fieldName.toLowerCase().includes('helper');
   const joiner = (isHtmlContent || isCodeHeavy) ? '' : '\n\n';
   const rawResult = verifiedChunks.join(joiner);
   // Chunks already individually cleaned above — only unmask secrets here
   let cleaned = unmaskSecrets(rawResult, secretMap);
+  
+  if (isCodeHeavy) {
+    const structuralTrunc = detectStructuralTruncation(maskedText, cleaned);
+    if (structuralTrunc.isTruncated) {
+      console.warn(`[translateText] Structural truncation detected in final joined result for ${fieldName}: ${structuralTrunc.reason}`);
+      cleaned = recoverTruncatedTail(maskedText, cleaned);
+    }
+  }
   
   // RESIDUAL CJK CHECK: auto-retry if Chinese text remains
   return postTranslationResidualCheck(

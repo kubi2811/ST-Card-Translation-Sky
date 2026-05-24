@@ -55,7 +55,36 @@ ADDITIONAL RULES FOR JAVASCRIPT/TAVERNHELPER SCRIPT CONTENT:
 21. PROPER NOUN RULE: Chinese proper nouns → Hán Việt. Japanese proper nouns → Romaji (NOT Hán Việt). Western/Fantasy names phonetically transcribed into CJK (e.g., 维拉→Vera, 塞勒涅→Selene) → restore to original Latin spelling (NEVER Hán Việt).
 22. BRACKET NOTATION: If translated keys/variable names contain spaces (e.g., "Hệ Thống"), you MUST use bracket notation in JS: obj['Hệ Thống'] NOT obj.Hệ Thống. Use data['key']['subkey'] for nested access.
 23. HTML id SAFETY: HTML id attributes MUST be ASCII-only with no spaces. Use camelCase: id="tab-NhaO" NOT id="tab-Nhà Ở". Put readable text in visible content only. Same ASCII id in data-target and CSS selectors.
-24. lodash _.get() SAFETY: Do NOT use _.get(obj, 'key with spaces.subkey') — use bracket notation or array path: _.get(obj, ['Key With Spaces', 'SubKey']).`;
+24. lodash _.get() SAFETY: Do NOT use _.get(obj, 'key with spaces.subkey') — use bracket notation or array path: _.get(obj, ['Key With Spaces', 'SubKey']).
+25. safeString HELPER — INJECT ONCE AT TOP OF SCHEMA SCRIPT:
+    If the script defines a Zod schema (z.object({...})), you MUST inject the following helper function at the TOP of the script (BEFORE any z.object call), then use safeString() in place of z.string() for ALL string-type fields in the schema:
+
+    \`\`\`
+    const safeString = () => z.preprocess(
+      (val) => {
+        if (val === null || val === undefined) return '';
+        if (typeof val === 'string') return val;
+        if (typeof val === 'object') {
+          try { return JSON.stringify(val); } catch { return String(val); }
+        }
+        return String(val);
+      },
+      z.string()
+    );
+    \`\`\`
+
+    THEN replace every z.string() field with safeString():
+      BEFORE: z.object({ "Tên": z.string().prefault("..."), ... })
+      AFTER:  z.object({ "Tên": safeString().prefault("..."), ... })
+
+    WHY: SillyTavern's MVU engine sometimes feeds truncated Objects instead of Strings to Zod validation when the AI output is cut mid-sentence. Without this wrapper, Zod throws a type error and the entire state update fails silently. safeString() uses z.preprocess() to silently recover these broken Objects back into valid strings.
+    RULES:
+    - Inject safeString EXACTLY ONCE at the top, BEFORE any schema definition.
+    - Use safeString() for ALL z.string() fields in z.object schemas.
+    - Do NOT use safeString() for z.number(), z.boolean(), z.enum(), or z.array() — only z.string().
+    - Preserve .prefault(), .default(), .describe(), .optional() chains: safeString().prefault("X").describe("Y") is valid.
+    - If the script already has a safeString or similar preprocess wrapper, do NOT duplicate it.`;
+
 
 /** Prompt bổ sung cho [initvar] entries (YAML variable initialization) */
 export const INITVAR_EXTRA_PROMPT = `

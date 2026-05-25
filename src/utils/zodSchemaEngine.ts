@@ -89,7 +89,7 @@ export function extractZodSchemas(card: CharacterCard): DetectedZodSchema[] {
 /**
  * Extract z.object({...}) source blocks using balanced brace matching.
  */
-function extractZodObjectBlocks(source: string): string[] {
+export function extractZodObjectBlocks(source: string): string[] {
   const blocks: string[] = [];
   const regex = /(?:z|Zod)\.object\s*\(/g;
   let match: RegExpExecArray | null;

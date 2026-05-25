@@ -852,6 +852,15 @@ These lines control EJS execution flow. Translating or modifying them will BREAK
 If a decorator contains CJK in its parameters (e.g., [GENERATE:REGEX:中文keyword]), translate ONLY the CJK parameter using the keyword dictionary above, NOT the decorator syntax itself.`;
   }
 
+  block += `\n\nEJS OBJECT LITERAL KEY QUOTING (CRITICAL SAFETY FOR VIETNAMESE):
+When translating EJS code blocks, templates, or narrative openers containing EJS, if there is an object literal being constructed or passed to functions (such as passing an object to setvar('key', { ... })), any key that contains spaces, special characters, or Vietnamese diacritics (e.g., 'Loại', 'Mô Tả') MUST be enclosed in single quotes '' (e.g., 'Loại': 'Võ công', 'Mô Tả': '...').
+Without quotes, the EJS compiler will throw an immediate syntax error due to the special characters and spaces in the key names.
+
+EXAMPLE (Before):
+  setvar('skill_path', { Loại: 'Võ công', Mô Tả: '...' });
+EXAMPLE (After - CORRECT):
+  setvar('skill_path', { 'Loại': 'Võ công', 'Mô Tả': '...' });`;
+
   return block;
 }
 

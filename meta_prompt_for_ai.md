@@ -326,6 +326,22 @@ machine language. These two goals must coexist in every single output.
     If '好感度' was translated to 'Hảo_cảm' in JSON:
     ✓ CORRECT: "<% if (getvar('Hảo_cảm') >= 80) { %> {{char}} mỉm cười."
 
+  **RULE C3-SUB: EJS OBJECT LITERAL KEY QUOTING (CRITICAL SAFETY):**
+  When translating EJS code blocks or templates, or narrative openers (first_mes/alternate_greetings) containing EJS, if there is an object literal being constructed or passed to functions (such as passing an object to setvar('key', { ... })), any key that contains spaces, special characters, or diacritics (like Vietnamese characters 'Loại', 'Mô Tả') MUST be enclosed in single quotes '' (e.g., 'Loại': 'Võ công', 'Mô Tả': '...').
+  Without quotes, JavaScript/EJS engines throw immediate syntax errors because keys containing spaces or special Vietnamese diacritics are not valid unquoted identifiers.
+
+  EXAMPLE:
+    Source:
+      setvar('stat_data.Nhân vật nữ.Hoắc Tình Tuyết.Kỹ năng.Vân Đài Thương Pháp', {
+        Loại: 'Võ công',
+        Mô Tả: 'Thương pháp nền tảng'
+      });
+    ✓ CORRECT:
+      setvar('stat_data.Nhân vật nữ.Hoắc Tình Tuyết.Kỹ năng.Vân Đài Thương Pháp', {
+        'Loại': 'Võ công',
+        'Mô Tả': 'Thương pháp nền tảng'
+      });
+
   ## RULE C4 — CSS FONT-FAMILY SWAP (THE ONLY PERMITTED CODE CHANGE)
   This is the single, precisely bounded exception where you ARE
   allowed — and REQUIRED — to modify code.

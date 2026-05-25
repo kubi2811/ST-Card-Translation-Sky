@@ -2,7 +2,7 @@ import { useCallback, useRef } from 'react';
 import { useStore } from '../store';
 import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookEntries, ChunkError } from '../utils/apiClient';
 import { extractTranslatableFields, applyTranslationsToCard, autoTranslateLorebookTriggerKeys, injectNewLorebookEntries } from '../utils/cardFields';
-import { syncMvuVariables, postProcessRegexHtml, extractPotentialMvuKeyStrings, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard } from '../utils/mvuSync';
+import { syncMvuVariables, postProcessRegexHtml, extractPotentialMvuKeyStrings, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas } from '../utils/mvuSync';
 import { shouldSkipTranslation, detectLanguage } from '../utils/langDetect';
 import { clearRAGCache } from '../utils/ragContext';
 import { getMvuCardSummary } from '../utils/mvuDetector';
@@ -836,8 +836,20 @@ export function useTranslation() {
           const extractedKeys = extractPotentialMvuKeyStrings(store.card);
           
           if (extractedKeys.length > 0) {
-            // Filter out keys already in dictionary
-            const existingDict = store.translationConfig.mvuDictionary;
+            // 1. Try to extract exact mappings from the already-translated Schema (TavernHelper)
+            const schemaMappings = extractMappingFromTranslatedSchemas(store.card, useStore.getState().fields);
+            const schemaMappingKeys = Object.keys(schemaMappings);
+            
+            let existingDict = store.translationConfig.mvuDictionary;
+            
+            if (schemaMappingKeys.length > 0) {
+              const updatedDict = { ...existingDict, ...schemaMappings };
+              store.setTranslationConfig({ mvuDictionary: updatedDict });
+              existingDict = updatedDict;
+              store.addLog('success', `📋 Extracted ${schemaMappingKeys.length} exact variable mapping(s) from translated Zod schema: [${schemaMappingKeys.join(', ')}]`);
+            }
+            
+            // 2. Filter out keys already in dictionary
             const newKeys = extractedKeys.filter(k => !(k in existingDict));
             
             store.addLog('info', `Found ${extractedKeys.length} variables (${newKeys.length} new, ${extractedKeys.length - newKeys.length} already mapped)`);
@@ -1407,14 +1419,27 @@ export function useTranslation() {
 
   const getExportCard = useCallback(() => {
     if (!store.card) return null;
-    let exportCard = applyTranslationsToCard(store.card, store.fields, store.translationConfig.exportKeyMode);
-    
+
+    // ═══ COVARIANCE FIX: Correct order of operations ═══
+    // 1. First, run syncMvuVariables on the ORIGINAL card where CJK variable names
+    //    still exist. This ensures all variable names are consistently replaced
+    //    across schema, initvar, regex, lorebook, and narrative fields.
+    // 2. Then, overlay AI translations on top. For fields that were translated,
+    //    the AI output (which was guided by the MVU dictionary) takes precedence.
+    //    For fields that were NOT translated, the MVU-synced version persists.
+    //
+    // Previous order was: applyTranslations → syncMvu (WRONG — CJK vars already
+    // replaced by AI, so syncMvu couldn't find them → inconsistent variable names).
+    let baseCard = store.card;
     if (store.translationConfig.enableMvuSync && Object.keys(store.translationConfig.mvuDictionary).length > 0) {
       const enabledGroups = store.translationConfig.fieldGroups
         .filter((g: FieldGroupConfig) => g.enabled)
         .map((g: FieldGroupConfig) => g.id);
-      exportCard = syncMvuVariables(exportCard, store.translationConfig.mvuDictionary, enabledGroups);
+      baseCard = syncMvuVariables(baseCard, store.translationConfig.mvuDictionary, enabledGroups);
     }
+
+    // Now overlay AI translations on the MVU-synced card
+    let exportCard = applyTranslationsToCard(baseCard, store.fields, store.translationConfig.exportKeyMode);
     
     // B3 FIX: Auto-add translated trigger keys for lorebook entries.
     // Ensures CJK trigger keys are supplemented with their translated equivalents

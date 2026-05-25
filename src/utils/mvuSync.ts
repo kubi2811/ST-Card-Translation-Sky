@@ -1,6 +1,7 @@
-import type { CharacterCard, ProxySettings } from '../types/card';
+import type { CharacterCard, ProxySettings, TranslationField } from '../types/card';
 import { extractPatchFieldNames } from './jsonPatchValidator';
 import { getMaxOutputTokens } from './apiClient';
+import { extractZodObjectBlocks, parseZodFields } from './zodSchemaEngine';
 
 /**
  * Trích xuất và parse JSON từ phản hồi của AI một cách an toàn.
@@ -1422,4 +1423,95 @@ export function postProcessRegexHtml(html: string): string {
   }
 
   return result;
+}
+
+/**
+ * Trích xuất ánh xạ (mapping) trực tiếp từ các Schema đã được dịch (TavernHelper).
+ * Hàm này so sánh Zod Object trong mã nguồn gốc và mã nguồn đã dịch của TavernHelper
+ * để tìm ra các biến CJK đã được dịch thành tên biến gì một cách chính xác 100%.
+ */
+export function extractMappingFromTranslatedSchemas(
+  card: CharacterCard,
+  fields: TranslationField[]
+): Record<string, string> {
+  const mapping: Record<string, string> = {};
+  const data = card.data;
+  if (!data) return mapping;
+
+  const allScripts: { originalContent: string; translatedContent: string }[] = [];
+
+  // Thu thập các TavernHelper scripts gốc và đã dịch tương ứng
+  const thRaw = data.extensions?.tavern_helper as any;
+  const legacy = data.extensions?.TavernHelper_scripts as any[];
+
+  const findTranslatedContent = (path: string): string | null => {
+    const f = fields.find(field => field.path === path);
+    return f && f.status === 'done' && f.translated ? f.translated : null;
+  };
+
+  if (Array.isArray(thRaw)) {
+    thRaw.forEach((item: any, i: number) => {
+      if (Array.isArray(item) && item[0] === 'scripts' && Array.isArray(item[1])) {
+        item[1].forEach((s: any, idx: number) => {
+          if (s?.content) {
+            const path = `data.extensions.tavern_helper[${i}][1][${idx}].content`;
+            const trans = findTranslatedContent(path);
+            if (trans) allScripts.push({ originalContent: s.content, translatedContent: trans });
+          }
+        });
+      } else if (item && typeof item === 'object' && !Array.isArray(item) && item.content) {
+        const path = `data.extensions.tavern_helper[${i}].content`;
+        const trans = findTranslatedContent(path);
+        if (trans) allScripts.push({ originalContent: item.content, translatedContent: trans });
+      }
+    });
+  } else if (thRaw?.scripts && Array.isArray(thRaw.scripts)) {
+    thRaw.scripts.forEach((s: any, i: number) => {
+      if (s.content) {
+        const path = `data.extensions.tavern_helper.scripts[${i}].content`;
+        const trans = findTranslatedContent(path);
+        if (trans) allScripts.push({ originalContent: s.content, translatedContent: trans });
+      }
+    });
+  }
+
+  if (Array.isArray(legacy)) {
+    legacy.forEach((s, i) => {
+      if (s.content) {
+        const path = `data.extensions.TavernHelper_scripts[${i}].content`;
+        const trans = findTranslatedContent(path);
+        if (trans) allScripts.push({ originalContent: s.content, translatedContent: trans });
+      }
+    });
+  }
+
+  // So sánh từng cặp EJS script gốc vs đã dịch
+  for (const script of allScripts) {
+    const origBlocks = extractZodObjectBlocks(script.originalContent);
+    const transBlocks = extractZodObjectBlocks(script.translatedContent);
+
+    // So sánh từng block Zod object tương ứng theo vị trí
+    const len = Math.min(origBlocks.length, transBlocks.length);
+    for (let bIdx = 0; bIdx < len; bIdx++) {
+      try {
+        const origFields = parseZodFields(origBlocks[bIdx]);
+        const transFields = parseZodFields(transBlocks[bIdx]);
+
+        // Nếu số lượng trường bằng nhau, ánh xạ 1-1
+        if (origFields.length === transFields.length) {
+          for (let fIdx = 0; fIdx < origFields.length; fIdx++) {
+            const origF = origFields[fIdx];
+            const transF = transFields[fIdx];
+            if (origF.name && transF.name && origF.name !== transF.name) {
+              mapping[origF.name] = transF.name;
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Failed to compare Zod block:', err);
+      }
+    }
+  }
+
+  return mapping;
 }

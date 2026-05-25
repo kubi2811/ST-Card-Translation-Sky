@@ -503,7 +503,24 @@ RULE C3.4 — safeString HELPER (ZOD SCHEMA RESILIENCE):
    THEN: z.object({ "Tên": safeString().prefault("...") }) instead of z.string().prefault("...")
    WHY: MVU engine may feed truncated Objects to Zod. safeString() silently recovers them.
    RULES: Inject ONCE at top. Use for ALL z.string() fields only. Preserve .prefault()/.describe() chains.
-   If the script already has safeString or a similar preprocess wrapper, do NOT duplicate it.`;
+   If the script already has safeString or a similar preprocess wrapper, do NOT duplicate it.
+
+RULE C3.5 — SINGLE QUOTES FOR OBJECT KEYS WITH DIACRITICS OR SPACES (EJS SAFETY):
+   When translating EJS code blocks or templates, or narrative openers (first_mes/alternate_greetings) containing EJS, if there is an object literal being constructed or passed to functions (such as passing an object to setvar('key', { ... })), any key that contains spaces, special characters, or diacritics (like Vietnamese characters 'Loại', 'Mô Tả') MUST be enclosed in single quotes '' (e.g., 'Loại': 'Võ công', 'Mô Tả': '...').
+   
+   ROOT CAUSE: JavaScript/EJS engines throw immediate syntax errors if object keys contain spaces or Vietnamese diacritics (e.g., oạ, ả) and are not quoted.
+   
+   EXAMPLE (Before):
+     setvar('stat_data.Nhân vật nữ.Hoắc Tình Tuyết.Kỹ năng.Vân Đài Thương Pháp', {
+       Loại: 'Võ công',
+       Mô Tả: 'Thương pháp nền tảng'
+     });
+     
+   EXAMPLE (After - CORRECT):
+     setvar('stat_data.Nhân vật nữ.Hoắc Tình Tuyết.Kỹ năng.Vân Đài Thương Pháp', {
+       'Loại': 'Võ công',
+       'Mô Tả': 'Thương pháp nền tảng'
+     });`;
 }
 
 /* ════════════════════════════════════════════════════════════════════

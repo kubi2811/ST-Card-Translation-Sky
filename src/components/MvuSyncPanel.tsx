@@ -1,12 +1,12 @@
 import React, { useState, useMemo } from 'react';
 import { useStore } from '../store';
 import { useT } from '../i18n/useLocale';
-import { extractPotentialMvuKeys, aiTranslateMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, type MvuKeyInfo } from '../utils/mvuSync';
+import { extractPotentialMvuKeys, aiTranslateMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, type MvuKeyInfo } from '../utils/mvuSync';
 import { isMvuCard, getMvuZodSummary } from '../utils/mvuDetector';
 import { Settings, Plus, Trash2, Wand2, Info, Loader2, Bot, Search, Download, Upload, BarChart3, Zap, AlertTriangle } from 'lucide-react';
 
 export default function MvuSyncPanel() {
-  const { card, translationConfig, setTranslationConfig, locale, proxy, addToast } = useStore();
+  const { card, fields, translationConfig, setTranslationConfig, locale, proxy, addToast } = useStore();
   const t = useT();
   const [isExpanded, setIsExpanded] = useState(false);
   const [newKey, setNewKey] = useState('');
@@ -59,8 +59,14 @@ export default function MvuSyncPanel() {
       addToast('info', isVi ? 'Không tìm thấy key MVU nào.' : 'No MVU keys found.');
       return;
     }
-    const nextDict = { ...mvuDictionary };
-    let added = 0;
+    
+    // Extract direct mappings from translated schemas if possible
+    const schemaMappings = extractMappingFromTranslatedSchemas(card, fields);
+    const schemaMappingKeys = Object.keys(schemaMappings);
+    
+    const nextDict = { ...mvuDictionary, ...schemaMappings };
+    let added = schemaMappingKeys.filter(k => !(k in mvuDictionary)).length;
+    
     keyInfos.forEach(ki => {
       if (!(ki.key in nextDict)) {
         nextDict[ki.key] = '';
@@ -68,8 +74,13 @@ export default function MvuSyncPanel() {
       }
     });
     
-    if (added > 0) {
-      setTranslationConfig({ mvuDictionary: nextDict });
+    setTranslationConfig({ mvuDictionary: nextDict });
+    
+    if (schemaMappingKeys.length > 0) {
+      addToast('success', isVi 
+        ? `Đã quét và tự động trích xuất ${schemaMappingKeys.length} biến từ Zod Schema đã dịch.` 
+        : `Extracted ${schemaMappingKeys.length} variables from translated Zod Schema.`);
+    } else if (added > 0) {
       addToast('success', isVi ? `Đã thêm ${added} key mới.` : `Added ${added} new keys.`);
     } else {
       addToast('info', isVi ? 'Các key đều đã có sẵn.' : 'Keys already exist.');
@@ -85,10 +96,35 @@ export default function MvuSyncPanel() {
       return;
     }
 
-    // Lọc keys chưa có hoặc chưa có bản dịch
-    const keysNeedTranslation = keys.filter(k => !(k in mvuDictionary) || !mvuDictionary[k]);
+    // 1. Try to extract exact mappings from translated Zod schema first
+    const schemaMappings = extractMappingFromTranslatedSchemas(card, fields);
+    const schemaMappingKeys = Object.keys(schemaMappings);
+    let currentDict = { ...mvuDictionary };
+    let extractedCount = 0;
+    
+    if (schemaMappingKeys.length > 0) {
+      for (const [k, v] of Object.entries(schemaMappings)) {
+        if (v && v.trim() && k !== v && currentDict[k] !== v) {
+          currentDict[k] = v;
+          extractedCount++;
+        }
+      }
+      if (extractedCount > 0) {
+        setTranslationConfig({ mvuDictionary: currentDict });
+      }
+    }
+
+    // 2. Filter keys that still need translation
+    const keysNeedTranslation = keys.filter(k => !(k in currentDict) || !currentDict[k]);
     if (keysNeedTranslation.length === 0) {
-      addToast('info', isVi ? 'Tất cả key đều đã có bản dịch.' : 'All keys already have translations.');
+      if (extractedCount > 0) {
+        addToast('success', isVi
+          ? `Đã đồng bộ ${extractedCount} biến từ Zod Schema đã dịch. Tất cả key khác đã có bản dịch.`
+          : `Synced ${extractedCount} variables from translated Zod Schema. All other keys already translated.`
+        );
+      } else {
+        addToast('info', isVi ? 'Tất cả key đều đã có bản dịch.' : 'All keys already have translations.');
+      }
       return;
     }
 

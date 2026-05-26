@@ -1,7 +1,7 @@
 import type { CharacterCard, ProxySettings, TranslationField } from '../types/card';
 import { extractPatchFieldNames } from './jsonPatchValidator';
 import { getMaxOutputTokens } from './apiClient';
-import { extractZodObjectBlocks, parseZodFields } from './zodSchemaEngine';
+import { extractZodObjectBlocks, parseZodFields, extractOrderedStringPairs } from './zodSchemaEngine';
 
 /**
  * Trích xuất và parse JSON từ phản hồi của AI một cách an toàn.
@@ -839,7 +839,8 @@ export async function aiTranslateMvuKeys(
   signal?: AbortSignal,
   schemaContext?: string,
   keyDescriptions?: Record<string, string>,
-  modInstructions?: string
+  modInstructions?: string,
+  existingMappings?: Record<string, string>
 ): Promise<Record<string, string>> {
   if (keys.length === 0) return {};
 
@@ -900,6 +901,19 @@ RESPOND in EXACT JSON format (no markdown): {"translations": {"original_key": "T
       contextBlock = `\nHere is the Zod schema or script context where these variables are defined. USE THIS CONTEXT to understand what the variables mean (look at the .describe() text or comments):\n\`\`\`javascript\n${schemaContext.slice(0, 5000)}\n\`\`\`\n\n`;
     }
 
+    // Build covariance constraint block from existing schema mappings
+    let covarianceBlock = '';
+    if (existingMappings && Object.keys(existingMappings).length > 0) {
+      const mappingLines = Object.entries(existingMappings)
+        .filter(([k, v]) => k !== v)
+        .slice(0, 50) // Limit to avoid token overflow
+        .map(([k, v]) => `  "${k}" → "${v}"`)
+        .join('\n');
+      if (mappingLines) {
+        covarianceBlock = `\n═══ MANDATORY COVARIANCE CONSTRAINTS ═══\nThe following variables have ALREADY been translated in the Zod Schema. You MUST follow the same naming patterns and style for consistency. If any variable you are translating is semantically related to these, use the same conventions (e.g. same prefix, same word choice for shared concepts):\n${mappingLines}\n═══ END COVARIANCE CONSTRAINTS ═══\n\n`;
+      }
+    }
+
     // Build variable list with optional descriptions
     const varList = batch.map((k, i) => {
       const desc = keyDescriptions?.[k];
@@ -931,7 +945,7 @@ RESPOND in EXACT JSON format (no markdown): {"translations": {"original_key": "T
           retryHint = `\n\n⚠️ CRITICAL: Your previous response STILL contained Chinese/Japanese/Korean characters in the translated values. This is WRONG. You MUST translate ALL values to ${targetLang} using ONLY Latin/Roman script. Do NOT keep ANY CJK characters (汉字/漢字/한글/カタカナ) in the output values. Convert them to ${targetLang} equivalents (e.g. 好感度 → Hảo Cảm, 攻击力 → Sức Tấn Công, 状态 → Trạng Thái).`;
         }
 
-        const currentUserPrompt = `Translate these variable names to ${targetLang} (natural, readable formatting — consistency is the only rule):${contextBlock}
+        const currentUserPrompt = `Translate these variable names to ${targetLang} (natural, readable formatting — consistency is the only rule):${contextBlock}${covarianceBlock}
 Variables to translate:
 ${currentVarList}${retryHint}`;
 
@@ -1490,7 +1504,7 @@ export function extractMappingFromTranslatedSchemas(
     const origBlocks = extractZodObjectBlocks(script.originalContent);
     const transBlocks = extractZodObjectBlocks(script.translatedContent);
 
-    // So sánh từng block Zod object tương ứng theo vị trí
+    // ═══ PHASE A: Extract Zod field name mappings (existing logic) ═══
     const len = Math.min(origBlocks.length, transBlocks.length);
     for (let bIdx = 0; bIdx < len; bIdx++) {
       try {
@@ -1510,6 +1524,24 @@ export function extractMappingFromTranslatedSchemas(
       } catch (err) {
         console.error('Failed to compare Zod block:', err);
       }
+    }
+
+    // ═══ PHASE B: Extract string literal mappings (enums, defaults, describes) ═══
+    // Compare ALL string literals in the full script source (not just Zod blocks)
+    // to capture enum values, .default() values, .describe() strings, etc.
+    try {
+      const literalMappings = extractOrderedStringPairs(
+        script.originalContent,
+        script.translatedContent
+      );
+      for (const [origLit, transLit] of Object.entries(literalMappings)) {
+        // Don't override field name mappings from Phase A
+        if (!(origLit in mapping)) {
+          mapping[origLit] = transLit;
+        }
+      }
+    } catch (err) {
+      console.error('Failed to extract string literal mappings:', err);
     }
   }
 

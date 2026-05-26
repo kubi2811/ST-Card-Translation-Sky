@@ -837,6 +837,7 @@ export function useTranslation() {
           
           if (extractedKeys.length > 0) {
             // 1. Try to extract exact mappings from the already-translated Schema (TavernHelper)
+            // This now captures BOTH field names AND string literals (enum values, defaults, describes)
             const schemaMappings = extractMappingFromTranslatedSchemas(store.card, useStore.getState().fields);
             const schemaMappingKeys = Object.keys(schemaMappings);
             
@@ -846,7 +847,14 @@ export function useTranslation() {
               const updatedDict = { ...existingDict, ...schemaMappings };
               store.setTranslationConfig({ mvuDictionary: updatedDict });
               existingDict = updatedDict;
-              store.addLog('success', `📋 Extracted ${schemaMappingKeys.length} exact variable mapping(s) from translated Zod schema: [${schemaMappingKeys.join(', ')}]`);
+              // Log field names and string literals separately for clarity
+              const fieldNameCount = schemaMappingKeys.filter(k => !/[\s]/.test(k) && k.length < 30).length;
+              const literalCount = schemaMappingKeys.length - fieldNameCount;
+              const logParts = [`📋 Extracted ${schemaMappingKeys.length} exact mapping(s) from translated schema`];
+              if (fieldNameCount > 0) logParts.push(`(${fieldNameCount} field names`);
+              if (literalCount > 0) logParts.push(`${fieldNameCount > 0 ? ', ' : '('}${literalCount} enum/default values`);
+              if (fieldNameCount > 0 || literalCount > 0) logParts.push(')');
+              store.addLog('success', logParts.join(''));
             }
             
             // 2. Filter out keys already in dictionary
@@ -877,13 +885,16 @@ export function useTranslation() {
                 keyDescriptions = extractZodDescriptions(schemaContext);
               }
 
+              // Pass schemaMappings as covariance constraints so AI follows established naming patterns
               const aiTranslations = await aiTranslateMvuKeys(
                 newKeys,
                 store.translationConfig.targetLanguage,
                 store.proxy,
                 abortRef.current?.signal,
                 schemaContext,
-                keyDescriptions
+                keyDescriptions,
+                undefined, // modInstructions
+                schemaMappingKeys.length > 0 ? schemaMappings : undefined // existingMappings for covariance
               );
               
               const mergedDict = { ...existingDict };

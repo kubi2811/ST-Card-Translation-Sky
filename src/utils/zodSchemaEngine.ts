@@ -434,3 +434,76 @@ export function getAllSchemaFieldNames(schemas: DetectedZodSchema[]): string[] {
   for (const schema of schemas) collectFields(schema.fields);
   return [...names];
 }
+
+/**
+ * Extract ALL string literals from Zod expressions in a source block, in order of appearance.
+ * Captures: z.enum([...]) values, .default('...'), .describe('...'), .prefault('...')
+ * Used for 1-1 positional comparison between original and translated schema sources.
+ *
+ * Only captures CJK-containing strings (or strings that changed during translation)
+ * to avoid noise from purely ASCII values like "true", "false", numbers, etc.
+ */
+export function extractAllStringLiterals(source: string): string[] {
+  const literals: string[] = [];
+
+  // 1. Extract z.enum([...]) values — ordered as they appear
+  const enumRegex = /(?:z|Zod)\.enum\(\s*\[([^\]]+)\]/g;
+  let enumMatch: RegExpExecArray | null;
+  while ((enumMatch = enumRegex.exec(source)) !== null) {
+    const valuesStr = enumMatch[1];
+    // Parse individual enum values carefully (handle commas inside strings)
+    const valRegex = /["'`]([^"'`]+)["'`]/g;
+    let valMatch: RegExpExecArray | null;
+    while ((valMatch = valRegex.exec(valuesStr)) !== null) {
+      literals.push(valMatch[1]);
+    }
+  }
+
+  // 2. Extract .default('...') values
+  const defaultRegex = /\.(?:default|prefault)\(\s*["'`]([^"'`]+)["'`]\s*\)/g;
+  let defaultMatch: RegExpExecArray | null;
+  while ((defaultMatch = defaultRegex.exec(source)) !== null) {
+    literals.push(defaultMatch[1]);
+  }
+
+  // 3. Extract .describe('...') values
+  const describeRegex = /\.describe\(\s*["'`]([^"'`]+)["'`]\s*\)/g;
+  let describeMatch: RegExpExecArray | null;
+  while ((describeMatch = describeRegex.exec(source)) !== null) {
+    literals.push(describeMatch[1]);
+  }
+
+  return literals;
+}
+
+/**
+ * Extract ordered string literals from a full EJS/JS source (not just Zod blocks).
+ * This does a broader scan to catch string literals in:
+ * - YAML-like values (key: "value" inside template literals)
+ * - data.variable === "value" comparisons
+ * - getvar/setvar calls with string arguments
+ * Used as a fallback when Zod block extraction yields insufficient mappings.
+ */
+export function extractOrderedStringPairs(
+  originalSource: string,
+  translatedSource: string
+): Record<string, string> {
+  const mapping: Record<string, string> = {};
+
+  const origLiterals = extractAllStringLiterals(originalSource);
+  const transLiterals = extractAllStringLiterals(translatedSource);
+
+  // Only map when counts match (1-1 positional mapping)
+  if (origLiterals.length === transLiterals.length && origLiterals.length > 0) {
+    for (let i = 0; i < origLiterals.length; i++) {
+      const orig = origLiterals[i];
+      const trans = transLiterals[i];
+      // Only add if they differ and original contains CJK
+      if (orig !== trans && /[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff\uac00-\ud7af]/.test(orig)) {
+        mapping[orig] = trans;
+      }
+    }
+  }
+
+  return mapping;
+}

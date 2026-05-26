@@ -276,8 +276,9 @@ export function useTranslation() {
 
       if (!isEligibleForSurgical || surgicalFallback) {
         // ═══ Chunk-level resume: pass previously completed chunks + progress callback ═══
-        const prevChunks = field.completedChunks && field.completedChunks.length > 0
-          ? field.completedChunks
+        const freshField = useStore.getState().fields.find(f => f.path === field.path) || field;
+        const prevChunks = freshField.completedChunks && freshField.completedChunks.length > 0
+          ? freshField.completedChunks
           : undefined;
 
         if (prevChunks) {
@@ -419,21 +420,45 @@ export function useTranslation() {
       }
 
       // ═══ CHUNK-LEVEL RESUME: Save partial progress on chunk failure ═══
+      const currentRetries = freshRetries();
+      const maxChunkRetries = 2; // Auto-retry up to 2 times for chunk errors (3 total attempts)
+
       if (err instanceof ChunkError) {
+        // Save the progress first so we can resume
         store.updateField(field.path, {
-          status: 'error',
-          error: msg,
-          retries: freshRetries() + 1,
           completedChunks: err.completedChunks,
           failedChunkIndex: err.failedChunkIndex,
           totalChunks: err.totalChunks,
+        });
+
+        if (currentRetries < maxChunkRetries) {
+          store.updateField(field.path, { retries: currentRetries + 1 });
+          store.addLog('retry', `⚠️ Chunk translation failed at chunk ${err.failedChunkIndex + 1}/${err.totalChunks}. Auto-retrying with resume (Attempt ${currentRetries + 1}/${maxChunkRetries})...`);
+          await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
+          return 'retry';
+        }
+
+        // If all retries exhausted, set error state
+        store.updateField(field.path, {
+          status: 'error',
+          error: msg,
+          retries: currentRetries + 1,
         });
         store.addLog('error', `Failed: ${field.label} — chunk ${err.failedChunkIndex + 1}/${err.totalChunks} (${err.completedChunks.length} chunks saved for resume)`);
         store.addToast('error', `${field.label}: chunk ${err.failedChunkIndex + 1}/${err.totalChunks} failed — retry will resume`);
         return 'error';
       }
 
-      store.updateField(field.path, { status: 'error', error: msg, retries: freshRetries() + 1 });
+      // If it's a standard error but the field is chunk-eligible (meaning first chunk failed or single-chunk error on a large field)
+      const isChunked = charCount > CHUNK_THRESHOLD;
+      if (isChunked && currentRetries < maxChunkRetries) {
+        store.updateField(field.path, { retries: currentRetries + 1 });
+        store.addLog('retry', `⚠️ Chunk translation failed at chunk 1. Auto-retrying (Attempt ${currentRetries + 1}/${maxChunkRetries})...`);
+        await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
+        return 'retry';
+      }
+
+      store.updateField(field.path, { status: 'error', error: msg, retries: currentRetries + 1 });
       store.addLog('error', `Failed: ${field.label} — ${msg}`);
       store.addToast('error', `Failed: ${field.label}`);
       return 'error';
@@ -628,11 +653,20 @@ export function useTranslation() {
               const fieldIdx = allCurrentFields.findIndex(f => f.path === ef.path);
               const result = await translateSingleField(ef, fieldIdx >= 0 ? fieldIdx : fi, allCurrentFields);
 
+              if (result === 'retry') {
+                fi--; // Dịch lại field này ở loop tiếp theo
+                continue;
+              }
+
               // Extra retry for MVU-critical fields that failed
               if (result === 'error' && isMvuCriticalField(ef)) {
                 store.addLog('retry', `🔄 Extra retry for MVU-critical: ${ef.label}`);
                 await new Promise((r) => setTimeout(r, backoffDelay));
-                await translateSingleField(ef, fieldIdx >= 0 ? fieldIdx : fi, allCurrentFields);
+                const secondResult = await translateSingleField(ef, fieldIdx >= 0 ? fieldIdx : fi, allCurrentFields);
+                if (secondResult === 'retry') {
+                  fi--;
+                  continue;
+                }
               }
             } catch (fallbackErr) {
               const fbMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
@@ -688,11 +722,20 @@ export function useTranslation() {
           const fieldIdx = allCurrentFields.findIndex(sf => sf.path === f.path);
           const result = await translateSingleField(f, fieldIdx >= 0 ? fieldIdx : fi, allCurrentFields);
 
+          if (result === 'retry') {
+            fi--; // Dịch lại
+            continue;
+          }
+
           // Extra retry for MVU-critical fields
           if (result === 'error' && isMvuCriticalField(f)) {
             store.addLog('retry', `🔄 Extra retry for MVU-critical: ${f.label}`);
             await new Promise((r) => setTimeout(r, backoffDelay));
-            await translateSingleField(f, fieldIdx >= 0 ? fieldIdx : fi, allCurrentFields);
+            const secondResult = await translateSingleField(f, fieldIdx >= 0 ? fieldIdx : fi, allCurrentFields);
+            if (secondResult === 'retry') {
+              fi--;
+              continue;
+            }
           }
         } catch (fallbackErr) {
           const fbMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
@@ -1356,13 +1399,26 @@ export function useTranslation() {
     store.setPhase('cancelled');
   }, [store]);
 
-  const retranslateField = useCallback(async (path: string) => {
+  const retranslateField = useCallback(async (path: string, resume = false) => {
     const field = store.fields.find((f) => f.path === path);
     if (!field) return;
 
     const controller = new AbortController();
     store.updateField(path, { status: 'translating', error: undefined });
-    store.addLog('active', `Re-translating: ${field.label}`);
+
+    // Read fresh field state from store to prevent stale reference
+    const freshField = useStore.getState().fields.find(f => f.path === path) || field;
+    const prevChunks = resume && freshField.completedChunks && freshField.completedChunks.length > 0
+      ? freshField.completedChunks
+      : undefined;
+
+    if (prevChunks) {
+      store.addLog('active', `Re-translating: ${field.label} (Resuming from chunk ${prevChunks.length + 1})`);
+    } else {
+      store.addLog('active', `Re-translating: ${field.label}`);
+      // Clear chunk progress if we are translating from scratch
+      store.updateField(path, { completedChunks: undefined, failedChunkIndex: undefined, totalChunks: undefined });
+    }
 
     try {
       // Contextual keyword translation for retranslate
@@ -1430,7 +1486,21 @@ export function useTranslation() {
         field.previousTranslation,
         resolvedFieldType,
         currentMvuDict,
-        store.translationConfig.chunkSize
+        store.translationConfig.chunkSize,
+        prevChunks,
+        // onChunkComplete: save chunk progress in real-time
+        (chunkIdx, translatedChunk, totalChunks) => {
+          const currentField = useStore.getState().fields.find(f => f.path === field.path);
+          const currentCompleted = currentField?.completedChunks || [];
+          if (chunkIdx >= currentCompleted.length) {
+            const updatedChunks = [...currentCompleted];
+            updatedChunks[chunkIdx] = translatedChunk;
+            store.updateField(field.path, {
+              completedChunks: updatedChunks,
+              totalChunks,
+            });
+          }
+        }
       );
 
       // Post-process regex HTML: font swap + underscore display
@@ -1443,12 +1513,29 @@ export function useTranslation() {
         translated = postProcessRegexHtml(translated);
       }
 
-      store.updateField(path, { status: 'done', translated });
+      store.updateField(path, {
+        status: 'done',
+        translated,
+        completedChunks: undefined,
+        totalChunks: undefined,
+        failedChunkIndex: undefined,
+      });
       store.addLog('success', `Re-translated: ${field.label}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      store.updateField(path, { status: 'error', error: msg });
-      store.addLog('error', `Re-translate failed: ${field.label} — ${msg}`);
+      if (err instanceof ChunkError) {
+        store.updateField(path, {
+          status: 'error',
+          error: msg,
+          completedChunks: err.completedChunks,
+          failedChunkIndex: err.failedChunkIndex,
+          totalChunks: err.totalChunks,
+        });
+        store.addLog('error', `Re-translate failed: ${field.label} — chunk ${err.failedChunkIndex + 1}/${err.totalChunks} (${err.completedChunks.length} saved)`);
+      } else {
+        store.updateField(path, { status: 'error', error: msg });
+        store.addLog('error', `Re-translate failed: ${field.label} — ${msg}`);
+      }
     }
   }, [store]);
 
@@ -1506,88 +1593,127 @@ export function useTranslation() {
     let failCount = 0;
 
     for (const field of errorFields) {
-      try {
-        store.updateField(field.path, { status: 'translating', error: undefined });
+      let attempts = 0;
+      const maxAttempts = 2; // Auto-retry up to 2 times for chunk errors
+      let success = false;
 
-        // Build context hint for lorebook keys
-        let contextHint: string | undefined;
-        if (field.group === 'lorebook_keys') {
-          const contentPath = field.path.replace('.keys', '.content');
-          const contentField = store.fields.find(f => f.path === contentPath);
-          if (contentField) {
-            contextHint = (contentField.translated || contentField.original || '').slice(0, 1500);
-          }
-        }
+      while (attempts <= maxAttempts) {
+        try {
+          store.updateField(field.path, { status: 'translating', error: undefined });
 
-        // Chunk-level resume: pass previously completed chunks if available
-        const prevChunks = field.completedChunks && field.completedChunks.length > 0
-          ? field.completedChunks
-          : undefined;
-
-        if (prevChunks) {
-          store.addLog('info', `🔄 Resuming ${field.label} from chunk ${prevChunks.length + 1} (${prevChunks.length} chunks cached)`);
-        }
-
-        const translated = await translateText(
-          field.original,
-          field.label,
-          store.proxy,
-          store.translationConfig.targetLanguage,
-          store.translationConfig.sourceLanguage,
-          store.translationConfig.translationPrompt,
-          store.translationConfig.customSchema,
-          undefined,
-          contextHint,
-          store.translationConfig.glossary,
-          field.previousTranslation,
-          undefined,
-          undefined,
-          store.translationConfig.chunkSize,
-          prevChunks,
-          // onChunkComplete: save chunk progress in real-time
-          (chunkIdx, translatedChunk, totalChunks) => {
-            const currentField = useStore.getState().fields.find(f => f.path === field.path);
-            const currentCompleted = currentField?.completedChunks || [];
-            if (chunkIdx >= currentCompleted.length) {
-              const updatedChunks = [...currentCompleted];
-              updatedChunks[chunkIdx] = translatedChunk;
-              store.updateField(field.path, {
-                completedChunks: updatedChunks,
-                totalChunks,
-              });
+          // Build context hint for lorebook keys
+          let contextHint: string | undefined;
+          if (field.group === 'lorebook_keys') {
+            const contentPath = field.path.replace('.keys', '.content');
+            const contentField = store.fields.find(f => f.path === contentPath);
+            if (contentField) {
+              contextHint = (contentField.translated || contentField.original || '').slice(0, 1500);
             }
-          },
-        );
+          }
 
-        // Clear chunk state on success
-        store.updateField(field.path, {
-          status: 'done', translated, retries: field.retries + 1,
-          completedChunks: undefined, totalChunks: undefined, failedChunkIndex: undefined,
-        });
-        store.addLog('success', `✓ Retry OK: ${field.label}`);
-        successCount++;
+          // Chunk-level resume: pass previously completed chunks if available dynamically from the store
+          const freshField = useStore.getState().fields.find(f => f.path === field.path) || field;
+          const prevChunks = freshField.completedChunks && freshField.completedChunks.length > 0
+            ? freshField.completedChunks
+            : undefined;
 
-        // Delay between retries
-        if (store.proxy.requestDelay > 0) {
-          await new Promise(r => setTimeout(r, store.proxy.requestDelay));
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+          if (prevChunks && attempts === 0) {
+            store.addLog('info', `🔄 Resuming ${field.label} from chunk ${prevChunks.length + 1} (${prevChunks.length} chunks cached)`);
+          }
 
-        // Save partial chunk progress on ChunkError
-        if (err instanceof ChunkError) {
+          const translated = await translateText(
+            field.original,
+            field.label,
+            store.proxy,
+            store.translationConfig.targetLanguage,
+            store.translationConfig.sourceLanguage,
+            store.translationConfig.translationPrompt,
+            store.translationConfig.customSchema,
+            undefined,
+            contextHint,
+            store.translationConfig.glossary,
+            field.previousTranslation,
+            undefined,
+            undefined,
+            store.translationConfig.chunkSize,
+            prevChunks,
+            // onChunkComplete: save chunk progress in real-time
+            (chunkIdx, translatedChunk, totalChunks) => {
+              const currentField = useStore.getState().fields.find(f => f.path === field.path);
+              const currentCompleted = currentField?.completedChunks || [];
+              if (chunkIdx >= currentCompleted.length) {
+                const updatedChunks = [...currentCompleted];
+                updatedChunks[chunkIdx] = translatedChunk;
+                store.updateField(field.path, {
+                  completedChunks: updatedChunks,
+                  totalChunks,
+                });
+              }
+            },
+          );
+
+          // Clear chunk state on success
           store.updateField(field.path, {
-            status: 'error', error: msg, retries: field.retries + 1,
-            completedChunks: err.completedChunks,
-            failedChunkIndex: err.failedChunkIndex,
-            totalChunks: err.totalChunks,
+            status: 'done', translated, retries: field.retries + attempts + 1,
+            completedChunks: undefined, totalChunks: undefined, failedChunkIndex: undefined,
           });
-          store.addLog('error', `✗ Retry failed: ${field.label} — chunk ${err.failedChunkIndex + 1}/${err.totalChunks} (${err.completedChunks.length} saved)`);
-        } else {
-          store.updateField(field.path, { status: 'error', error: msg, retries: field.retries + 1 });
-          store.addLog('error', `✗ Retry failed: ${field.label} — ${msg}`);
+          store.addLog('success', `✓ Retry OK: ${field.label}`);
+          successCount++;
+          success = true;
+
+          // Delay between retries
+          if (store.proxy.requestDelay > 0) {
+            await new Promise(r => setTimeout(r, store.proxy.requestDelay));
+          }
+          break;
+        } catch (err) {
+          attempts++;
+          const msg = err instanceof Error ? err.message : String(err);
+
+          // Check if chunking is expected
+          const currentMaxTokens = store.proxy.maxTokens;
+          const currentChunkSize = store.translationConfig.chunkSize;
+          const CHUNK_THRESHOLD = currentChunkSize && currentChunkSize > 0
+            ? currentChunkSize
+            : (currentMaxTokens && currentMaxTokens > 0 ? Math.min(Math.floor(currentMaxTokens * 3.5), 200000) : 100000);
+          const isChunked = field.original.length > CHUNK_THRESHOLD;
+
+          if (isChunked && attempts <= maxAttempts) {
+            if (err instanceof ChunkError) {
+              store.updateField(field.path, {
+                completedChunks: err.completedChunks,
+                failedChunkIndex: err.failedChunkIndex,
+                totalChunks: err.totalChunks,
+              });
+              store.addLog('retry', `⚠️ Lỗi thử lại chunk ${err.failedChunkIndex + 1}/${err.totalChunks}. Đang tự động thử lại (Attempt ${attempts}/${maxAttempts})...`);
+            } else {
+              store.addLog('retry', `⚠️ Lỗi thử lại chunk 1. Đang tự động thử lại (Attempt ${attempts}/${maxAttempts})...`);
+            }
+            await new Promise(r => setTimeout(r, store.proxy.retryDelay || 1000));
+            continue;
+          }
+
+          // If we reach here, it failed and we are not retrying
+          if (err instanceof ChunkError) {
+            store.updateField(field.path, {
+              status: 'error', error: msg, retries: field.retries + attempts,
+              completedChunks: err.completedChunks,
+              failedChunkIndex: err.failedChunkIndex,
+              totalChunks: err.totalChunks,
+            });
+            store.addLog('error', `✗ Retry failed: ${field.label} — chunk ${err.failedChunkIndex + 1}/${err.totalChunks} (${err.completedChunks.length} saved)`);
+          } else {
+            store.updateField(field.path, { status: 'error', error: msg, retries: field.retries + attempts });
+            store.addLog('error', `✗ Retry failed: ${field.label} — ${msg}`);
+          }
+          failCount++;
+
+          // Delay between retries
+          if (store.proxy.requestDelay > 0) {
+            await new Promise(r => setTimeout(r, store.proxy.requestDelay));
+          }
+          break;
         }
-        failCount++;
       }
     }
 

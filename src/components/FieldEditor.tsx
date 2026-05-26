@@ -177,6 +177,145 @@ function SurgicalResultBadge({ result }: { result?: { type: 'success' | 'fallbac
   );
 }
 
+function ChunkStatusAndResume({
+  field,
+  retranslateField,
+  phase,
+}: {
+  field: any;
+  retranslateField: (path: string, resume?: boolean) => void;
+  phase: string;
+}) {
+  const { proxy, translationConfig } = useStore();
+  const currentMaxTokens = proxy.maxTokens;
+  const currentChunkSize = translationConfig.chunkSize;
+  const CHUNK_THRESHOLD = currentChunkSize && currentChunkSize > 0
+    ? currentChunkSize
+    : (currentMaxTokens && currentMaxTokens > 0 ? Math.min(Math.floor(currentMaxTokens * 3.5), 200000) : 100000);
+
+  const isChunked = field.original.length > CHUNK_THRESHOLD;
+  if (!isChunked) return null;
+
+  const completedCount = field.completedChunks?.length || 0;
+  const totalChunks = field.totalChunks || Math.ceil(field.original.length / CHUNK_THRESHOLD);
+  const failedIdx = field.failedChunkIndex !== undefined ? field.failedChunkIndex : (field.status === 'error' ? completedCount : undefined);
+
+  // If status is translating, show current progress
+  if (field.status === 'translating') {
+    return (
+      <div style={{ fontSize: '0.62rem', color: 'var(--accent-info)', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <span style={{ padding: '1px 5px', background: 'rgba(124,106,240,0.12)', borderRadius: '3px', fontWeight: 600 }}>
+          Dịch chunk: {completedCount + 1}/{totalChunks}
+        </span>
+        <span style={{ color: 'var(--text-muted)' }}>
+          (Đã hoàn thành {completedCount} chunk)
+        </span>
+      </div>
+    );
+  }
+
+  // If status is done, no need to show chunk details
+  if (field.status === 'done') return null;
+
+  // If status is error, show the failed chunk index and a button to resume
+  if (field.status === 'error') {
+    return (
+      <div style={{
+        marginTop: '6px',
+        padding: '8px',
+        background: 'rgba(231, 76, 60, 0.04)',
+        border: '1px solid rgba(231, 76, 60, 0.15)',
+        borderRadius: 'var(--radius-md)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '6px'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.68rem', color: 'var(--accent-danger)' }}>
+          <AlertTriangle size={12} />
+          <span style={{ fontWeight: 600 }}>
+            Lỗi ở chunk {(failedIdx !== undefined ? failedIdx : 0) + 1}/{totalChunks}
+          </span>
+          {completedCount > 0 && (
+            <span style={{ color: 'var(--text-muted)' }}>
+              (Đã lưu {completedCount} chunk)
+            </span>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <button
+            className="btn btn-ghost btn-xs"
+            onClick={() => retranslateField(field.path, true)}
+            disabled={phase === 'translating'}
+            style={{
+              padding: '3px 8px',
+              fontSize: '0.68rem',
+              fontWeight: 600,
+              background: 'var(--accent-primary)',
+              color: 'white',
+              border: 'none',
+              borderRadius: 'var(--radius-sm)',
+              cursor: phase === 'translating' ? 'not-allowed' : 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
+            }}
+          >
+            <RotateCcw size={10} />
+            {completedCount > 0 ? `Dịch tiếp từ chunk ${completedCount + 1}` : 'Dịch lại từ đầu'}
+          </button>
+          {completedCount > 0 && (
+            <button
+              className="btn btn-ghost btn-xs"
+              onClick={() => retranslateField(field.path, false)}
+              disabled={phase === 'translating'}
+              style={{
+                padding: '3px 8px',
+                fontSize: '0.68rem',
+                fontWeight: 500,
+                color: 'var(--text-muted)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius-sm)',
+                cursor: phase === 'translating' ? 'not-allowed' : 'pointer',
+              }}
+            >
+              Dịch lại từ đầu
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // If status is pending or ignored, but it already has completed chunks cached
+  if (completedCount > 0) {
+    return (
+      <div style={{ fontSize: '0.62rem', color: 'var(--accent-info)', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <span style={{ padding: '1px 5px', background: 'rgba(124,106,240,0.12)', borderRadius: '3px', fontWeight: 600 }}>
+          Đã lưu {completedCount}/{totalChunks} chunks
+        </span>
+        <button
+          className="btn btn-ghost btn-xs"
+          onClick={() => retranslateField(field.path, true)}
+          disabled={phase === 'translating'}
+          style={{
+            padding: '1px 5px',
+            fontSize: '0.6rem',
+            color: 'var(--accent-primary)',
+            background: 'transparent',
+            border: '1px solid rgba(124, 106, 240, 0.3)',
+            borderRadius: '3px',
+            cursor: phase === 'translating' ? 'not-allowed' : 'pointer',
+          }}
+        >
+          Tiếp tục dịch
+        </button>
+      </div>
+    );
+  }
+
+  return null;
+}
+
 /** Live HTML/Regex Preview Pane — renders translated HTML in a sandboxed iframe */
 function HtmlPreviewPane({ html }: { html: string }) {
   const srcdoc = useMemo(() => {
@@ -655,30 +794,11 @@ function VirtualTableView({
                           {field.error}
                         </div>
                       )}
-                      {field.completedChunks && field.completedChunks.length > 0 && field.totalChunks && (
-                        <div
-                          style={{
-                            fontSize: '0.6rem',
-                            color: 'var(--accent-info)',
-                            marginTop: '3px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                          }}
-                        >
-                          <span style={{
-                            padding: '1px 5px',
-                            background: 'rgba(124,106,240,0.12)',
-                            borderRadius: '3px',
-                            fontWeight: 600,
-                          }}>
-                            ✓ {field.completedChunks.length}/{field.totalChunks} chunks
-                          </span>
-                          <span style={{ color: 'var(--text-muted)' }}>
-                            — retry resumes from chunk {field.completedChunks.length + 1}
-                          </span>
-                        </div>
-                      )}
+                      <ChunkStatusAndResume
+                        field={field}
+                        retranslateField={retranslateField}
+                        phase={phase}
+                      />
                         </div>
                       </div>
                     </td>
@@ -1034,30 +1154,11 @@ function VirtualDiffView({
                     {field.error}
                   </div>
                 )}
-                {field.completedChunks && field.completedChunks.length > 0 && field.totalChunks && (
-                  <div
-                    style={{
-                      fontSize: '0.6rem',
-                      color: 'var(--accent-info)',
-                      marginTop: '4px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                    }}
-                  >
-                    <span style={{
-                      padding: '1px 5px',
-                      background: 'rgba(124,106,240,0.12)',
-                      borderRadius: '3px',
-                      fontWeight: 600,
-                    }}>
-                      ✓ {field.completedChunks.length}/{field.totalChunks} chunks
-                    </span>
-                    <span style={{ color: 'var(--text-muted)' }}>
-                      — retry resumes from chunk {field.completedChunks.length + 1}
-                    </span>
-                  </div>
-                )}
+                <ChunkStatusAndResume
+                  field={field}
+                  retranslateField={retranslateField}
+                  phase={phase}
+                />
               </div>
             </div>
           );

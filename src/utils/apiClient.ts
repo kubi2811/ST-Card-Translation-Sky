@@ -171,7 +171,8 @@ STRICT RULES:
 12. CRITICAL: The output must contain ONLY the translated text in ${targetLang}. Do NOT include source language text. Do NOT pair original text with translation. Do NOT use arrows (→) or colons (:) to show before/after.
 13. CRITICAL: You MUST translate the COMPLETE text. Do NOT stop early. Do NOT summarize or truncate. If the text is very long, translate ALL of it from start to finish.
 14. CRITICAL: ABSOLUTELY NO untranslated source language characters (e.g., Chinese Hanzi, Japanese Kanji) should remain in the final output. You MUST translate every single word into ${targetLang} unless it is a specific system variable name (like {{char}}). This includes: section headers, YAML-like key names, parenthetical annotations, labels, category names, and text inside XML tags. After translating, scan your ENTIRE output for any remaining Chinese characters — if you find ANY, translate them immediately.
-15. LOREBOOK SPECIFIC: Lorebook entries commonly have Chinese text that gets missed during translation. You MUST translate ALL of these: Chinese section headers (e.g., "人物设定："), Chinese YAML keys (e.g., "外貌:"), Chinese annotations in parentheses (e.g., "(可爱的)"), Chinese text inside XML tags (e.g., <tag>中文内容</tag>), and any Chinese text mixed with already-translated Vietnamese text. The final output must have ZERO Chinese characters.${vietnameseRules}`;
+15. LOREBOOK SPECIFIC: Lorebook entries commonly have Chinese text that gets missed during translation. You MUST translate ALL of these: Chinese section headers (e.g., "人物设定："), Chinese YAML keys (e.g., "外貌:"), Chinese annotations in parentheses (e.g., "(可爱的)"), Chinese text inside XML tags (e.g., <tag>中文内容</tag>), and any Chinese text mixed with already-translated Vietnamese text. The final output must have ZERO Chinese characters.
+16. CRITICAL: Do NOT translate URLs, file paths, or image links. Never modify any part of a URL, web link, file path, or image source (e.g., https://..., src="...", href="...", url(...), .html, .png, .jpg), even if they contain foreign characters. Translating links will break them and cause 404 errors.${vietnameseRules}`;
 }
 
 /**
@@ -630,7 +631,6 @@ function isInsideHtmlTag(text: string, pos: number): boolean {
   const lastOpen = slice.lastIndexOf('<');
   if (lastOpen === -1) return false;
   const afterOpen = slice.slice(lastOpen);
-  // If there's a '<' with no matching '>' after it, we're inside a tag
   return !afterOpen.includes('>');
 }
 
@@ -647,30 +647,42 @@ function isInsideCssAtRule(text: string, pos: number): boolean {
     lastAt = m.index;
   }
   if (lastAt === -1) return false;
-  // Check brace balance after the @-rule
   const afterAt = slice.slice(lastAt);
   let depth = 0;
   for (const ch of afterAt) {
     if (ch === '{') depth++;
     else if (ch === '}') depth--;
   }
-  return depth > 0; // unclosed = inside @-rule block
+  return depth > 0;
+}
+
+/**
+ * Check if position is inside a URL (src="...", href="...", or standalone https://...).
+ * Splitting inside a URL will break the link.
+ */
+function isInsideUrl(text: string, pos: number): boolean {
+  const scanLen = Math.min(pos, 500);
+  const slice = text.slice(pos - scanLen, pos);
+  if (/(?:src|href|url|action|data-src|data-url|poster|srcset)\s*=\s*["'][^"']*$/i.test(slice)) return true;
+  if (/url\s*\(\s*["']?[^)"']*$/i.test(slice)) return true;
+  if (/https?:\/\/[^\s<>"')\]]*$/i.test(slice)) return true;
+  return false;
 }
 
 /**
  * Check if a candidate split position is "safe" — i.e., not inside a template literal,
  * EJS block, regex pattern, function body, script/style block, HTML tag, CSS block,
- * or unbalanced JSON/code structure.
+ * URL, or unbalanced JSON/code structure.
  * Returns true if it is safe to split at `pos`.
  */
 function isSafeBoundary(text: string, pos: number): boolean {
   const before = text.slice(0, pos);
 
-  // 1. Backtick balance — splitting inside `template ${expr}` breaks JS (B1)
+  // 1. Backtick balance
   const backtickCount = countUnescapedBackticks(text, pos, 10000);
   if (backtickCount % 2 !== 0) return false;
 
-  // 2. EJS tag balance — splitting inside <% ... %> breaks templates
+  // 2. EJS tag balance
   const ejsOpens = (before.match(/<%/g) || []).length;
   const ejsCloses = (before.match(/%>/g) || []).length;
   if (ejsOpens > ejsCloses) return false;
@@ -679,7 +691,7 @@ function isSafeBoundary(text: string, pos: number): boolean {
   const codeBlockMarkers = (before.match(/```/g) || []).length;
   if (codeBlockMarkers % 2 !== 0) return false;
 
-  // 4. Brace/bracket balance — scan last 10000 chars for deep nesting
+  // 4. Brace/bracket balance
   const recentSlice = before.slice(-10000);
   let braceDepth = 0;
   let bracketDepth = 0;
@@ -692,27 +704,30 @@ function isSafeBoundary(text: string, pos: number): boolean {
     else if (ch === '(') parenDepth++;
     else if (ch === ')') parenDepth--;
   }
-  if (braceDepth > 2) return false;   // deep nesting = inside JSON/code block
-  if (bracketDepth > 2) return false;  // inside array literal
-  if (parenDepth > 2) return false;    // inside function call / expression
+  if (braceDepth > 2) return false;
+  if (bracketDepth > 2) return false;
+  if (parenDepth > 2) return false;
 
-  // 5. Function body detection — splitting inside function(){...} corrupts code (B8)
+  // 5. Function body detection
   if (isInsideFunctionBody(text, pos)) return false;
 
-  // 6. Script/style block detection — never split inside <script> or <style>
+  // 6. Script/style block detection
   if (isInsideScriptOrStyle(text, pos)) return false;
 
-  // 7. String literal detection — splitting inside "..." or '...' breaks code
+  // 7. String literal detection
   if (isInsideStringLiteral(text, pos)) return false;
 
-  // 8. Regex literal detection — splitting inside /pattern/ breaks regex
+  // 8. Regex literal detection
   if (isInsideRegexLiteral(text, pos)) return false;
 
-  // 9. HTML tag detection — splitting inside <div class="... breaks tags
+  // 9. HTML tag detection
   if (isInsideHtmlTag(text, pos)) return false;
 
-  // 10. CSS @-rule block detection — splitting inside @media{...} breaks CSS
+  // 10. CSS @-rule block detection
   if (isInsideCssAtRule(text, pos)) return false;
+
+  // 11. URL detection — splitting inside a URL breaks links and image sources
+  if (isInsideUrl(text, pos)) return false;
 
   return true;
 }
@@ -950,6 +965,14 @@ export function chunkText(text: string, maxChars?: number, _maxTokens?: number):
     chunks.push(remaining.slice(0, splitIdx));
     // Never trimStart to ensure exact reconstruction when joining with ''
     remaining = remaining.slice(splitIdx);
+
+    // Guard: if remaining is only whitespace, append to last chunk instead of creating empty chunk
+    if (remaining.length > 0 && remaining.trim().length === 0) {
+      if (chunks.length > 0) {
+        chunks[chunks.length - 1] += remaining;
+      }
+      break;
+    }
   }
 
   return chunks;
@@ -1445,7 +1468,9 @@ function sleep(ms: number): Promise<void> {
 /* ─── Clean translation response ─── */
 // Strips patterns where AI returns "original → translation" instead of just translation
 // Also handles Expert Mode XML responses (<thought_process>/<translation> tags)
-function cleanTranslationResponse(original: string, translated: string, isExpertMode?: boolean): string {
+// When isChunkedPart=true, arrow cleanup is SKIPPED because chunks are fragments that
+// may legitimately contain → characters (CSS, code, mapping notations).
+function cleanTranslationResponse(original: string, translated: string, isExpertMode?: boolean, isChunkedPart?: boolean): string {
   if (!translated || !translated.trim()) return translated;
 
   // ═══ EXPERT MODE: Extract <translation> content from XML response ═══
@@ -1520,9 +1545,10 @@ function cleanTranslationResponse(original: string, translated: string, isExpert
 
   // Pattern 1: Full text "original → translation" or "original -> translation"
   // The AI sometimes returns "Chinese text → Vietnamese text"
+  // SKIP for chunked parts — chunks are text fragments where → is often legitimate content.
   // This hallucination mostly happens on short texts. For very long texts (>2000 chars),
   // it's almost certainly a legitimate arrow in the code/regex.
-  if (original.length < 2000) {
+  if (original.length < 2000 && !isChunkedPart) {
     // Check if the response contains the original text with an arrow separator
     // Split by various arrow characters
     const arrowSeparators = ['→', '➜', '➡', '⇒', '->'];
@@ -1566,8 +1592,11 @@ function cleanTranslationResponse(original: string, translated: string, isExpert
   }
 
   // Pattern 2: Backtick-wrapped pairs like `original` → `translation`
-  cleaned = cleaned.replace(/`[^`]+`\s*[→➜➡⇒]\s*`([^`]+)`/g, '$1');
-  cleaned = cleaned.replace(/`[^`]+`\s*->\s*`([^`]+)`/g, '$1');
+  // Also skip for chunked parts to avoid stripping legitimate content
+  if (!isChunkedPart) {
+    cleaned = cleaned.replace(/`[^`]+`\s*[→➜➡⇒]\s*`([^`]+)`/g, '$1');
+    cleaned = cleaned.replace(/`[^`]+`\s*->\s*`([^`]+)`/g, '$1');
+  }
 
   // Pattern 3: Remove any remaining quotes wrapping around the whole response
   if (cleaned.startsWith("'") && cleaned.endsWith("'") && !original.startsWith("'")) {
@@ -1862,9 +1891,14 @@ async function translateChunk(
 
       // ─── Multi-round truncation detection & continuation ───
       // Nếu AI trả về < input → gần chắc chắn bị cắt do max output tokens.
-      // Code-heavy content (như Regex, Custom Code) thường có tỷ lệ 1:1 do code giữ nguyên. User yêu cầu bắt buộc >= 100%.
+      // Code-heavy content (như Regex, Custom Code) thường có tỷ lệ 1:1 do code giữ nguyên.
+      // CJK→Latin expansion: CJK text is very compact (~1 char = 1 word), Vietnamese/English
+      // translations are 1.3-2x longer. Adjust threshold so continuation triggers correctly.
       const isCodeHeavy = fieldName.toLowerCase().includes('regex') || fieldName.toLowerCase().includes('code') || fieldName.toLowerCase().includes('script') || fieldName.toLowerCase().includes('helper');
-      const CONT_THRESHOLD = isCodeHeavy ? 0.85 : 0.7;
+      const cjkRatioInChunk = getCJKRatio(chunk);
+      // High CJK ratio = expect longer output, so raise threshold to avoid premature stop
+      const cjkExpansionFactor = cjkRatioInChunk > 0.3 ? 1.4 : (cjkRatioInChunk > 0.1 ? 1.2 : 1.0);
+      const CONT_THRESHOLD = isCodeHeavy ? 0.85 : Math.min(0.7 * cjkExpansionFactor, 0.95);
       const MAX_CONT_ROUNDS = 5;
 
       if (chunk.length > 500 && result.length > 0) {
@@ -1882,8 +1916,11 @@ async function translateChunk(
           console.log(`[translateChunk] ${fieldName} chunk ${chunkIdx + 1}/${totalChunks}: response ${(responseRatio * 100).toFixed(0)}% < ${(CONT_THRESHOLD * 100).toFixed(0)}% (or structural issue) → continuation round ${contRound + 1}/${MAX_CONT_ROUNDS}...`);
 
           // Estimate where in the original text we need to pick up
-          // Use the accumulated result length as a better coverage indicator
-          const estimatedCoverage = Math.min(Math.max(result.length / chunk.length - 0.05, 0.1), 0.95);
+          // Account for CJK→Latin expansion: if source is mostly CJK, the translation
+          // will be longer per-character, so we need to adjust the coverage estimate.
+          const expectedExpansion = cjkRatioInChunk > 0.3 ? 1.4 : (cjkRatioInChunk > 0.1 ? 1.2 : 1.0);
+          const adjustedResultRatio = result.length / (chunk.length * expectedExpansion);
+          const estimatedCoverage = Math.min(Math.max(adjustedResultRatio - 0.05, 0.1), 0.95);
           const remainingOriginal = chunk.slice(Math.floor(chunk.length * estimatedCoverage));
 
           const continuationPrompt = `The previous translation was cut off at approximately ${(responseRatio * 100).toFixed(0)}% of the content. Continue translating from where you stopped.\n` +
@@ -1951,8 +1988,9 @@ async function verifySeams(
   if (translatedChunks.length < 2) return translatedChunks;
 
   // Only check seams — the tail of chunk[i] + head of chunk[i+1]
-  // Take ~300 chars from each side of the seam
-  const SEAM_CHARS = 300;
+  // Dynamic seam chars: scale with chunk size for better coverage on large texts
+  const avgChunkSize = originalChunks.reduce((s, c) => s + c.length, 0) / originalChunks.length;
+  const SEAM_CHARS = Math.min(Math.max(300, Math.floor(avgChunkSize * 0.02)), 800);
   const seamIssues: { idx: number; tailOrig: string; headOrig: string; tailTrans: string; headTrans: string }[] = [];
 
   for (let i = 0; i < translatedChunks.length - 1; i++) {
@@ -2088,6 +2126,72 @@ function unmaskSecrets(text: string, map: SecretMaskMap): string {
   return unmaskedText;
 }
 
+// ─── URL Masking Utilities ───
+// Protect URLs/image links from being translated by the AI.
+// Similar to secret masking, but for URLs in src, href, CSS url(), standalone URLs, and markdown images.
+interface UrlMaskMap {
+  [placeholder: string]: string;
+}
+
+function maskUrls(text: string): { maskedText: string; map: UrlMaskMap } {
+  const map: UrlMaskMap = {};
+  let maskedText = text;
+  let counter = 0;
+
+  // Helper to create unique placeholder
+  const makePlaceholder = () => `__PROTECTED_URL_${counter++}__`;
+
+  // 1. Markdown image links: ![alt](url)
+  maskedText = maskedText.replace(/(!\[[^\]]*\]\()([^)\s]+)(\))/g, (_match, prefix, url, suffix) => {
+    const ph = makePlaceholder();
+    map[ph] = url;
+    return `${prefix}${ph}${suffix}`;
+  });
+
+  // 2. HTML attributes: src="...", href="...", url="...", action="...", data-src="...", poster="...", srcset="..."
+  maskedText = maskedText.replace(
+    /((?:src|href|action|data-src|data-url|poster|srcset)\s*=\s*)(["'])(https?:\/\/[^"'<>\s]+|[^"'<>\s]+\.(?:png|jpg|jpeg|gif|svg|webp|mp4|webm|mp3|ogg|wav|pdf|zip|css|js|html?)(?:[?#][^"'<>\s]*)?)\2/gi,
+    (_match, attr, quote, url) => {
+      const ph = makePlaceholder();
+      map[ph] = url;
+      return `${attr}${quote}${ph}${quote}`;
+    }
+  );
+
+  // 3. CSS url() patterns
+  maskedText = maskedText.replace(
+    /(url\s*\(\s*)(["']?)(https?:\/\/[^"')\s]+|[^"')\s]+\.(?:png|jpg|jpeg|gif|svg|webp|woff2?|ttf|eot)(?:[?#][^"')\s]*)?)\2(\s*\))/gi,
+    (_match, prefix, quote, url, suffix) => {
+      const ph = makePlaceholder();
+      map[ph] = url;
+      return `${prefix}${quote}${ph}${quote}${suffix}`;
+    }
+  );
+
+  // 4. Standalone URLs (https://... not already captured)
+  // Only match URLs that aren't already placeholders
+  maskedText = maskedText.replace(
+    /(?<=[\s\n(]|^)(https?:\/\/[^\s<>"'`)\]]{10,})/gm,
+    (match, url) => {
+      if (url.includes('__PROTECTED_URL_')) return match; // Already masked
+      const ph = makePlaceholder();
+      map[ph] = url;
+      return match.replace(url, ph);
+    }
+  );
+
+  return { maskedText, map };
+}
+
+function unmaskUrls(text: string, map: UrlMaskMap): string {
+  let unmaskedText = text;
+  for (const [placeholder, url] of Object.entries(map)) {
+    // Use split+join for safety (avoids regex special char issues in URLs)
+    unmaskedText = unmaskedText.split(placeholder).join(url);
+  }
+  return unmaskedText;
+}
+
 export async function translateText(
   text: string,
   fieldName: string,
@@ -2114,7 +2218,9 @@ export async function translateText(
   if (!text || text.trim() === '') return '';
 
   // 1. Mask secrets (API keys, tokens, passwords) before translation
-  const { maskedText, map: secretMap } = maskSecrets(text);
+  const { maskedText: secretMasked, map: secretMap } = maskSecrets(text);
+  // 2. Mask URLs/image links to prevent AI from translating them
+  const { maskedText, map: urlMap } = maskUrls(secretMasked);
 
   const isExpert = config.expertMode;
   const isCodeHeavy = fieldName.toLowerCase().includes('regex') || fieldName.toLowerCase().includes('code') || fieldName.toLowerCase().includes('script') || fieldName.toLowerCase().includes('helper');
@@ -2131,8 +2237,9 @@ export async function translateText(
     const result = await translateChunk(
       chunks[0], 0, 1, fieldName, config, targetLang, sourceLang, system, user, signal
     );
-    let cleaned = cleanTranslationResponse(maskedText, result, isExpert);
-    cleaned = unmaskSecrets(cleaned, secretMap); // Unmask before residual check
+    let cleaned = cleanTranslationResponse(maskedText, result, isExpert, false);
+    cleaned = unmaskUrls(cleaned, urlMap);  // Unmask URLs
+    cleaned = unmaskSecrets(cleaned, secretMap); // Unmask secrets before residual check
     
     if (isCodeHeavy) {
       const structuralTrunc = detectStructuralTruncation(maskedText, cleaned);
@@ -2178,14 +2285,20 @@ export async function translateText(
   for (let idx = hasResume ? resumeFromIdx : 0; idx < chunks.length; idx++) {
     if (signal?.aborted) throw new Error('Cancelled');
 
-    // Build rich context: full previous translated chunk + original boundary
+    // Build rich context: tail of previous translated chunk + original boundary
+    // LIMIT context size to avoid overflowing the model's context window on very large chunks.
     let prevContext = '';
     if (idx > 0 && translatedChunks[idx - 1]) {
-      const fullPrevTranslation = translatedChunks[idx - 1];
+      const prevTranslation = translatedChunks[idx - 1];
+      // Only send tail of previous translation to avoid context overflow on very large chunks
+      const CONTEXT_TAIL_CHARS = 2000;
+      const prevTranslationTail = prevTranslation.length > CONTEXT_TAIL_CHARS
+        ? '...[earlier content truncated for brevity]...\n' + prevTranslation.slice(-CONTEXT_TAIL_CHARS)
+        : prevTranslation;
       const originalBoundaryTail = chunks[idx - 1].slice(-ORIGINAL_BOUNDARY_CHARS);
       prevContext =
-        `=== PREVIOUS CHUNK TRANSLATION (for terminology & flow consistency) ===\n` +
-        `${fullPrevTranslation}\n\n` +
+        `=== PREVIOUS CHUNK TRANSLATION TAIL (for terminology & flow consistency) ===\n` +
+        `${prevTranslationTail}\n\n` +
         `=== ORIGINAL TEXT BOUNDARY (last ${ORIGINAL_BOUNDARY_CHARS} chars before this chunk — for code structure awareness) ===\n` +
         `${originalBoundaryTail}`;
     }
@@ -2202,9 +2315,10 @@ export async function translateText(
       const translated = await translateChunk(
         chunks[idx], idx, chunks.length, fieldName, config, targetLang, sourceLang, system, user, signal
       );
-      // Clean each chunk individually against its OWN original text to prevent
-      // arrow-separator cleanup from incorrectly stripping legitimate content
-      const chunkCleaned = cleanTranslationResponse(chunks[idx], translated, isExpert);
+      // Clean each chunk individually against its OWN original text.
+      // Pass isChunkedPart=true to SKIP arrow cleanup (→) — chunks are text fragments
+      // where → is often legitimate content (CSS transitions, code mappings, etc.)
+      const chunkCleaned = cleanTranslationResponse(chunks[idx], translated, isExpert, true);
       translatedChunks.push(chunkCleaned);
       console.log(`[translateText] ${fieldName}: chunk ${idx + 1}/${chunks.length} done ✓`);
 
@@ -2244,8 +2358,9 @@ export async function translateText(
   const isHtmlContent = /<[a-z][^>]*>/i.test(maskedText) && /<\/[a-z]+>/i.test(maskedText);
   const joiner = (isHtmlContent || isCodeHeavy) ? '' : '\n\n';
   const rawResult = verifiedChunks.join(joiner);
-  // Chunks already individually cleaned above — only unmask secrets here
-  let cleaned = unmaskSecrets(rawResult, secretMap);
+  // Chunks already individually cleaned above — unmask URLs and secrets here
+  let cleaned = unmaskUrls(rawResult, urlMap);
+  cleaned = unmaskSecrets(cleaned, secretMap);
   
   if (isCodeHeavy) {
     const structuralTrunc = detectStructuralTruncation(maskedText, cleaned);

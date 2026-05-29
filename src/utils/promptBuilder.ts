@@ -485,15 +485,38 @@ function getBatchFieldTypeExtraPrompts(
  * Build the MVU dictionary injection string.
  * For logic fields: strict replacement dictionary.
  * For narrative fields: glossary-style hint.
+ * For initvar/controller fields: ULTRA-STRICT covariance enforcement.
  */
 function buildMvuDictInjection(
   mvuDictionary: Record<string, string>,
   isLogic: boolean,
+  entryType?: string,
 ): string {
   const mvuEntries = Object.entries(mvuDictionary).filter(([k, v]) => k && v && k !== v);
   if (mvuEntries.length === 0) return '';
 
   const dictList = mvuEntries.map(([k, v]) => `  "${k}" → "${v}"`).join('\n');
+
+  // ─── ULTRA-STRICT mode for initvar/controller/mvu_logic ───
+  // These fields MUST have 100% character-exact covariance with schema
+  const isInitvarType = entryType === 'initvar' || entryType === 'controller' || entryType === 'mvu_logic';
+
+  if (isInitvarType) {
+    return `\n\n⚠️ ZERO-TOLERANCE COVARIANCE — EXACT KEY REPLACEMENT TABLE:
+This entry's YAML keys / variable names MUST use EXACTLY the following translations.
+DO NOT translate these variable names yourself — copy them CHARACTER-FOR-CHARACTER from this table.
+Any deviation (different spacing, different wording, different capitalization) will BREAK the card.
+
+${dictList}
+
+ENFORCEMENT RULES (HIGHEST PRIORITY):
+1. For EVERY CJK key in the source text, find it in the table above and use the EXACT translated value
+2. DO NOT add prefixes like "Độ", "Mức", "Giá trị" unless the table above includes them
+3. DO NOT change capitalization — if the table says "Hảo Cảm", use "Hảo Cảm" (not "Hảo cảm" or "hảo cảm")
+4. DO NOT use synonyms — if the table says "Thể Lực", do NOT write "Sức Khỏe" even if semantically similar
+5. The schema (z.object) already uses these exact names — your YAML keys MUST match 100%
+6. Enum values (.default(), .prefault(), z.enum()) from this table MUST also be used exactly as-is in YAML values`;
+  }
 
   if (isLogic) {
     return `\n\nCRITICAL — MVU/Zod VARIABLE REPLACEMENT DICTIONARY:
@@ -627,7 +650,10 @@ ${modInstructionsBlock}`;
       const checkLogic = isBatchMode
         ? batchFields.some(isLogicField)
         : isLogicField(field);
-      modPrompt += buildMvuDictInjection(mvuDictionary, checkLogic);
+      const dominantEntryType = isBatchMode
+        ? (batchFields.find(f => f.entryType === 'initvar' || f.entryType === 'controller' || f.entryType === 'mvu_logic')?.entryType || field.entryType)
+        : field.entryType;
+      modPrompt += buildMvuDictInjection(mvuDictionary, checkLogic, dominantEntryType);
     }
 
     // Inject EJS Sync prompt block (Strategy C)
@@ -802,7 +828,10 @@ ${modInstructionsBlock}`;
       const checkLogic = isBatchMode
         ? batchFields.some(isLogicField)
         : isLogicField(field);
-      prompt = (prompt || '') + buildMvuDictInjection(mvuDictionary, checkLogic);
+      const dominantEntryType = isBatchMode
+        ? (batchFields.find(f => f.entryType === 'initvar' || f.entryType === 'controller' || f.entryType === 'mvu_logic')?.entryType || field.entryType)
+        : field.entryType;
+      prompt = (prompt || '') + buildMvuDictInjection(mvuDictionary, checkLogic, dominantEntryType);
     }
   }
 

@@ -301,6 +301,127 @@ export function syncMvuVariables(
   return result;
 }
 
+/**
+ * Enforce covariance between initvar YAML keys and the MVU Dictionary.
+ * After AI translates an initvar entry, this function scans all YAML keys
+ * in the translated text and replaces any that don't match the MVU Dictionary
+ * with the correct (dictionary) value.
+ *
+ * This is the FINAL SAFETY NET — even if the AI used a slightly different
+ * translation for a variable name, this function will forcefully align it
+ * with the schema-derived dictionary.
+ *
+ * @param translatedText The AI-translated initvar text
+ * @param mvuDictionary The MVU dictionary (original CJK → translated name)
+ * @returns { text: string, fixes: { found: string, replaced: string }[] }
+ */
+export function enforceInitvarCovariance(
+  translatedText: string,
+  mvuDictionary: Record<string, string>
+): { text: string; fixes: { found: string; replaced: string }[] } {
+  if (!translatedText || typeof translatedText !== 'string') {
+    return { text: translatedText, fixes: [] };
+  }
+
+  const fixes: { found: string; replaced: string }[] = [];
+
+  // Build reverse lookup: translated value → original CJK key
+  // This lets us check if a YAML key in the output IS a valid translated name
+  const translatedToOriginal = new Map<string, string>();
+  const originalToTranslated = new Map<string, string>();
+  for (const [orig, trans] of Object.entries(mvuDictionary)) {
+    if (orig && trans && orig !== trans) {
+      translatedToOriginal.set(trans.toLowerCase(), orig);
+      originalToTranslated.set(orig, trans);
+    }
+  }
+
+  if (originalToTranslated.size === 0) {
+    return { text: translatedText, fixes: [] };
+  }
+
+  // Extract all YAML-style keys from the translated text
+  // Match: "key": value  OR  key: value  (at start of line, with optional quotes)
+  const lines = translatedText.split('\n');
+  let result = translatedText;
+
+  for (const line of lines) {
+    const yamlMatch = line.match(/^(\s*)(?:["']([^"':\n]+)["']|([^"':\s\n][^"':\n]*[^"':\s\n]|[^"':\s\n]))\s*:/);
+    if (!yamlMatch) continue;
+
+    const yamlKey = (yamlMatch[2] || yamlMatch[3])?.trim();
+    if (!yamlKey) continue;
+
+    // Skip if this key is already correct (exists as a translated value in dict)
+    if (translatedToOriginal.has(yamlKey.toLowerCase())) continue;
+
+    // Skip if this key is a CJK original (hasn't been translated yet — will be handled by applyMvuToText)
+    if (originalToTranslated.has(yamlKey)) continue;
+
+    // This key is NOT in the dictionary — it might be a mismatched translation
+    // Try to find the correct translation by checking if any dictionary value
+    // is "close" to this key (fuzzy match)
+    const correctValue = findClosestDictValue(yamlKey, mvuDictionary);
+    if (correctValue && correctValue !== yamlKey) {
+      // Build a regex that replaces this specific YAML key occurrence
+      const escaped = yamlKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const keyRegex = new RegExp(
+        `^(\\s*)(["']?)${escaped}(["']?)(\\s*:)`,
+        'gm'
+      );
+      const safeReplacement = correctValue.replace(/\$/g, '$$$$');
+      const newText = result.replace(keyRegex, `$1$2${safeReplacement}$3$4`);
+      if (newText !== result) {
+        result = newText;
+        fixes.push({ found: yamlKey, replaced: correctValue });
+      }
+    }
+  }
+
+  return { text: result, fixes };
+}
+
+/**
+ * Find the closest matching dictionary value for a potentially mismatched YAML key.
+ * Uses normalized comparison to handle common AI translation variations:
+ * - Case differences: "Hảo cảm" vs "Hảo Cảm"
+ * - Prefix additions: "Độ Hảo Cảm" vs "Hảo Cảm"
+ * - Word order: "Cảm Hảo" vs "Hảo Cảm"
+ */
+function findClosestDictValue(
+  yamlKey: string,
+  mvuDictionary: Record<string, string>
+): string | null {
+  const normalize = (s: string) => s.toLowerCase().replace(/[\s_-]+/g, ' ').trim();
+  const normalizedKey = normalize(yamlKey);
+
+  // Direct case-insensitive match against translated values
+  for (const [, trans] of Object.entries(mvuDictionary)) {
+    if (!trans || trans === yamlKey) continue;
+    if (normalize(trans) === normalizedKey) {
+      return trans; // Exact match after normalization — use dict value
+    }
+  }
+
+  // Substring containment: "Độ Hảo Cảm" contains "Hảo Cảm"
+  // Only match if the dict value is a significant portion of the key
+  for (const [, trans] of Object.entries(mvuDictionary)) {
+    if (!trans || trans.length < 2) continue;
+    const normalizedTrans = normalize(trans);
+    // Check if key contains the dict value or vice versa
+    if (normalizedKey.includes(normalizedTrans) || normalizedTrans.includes(normalizedKey)) {
+      // Only accept if length ratio is reasonable (> 60%)
+      const ratio = Math.min(normalizedKey.length, normalizedTrans.length) /
+                    Math.max(normalizedKey.length, normalizedTrans.length);
+      if (ratio > 0.6) {
+        return trans;
+      }
+    }
+  }
+
+  return null;
+}
+
 // ─── Noise Filter Sets ───
 const NOISE_GENERIC = new Set([
   'true', 'false', 'null', 'undefined', 'enabled', 'disabled',

@@ -477,12 +477,78 @@ export function extractAllStringLiterals(source: string): string[] {
 }
 
 /**
+ * Extract TYPED string literals from Zod expressions, separated by category.
+ * Returns { enums: string[], defaults: string[], describes: string[] }
+ * for independent positional comparison per type.
+ */
+export function extractTypedStringLiterals(source: string): {
+  enums: string[];
+  defaults: string[];
+  describes: string[];
+} {
+  const enums: string[] = [];
+  const defaults: string[] = [];
+  const describes: string[] = [];
+
+  // 1. z.enum([...]) values
+  const enumRegex = /(?:z|Zod)\.enum\(\s*\[([^\]]+)\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = enumRegex.exec(source)) !== null) {
+    const valRegex = /["'`]([^"'`]+)["'`]/g;
+    let vm: RegExpExecArray | null;
+    while ((vm = valRegex.exec(m[1])) !== null) {
+      enums.push(vm[1]);
+    }
+  }
+
+  // 2. .default('...') / .prefault('...')
+  const defaultRegex = /\.(?:default|prefault)\(\s*["'`]([^"'`]+)["'`]\s*\)/g;
+  while ((m = defaultRegex.exec(source)) !== null) {
+    defaults.push(m[1]);
+  }
+
+  // 3. .describe('...')
+  const describeRegex = /\.describe\(\s*["'`]([^"'`]+)["'`]\s*\)/g;
+  while ((m = describeRegex.exec(source)) !== null) {
+    describes.push(m[1]);
+  }
+
+  return { enums, defaults, describes };
+}
+
+/** Check if a string contains CJK characters */
+function hasCJK(s: string): boolean {
+  return /[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff\uac00-\ud7af]/.test(s);
+}
+
+/**
+ * Map two arrays of string literals positionally, accepting only pairs where
+ * the original contains CJK and differs from the translation.
+ */
+function mapPositionalLiterals(
+  origArr: string[],
+  transArr: string[],
+  mapping: Record<string, string>
+): void {
+  if (origArr.length === transArr.length && origArr.length > 0) {
+    for (let i = 0; i < origArr.length; i++) {
+      if (origArr[i] !== transArr[i] && hasCJK(origArr[i])) {
+        mapping[origArr[i]] = transArr[i];
+      }
+    }
+  }
+}
+
+/**
  * Extract ordered string literals from a full EJS/JS source (not just Zod blocks).
  * This does a broader scan to catch string literals in:
  * - YAML-like values (key: "value" inside template literals)
  * - data.variable === "value" comparisons
  * - getvar/setvar calls with string arguments
- * Used as a fallback when Zod block extraction yields insufficient mappings.
+ *
+ * COVARIANCE FIX: Uses type-separated matching (enums, defaults, describes
+ * independently) so a mismatch in one category doesn't break all categories.
+ * Falls back to the combined list only when all three type-level counts match.
  */
 export function extractOrderedStringPairs(
   originalSource: string,
@@ -490,17 +556,29 @@ export function extractOrderedStringPairs(
 ): Record<string, string> {
   const mapping: Record<string, string> = {};
 
-  const origLiterals = extractAllStringLiterals(originalSource);
-  const transLiterals = extractAllStringLiterals(translatedSource);
+  // ─── Phase 1: Try type-separated matching (more robust) ───
+  const origTyped = extractTypedStringLiterals(originalSource);
+  const transTyped = extractTypedStringLiterals(translatedSource);
 
-  // Only map when counts match (1-1 positional mapping)
-  if (origLiterals.length === transLiterals.length && origLiterals.length > 0) {
-    for (let i = 0; i < origLiterals.length; i++) {
-      const orig = origLiterals[i];
-      const trans = transLiterals[i];
-      // Only add if they differ and original contains CJK
-      if (orig !== trans && /[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff\uac00-\ud7af]/.test(orig)) {
-        mapping[orig] = trans;
+  // Match enums independently — most critical for covariance
+  mapPositionalLiterals(origTyped.enums, transTyped.enums, mapping);
+  // Match defaults independently
+  mapPositionalLiterals(origTyped.defaults, transTyped.defaults, mapping);
+  // Match describes independently
+  mapPositionalLiterals(origTyped.describes, transTyped.describes, mapping);
+
+  // ─── Phase 2: If type-separated yielded nothing, try combined (legacy) ───
+  if (Object.keys(mapping).length === 0) {
+    const origLiterals = extractAllStringLiterals(originalSource);
+    const transLiterals = extractAllStringLiterals(translatedSource);
+
+    if (origLiterals.length === transLiterals.length && origLiterals.length > 0) {
+      for (let i = 0; i < origLiterals.length; i++) {
+        const orig = origLiterals[i];
+        const trans = transLiterals[i];
+        if (orig !== trans && hasCJK(orig)) {
+          mapping[orig] = trans;
+        }
       }
     }
   }

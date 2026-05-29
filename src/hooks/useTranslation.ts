@@ -2,7 +2,7 @@ import { useCallback, useRef } from 'react';
 import { useStore } from '../store';
 import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookEntries, ChunkError } from '../utils/apiClient';
 import { extractTranslatableFields, applyTranslationsToCard, autoTranslateLorebookTriggerKeys, injectNewLorebookEntries } from '../utils/cardFields';
-import { syncMvuVariables, postProcessRegexHtml, extractPotentialMvuKeyStrings, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas } from '../utils/mvuSync';
+import { syncMvuVariables, postProcessRegexHtml, extractPotentialMvuKeyStrings, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, enforceInitvarCovariance } from '../utils/mvuSync';
 import { shouldSkipTranslation, detectLanguage } from '../utils/langDetect';
 import { clearRAGCache } from '../utils/ragContext';
 import { getMvuCardSummary } from '../utils/mvuDetector';
@@ -332,6 +332,16 @@ export function useTranslation() {
             store.addLog('info', `🔧 Auto-fixed ${validation.unreplaced.length} vars in ${field.label}`);
           }
         }
+
+        // ─── COVARIANCE FIX: Enforce initvar YAML keys match MVU Dictionary exactly ───
+        if (field.entryType === 'initvar' || field.entryType === 'controller' || field.entryType === 'mvu_logic') {
+          const covariance = enforceInitvarCovariance(translated, currentMvuDict);
+          if (covariance.fixes.length > 0) {
+            translated = covariance.text;
+            const fixSummary = covariance.fixes.map(f => `"${f.found}"→"${f.replaced}"`).join(', ');
+            store.addLog('info', `🔗 Covariance: fixed ${covariance.fixes.length} YAML key(s) in ${field.label}: ${fixSummary}`);
+          }
+        }
       }
 
       // Post-process regex HTML: font swap + underscore display
@@ -589,6 +599,18 @@ export function useTranslation() {
               store.addLog('info', `🔧 Auto-fixed ${validation.unreplaced.length} vars in ${batchFields[j].label}`);
             } else {
               store.addLog('warning', `⚠️ ${validation.unreplaced.length} unreplaced vars in ${batchFields[j].label}: ${validation.unreplaced.slice(0, 3).join(', ')}`);
+            }
+          }
+
+          // ─── COVARIANCE FIX: Enforce initvar/controller/mvu_logic YAML keys ───
+          const bf = batchFields[j];
+          if (bf.entryType === 'initvar' || bf.entryType === 'controller' || bf.entryType === 'mvu_logic') {
+            const covariance = enforceInitvarCovariance(translated, mvuDict);
+            if (covariance.fixes.length > 0) {
+              translated = covariance.text;
+              autoFixCount += covariance.fixes.length;
+              const fixSummary = covariance.fixes.map(f => `"${f.found}"→"${f.replaced}"`).join(', ');
+              store.addLog('info', `🔗 Covariance: fixed ${covariance.fixes.length} YAML key(s) in ${bf.label}: ${fixSummary}`);
             }
           }
 

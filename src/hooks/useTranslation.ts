@@ -2,7 +2,7 @@ import { useCallback, useRef } from 'react';
 import { useStore } from '../store';
 import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookEntries, ChunkError } from '../utils/apiClient';
 import { extractTranslatableFields, applyTranslationsToCard, autoTranslateLorebookTriggerKeys, injectNewLorebookEntries } from '../utils/cardFields';
-import { syncMvuVariables, postProcessRegexHtml, extractPotentialMvuKeyStrings, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, enforceInitvarCovariance } from '../utils/mvuSync';
+import { syncMvuVariables, postProcessRegexHtml, extractPotentialMvuKeyStrings, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, enforceInitvarCovariance, extractMappingFromTranslatedInitvar } from '../utils/mvuSync';
 import { shouldSkipTranslation, detectLanguage } from '../utils/langDetect';
 import { clearRAGCache } from '../utils/ragContext';
 import { getMvuCardSummary } from '../utils/mvuDetector';
@@ -197,6 +197,22 @@ export function useTranslation() {
       // Build entry name dictionary from already-translated lorebook name fields
       const entryNameDict = { ...buildEntryNameDictionary(fields), ...buildRegexTriggerDictionary(fields) };
 
+      // ═══ Collect translated schema content for initvar/controller/mvu_logic context ═══
+      // When translating these entry types, inject the full translated TavernHelper scripts
+      // so the AI knows exact variable names, types, enum values, default values, etc.
+      let translatedSchemaContent: string | undefined;
+      const isInitvarType = field.entryType === 'initvar' || field.entryType === 'controller' || field.entryType === 'mvu_logic';
+      if (isInitvarType && store.translationConfig.enableMvuSync) {
+        const schemaFields = fields.filter(f =>
+          f.group === 'tavern_helper' && f.status === 'done' && f.translated && f.translated.trim()
+        );
+        if (schemaFields.length > 0) {
+          translatedSchemaContent = schemaFields
+            .map(f => `// ─── ${f.label} ───\n${f.translated}`)
+            .join('\n\n');
+        }
+      }
+
       const promptResult = buildEffectivePrompt({
         translationPrompt: store.translationConfig.translationPrompt,
         enableJailbreak: store.translationConfig.enableJailbreak,
@@ -222,6 +238,7 @@ export function useTranslation() {
         ejsEntryNameDict: useStore.getState().translationConfig.ejsEntryNameDict,
         ejsKeywordDict: useStore.getState().translationConfig.ejsKeywordDict,
         ejsDecoratorPreserve: store.translationConfig.ejsDecoratorPreserve,
+        translatedSchemaContent,
       });
 
       // ═══ Determine field type for Master Prompt (expert mode) ═══
@@ -340,6 +357,29 @@ export function useTranslation() {
             translated = covariance.text;
             const fixSummary = covariance.fixes.map(f => `"${f.found}"→"${f.replaced}"`).join(', ');
             store.addLog('info', `🔗 Covariance: fixed ${covariance.fixes.length} YAML key(s) in ${field.label}: ${fixSummary}`);
+          }
+
+          // ═══ PROGRESSIVE DICT: Extract new variable mappings from this just-translated entry ═══
+          // Entries like initvar/controller may define variables NOT in the Zod schema.
+          // By extracting mappings here, we ensure subsequent entries use the same translated names.
+          const entryMappings = extractMappingFromTranslatedInitvar([
+            { original: field.original, translated, status: 'done', entryType: field.entryType }
+          ]);
+          const newMappingKeys = Object.keys(entryMappings);
+          if (newMappingKeys.length > 0) {
+            const freshDict = useStore.getState().translationConfig.mvuDictionary;
+            const updatedDict = { ...freshDict };
+            let addedCount = 0;
+            for (const [k, v] of Object.entries(entryMappings)) {
+              if (v && v.trim() && !(k in updatedDict)) {
+                updatedDict[k] = v;
+                addedCount++;
+              }
+            }
+            if (addedCount > 0) {
+              store.setTranslationConfig({ mvuDictionary: updatedDict });
+              store.addLog('info', `🔗 Progressive: +${addedCount} entry-specific var(s) from ${field.label}`);
+            }
           }
         }
       }
@@ -506,6 +546,22 @@ export function useTranslation() {
       // Build entry name dictionary from already-translated lorebook name fields
       const batchEntryNameDict = { ...buildEntryNameDictionary(store.fields), ...buildRegexTriggerDictionary(store.fields) };
 
+      // ═══ Collect translated schema content for initvar/controller/mvu_logic context ═══
+      let batchSchemaContent: string | undefined;
+      const batchHasInitvarType = batchFields.some(f =>
+        f.entryType === 'initvar' || f.entryType === 'controller' || f.entryType === 'mvu_logic'
+      );
+      if (batchHasInitvarType && store.translationConfig.enableMvuSync) {
+        const schemaFields = store.fields.filter(f =>
+          f.group === 'tavern_helper' && f.status === 'done' && f.translated && f.translated.trim()
+        );
+        if (schemaFields.length > 0) {
+          batchSchemaContent = schemaFields
+            .map(f => `// ─── ${f.label} ───\n${f.translated}`)
+            .join('\n\n');
+        }
+      }
+
       const promptResult = buildEffectivePrompt({
         translationPrompt: store.translationConfig.translationPrompt,
         enableJailbreak: store.translationConfig.enableJailbreak,
@@ -532,6 +588,7 @@ export function useTranslation() {
         ejsEntryNameDict: useStore.getState().translationConfig.ejsEntryNameDict,
         ejsKeywordDict: useStore.getState().translationConfig.ejsKeywordDict,
         ejsDecoratorPreserve: store.translationConfig.ejsDecoratorPreserve,
+        translatedSchemaContent: batchSchemaContent,
       });
 
       const results = await translateBatch(
@@ -611,6 +668,27 @@ export function useTranslation() {
               autoFixCount += covariance.fixes.length;
               const fixSummary = covariance.fixes.map(f => `"${f.found}"→"${f.replaced}"`).join(', ');
               store.addLog('info', `🔗 Covariance: fixed ${covariance.fixes.length} YAML key(s) in ${bf.label}: ${fixSummary}`);
+            }
+
+            // ═══ PROGRESSIVE DICT: Extract new variable mappings from batch-translated entry ═══
+            const entryMappings = extractMappingFromTranslatedInitvar([
+              { original: bf.original, translated, status: 'done', entryType: bf.entryType }
+            ]);
+            const newMappingKeys = Object.keys(entryMappings);
+            if (newMappingKeys.length > 0) {
+              const freshDict = useStore.getState().translationConfig.mvuDictionary;
+              const updatedDict = { ...freshDict };
+              let addedCount = 0;
+              for (const [k, v] of Object.entries(entryMappings)) {
+                if (v && v.trim() && !(k in updatedDict)) {
+                  updatedDict[k] = v;
+                  addedCount++;
+                }
+              }
+              if (addedCount > 0) {
+                store.setTranslationConfig({ mvuDictionary: updatedDict });
+                store.addLog('info', `🔗 Progressive: +${addedCount} entry-specific var(s) from ${bf.label}`);
+              }
             }
           }
 

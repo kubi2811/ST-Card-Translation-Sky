@@ -395,6 +395,8 @@ export interface PromptBuildOptions {
   ejsEntryNameDict?: Record<string, string>;
   ejsKeywordDict?: Record<string, string>;
   ejsDecoratorPreserve?: boolean;
+  /** Full translated TavernHelper/Schema content to inject when translating initvar/controller/mvu_logic */
+  translatedSchemaContent?: string;
 }
 
 export interface PromptBuildResult {
@@ -491,6 +493,7 @@ function buildMvuDictInjection(
   mvuDictionary: Record<string, string>,
   isLogic: boolean,
   entryType?: string,
+  translatedSchemaContent?: string,
 ): string {
   const mvuEntries = Object.entries(mvuDictionary).filter(([k, v]) => k && v && k !== v);
   if (mvuEntries.length === 0) return '';
@@ -502,7 +505,7 @@ function buildMvuDictInjection(
   const isInitvarType = entryType === 'initvar' || entryType === 'controller' || entryType === 'mvu_logic';
 
   if (isInitvarType) {
-    return `\n\n⚠️ ZERO-TOLERANCE COVARIANCE — EXACT KEY REPLACEMENT TABLE:
+    let injection = `\n\n⚠️ ZERO-TOLERANCE COVARIANCE — EXACT KEY REPLACEMENT TABLE:
 This entry's YAML keys / variable names MUST use EXACTLY the following translations.
 DO NOT translate these variable names yourself — copy them CHARACTER-FOR-CHARACTER from this table.
 Any deviation (different spacing, different wording, different capitalization) will BREAK the card.
@@ -516,6 +519,32 @@ ENFORCEMENT RULES (HIGHEST PRIORITY):
 4. DO NOT use synonyms — if the table says "Thể Lực", do NOT write "Sức Khỏe" even if semantically similar
 5. The schema (z.object) already uses these exact names — your YAML keys MUST match 100%
 6. Enum values (.default(), .prefault(), z.enum()) from this table MUST also be used exactly as-is in YAML values`;
+
+    // ─── FULL SCHEMA INJECTION: send the complete translated schema code ───
+    // This gives the AI full context about variable types, enum options,
+    // default values, and structural relationships — not just a flat dictionary.
+    if (translatedSchemaContent && translatedSchemaContent.trim()) {
+      // Cap at 30000 chars to avoid exceeding token limits
+      const schemaSnippet = translatedSchemaContent.length > 30000
+        ? translatedSchemaContent.slice(0, 30000) + '\n... (truncated)'
+        : translatedSchemaContent;
+      injection += `\n\n═══ TRANSLATED SCHEMA (FULL SOURCE CODE — REFERENCE ONLY) ═══
+Below is the ALREADY-TRANSLATED schema/TavernHelper script. Use it as THE authoritative reference for:
+- Exact variable names (z.object field names)
+- Enum values (z.enum options)
+- Default values (.prefault(), .default())
+- Variable types (z.string, z.number, z.boolean, z.enum)
+- Structural relationships (nested objects)
+
+Your YAML keys, macro variable names, and all references MUST match this schema EXACTLY.
+
+\`\`\`javascript
+${schemaSnippet}
+\`\`\`
+═══ END OF SCHEMA ═══`;
+    }
+
+    return injection;
   }
 
   if (isLogic) {
@@ -575,6 +604,7 @@ export function buildEffectivePrompt(options: PromptBuildOptions): PromptBuildRe
     enableModMode = false,
     modInstructions = '',
     expertMode = false,
+    translatedSchemaContent,
   } = options;
 
   const modPreset = options.modPreset || 'none';
@@ -653,7 +683,7 @@ ${modInstructionsBlock}`;
       const dominantEntryType = isBatchMode
         ? (batchFields.find(f => f.entryType === 'initvar' || f.entryType === 'controller' || f.entryType === 'mvu_logic')?.entryType || field.entryType)
         : field.entryType;
-      modPrompt += buildMvuDictInjection(mvuDictionary, checkLogic, dominantEntryType);
+      modPrompt += buildMvuDictInjection(mvuDictionary, checkLogic, dominantEntryType, translatedSchemaContent);
     }
 
     // Inject EJS Sync prompt block (Strategy C)
@@ -831,7 +861,7 @@ ${modInstructionsBlock}`;
       const dominantEntryType = isBatchMode
         ? (batchFields.find(f => f.entryType === 'initvar' || f.entryType === 'controller' || f.entryType === 'mvu_logic')?.entryType || field.entryType)
         : field.entryType;
-      prompt = (prompt || '') + buildMvuDictInjection(mvuDictionary, checkLogic, dominantEntryType);
+      prompt = (prompt || '') + buildMvuDictInjection(mvuDictionary, checkLogic, dominantEntryType, translatedSchemaContent);
     }
   }
 

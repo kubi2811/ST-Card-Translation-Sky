@@ -311,6 +311,9 @@ export function syncMvuVariables(
  * translation for a variable name, this function will forcefully align it
  * with the schema-derived dictionary.
  *
+ * Now also enforces covariance for macro variables ({{getvar::KEY}}) and
+ * bracket access (obj['KEY']), not just YAML keys.
+ *
  * @param translatedText The AI-translated initvar text
  * @param mvuDictionary The MVU dictionary (original CJK → translated name)
  * @returns { text: string, fixes: { found: string, replaced: string }[] }
@@ -340,11 +343,10 @@ export function enforceInitvarCovariance(
     return { text: translatedText, fixes: [] };
   }
 
-  // Extract all YAML-style keys from the translated text
-  // Match: "key": value  OR  key: value  (at start of line, with optional quotes)
-  const lines = translatedText.split('\n');
   let result = translatedText;
 
+  // ─── Pass 1: YAML key covariance (existing logic) ───
+  const lines = translatedText.split('\n');
   for (const line of lines) {
     const yamlMatch = line.match(/^(\s*)(?:["']([^"':\n]+)["']|([^"':\s\n][^"':\n]*[^"':\s\n]|[^"':\s\n]))\s*:/);
     if (!yamlMatch) continue;
@@ -366,7 +368,7 @@ export function enforceInitvarCovariance(
       // Build a regex that replaces this specific YAML key occurrence
       const escaped = yamlKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const keyRegex = new RegExp(
-        `^(\\s*)(["']?)${escaped}(["']?)(\\s*:)`,
+        `^(\\s*)([\"']?)${escaped}([\"']?)(\\s*:)`,
         'gm'
       );
       const safeReplacement = correctValue.replace(/\$/g, '$$$$');
@@ -374,6 +376,72 @@ export function enforceInitvarCovariance(
       if (newText !== result) {
         result = newText;
         fixes.push({ found: yamlKey, replaced: correctValue });
+      }
+    }
+  }
+
+  // ─── Pass 2: Macro variable covariance ───
+  // Fix {{getvar::KEY}} / {{setvar::KEY::}} where KEY is a mismatched translation
+  const macroRegex = /(\{\{(?:getvar|setvar|addvar|getglobalvar|setglobalvar|addglobalvar)::)([^:}]+)(}}|::)/g;
+  let macroMatch;
+  const macroFixes: { from: string; to: string }[] = [];
+  while ((macroMatch = macroRegex.exec(result)) !== null) {
+    const varName = macroMatch[2].trim();
+    if (!varName) continue;
+    // Skip if already correct
+    if (translatedToOriginal.has(varName.toLowerCase())) continue;
+    // Skip if it's still a CJK original
+    if (originalToTranslated.has(varName)) continue;
+
+    const correctValue = findClosestDictValue(varName, mvuDictionary);
+    if (correctValue && correctValue !== varName) {
+      macroFixes.push({ from: varName, to: correctValue });
+    }
+  }
+  for (const mf of macroFixes) {
+    const escaped = mf.from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const safeReplacement = mf.to.replace(/\$/g, '$$$$');
+    const mfRegex = new RegExp(
+      `(\\{\\{(?:getvar|setvar|addvar|getglobalvar|setglobalvar|addglobalvar)::)${escaped}(}}|::)`,
+      'g'
+    );
+    const newText = result.replace(mfRegex, `$1${safeReplacement}$2`);
+    if (newText !== result) {
+      result = newText;
+      if (!fixes.some(f => f.found === mf.from)) {
+        fixes.push({ found: mf.from, replaced: mf.to });
+      }
+    }
+  }
+
+  // ─── Pass 3: Bracket access covariance ───
+  // Fix obj['KEY'] / data["KEY"] where KEY is a mismatched translation
+  const bracketRegex = /(\[\s*['"])([^'"]+)(['"]\s*\])/g;
+  let bracketMatch;
+  const bracketFixes: { from: string; to: string }[] = [];
+  while ((bracketMatch = bracketRegex.exec(result)) !== null) {
+    const varName = bracketMatch[2].trim();
+    if (!varName || varName.length < 2) continue;
+    if (translatedToOriginal.has(varName.toLowerCase())) continue;
+    if (originalToTranslated.has(varName)) continue;
+
+    const correctValue = findClosestDictValue(varName, mvuDictionary);
+    if (correctValue && correctValue !== varName) {
+      bracketFixes.push({ from: varName, to: correctValue });
+    }
+  }
+  for (const bf of bracketFixes) {
+    const escaped = bf.from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const safeReplacement = bf.to.replace(/\$/g, '$$$$');
+    const bfRegex = new RegExp(
+      `(\\[\\s*['"])${escaped}(['"]\\s*\\])`,
+      'g'
+    );
+    const newText = result.replace(bfRegex, `$1${safeReplacement}$2`);
+    if (newText !== result) {
+      result = newText;
+      if (!fixes.some(f => f.found === bf.from)) {
+        fixes.push({ found: bf.from, replaced: bf.to });
       }
     }
   }
@@ -420,6 +488,156 @@ function findClosestDictValue(
   }
 
   return null;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   PROGRESSIVE DICTIONARY — Extract mappings from translated entries
+   ═══════════════════════════════════════════════════════════════ */
+
+/** Check if a string contains CJK characters (module-level reusable) */
+function hasCJK(s: string): boolean {
+  return /[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff\uac00-\ud7af]/.test(s);
+}
+
+/**
+ * Extract YAML-style keys from text in order of appearance.
+ * Matches: `key: value`, `"key": value`, `'key': value`
+ * Returns only unique keys in appearance order.
+ */
+function extractYamlKeysOrdered(text: string): string[] {
+  if (!text || typeof text !== 'string') return [];
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  const yamlKeyRegex = /^\s*(?:["']([^"':\n]+)["']|([^"':\s\n][^"':\n]*[^"':\s\n]|[^"':\s\n]))\s*:/gm;
+  let match;
+  while ((match = yamlKeyRegex.exec(text)) !== null) {
+    const key = (match[1] || match[2])?.trim();
+    if (key && !seen.has(key) &&
+        !key.startsWith('[') && !key.startsWith('<') &&
+        !key.startsWith('//') && !key.startsWith('#') &&
+        !key.startsWith('{') && !key.startsWith('*')) {
+      keys.push(key);
+      seen.add(key);
+    }
+  }
+  return keys;
+}
+
+/**
+ * Extract macro variable names from text in order of appearance.
+ * Matches: {{getvar::KEY}}, {{setvar::KEY::VAL}}, {{addvar::KEY}}, etc.
+ * Returns only unique variable names in appearance order.
+ */
+function extractMacroVarNamesOrdered(text: string): string[] {
+  if (!text || typeof text !== 'string') return [];
+  const names: string[] = [];
+  const seen = new Set<string>();
+  const macroRegex = /\{\{(?:getvar|setvar|addvar|getglobalvar|setglobalvar|addglobalvar)::([^:}]+)/g;
+  let match;
+  while ((match = macroRegex.exec(text)) !== null) {
+    const name = match[1].trim();
+    if (name && !seen.has(name)) {
+      names.push(name);
+      seen.add(name);
+    }
+  }
+  return names;
+}
+
+/**
+ * Extract variable name mappings from already-translated initvar/controller/mvu_logic entries.
+ * Compares original vs translated text to find:
+ * 1. YAML key mappings (positional comparison)
+ * 2. Macro variable name mappings (positional comparison)
+ * 3. Bracket access variable mappings
+ *
+ * This provides "ground truth" mappings from entries that define their OWN variables
+ * (not just schema variables). These mappings are then merged into the MVU dictionary
+ * so that subsequent entries can use the correct translated names.
+ *
+ * @param fields Array of TranslationField with status=done, translated set
+ * @returns Record<originalCJK, translatedName>
+ */
+export function extractMappingFromTranslatedInitvar(
+  fields: { original: string; translated: string; status: string; entryType?: string }[]
+): Record<string, string> {
+  const mapping: Record<string, string> = {};
+
+  // Filter to initvar/controller/mvu_logic entries that are done
+  const relevantFields = fields.filter(f =>
+    (f.entryType === 'initvar' || f.entryType === 'controller' || f.entryType === 'mvu_logic') &&
+    f.status === 'done' && f.translated && f.original
+  );
+
+  for (const field of relevantFields) {
+    // ─── 1. YAML key positional mapping ───
+    const origKeys = extractYamlKeysOrdered(field.original);
+    const transKeys = extractYamlKeysOrdered(field.translated);
+
+    if (origKeys.length === transKeys.length && origKeys.length > 0) {
+      for (let i = 0; i < origKeys.length; i++) {
+        if (origKeys[i] !== transKeys[i] && hasCJK(origKeys[i])) {
+          mapping[origKeys[i]] = transKeys[i];
+        }
+      }
+    }
+
+    // ─── 2. Macro variable name positional mapping ───
+    const origMacros = extractMacroVarNamesOrdered(field.original);
+    const transMacros = extractMacroVarNamesOrdered(field.translated);
+
+    if (origMacros.length === transMacros.length && origMacros.length > 0) {
+      for (let i = 0; i < origMacros.length; i++) {
+        if (origMacros[i] !== transMacros[i] && hasCJK(origMacros[i])) {
+          // Only add if not already mapped (YAML keys take priority)
+          if (!(origMacros[i] in mapping)) {
+            mapping[origMacros[i]] = transMacros[i];
+          }
+        }
+      }
+    }
+
+    // ─── 3. Bracket access: obj['KEY'] / data["KEY"] ───
+    const bracketRegex = /\w+\s*\[\s*['"]([^'"]+)['"]\s*\]/g;
+    const origBrackets: string[] = [];
+    const transBrackets: string[] = [];
+    let bm;
+    while ((bm = bracketRegex.exec(field.original)) !== null) {
+      if (hasCJK(bm[1])) origBrackets.push(bm[1]);
+    }
+    bracketRegex.lastIndex = 0;
+    while ((bm = bracketRegex.exec(field.translated)) !== null) {
+      transBrackets.push(bm[1]);
+    }
+    if (origBrackets.length === transBrackets.length && origBrackets.length > 0) {
+      for (let i = 0; i < origBrackets.length; i++) {
+        if (origBrackets[i] !== transBrackets[i] && !(origBrackets[i] in mapping)) {
+          mapping[origBrackets[i]] = transBrackets[i];
+        }
+      }
+    }
+
+    // ─── 4. String comparisons: === 'KEY' / case 'KEY' ───
+    const compRegex = /(?:===|!==|==|!=|case)\s*['"]([^'"]+)['"]/g;
+    const origComps: string[] = [];
+    const transComps: string[] = [];
+    while ((bm = compRegex.exec(field.original)) !== null) {
+      if (hasCJK(bm[1])) origComps.push(bm[1]);
+    }
+    compRegex.lastIndex = 0;
+    while ((bm = compRegex.exec(field.translated)) !== null) {
+      transComps.push(bm[1]);
+    }
+    if (origComps.length === transComps.length && origComps.length > 0) {
+      for (let i = 0; i < origComps.length; i++) {
+        if (origComps[i] !== transComps[i] && !(origComps[i] in mapping)) {
+          mapping[origComps[i]] = transComps[i];
+        }
+      }
+    }
+  }
+
+  return mapping;
 }
 
 // ─── Noise Filter Sets ───

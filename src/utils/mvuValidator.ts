@@ -1049,3 +1049,190 @@ export function autoFixEntryNames(
 
   return fixed;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   CROSS-ENTRY COVARIANCE VALIDATION
+   Detects variable names used in multiple entries but translated
+   inconsistently — the root cause of "biến không đồng biến" bug.
+   ═══════════════════════════════════════════════════════════════ */
+
+export interface CrossEntryVariance {
+  /** Original CJK variable name */
+  originalVar: string;
+  /** Map of (translation variant → list of entry labels where it appears) */
+  variants: Record<string, string[]>;
+  /** The "canonical" translation from MVU dictionary */
+  canonical?: string;
+}
+
+export interface CrossEntryCovarianceResult {
+  /** True if all variables are consistent across entries */
+  valid: boolean;
+  /** Variables that have inconsistent translations across entries */
+  inconsistencies: CrossEntryVariance[];
+  /** Total unique variables checked */
+  totalVarsChecked: number;
+  /** Total consistent variables */
+  consistentCount: number;
+  /** Summary */
+  summary: string;
+}
+
+/**
+ * Extract all variable-like references from translated text.
+ * Returns a set of variable names found via YAML keys, macros, bracket access, etc.
+ */
+function extractAllVarReferences(text: string): Set<string> {
+  const refs = new Set<string>();
+  if (!text) return refs;
+
+  // 1. YAML keys
+  const yamlKeyRegex = /^\s*(?:["']([^"':\n]+)["']|([^"':\s\n][^"':\n]*[^"':\s\n]|[^"':\s\n]))\s*:/gm;
+  let m;
+  while ((m = yamlKeyRegex.exec(text)) !== null) {
+    const key = (m[1] || m[2])?.trim();
+    if (key && key.length > 1 && !key.startsWith('[') && !key.startsWith('<') && !key.startsWith('//') && !key.startsWith('#')) {
+      refs.add(key);
+    }
+  }
+
+  // 2. Macro variables
+  const macroRegex = /\{\{(?:getvar|setvar|addvar|getglobalvar|setglobalvar|addglobalvar)::([^:}]+)/g;
+  while ((m = macroRegex.exec(text)) !== null) {
+    const name = m[1].trim();
+    if (name && name.length > 1) refs.add(name);
+  }
+
+  // 3. Bracket access
+  const bracketRegex = /\[\s*['"]([^'"]+)['"]\s*\]/g;
+  while ((m = bracketRegex.exec(text)) !== null) {
+    const name = m[1].trim();
+    if (name && name.length > 1) refs.add(name);
+  }
+
+  // 4. EJS function calls
+  const ejsRegex = /(?:getvar|setvar|addvar|getVariable|setVariable)\s*\(\s*['"]([^'"]+)['"]/g;
+  while ((m = ejsRegex.exec(text)) !== null) {
+    const fullKey = m[1].trim();
+    const segments = fullKey.split('.');
+    for (const seg of segments) {
+      if (seg && seg.length > 1 && !/^\d+$/.test(seg)) refs.add(seg);
+    }
+  }
+
+  return refs;
+}
+
+/**
+ * Validate that variables appearing in multiple translated entries
+ * use the SAME translated name everywhere.
+ *
+ * Cross-checks all lorebook entries, regex entries, and core fields.
+ * For each original CJK variable, verifies that its translated name
+ * is consistent across all entries where it appears.
+ *
+ * @param fields - All translated fields
+ * @param dictionary - MVU dictionary (original → translated)
+ */
+export function validateCrossEntryCovariance(
+  fields: { path: string; label: string; group: string; original: string; translated: string; status: string; entryType?: string }[],
+  dictionary: Record<string, string>
+): CrossEntryCovarianceResult {
+  const result: CrossEntryCovarianceResult = {
+    valid: true,
+    inconsistencies: [],
+    totalVarsChecked: 0,
+    consistentCount: 0,
+    summary: '',
+  };
+
+  const dictEntries = Object.entries(dictionary).filter(([k, v]) => k && v && k !== v);
+  if (dictEntries.length === 0) {
+    result.summary = 'No dictionary entries to check';
+    return result;
+  }
+
+  // Build reverse dict: translated → original
+  const transToOrig = new Map<string, string>();
+  for (const [orig, trans] of dictEntries) {
+    transToOrig.set(trans, orig);
+  }
+
+  // For each translated field, extract what variable references it contains
+  // and map each back to the original CJK key
+  const varUsages = new Map<string, Map<string, string[]>>(); // originalVar → Map<translationUsed, [entryLabels]>
+
+  for (const field of fields) {
+    if (field.status !== 'done' || !field.translated) continue;
+    // Only check code-relevant fields
+    if (!['lorebook', 'regex', 'tavern_helper', 'system', 'core'].includes(field.group)) continue;
+
+    const refs = extractAllVarReferences(field.translated);
+
+    for (const ref of refs) {
+      // Is this ref a translated value from the dictionary?
+      const origKey = transToOrig.get(ref);
+      if (!origKey) continue; // Not a dictionary variable, skip
+
+      if (!varUsages.has(origKey)) {
+        varUsages.set(origKey, new Map());
+      }
+      const usageMap = varUsages.get(origKey)!;
+      if (!usageMap.has(ref)) {
+        usageMap.set(ref, []);
+      }
+      usageMap.get(ref)!.push(field.label);
+    }
+
+    // Also check for ORIGINAL CJK vars that should have been translated but weren't
+    const origRefs = extractAllVarReferences(field.original);
+    for (const origRef of origRefs) {
+      const expectedTrans = dictionary[origRef];
+      if (!expectedTrans || expectedTrans === origRef) continue;
+
+      // Check if original CJK still exists in translated (unreplaced)
+      if (field.translated.includes(origRef) && !field.translated.includes(expectedTrans)) {
+        if (!varUsages.has(origRef)) {
+          varUsages.set(origRef, new Map());
+        }
+        const usageMap = varUsages.get(origRef)!;
+        // Record the original as a "bad" variant
+        if (!usageMap.has(origRef)) {
+          usageMap.set(origRef, []);
+        }
+        usageMap.get(origRef)!.push(field.label + ' (unreplaced)');
+      }
+    }
+  }
+
+  // Analyze: variables with >1 translation variant are inconsistent
+  result.totalVarsChecked = varUsages.size;
+
+  for (const [origVar, usageMap] of varUsages) {
+    if (usageMap.size > 1) {
+      // Multiple different translations found for the same original variable
+      const variants: Record<string, string[]> = {};
+      for (const [transVar, entries] of usageMap) {
+        variants[transVar] = entries;
+      }
+      result.inconsistencies.push({
+        originalVar: origVar,
+        variants,
+        canonical: dictionary[origVar],
+      });
+      result.valid = false;
+    } else {
+      result.consistentCount++;
+    }
+  }
+
+  // Build summary
+  const parts: string[] = [];
+  parts.push(`${result.consistentCount}/${result.totalVarsChecked} consistent`);
+  if (result.inconsistencies.length > 0) {
+    parts.push(`${result.inconsistencies.length} ❌ inconsistent`);
+  }
+  result.summary = parts.join(' | ');
+
+  return result;
+}

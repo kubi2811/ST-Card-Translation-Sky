@@ -771,11 +771,19 @@ function findSafeBoundary(text: string, targetPos: number, minPos: number): numb
 }
 
 export function chunkText(text: string, maxChars?: number, _maxTokens?: number): string[] {
-  // Default 100K per chunk for ALL models.
-  // Chunk quá lớn (100K+) sẽ khiến AI chạm giới hạn max output tokens → mất đuôi.
-  // 100K chars ≈ 30K tokens — phù hợp và an toàn cho mọi model hiện đại.
+  // Default chunk size depends on content type.
+  // Code-heavy content (regex HTML, embedded scripts) needs smaller chunks
+  // because AI output limit (~8K-65K tokens) can't reproduce 100K chars of code 1:1.
   if (maxChars === undefined) {
-    maxChars = 100000;
+    const codeSignals = [
+      /<style[\s>]/i.test(text),
+      /<script[\s>]/i.test(text),
+      (text.match(/\{/g) || []).length > 50,
+      (text.match(/<[a-z][^>]*>/gi) || []).length > 100,
+    ].filter(Boolean).length;
+    // Code-heavy: 30K chars ≈ 10K tokens output — safe for all models
+    // Normal text: 100K chars ≈ 30K tokens
+    maxChars = codeSignals >= 2 ? 30000 : 100000;
   }
 
   // ═══ HARD CAP: 500K chars per chunk ═══
@@ -1889,6 +1897,23 @@ async function translateChunk(
         throw new Error('AI bị ngắt ngang do chạm giới hạn Max Tokens (chưa kịp xuất bản dịch).');
       }
 
+      // ═══ Expert Mode: detect <translation> bị cắt ngang ═══
+      // AI output đủ reasoning nhưng <translation> không có </translation>
+      // → reasoning ăn hết output tokens, bản dịch bị truncated
+      if (config.expertMode) {
+        const hasTransOpen = /<translation>/i.test(result);
+        const hasTransClose = /<\/translation>/i.test(result);
+        if (hasTransOpen && !hasTransClose) {
+          // Extract partial translation để dùng cho continuation
+          const partialMatch = result.match(/<translation>\s*([\s\S]+)$/i);
+          if (partialMatch) {
+            // Chỉ giữ phần translation, bỏ reasoning để continuation nhận đúng
+            result = partialMatch[1].trim();
+            console.warn(`[translateChunk] Expert Mode: <translation> bị cắt ngang (${result.length} chars partial) — reasoning ăn quá nhiều output tokens. Sẽ trigger continuation.`);
+          }
+        }
+      }
+
       // ─── Multi-round truncation detection & continuation ───
       // Nếu AI trả về < input → gần chắc chắn bị cắt do max output tokens.
       // Code-heavy content (như Regex, Custom Code) thường có tỷ lệ 1:1 do code giữ nguyên.
@@ -1898,7 +1923,9 @@ async function translateChunk(
       const cjkRatioInChunk = getCJKRatio(chunk);
       // High CJK ratio = expect longer output, so raise threshold to avoid premature stop
       const cjkExpansionFactor = cjkRatioInChunk > 0.3 ? 1.4 : (cjkRatioInChunk > 0.1 ? 1.2 : 1.0);
-      const CONT_THRESHOLD = isCodeHeavy ? 0.85 : Math.min(0.7 * cjkExpansionFactor, 0.95);
+      // Code-heavy: ratio thấp là bình thường (code giữ nguyên, chỉ dịch CJK)
+      // Giảm threshold để không trigger continuation vô ích
+      const CONT_THRESHOLD = isCodeHeavy ? 0.50 : Math.min(0.7 * cjkExpansionFactor, 0.95);
       const MAX_CONT_ROUNDS = 5;
 
       if (chunk.length > 500 && result.length > 0) {
@@ -1911,6 +1938,14 @@ async function translateChunk(
               break;
             }
             console.log(`[translateChunk] Structural truncation detected in ${fieldName} chunk ${chunkIdx + 1}/${totalChunks} despite ratio ${(responseRatio * 100).toFixed(0)}%: ${structuralCheck.reason}`);
+          } else if (isCodeHeavy && responseRatio >= 0.30) {
+            // Code-heavy: ratio thấp là bình thường (code giữ nguyên, chỉ dịch CJK rải rác)
+            // Kiểm tra structural — nếu cấu trúc OK thì dịch xong rồi, dừng continuation
+            const structuralCheck = detectStructuralTruncation(chunk, result);
+            if (!structuralCheck.isTruncated) {
+              console.log(`[translateChunk] Code-heavy ${fieldName}: ratio ${(responseRatio * 100).toFixed(0)}% but structure OK — skipping continuation`);
+              break;
+            }
           }
 
           console.log(`[translateChunk] ${fieldName} chunk ${chunkIdx + 1}/${totalChunks}: response ${(responseRatio * 100).toFixed(0)}% < ${(CONT_THRESHOLD * 100).toFixed(0)}% (or structural issue) → continuation round ${contRound + 1}/${MAX_CONT_ROUNDS}...`);
@@ -2224,7 +2259,13 @@ export async function translateText(
 
   const isExpert = config.expertMode;
   const isCodeHeavy = fieldName.toLowerCase().includes('regex') || fieldName.toLowerCase().includes('code') || fieldName.toLowerCase().includes('script') || fieldName.toLowerCase().includes('helper');
-  const chunks = chunkText(maskedText, chunkSize && chunkSize > 0 ? chunkSize : undefined, config.maxTokens);
+  // Adaptive chunk size: code-heavy content cần chunk nhỏ hơn
+  // vì AI output limit không đủ cho 100K chars code 1:1
+  let effectiveChunkSize = chunkSize && chunkSize > 0 ? chunkSize : undefined;
+  if (!effectiveChunkSize && isCodeHeavy) {
+    effectiveChunkSize = 30000; // ~10K tokens output — an toàn cho mọi model
+  }
+  const chunks = chunkText(maskedText, effectiveChunkSize, config.maxTokens);
 
   // ═══ SINGLE CHUNK — fast path (no parallelism needed) ═══
   if (chunks.length === 1) {

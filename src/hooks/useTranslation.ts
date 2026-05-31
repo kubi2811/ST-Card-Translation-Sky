@@ -158,12 +158,24 @@ export function useTranslation() {
     store.setCurrentFieldIndex(index);
     store.updateField(field.path, { status: 'translating' });
     const charCount = field.original.length;
-    // Tự động tính toán CHUNK_THRESHOLD dựa trên token user nhập (cùng công thức maxTokens * 3.5)
     const currentMaxTokens = store.proxy.maxTokens;
     const currentChunkSize = store.translationConfig.chunkSize;
-    const CHUNK_THRESHOLD = currentChunkSize && currentChunkSize > 0
-      ? currentChunkSize
-      : (currentMaxTokens && currentMaxTokens > 0 ? Math.min(Math.floor(currentMaxTokens * 3.5), 200000) : 100000);
+    // Adaptive CHUNK_THRESHOLD: regex/code-heavy fields cần chunk nhỏ hơn
+    // vì AI output limit không đủ cho 100K chars code 1:1
+    const isRegexOrCodeField = field.group === 'regex' || field.group === 'tavern_helper';
+    let CHUNK_THRESHOLD: number;
+    if (currentChunkSize && currentChunkSize > 0) {
+      CHUNK_THRESHOLD = currentChunkSize;
+    } else if (isRegexOrCodeField) {
+      // Regex/TavernHelper: chunk nhỏ hơn vì nội dung code-heavy
+      CHUNK_THRESHOLD = currentMaxTokens && currentMaxTokens > 0
+        ? Math.min(Math.floor(currentMaxTokens * 2), 50000)
+        : 30000;
+    } else {
+      CHUNK_THRESHOLD = currentMaxTokens && currentMaxTokens > 0
+        ? Math.min(Math.floor(currentMaxTokens * 3.5), 200000)
+        : 100000;
+    }
       
     const targetModel = store.translationConfig.enableModelRouting
       ? (store.translationConfig.entryModelRouting[field.path] || store.translationConfig.groupModelRouting[field.group] || store.proxy.model)
@@ -392,6 +404,34 @@ export function useTranslation() {
       // Post-process TavernHelper content that contains HTML
       if (field.group === 'tavern_helper' && translated && /<[a-z][^>]*>/i.test(translated)) {
         translated = postProcessRegexHtml(translated);
+      }
+
+      // ═══ COMPLETENESS VALIDATION: output ≥ input cho mọi field ═══
+      // field.original = nội dung gốc CẦN DỊCH (không bao gồm schema, RAG, prompt)
+      // CJK → Latin luôn expand, nên nếu output ngắn hơn = mất nội dung
+      if (translated && translated.trim() && field.original.length > 100) {
+        const origLen = field.original.length;
+        const transLen = translated.length;
+        // Code-heavy: code giữ nguyên, CJK→Latin expand nhẹ → ratio ~0.85-1.0
+        // Text thuần: CJK→Latin expand mạnh → ratio thường 1.2-2.0, tối thiểu ~0.95
+        const isCodeField = field.group === 'regex' || field.group === 'tavern_helper';
+        const minRatio = isCodeField ? 0.85 : 0.95;
+        
+        if (transLen < origLen * minRatio) {
+          if (freshRetries() < (store.proxy.maxRetries || 3)) {
+            store.updateField(field.path, { retries: freshRetries() + 1 });
+            store.addLog('retry', 
+              `⚠️ Dịch thiếu: ${transLen}/${origLen} chars ` +
+              `(${(transLen / origLen * 100).toFixed(0)}% < ${(minRatio * 100).toFixed(0)}%). Auto-retry...`
+            );
+            await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
+            return 'retry';
+          }
+          store.addLog('warning', 
+            `⚠️ Vẫn ngắn sau retries: ${transLen}/${origLen} chars ` +
+            `(${(transLen / origLen * 100).toFixed(0)}%). Có thể thiếu nội dung.`
+          );
+        }
       }
 
       // Empty translation guard — if API returned empty/whitespace, treat as error

@@ -413,10 +413,10 @@ export function useTranslation() {
       if (translated && translated.trim() && field.original.length > 100) {
         const origLen = field.original.length;
         const transLen = translated.length;
-        // Code-heavy: code giữ nguyên, CJK→Latin expand nhẹ → ratio ~0.85-1.0
-        // Text thuần: CJK→Latin expand mạnh → ratio thường 1.2-2.0, tối thiểu ~0.95
+        // Regex & TavernHelper: Cấu trúc code và nội dung dịch ra tiếng Việt phải đảm bảo không ngắn hơn bản gốc (minRatio = 1.0)
+        // Text thường: minRatio = 0.95
         const isCodeField = field.group === 'regex' || field.group === 'tavern_helper';
-        const minRatio = isCodeField ? 0.85 : 0.95;
+        const minRatio = isCodeField ? 1.0 : 0.95;
         
         if (transLen < origLen * minRatio) {
           if (freshRetries() < (store.proxy.maxRetries || 3)) {

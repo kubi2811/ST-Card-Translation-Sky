@@ -52,6 +52,10 @@ export function useTranslation() {
   const store = useStore();
   const abortRef = useRef<AbortController | null>(null);
   const pauseRef = useRef(false);
+  // Track whether the main translation loop is actively running
+  const runningRef = useRef(false);
+  // Per-field abort controllers: cancel previous in-flight translation for same field on retry
+  const fieldAbortMap = useRef<Map<string, AbortController>>(new Map());
 
   /**
    * Prepare fields for translation.
@@ -311,7 +315,8 @@ export function useTranslation() {
           : undefined;
 
         if (prevChunks) {
-          store.addLog('info', `🔄 Resuming ${field.label} from chunk ${prevChunks.length + 1} (${prevChunks.length} chunks cached)`);
+          const filledCount = prevChunks.filter(c => c && c.length > 0).length;
+          store.addLog('info', `🔄 Resuming ${field.label}: ${filledCount} chunks cached`);
         }
 
         translated = await translateText(
@@ -346,6 +351,8 @@ export function useTranslation() {
           },
           // parallelChunks
           store.translationConfig.parallelChunks,
+          // enableChunkVerification
+          store.translationConfig.enableChunkVerification,
         );
       }
 
@@ -914,9 +921,15 @@ export function useTranslation() {
     if (abortRef.current) {
       abortRef.current.abort();
     }
+    // Also cancel any per-field in-flight translations (from retranslate/retry)
+    for (const [, ctrl] of fieldAbortMap.current) {
+      ctrl.abort();
+    }
+    fieldAbortMap.current.clear();
 
     abortRef.current = new AbortController();
     pauseRef.current = false;
+    runningRef.current = true;
     store.setPhase('translating');
     store.setStartTime(Date.now());
     store.clearLogs();
@@ -997,6 +1010,7 @@ export function useTranslation() {
     while (i < fields.length) {
       // Check abort
       if (checkAbort()) {
+        runningRef.current = false;
         store.setPhase('cancelled');
         store.addLog('warning', 'Translation cancelled by user');
         return;
@@ -1004,6 +1018,7 @@ export function useTranslation() {
 
       // Handle pause
       if (await waitForPause()) {
+        runningRef.current = false;
         store.setPhase('cancelled');
         return;
       }
@@ -1103,6 +1118,7 @@ export function useTranslation() {
         } catch (mvuErr) {
           const mvuMsg = mvuErr instanceof Error ? mvuErr.message : String(mvuErr);
           if (mvuMsg === 'Cancelled' || checkAbort()) {
+            runningRef.current = false;
             store.setPhase('cancelled');
             return;
           }
@@ -1177,6 +1193,7 @@ export function useTranslation() {
         } catch (ejsErr) {
           const ejsMsg = ejsErr instanceof Error ? ejsErr.message : String(ejsErr);
           if (ejsMsg === 'Cancelled' || checkAbort()) {
+            runningRef.current = false;
             store.setPhase('cancelled');
             return;
           }
@@ -1295,8 +1312,16 @@ export function useTranslation() {
         let batchIdx = 0;
         while (batchIdx < subBatches.length) {
           if (checkAbort()) {
+            runningRef.current = false;
             store.setPhase('cancelled');
             store.addLog('warning', 'Translation cancelled');
+            return;
+          }
+
+          // Handle pause inside batch loop
+          if (await waitForPause()) {
+            runningRef.current = false;
+            store.setPhase('cancelled');
             return;
           }
 
@@ -1313,6 +1338,7 @@ export function useTranslation() {
               if (r.status === 'rejected') {
                 const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
                 if (msg === 'Cancelled' || checkAbort()) {
+                  runningRef.current = false;
                   store.setPhase('cancelled');
                   store.addLog('warning', 'Translation cancelled');
                   return;
@@ -1320,6 +1346,7 @@ export function useTranslation() {
               }
             }
           } catch {
+            runningRef.current = false;
             store.setPhase('cancelled');
             store.addLog('warning', 'Translation cancelled');
             return;
@@ -1389,6 +1416,7 @@ export function useTranslation() {
         }
       } catch {
         // Cancel was thrown
+        runningRef.current = false;
         store.setPhase('cancelled');
         store.addLog('warning', 'Translation cancelled');
         return;
@@ -1405,6 +1433,7 @@ export function useTranslation() {
       }
     }
 
+    runningRef.current = false;
     store.setPhase('done');
     store.saveTranslationCache();
     const doneCount = store.fields.filter((f) => f.status === 'done').length;
@@ -1530,13 +1559,42 @@ export function useTranslation() {
 
   const resumeTranslation = useCallback(() => {
     pauseRef.current = false;
-    store.setPhase('translating');
-    store.addLog('info', 'Translation resumed');
-  }, [store]);
+    if (runningRef.current) {
+      // The translation loop is still alive (paused in waitForPause),
+      // just flip the flag and it will continue on its own.
+      store.setPhase('translating');
+      store.addLog('info', 'Translation resumed');
+    } else {
+      // The translation loop has exited (e.g., API error during pause killed it).
+      // We need to restart via continueTranslation to pick up where we left off.
+      store.addLog('info', 'Translation loop was not active — restarting via continue...');
+      // Reset any fields stuck in 'translating' status back to 'pending'
+      const stuckFields = useStore.getState().fields.filter(f => f.status === 'translating');
+      for (const f of stuckFields) {
+        store.updateField(f.path, { status: 'pending' });
+      }
+      store.setPhase('translating');
+      // Use setTimeout to avoid calling startTranslation synchronously inside this callback
+      setTimeout(() => {
+        startTranslation(true);
+      }, 0);
+    }
+  }, [store, startTranslation]);
 
   const cancelTranslation = useCallback(() => {
     abortRef.current?.abort();
+    // Also cancel any per-field in-flight translations
+    for (const [, ctrl] of fieldAbortMap.current) {
+      ctrl.abort();
+    }
+    fieldAbortMap.current.clear();
     pauseRef.current = false;
+    runningRef.current = false;
+    // Reset any fields stuck in 'translating' status back to 'pending'
+    const stuckFields = useStore.getState().fields.filter(f => f.status === 'translating');
+    for (const f of stuckFields) {
+      store.updateField(f.path, { status: 'pending' });
+    }
     store.setPhase('cancelled');
   }, [store]);
 
@@ -1544,7 +1602,14 @@ export function useTranslation() {
     const field = store.fields.find((f) => f.path === path);
     if (!field) return;
 
+    // ═══ Cancel any previous in-flight translation for this field ═══
+    const prevController = fieldAbortMap.current.get(path);
+    if (prevController) {
+      prevController.abort();
+      fieldAbortMap.current.delete(path);
+    }
     const controller = new AbortController();
+    fieldAbortMap.current.set(path, controller);
     store.updateField(path, { status: 'translating', error: undefined });
 
     // Read fresh field state from store to prevent stale reference
@@ -1642,6 +1707,7 @@ export function useTranslation() {
           });
         },
         store.translationConfig.parallelChunks,
+        store.translationConfig.enableChunkVerification,
       );
 
       // Post-process regex HTML: font swap + underscore display
@@ -1664,6 +1730,11 @@ export function useTranslation() {
       store.addLog('success', `Re-translated: ${field.label}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      if (msg === 'Cancelled' || msg === 'The operation was aborted' || msg === 'The user aborted a request.') {
+        // Silently ignore abort — field was cancelled because a new retranslate started
+        store.updateField(path, { status: 'pending' });
+        return;
+      }
       if (err instanceof ChunkError) {
         store.updateField(path, {
           status: 'error',
@@ -1677,6 +1748,9 @@ export function useTranslation() {
         store.updateField(path, { status: 'error', error: msg });
         store.addLog('error', `Re-translate failed: ${field.label} — ${msg}`);
       }
+    } finally {
+      // Clean up per-field abort controller
+      fieldAbortMap.current.delete(path);
     }
   }, [store]);
 
@@ -1723,23 +1797,57 @@ export function useTranslation() {
 
   /** Retry all fields that are in 'error' status */
   const retryAllErrors = useCallback(async () => {
-    const errorFields = store.fields.filter(f => f.status === 'error');
+    const errorFields = useStore.getState().fields.filter(f => f.status === 'error');
     if (errorFields.length === 0) {
       store.addToast('info', 'No error fields to retry');
       return;
     }
+
+    // ═══ Properly manage phase and abort controller for retry ═══
+    if (abortRef.current) {
+      abortRef.current.abort();
+    }
+    for (const [, ctrl] of fieldAbortMap.current) {
+      ctrl.abort();
+    }
+    fieldAbortMap.current.clear();
+    abortRef.current = new AbortController();
+    pauseRef.current = false;
+    runningRef.current = true;
+    store.setPhase('translating');
 
     store.addLog('info', `♻️ Retrying ${errorFields.length} failed field(s)...`);
     let successCount = 0;
     let failCount = 0;
 
     for (const field of errorFields) {
+      // Check abort/pause between fields
+      if (checkAbort()) {
+        runningRef.current = false;
+        store.setPhase('cancelled');
+        store.addLog('warning', 'Retry cancelled by user');
+        return;
+      }
+      if (await waitForPause()) {
+        runningRef.current = false;
+        store.setPhase('cancelled');
+        return;
+      }
+
       let attempts = 0;
       const maxAttempts = 2; // Auto-retry up to 2 times for chunk errors
       let success = false;
 
       while (attempts <= maxAttempts) {
         try {
+          // Cancel any previous in-flight translation for this field
+          const prevCtrl = fieldAbortMap.current.get(field.path);
+          if (prevCtrl) {
+            prevCtrl.abort();
+            fieldAbortMap.current.delete(field.path);
+          }
+          const retryController = new AbortController();
+          fieldAbortMap.current.set(field.path, retryController);
           store.updateField(field.path, { status: 'translating', error: undefined });
 
           // Build context hint for lorebook keys
@@ -1759,7 +1867,8 @@ export function useTranslation() {
             : undefined;
 
           if (prevChunks && attempts === 0) {
-            store.addLog('info', `🔄 Resuming ${field.label} from chunk ${prevChunks.length + 1} (${prevChunks.length} chunks cached)`);
+            const filledCount = prevChunks.filter(c => c && c.length > 0).length;
+            store.addLog('info', `🔄 Resuming ${field.label}: ${filledCount} chunks cached`);
           }
 
           const translated = await translateText(
@@ -1770,7 +1879,7 @@ export function useTranslation() {
             store.translationConfig.sourceLanguage,
             store.translationConfig.translationPrompt,
             store.translationConfig.customSchema,
-            undefined,
+            abortRef.current?.signal,
             contextHint,
             store.translationConfig.glossary,
             field.previousTranslation,
@@ -1791,6 +1900,7 @@ export function useTranslation() {
               });
             },
             store.translationConfig.parallelChunks,
+            store.translationConfig.enableChunkVerification,
           );
 
           // Clear chunk state on success
@@ -1801,6 +1911,7 @@ export function useTranslation() {
           store.addLog('success', `✓ Retry OK: ${field.label}`);
           successCount++;
           success = true;
+          fieldAbortMap.current.delete(field.path);
 
           // Delay between retries
           if (store.proxy.requestDelay > 0) {
@@ -1808,8 +1919,19 @@ export function useTranslation() {
           }
           break;
         } catch (err) {
-          attempts++;
           const msg = err instanceof Error ? err.message : String(err);
+
+          // Handle cancellation during retry
+          if (msg === 'Cancelled' || msg === 'The operation was aborted' || msg === 'The user aborted a request.' || checkAbort()) {
+            store.updateField(field.path, { status: 'error', error: 'Cancelled' });
+            fieldAbortMap.current.delete(field.path);
+            runningRef.current = false;
+            store.setPhase('cancelled');
+            store.addLog('warning', 'Retry cancelled by user');
+            return;
+          }
+
+          attempts++;
 
           // Check if chunking is expected
           const currentMaxTokens = store.proxy.maxTokens;
@@ -1848,6 +1970,7 @@ export function useTranslation() {
             store.addLog('error', `✗ Retry failed: ${field.label} — ${msg}`);
           }
           failCount++;
+          fieldAbortMap.current.delete(field.path);
 
           // Delay between retries
           if (store.proxy.requestDelay > 0) {
@@ -1858,6 +1981,11 @@ export function useTranslation() {
       }
     }
 
+    runningRef.current = false;
+    // Only set phase to done/cancelled if still in 'translating' (not already cancelled by user)
+    if (useStore.getState().phase === 'translating') {
+      store.setPhase(failCount > 0 ? 'done' : 'done');
+    }
     store.saveTranslationCache();
     store.addLog('info', `Retry complete: ${successCount} fixed, ${failCount} still failing`);
     store.addToast(failCount === 0 ? 'success' : 'error', `Retry: ${successCount}/${errorFields.length} fixed`);
@@ -2225,10 +2353,16 @@ export function useTranslation() {
     if (abortRef.current) {
       abortRef.current.abort();
     }
+    // Also cancel any per-field in-flight translations (from retranslate/retry)
+    for (const [, ctrl] of fieldAbortMap.current) {
+      ctrl.abort();
+    }
+    fieldAbortMap.current.clear();
 
     // Clear state for fresh progress tracking
     abortRef.current = new AbortController();
     pauseRef.current = false;
+    runningRef.current = true;
     store.setPhase('translating');
     store.setStartTime(Date.now());
     store.clearLogs();
@@ -2305,6 +2439,7 @@ export function useTranslation() {
       } catch (mvuErr) {
         const mvuMsg = mvuErr instanceof Error ? mvuErr.message : String(mvuErr);
         if (mvuMsg === 'Cancelled' || checkAbort()) {
+          runningRef.current = false;
           store.setPhase('cancelled');
           return;
         }
@@ -2601,6 +2736,7 @@ export function useTranslation() {
     while (i < targetFields.length) {
       // Check abort
       if (checkAbort()) {
+        runningRef.current = false;
         store.setPhase('cancelled');
         store.addLog('warning', '🔧 Mod cancelled by user');
         return;
@@ -2608,6 +2744,7 @@ export function useTranslation() {
 
       // Handle pause
       if (await waitForPause()) {
+        runningRef.current = false;
         store.setPhase('cancelled');
         return;
       }
@@ -2702,8 +2839,16 @@ export function useTranslation() {
         let batchIdx = 0;
         while (batchIdx < subBatches.length) {
           if (checkAbort()) {
+            runningRef.current = false;
             store.setPhase('cancelled');
             store.addLog('warning', '🔧 Mod cancelled');
+            return;
+          }
+
+          // Handle pause inside mod batch loop
+          if (await waitForPause()) {
+            runningRef.current = false;
+            store.setPhase('cancelled');
             return;
           }
 
@@ -2719,6 +2864,7 @@ export function useTranslation() {
               if (r.status === 'rejected') {
                 const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
                 if (msg === 'Cancelled' || checkAbort()) {
+                  runningRef.current = false;
                   store.setPhase('cancelled');
                   store.addLog('warning', '🔧 Mod cancelled');
                   return;
@@ -2726,6 +2872,7 @@ export function useTranslation() {
               }
             }
           } catch {
+            runningRef.current = false;
             store.setPhase('cancelled');
             store.addLog('warning', '🔧 Mod cancelled');
             return;
@@ -2768,6 +2915,7 @@ export function useTranslation() {
         }
       } catch {
         // Cancel was thrown
+        runningRef.current = false;
         store.setPhase('cancelled');
         store.addLog('warning', '🔧 Mod cancelled');
         return;
@@ -2870,6 +3018,7 @@ export function useTranslation() {
       }
     }
 
+    runningRef.current = false;
     // Only set to 'done' if not already cancelled
     if (useStore.getState().phase === 'translating') {
       store.setPhase('done');

@@ -1542,14 +1542,40 @@ function cleanTranslationResponse(original: string, translated: string, isExpert
     return text;
   };
 
+  // ═══ EMBEDDED BACKTICK REPAIR ═══
+  // AI sometimes injects ``` INSIDE code strings when translating large minified JS.
+  // e.g. 'editor-node' → 'editor-n```ode', `${var}` → `${var}```
+  // Detect by comparing: if original has fewer ``` occurrences than translated,
+  // the extras are AI hallucinations that must be removed.
+  const repairEmbeddedBackticks = (orig: string, trans: string): string => {
+    const origCount = (orig.match(/```/g) || []).length;
+    const transCount = (trans.match(/```/g) || []).length;
+    if (transCount > origCount) {
+      // Remove ``` that are embedded within code (not at line start/end as fences)
+      // Pattern: ``` preceded and/or followed by non-whitespace (embedded in identifiers/strings)
+      let repaired = trans.replace(/(?<=\S)```(?=\S)/g, '');
+      // Also handle ``` at word boundaries that don't match original structure
+      if ((repaired.match(/```/g) || []).length > origCount) {
+        repaired = repaired.replace(/(?<=\S)```/g, '');
+      }
+      if ((repaired.match(/```/g) || []).length > origCount) {
+        repaired = repaired.replace(/```(?=\S)/g, '');
+      }
+      return repaired;
+    }
+    return trans;
+  };
+
   const isHtmlContent = /<[a-z][^>]*>/i.test(original) && /<\/[a-z]+>/i.test(original);
   if (isHtmlContent) {
-    // For HTML content, apply code fence logic (safe operation)
+    // For HTML content, apply code fence logic + embedded backtick repair (safe operation)
     let cleaned = stripMarkdownFences(translated, original);
+    cleaned = repairEmbeddedBackticks(original, cleaned);
     return cleaned.trim() || translated.trim();
   }
 
   let cleaned = stripMarkdownFences(translated, original);
+  cleaned = repairEmbeddedBackticks(original, cleaned);
 
   // Pattern 1: Full text "original → translation" or "original -> translation"
   // The AI sometimes returns "Chinese text → Vietnamese text"
@@ -2011,6 +2037,192 @@ async function translateChunk(
   if (lastError) throw lastError;
   return '';
 }
+/* ─── AI Chunk Verification: compare original vs translated ─── */
+
+/**
+ * Quick structural comparison (no AI needed).
+ * Returns a report string or null if structure is acceptable.
+ */
+function quickStructuralCheck(original: string, translated: string): string | null {
+  const counts = (s: string) => ({
+    backticks: (s.match(/`/g) || []).length,
+    singleQ: (s.match(/'/g) || []).length,
+    doubleQ: (s.match(/"/g) || []).length,
+    parenOpen: (s.match(/\(/g) || []).length,
+    parenClose: (s.match(/\)/g) || []).length,
+    curlyOpen: (s.match(/\{/g) || []).length,
+    curlyClose: (s.match(/\}/g) || []).length,
+    brackets: (s.match(/[\[\]]/g) || []).length,
+    tripleBacktick: (s.match(/```/g) || []).length,
+  });
+  
+  const orig = counts(original);
+  const trans = counts(translated);
+  const issues: string[] = [];
+
+  // Absolute thresholds for structural drift
+  if (Math.abs(orig.backticks - trans.backticks) > 5) {
+    issues.push(`backticks: ${orig.backticks}→${trans.backticks}`);
+  }
+  if (Math.abs(orig.singleQ - trans.singleQ) > 10) {
+    issues.push(`single-quotes: ${orig.singleQ}→${trans.singleQ}`);
+  }
+  if (Math.abs(orig.parenOpen - trans.parenOpen) > 5) {
+    issues.push(`parens(: ${orig.parenOpen}→${trans.parenOpen}`);
+  }
+  if (Math.abs(orig.curlyOpen - trans.curlyOpen) > 5) {
+    issues.push(`braces{: ${orig.curlyOpen}→${trans.curlyOpen}`);
+  }
+  if (trans.tripleBacktick > orig.tripleBacktick) {
+    issues.push(`triple-backtick injected: ${orig.tripleBacktick}→${trans.tripleBacktick}`);
+  }
+  
+  // Length ratio check — translated should not be drastically shorter
+  if (translated.length < original.length * 0.7) {
+    issues.push(`length drop: ${original.length}→${translated.length} (${(translated.length/original.length*100).toFixed(0)}%)`);
+  }
+
+  return issues.length > 0 ? issues.join(', ') : null;
+}
+
+/**
+ * AI-powered chunk verification. Sends a sample of original + translated to the AI
+ * to detect corruption, missing content, and structural issues.
+ * Returns: { ok: true } or { ok: false, repaired: string }
+ */
+async function verifyChunkIntegrity(
+  originalChunk: string,
+  translatedChunk: string,
+  chunkIdx: number,
+  totalChunks: number,
+  fieldName: string,
+  config: ProxySettings,
+  targetLang: string,
+  signal?: AbortSignal,
+): Promise<{ ok: boolean; repaired?: string; issues?: string }> {
+  // Step 1: Quick structural check (free, no API call)
+  const structIssues = quickStructuralCheck(originalChunk, translatedChunk);
+  if (!structIssues) {
+    return { ok: true };
+  }
+  
+  console.log(`[verifyChunk] Chunk ${chunkIdx + 1}/${totalChunks} structural issues: ${structIssues}`);
+  
+  // Step 2: AI verification — send a SAMPLE (not full chunk) to save tokens
+  // Sample: first 2000 + last 2000 chars to catch head/tail corruption
+  const sampleOrig = originalChunk.length > 5000
+    ? originalChunk.slice(0, 2500) + '\n[...MIDDLE OMITTED...]\n' + originalChunk.slice(-2500)
+    : originalChunk;
+  const sampleTrans = translatedChunk.length > 5000
+    ? translatedChunk.slice(0, 2500) + '\n[...MIDDLE OMITTED...]\n' + translatedChunk.slice(-2500)
+    : translatedChunk;
+
+  const verifySystem = `You are a translation integrity verifier for code-heavy content translated to ${targetLang}.
+Compare the ORIGINAL and TRANSLATED samples below. Look for these specific issues:
+
+1. **Markdown injection**: Triple backticks (\`\`\`) inserted inside JS strings/identifiers (e.g. 'editor-n\`\`\`ode')
+2. **Unicode corruption**: Chinese characters corrupted into garbled text (e.g. 【 → ã??)  
+3. **Missing code**: Brackets, quotes, or parentheses that exist in original but are missing in translated
+4. **Extra characters**: Characters added by AI that don't exist in original
+5. **Structural breaks**: Code structure broken by translation (template literals, regex patterns)
+
+IMPORTANT: Only flag REAL structural damage. Translating Chinese text to ${targetLang} is CORRECT behavior.
+
+DETECTED STRUCTURAL DRIFT: ${structIssues}
+
+Respond in this exact format:
+- If no real issues: VERIFIED_OK
+- If issues found: ISSUES_FOUND\\n<description of each issue, one per line>`;
+
+  const verifyUser = `=== ORIGINAL (chunk ${chunkIdx + 1}/${totalChunks} of "${fieldName}") ===
+${sampleOrig}
+
+=== TRANSLATED ===
+${sampleTrans}`;
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort('Verify timeout'), 60000);
+    const combinedSignal = signal
+      ? AbortSignal.any([signal, controller.signal])
+      : controller.signal;
+
+    const result = await callProvider(config, verifySystem, verifyUser, combinedSignal);
+    clearTimeout(timeout);
+
+    if (result.trim().startsWith('VERIFIED_OK')) {
+      console.log(`[verifyChunk] Chunk ${chunkIdx + 1}: AI verified OK despite structural drift`);
+      return { ok: true };
+    }
+
+    // Issues found — log them
+    const issueText = result.replace(/^ISSUES_FOUND\s*/i, '').trim();
+    console.warn(`[verifyChunk] Chunk ${chunkIdx + 1} issues:\n${issueText}`);
+    
+    return { ok: false, issues: issueText };
+  } catch (err) {
+    // Verification failed — don't block translation, just log
+    console.warn(`[verifyChunk] Chunk ${chunkIdx + 1} verification failed:`, err);
+    return { ok: true }; // Fail-open: treat as ok if verification errors out
+  }
+}
+
+/**
+ * Post-join overall verification. Compares full original vs full translated
+ * using structural analysis. No AI call — just quick metrics.
+ */
+function verifyFinalTranslation(
+  original: string,
+  translated: string,
+  fieldName: string,
+): { ok: boolean; report: string } {
+  const issues: string[] = [];
+
+  // 1. Length ratio
+  const ratio = translated.length / original.length;
+  if (ratio < 0.8) {
+    issues.push(`⚠️ Bản dịch ngắn hơn gốc: ${(ratio * 100).toFixed(0)}% (${translated.length}/${original.length} chars)`);
+  }
+
+  // 2. Triple backtick injection
+  const origTriple = (original.match(/```/g) || []).length;
+  const transTriple = (translated.match(/```/g) || []).length;
+  if (transTriple > origTriple) {
+    issues.push(`⚠️ Markdown \`\`\` injection: gốc ${origTriple}, dịch ${transTriple} (+${transTriple - origTriple})`);
+  }
+
+  // 3. Bracket balance
+  const bracketCheck = (text: string, open: string, close: string) => {
+    const o = (text.match(new RegExp('\\' + open, 'g')) || []).length;
+    const c = (text.match(new RegExp('\\' + close, 'g')) || []).length;
+    return { open: o, close: c, balanced: o === c };
+  };
+  
+  const origParens = bracketCheck(original, '(', ')');
+  const transParens = bracketCheck(translated, '(', ')');
+  if (origParens.balanced && !transParens.balanced) {
+    issues.push(`⚠️ Parens bị mất cân bằng: gốc balanced, dịch (=${transParens.open} )=${transParens.close}`);
+  }
+
+  const origCurly = bracketCheck(original, '{', '}');
+  const transCurly = bracketCheck(translated, '{', '}');
+  if (origCurly.balanced && !transCurly.balanced) {
+    issues.push(`⚠️ Braces bị mất cân bằng: gốc balanced, dịch {=${transCurly.open} }=${transCurly.close}`);
+  }
+
+  // 4. Single quote count drift
+  const origSq = (original.match(/'/g) || []).length;
+  const transSq = (translated.match(/'/g) || []).length;
+  if (Math.abs(origSq - transSq) > 20) {
+    issues.push(`⚠️ Single quotes drift: gốc ${origSq}, dịch ${transSq} (diff ${transSq - origSq})`);
+  }
+
+  const report = issues.length > 0
+    ? `[verifyFinal] ${fieldName}:\n${issues.join('\n')}`
+    : `[verifyFinal] ${fieldName}: ✅ All structural checks passed`;
+  
+  return { ok: issues.length === 0, report };
+}
 
 /* ─── Verify seam coherence between adjacent translated chunks ─── */
 async function verifySeams(
@@ -2019,6 +2231,8 @@ async function verifySeams(
   config: ProxySettings,
   targetLang: string,
   signal?: AbortSignal,
+  enableStructuralVerification?: boolean,
+  isCodeHeavy?: boolean,
 ): Promise<string[]> {
   if (translatedChunks.length < 2) return translatedChunks;
 
@@ -2026,30 +2240,130 @@ async function verifySeams(
   // Dynamic seam chars: scale with chunk size for better coverage on large texts
   const avgChunkSize = originalChunks.reduce((s, c) => s + c.length, 0) / originalChunks.length;
   const SEAM_CHARS = Math.min(Math.max(300, Math.floor(avgChunkSize * 0.02)), 800);
-  const seamIssues: { idx: number; tailOrig: string; headOrig: string; tailTrans: string; headTrans: string }[] = [];
+  
+  interface SeamInfo {
+    idx: number;
+    tailOrig: string;
+    headOrig: string;
+    tailTrans: string;
+    headTrans: string;
+    structuralIssues?: string;
+  }
+  
+  const seamIssues: SeamInfo[] = [];
 
   for (let i = 0; i < translatedChunks.length - 1; i++) {
     const tailTrans = translatedChunks[i].slice(-SEAM_CHARS);
     const headTrans = translatedChunks[i + 1].slice(0, SEAM_CHARS);
     const tailOrig = originalChunks[i].slice(-SEAM_CHARS);
     const headOrig = originalChunks[i + 1].slice(0, SEAM_CHARS);
-    seamIssues.push({ idx: i, tailOrig, headOrig, tailTrans, headTrans });
+    
+    const seam: SeamInfo = { idx: i, tailOrig, headOrig, tailTrans, headTrans };
+    
+    // ═══ STRUCTURAL CHECK AT SEAM (when verification enabled) ═══
+    if (enableStructuralVerification && isCodeHeavy) {
+      const origBoundary = tailOrig + headOrig;
+      const transBoundary = tailTrans + headTrans;
+      const issues: string[] = [];
+
+      // 1. Check quote/bracket balance at seam boundary
+      const countChar = (s: string, ch: string) => {
+        let n = 0;
+        for (let j = 0; j < s.length; j++) if (s[j] === ch) n++;
+        return n;
+      };
+      
+      const origSq = countChar(origBoundary, "'");
+      const transSq = countChar(transBoundary, "'");
+      if (Math.abs(origSq - transSq) > 4) {
+        issues.push(`quotes: ${origSq}→${transSq}`);
+      }
+      
+      const origBt = countChar(origBoundary, '`');
+      const transBt = countChar(transBoundary, '`');
+      if (Math.abs(origBt - transBt) > 2) {
+        issues.push(`backticks: ${origBt}→${transBt}`);
+      }
+
+      const origPo = countChar(origBoundary, '(');
+      const transPo = countChar(transBoundary, '(');
+      if (Math.abs(origPo - transPo) > 3) {
+        issues.push(`parens: ${origPo}→${transPo}`);
+      }
+
+      // 2. Check for split string literals at seam
+      // If tail ends mid-string (odd number of quotes) and head starts mid-string
+      const tailTransSq = countChar(tailTrans, "'");
+      const headTransSq = countChar(headTrans, "'");
+      if (tailTransSq % 2 !== 0 && headTransSq % 2 !== 0) {
+        // Check if original also has this pattern (legitimate split)
+        const tailOrigSq = countChar(tailOrig, "'");
+        const headOrigSq = countChar(headOrig, "'");
+        if (tailOrigSq % 2 === 0 || headOrigSq % 2 === 0) {
+          issues.push('split-string: translated has unmatched quotes at seam (original does not)');
+        }
+      }
+
+      // 3. Check for triple backtick injection at seam
+      const seamTrans = tailTrans + headTrans;
+      const seamOrig = tailOrig + headOrig;
+      const origTriple = (seamOrig.match(/```/g) || []).length;
+      const transTriple = (seamTrans.match(/```/g) || []).length;
+      if (transTriple > origTriple) {
+        issues.push(`seam-backtick-injection: ${origTriple}→${transTriple}`);
+      }
+      
+      // 4. Check length ratio at seam boundary
+      const seamRatio = transBoundary.length / origBoundary.length;
+      if (seamRatio < 0.7) {
+        issues.push(`seam-length-drop: ${(seamRatio * 100).toFixed(0)}%`);
+      }
+
+      if (issues.length > 0) {
+        seam.structuralIssues = issues.join(', ');
+        console.warn(`[verifySeams] Seam ${i + 1} structural issues: ${seam.structuralIssues}`);
+      }
+    }
+    
+    seamIssues.push(seam);
   }
 
-  // Build a single verification prompt for ALL seams
-  const seamDescriptions = seamIssues.map((s, i) =>
-    `=== SEAM ${i + 1} (between chunk ${s.idx + 1} and ${s.idx + 2}) ===\n` +
-    `Original tail: ${s.tailOrig}\n` +
-    `Original head: ${s.headOrig}\n` +
-    `Translated tail: ${s.tailTrans}\n` +
-    `Translated head: ${s.headTrans}`
-  ).join('\n\n');
+  // ═══ Build AI verification prompt ═══
+  const hasStructuralIssues = seamIssues.some(s => s.structuralIssues);
+  
+  const seamDescriptions = seamIssues.map((s, i) => {
+    let desc = `=== SEAM ${i + 1} (between chunk ${s.idx + 1} and ${s.idx + 2}) ===\n` +
+      `Original tail: ${s.tailOrig}\n` +
+      `Original head: ${s.headOrig}\n` +
+      `Translated tail: ${s.tailTrans}\n` +
+      `Translated head: ${s.headTrans}`;
+    if (s.structuralIssues) {
+      desc += `\n⚠️ STRUCTURAL DRIFT: ${s.structuralIssues}`;
+    }
+    return desc;
+  }).join('\n\n');
 
-  const verifySystem = `You are a translation quality checker for ${targetLang}. ` +
+  // Enhanced prompt when structural verification is enabled
+  let verifySystem = `You are a translation quality checker for ${targetLang}. ` +
     `A large text was split into chunks and translated in parallel. ` +
     `Check if the seam points (where chunks join) are coherent. ` +
-    `Look for: broken sentences, duplicated phrases, missing connectors, inconsistent terminology, or broken HTML tags at seam boundaries.\n` +
-    `If ALL seams are fine, respond with exactly: ALL_OK\n` +
+    `Look for: broken sentences, duplicated phrases, missing connectors, inconsistent terminology, or broken HTML tags at seam boundaries.\n`;
+  
+  if (enableStructuralVerification && isCodeHeavy) {
+    verifySystem += `\nCRITICAL — CODE STRUCTURAL INTEGRITY CHECK:
+This is code-heavy content (minified JS/HTML/CSS). At each seam boundary, also check for:
+1. **Split string literals**: A quote opened in the tail but not closed, or vice versa in the head
+2. **Broken identifiers**: CSS class names, variable names, or function names split across the seam
+3. **Markdown injection**: Triple backticks (\`\`\`) that don't exist in the original appearing in the translated seam
+4. **Missing brackets/parens**: Structural characters (brackets, parentheses, braces) lost at the seam
+5. **Character corruption**: Chinese/Unicode characters corrupted into garbled text at boundaries
+
+Seams marked with ⚠️ STRUCTURAL DRIFT have detected numeric differences between original and translated structural characters.
+For these seams, compare the ORIGINAL boundary against the TRANSLATED boundary carefully.
+If code is corrupted at the seam, provide the fix that restores the original code structure while keeping translations.\n`;
+  }
+  
+  verifySystem += `If ALL seams are fine, respond with exactly: ALL_OK\n` +
     `If issues exist, respond in this format for EACH problematic seam:\n` +
     `SEAM <number>\nFIXED_TAIL: <corrected last ~100 chars of the preceding chunk>\nFIXED_HEAD: <corrected first ~100 chars of the following chunk>\n` +
     `Only output fixes for seams that have real problems. Keep fixes minimal — only change what's needed at the boundary.`;
@@ -2065,7 +2379,7 @@ async function verifySeams(
     clearTimeout(timeout);
 
     if (verifyResult.trim() === 'ALL_OK') {
-      console.log('[verifySeams] All seams coherent ✓');
+      console.log('[verifySeams] All seams coherent ✓' + (hasStructuralIssues ? ' (structural drift was acceptable)' : ''));
       return translatedChunks;
     }
 
@@ -2096,9 +2410,12 @@ async function verifySeams(
           }
         }
         fixCount++;
+        if (s.structuralIssues) {
+          console.log(`[verifySeams] Fixed structural seam ${seamNum + 1}: ${s.structuralIssues}`);
+        }
       }
     }
-    console.log(`[verifySeams] Fixed ${fixCount} seam(s)`);
+    console.log(`[verifySeams] Fixed ${fixCount} seam(s)` + (hasStructuralIssues ? ' (including structural repairs)' : ''));
     return fixedChunks;
   } catch (err) {
     // Verification failed — return originals (non-critical)
@@ -2251,6 +2568,8 @@ export async function translateText(
   onChunkComplete?: (chunkIndex: number, translatedChunk: string, totalChunks: number) => void,
   /** Number of chunks to translate in parallel (1 = sequential, 2+ = concurrent) */
   parallelChunks?: number,
+  /** Enable AI verification per chunk (compare original vs translated) */
+  enableChunkVerification?: boolean,
 ): Promise<string> {
   if (!text || text.trim() === '') return '';
 
@@ -2376,10 +2695,48 @@ export async function translateText(
           );
           const chunkCleaned = cleanTranslationResponse(chunks[idx], translated, isExpert, true);
           translatedChunks[idx] = chunkCleaned;
+          // Structural integrity check for code-heavy chunks
+          if (isCodeHeavy) {
+            const origBt = (chunks[idx].match(/`/g) || []).length;
+            const transBt = (chunkCleaned.match(/`/g) || []).length;
+            const origSq = (chunks[idx].match(/'/g) || []).length;
+            const transSq = (chunkCleaned.match(/'/g) || []).length;
+            if (Math.abs(origBt - transBt) > 5 || Math.abs(origSq - transSq) > 10) {
+              console.warn(`[translateText] ⚠️ Structural drift in chunk ${idx + 1}: backticks ${origBt}→${transBt}, quotes ${origSq}→${transSq}`);
+            }
+          }
           console.log(`[translateText] ${fieldName}: chunk ${idx + 1}/${chunks.length} done ✓`);
 
+          // AI Chunk Verification (if enabled)
+          if (enableChunkVerification && chunkCleaned) {
+            const verification = await verifyChunkIntegrity(
+              chunks[idx], chunkCleaned, idx, chunks.length, fieldName, config, targetLang, signal
+            );
+            if (!verification.ok) {
+              console.warn(`[translateText] Chunk ${idx + 1} failed verification, retrying once...`);
+              // Auto-retry the chunk once
+              try {
+                const retryResult = await translateChunk(
+                  chunks[idx], idx, chunks.length, fieldName, config, targetLang, sourceLang, system, user, signal
+                );
+                const retryCleaned = cleanTranslationResponse(chunks[idx], retryResult, isExpert, true);
+                const retryVerify = await verifyChunkIntegrity(
+                  chunks[idx], retryCleaned, idx, chunks.length, fieldName, config, targetLang, signal
+                );
+                if (retryVerify.ok || (retryCleaned.length >= chunkCleaned.length)) {
+                  translatedChunks[idx] = retryCleaned;
+                  console.log(`[translateText] Chunk ${idx + 1} retry ${retryVerify.ok ? 'verified ✓' : 'better than original, using retry'}`);
+                } else {
+                  console.warn(`[translateText] Chunk ${idx + 1} retry also failed verification, keeping original`);
+                }
+              } catch (retryErr) {
+                console.warn(`[translateText] Chunk ${idx + 1} retry failed:`, retryErr);
+              }
+            }
+          }
+
           if (onChunkComplete) {
-            onChunkComplete(idx, chunkCleaned, chunks.length);
+            onChunkComplete(idx, translatedChunks[idx]!, chunks.length);
           }
         } catch (err: any) {
           if (signal?.aborted || err?.message === 'Cancelled') {
@@ -2400,20 +2757,27 @@ export async function translateText(
 
     // Check for failures — create ChunkError with completed chunks
     const completedList = translatedChunks.filter((c): c is string => c !== undefined);
-    if (errors.length > 0 && completedList.length < chunks.length) {
-      // Convert sparse array to contiguous for ChunkError compatibility
+
+    // ═══ CRITICAL: Detect incomplete translation even if no errors were recorded ═══
+    // Workers may exit early (abort race, unhandled rejection) without pushing to errors[].
+    // If we have incomplete chunks, we MUST throw ChunkError to trigger resume on retry.
+    if (completedList.length < chunks.length) {
       const completedForResume = translatedChunks.map(c => c || '') as string[];
-      const firstFailedIdx = errors[0].idx;
+      const firstMissingIdx = translatedChunks.findIndex(c => !c);
+      const errorMsg = errors.length > 0
+        ? `Parallel: ${errors.length} chunk(s) failed. First: chunk ${errors[0].idx + 1}/${chunks.length}: ${errors[0].err.message}`
+        : `Parallel: ${chunks.length - completedList.length} chunk(s) incomplete (workers exited early). Completed: ${completedList.length}/${chunks.length}`;
+      
       if (completedList.length > 0) {
         throw new ChunkError(
-          `Parallel: ${errors.length} chunk(s) failed. First: chunk ${firstFailedIdx + 1}/${chunks.length}: ${errors[0].err.message}`,
+          errorMsg,
           completedForResume,
-          firstFailedIdx,
+          firstMissingIdx !== -1 ? firstMissingIdx : 0,
           chunks.length,
-          errors[0].err,
+          errors.length > 0 ? errors[0].err : new Error('Workers exited before completing all chunks'),
         );
       }
-      throw errors[0].err;
+      throw errors.length > 0 ? errors[0].err : new Error('All parallel workers exited without completing any chunks');
     }
   } else {
     // ═══ SEQUENTIAL PATH — original behavior with full context continuity ═══
@@ -2456,10 +2820,47 @@ export async function translateText(
         );
         const chunkCleaned = cleanTranslationResponse(chunks[idx], translated, isExpert, true);
         translatedChunks[idx] = chunkCleaned;
+        // Structural integrity check for code-heavy chunks
+        if (isCodeHeavy) {
+          const origBt = (chunks[idx].match(/`/g) || []).length;
+          const transBt = (chunkCleaned.match(/`/g) || []).length;
+          const origSq = (chunks[idx].match(/'/g) || []).length;
+          const transSq = (chunkCleaned.match(/'/g) || []).length;
+          if (Math.abs(origBt - transBt) > 5 || Math.abs(origSq - transSq) > 10) {
+            console.warn(`[translateText] ⚠️ Structural drift in chunk ${idx + 1}: backticks ${origBt}→${transBt}, quotes ${origSq}→${transSq}`);
+          }
+        }
         console.log(`[translateText] ${fieldName}: chunk ${idx + 1}/${chunks.length} done ✓`);
 
+        // AI Chunk Verification (if enabled)
+        if (enableChunkVerification && chunkCleaned) {
+          const verification = await verifyChunkIntegrity(
+            chunks[idx], chunkCleaned, idx, chunks.length, fieldName, config, targetLang, signal
+          );
+          if (!verification.ok) {
+            console.warn(`[translateText] Chunk ${idx + 1} failed verification, retrying once...`);
+            try {
+              const retryResult = await translateChunk(
+                chunks[idx], idx, chunks.length, fieldName, config, targetLang, sourceLang, system, user, signal
+              );
+              const retryCleaned = cleanTranslationResponse(chunks[idx], retryResult, isExpert, true);
+              const retryVerify = await verifyChunkIntegrity(
+                chunks[idx], retryCleaned, idx, chunks.length, fieldName, config, targetLang, signal
+              );
+              if (retryVerify.ok || (retryCleaned.length >= chunkCleaned.length)) {
+                translatedChunks[idx] = retryCleaned;
+                console.log(`[translateText] Chunk ${idx + 1} retry ${retryVerify.ok ? 'verified ✓' : 'better, using retry'}`);
+              } else {
+                console.warn(`[translateText] Chunk ${idx + 1} retry also failed, keeping original`);
+              }
+            } catch (retryErr) {
+              console.warn(`[translateText] Chunk ${idx + 1} retry failed:`, retryErr);
+            }
+          }
+        }
+
         if (onChunkComplete) {
-          onChunkComplete(idx, chunkCleaned, chunks.length);
+          onChunkComplete(idx, translatedChunks[idx]!, chunks.length);
         }
       } catch (err: any) {
         if (signal?.aborted || err?.message === 'Cancelled') {
@@ -2485,7 +2886,7 @@ export async function translateText(
 
   // ═══ SEAM VERIFICATION — check chunk boundaries for coherence ═══
   const finalChunks = translatedChunks.filter((c): c is string => c !== undefined);
-  const verifiedChunks = await verifySeams(finalChunks, chunks, config, targetLang, signal);
+  const verifiedChunks = await verifySeams(finalChunks, chunks, config, targetLang, signal, enableChunkVerification, isCodeHeavy);
 
   // For HTML and Code/Regex content, join without separator
   const isHtmlContent = /<[a-z][^>]*>/i.test(maskedText) && /<\/[a-z]+>/i.test(maskedText);
@@ -2499,6 +2900,15 @@ export async function translateText(
     if (structuralTrunc.isTruncated) {
       console.warn(`[translateText] Structural truncation detected in final joined result for ${fieldName}: ${structuralTrunc.reason}`);
       cleaned = recoverTruncatedTail(maskedText, cleaned);
+    }
+  }
+
+  // ═══ FINAL VERIFICATION — structural report on entire translation ═══
+  if (enableChunkVerification && chunks.length > 1) {
+    const finalCheck = verifyFinalTranslation(maskedText, cleaned, fieldName);
+    console.log(finalCheck.report);
+    if (!finalCheck.ok) {
+      console.warn(`[translateText] ⚠️ Final verification flagged issues for ${fieldName} — check log above`);
     }
   }
   

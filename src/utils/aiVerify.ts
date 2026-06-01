@@ -277,7 +277,7 @@ export function quickVerify(
 
 export interface FieldIssue extends VerifyIssue {
   fieldPath: string;
-  category: 'residual_source' | 'html_broken' | 'bracket_mismatch' | 'macro_damaged' | 'json_broken' | 'mvu_inconsistent' | 'length_anomaly' | 'empty_translation' | 'regex_broken' | 'code_splice' | 'structural_truncation';
+  category: 'residual_source' | 'html_broken' | 'bracket_mismatch' | 'macro_damaged' | 'json_broken' | 'mvu_inconsistent' | 'length_anomaly' | 'empty_translation' | 'regex_broken' | 'code_splice' | 'structural_truncation' | 'css_class_sync' | 'function_signature' | 'template_literal_content';
 }
 
 /** Count CJK characters in text */
@@ -1021,6 +1021,159 @@ export function verifyFields(
         }
       }
     }
+
+    // ─── 11. CSS class/ID sync (B9 verification) ───
+    if (field.group === 'regex' || field.group === 'tavern_helper') {
+      // Extract CSS classes and IDs from HTML in original
+      const origClasses = new Set((orig.match(/class\s*=\s*["']([^"']+)["']/g) || []).flatMap(m => {
+        const val = m.match(/["']([^"']+)["']/)?.[1] || '';
+        return val.split(/\s+/);
+      }));
+      const transClasses = new Set((currentAutoFix.match(/class\s*=\s*["']([^"']+)["']/g) || []).flatMap(m => {
+        const val = m.match(/["']([^"']+)["']/)?.[1] || '';
+        return val.split(/\s+/);
+      }));
+      const origIds = new Set((orig.match(/\bid\s*=\s*["']([^"']+)["']/g) || []).map(m => m.match(/["']([^"']+)["']/)?.[1] || ''));
+      const transIds = new Set((currentAutoFix.match(/\bid\s*=\s*["']([^"']+)["']/g) || []).map(m => m.match(/["']([^"']+)["']/)?.[1] || ''));
+
+      // CSS classes should NOT be translated
+      for (const cls of origClasses) {
+        if (cls && !transClasses.has(cls) && cls.length > 2) {
+          // Check if it was translated (replaced by something else)
+          const transArr = [...transClasses];
+          const possibleTranslation = transArr.find(tc => !origClasses.has(tc) && tc.length > 2);
+          if (possibleTranslation) {
+            issues.push({
+              id: crypto.randomUUID(), fieldPath: field.path,
+              severity: 'error', category: 'css_class_sync',
+              location: field.label,
+              description: `CSS class "${cls}" was translated to "${possibleTranslation}". CSS classes must NOT be translated — JS/CSS references will break.`,
+              original: cls,
+              current: possibleTranslation,
+              suggestion: `Restore CSS class "${cls}" — do not translate class names.`,
+              autoFixable: false,
+            });
+          }
+        }
+      }
+      // CSS IDs should NOT be translated
+      for (const id of origIds) {
+        if (id && !transIds.has(id) && id.length > 2) {
+          issues.push({
+            id: crypto.randomUUID(), fieldPath: field.path,
+            severity: 'error', category: 'css_class_sync',
+            location: field.label,
+            description: `CSS ID "${id}" missing in translation. CSS IDs must NOT be translated.`,
+            original: id,
+            current: '(missing or renamed)',
+            suggestion: `Restore CSS ID "${id}" in translated HTML.`,
+            autoFixable: false,
+          });
+        }
+      }
+    }
+
+    // ─── 12. Function/API signature preservation (B10 verification) ───
+    if (field.group === 'tavern_helper' || field.group === 'regex' || field.group === 'lorebook') {
+      // Extract function definitions and calls
+      const funcDefRegex = /\bfunction\s+(\w+)\s*\(/g;
+      const origFuncDefs: string[] = [];
+      let fm;
+      while ((fm = funcDefRegex.exec(orig)) !== null) origFuncDefs.push(fm[1]);
+      
+      if (origFuncDefs.length > 0) {
+        const transFuncDefRegex = /\bfunction\s+(\w+)\s*\(/g;
+        const transFuncDefs: string[] = [];
+        while ((fm = transFuncDefRegex.exec(currentAutoFix)) !== null) transFuncDefs.push(fm[1]);
+        
+        for (const fn of origFuncDefs) {
+          if (!transFuncDefs.includes(fn)) {
+            issues.push({
+              id: crypto.randomUUID(), fieldPath: field.path,
+              severity: 'error', category: 'function_signature',
+              location: field.label,
+              description: `Function "${fn}" was renamed or deleted in translation. Function names must NOT be translated.`,
+              original: `function ${fn}(...)`,
+              current: '(missing or renamed)',
+              suggestion: `Restore function name "${fn}" — JavaScript identifiers must not change.`,
+              autoFixable: false,
+            });
+          }
+        }
+      }
+
+      // Check API calls (common SillyTavern APIs)
+      const apiCalls = ['executeSlashCommands', 'triggerGroupMessage', 'setVariable', 'getVariable',
+        'sendMessage', 'fetch', 'addEventListener', 'querySelector', 'querySelectorAll',
+        'getElementById', 'getElementsByClassName', 'createElement', 'appendChild'];
+      for (const api of apiCalls) {
+        const origCount = (orig.match(new RegExp(`\\b${api}\\b`, 'g')) || []).length;
+        const transCount = (currentAutoFix.match(new RegExp(`\\b${api}\\b`, 'g')) || []).length;
+        if (origCount > 0 && transCount < origCount) {
+          issues.push({
+            id: crypto.randomUUID(), fieldPath: field.path,
+            severity: 'error', category: 'function_signature',
+            location: field.label,
+            description: `API call "${api}" appears ${origCount}x in original but only ${transCount}x in translation. API names must NOT be translated.`,
+            original: `${api}: ${origCount}x`,
+            current: `${api}: ${transCount}x`,
+            suggestion: `Restore all "${api}" calls — these are JavaScript API names.`,
+            autoFixable: false,
+          });
+        }
+      }
+    }
+
+    // ─── 13. Template literal interpolation content (B11 verification) ───
+    if (field.group === 'tavern_helper' || field.group === 'regex' || field.group === 'lorebook') {
+      // Extract ${...} expressions from template literals
+      const origInterpolations = (orig.match(/\$\{[^}]+\}/g) || []);
+      const transInterpolations = (currentAutoFix.match(/\$\{[^}]+\}/g) || []);
+      
+      if (origInterpolations.length > 0) {
+        const origSet = new Set(origInterpolations);
+        const transSet = new Set(transInterpolations);
+        
+        for (const expr of origSet) {
+          if (!transSet.has(expr)) {
+            // Check if the content was translated (variable name changed)
+            const innerOrig = expr.slice(2, -1).trim();
+            const possibleTranslated = [...transSet].find(te => {
+              const innerTrans = te.slice(2, -1).trim();
+              return !origSet.has(te) && innerTrans.length > 0;
+            });
+            
+            if (possibleTranslated) {
+              issues.push({
+                id: crypto.randomUUID(), fieldPath: field.path,
+                severity: 'error', category: 'template_literal_content',
+                location: field.label,
+                description: `Template interpolation ${expr} was translated to ${possibleTranslated}. JS expressions inside \${} must NOT be translated.`,
+                original: expr,
+                current: possibleTranslated,
+                suggestion: `Restore ${expr} — template literal expressions are JavaScript code.`,
+                autoFixable: false,
+              });
+            } else if (!innerOrig.match(/^['"`]/) && innerOrig.length > 1) {
+              // Only flag if it's not a string literal and not found at all
+              const found = transInterpolations.some(te => te.includes(innerOrig));
+              if (!found) {
+                issues.push({
+                  id: crypto.randomUUID(), fieldPath: field.path,
+                  severity: 'warning', category: 'template_literal_content',
+                  location: field.label,
+                  description: `Template interpolation ${expr} not found in translation. Verify it wasn't accidentally removed or translated.`,
+                  original: expr,
+                  current: '(missing)',
+                  suggestion: `Check that ${expr} is preserved in the translated template literal.`,
+                  autoFixable: false,
+                });
+              }
+            }
+          }
+        }
+      }
+    }
   }
 
   return issues;
@@ -1139,6 +1292,23 @@ const CATEGORY_FIX_HINTS: Record<string, string> = {
 - Do NOT break script/style blocks: every opening tag must have a matching closing tag
 - Preserve ALL arrow functions: () => { ... } must remain intact
 - If template literals (backticks) are broken, restore the missing backtick`,
+
+  css_class_sync: `CSS CLASS/ID FIX RULES:
+- CSS class names and IDs must NEVER be translated
+- Restore the original class="..." and id="..." attribute values exactly
+- If JS code references a class/ID (e.g. querySelector('.stat-bar')), it must match the HTML class/ID`,
+
+  function_signature: `FUNCTION NAME FIX RULES:
+- JavaScript function names must NEVER be translated
+- Restore function names exactly as in the ORIGINAL: function myFunc() { ... }
+- API calls (fetch, addEventListener, querySelector, etc.) must NEVER be translated
+- Variable names declared with const/let/var must NEVER be translated`,
+
+  template_literal_content: `TEMPLATE LITERAL FIX RULES:
+- JavaScript expressions inside \${...} must NEVER be translated
+- These are code expressions, not text: \${variable}, \${obj.property}, \${fn()}
+- Only translate the text OUTSIDE of \${...} interpolations
+- Restore any \${...} expressions that were accidentally translated or removed`,
 };
 
 /* ═══ Validate fix quality — multi-layer checks ═══ */
@@ -1255,6 +1425,63 @@ function validateFixQuality(
   return { valid: true };
 }
 
+/* ═══ Smart truncate — keep context around issues ═══ */
+
+function smartTruncate(text: string, maxChars: number, issuePositions?: number[]): string {
+  if (text.length <= maxChars) return text;
+  
+  if (!issuePositions || issuePositions.length === 0) {
+    // No issue positions — use head/tail split
+    const headSize = Math.floor(maxChars * 0.4);
+    const tailSize = Math.floor(maxChars * 0.4);
+    const head = text.slice(0, headSize);
+    const tail = text.slice(-tailSize);
+    return head + `\n\n[... ${text.length - headSize - tailSize} chars truncated ...]\n\n` + tail;
+  }
+  
+  // Build segments: head (20%) + issue contexts (60%) + tail (20%)
+  const headSize = Math.floor(maxChars * 0.2);
+  const tailSize = Math.floor(maxChars * 0.2);
+  const contextBudget = maxChars - headSize - tailSize;
+  const contextPerIssue = Math.floor(contextBudget / issuePositions.length);
+  const contextRadius = Math.floor(contextPerIssue / 2);
+  
+  let result = text.slice(0, headSize);
+  let lastEnd = headSize;
+  
+  // Sort issue positions
+  const sorted = [...issuePositions].sort((a, b) => a - b);
+  
+  for (const pos of sorted) {
+    const start = Math.max(lastEnd, pos - contextRadius);
+    const end = Math.min(text.length, pos + contextRadius);
+    if (start > lastEnd + 100) {
+      result += `\n[...${start - lastEnd} chars...]\n`;
+    }
+    result += text.slice(start, end);
+    lastEnd = end;
+  }
+  
+  if (lastEnd < text.length - tailSize - 100) {
+    result += `\n[...${text.length - tailSize - lastEnd} chars...]\n`;
+  }
+  result += text.slice(-tailSize);
+  
+  return result.slice(0, maxChars + 500); // allow slight overshoot for markers
+}
+
+/** Get dynamic content limit based on model name */
+function getModelContentLimit(model: string): number {
+  const m = model.toLowerCase();
+  if (m.includes('gemini-2.5') || m.includes('gemini-2.0')) return 200000;
+  if (m.includes('gemini')) return 120000;
+  if (m.includes('claude-3.5') || m.includes('claude-3-5') || m.includes('claude-4')) return 150000;
+  if (m.includes('claude')) return 100000;
+  if (m.includes('gpt-4o') || m.includes('gpt-4-turbo')) return 80000;
+  if (m.includes('deepseek')) return 60000;
+  return 60000; // safe default for unknown models
+}
+
 /* ═══ Build category-aware fix prompt ═══ */
 
 function buildFixPrompt(
@@ -1262,7 +1489,8 @@ function buildFixPrompt(
   field: TranslationField,
   targetLang: string,
   mvuBlock: string,
-  roundInfo?: { round: number; prevFixFeedback?: string }
+  roundInfo?: { round: number; prevFixFeedback?: string },
+  modelName?: string,
 ): { system: string; user: string } {
   const issueDesc = issueList.map((i, idx) => {
     const cat = 'category' in i ? (i as FieldIssue).category : null;
@@ -1297,13 +1525,28 @@ CRITICAL RULES:
 - The output length should be very close to the input translation length
 ${categoryHints ? '\n' + categoryHints : ''}${mvuBlock}${roundNote}`;
 
+  // Dynamic content limit based on model
+  const contentLimit = Math.floor(getModelContentLimit(modelName || 'unknown') / 3); // /3 because we send original + translation + system
+  
+  // Find issue positions in the text for smart truncation
+  const issuePositions: number[] = [];
+  for (const issue of issueList) {
+    if (issue.original && issue.original.length > 3) {
+      const pos = field.original.indexOf(issue.original);
+      if (pos !== -1) issuePositions.push(pos);
+    }
+  }
+
+  const origContent = smartTruncate(field.original, contentLimit, issuePositions);
+  const transContent = smartTruncate(field.translated, contentLimit, issuePositions);
+
   const user = `Fix this ${targetLang} translation. ONLY fix the listed issues.
 
 ORIGINAL:
-${field.original.slice(0, 6000)}
+${origContent}
 
 CURRENT TRANSLATION:
-${field.translated.slice(0, 6000)}
+${transContent}
 
 ISSUES TO FIX:
 ${issueDesc}
@@ -1418,7 +1661,8 @@ export async function aiFixIssues(
 
       const { system, user } = buildFixPrompt(
         currentIssueList, workingField, targetLang, mvuBlock,
-        { round, prevFixFeedback: prevFeedback }
+        { round, prevFixFeedback: prevFeedback },
+        config.model,
       );
 
       const issuesBefore = verifyFields([workingField], mvuDictionary, sourceLang);
@@ -1552,10 +1796,10 @@ ${issue.original ? `Original snippet: "${issue.original}"` : ''}
 ${issue.suggestion ? `Hint: ${issue.suggestion}` : ''}
 
 ORIGINAL TEXT:
-${field.original.slice(0, 6000)}
+${smartTruncate(field.original, getModelContentLimit(config.model) / 3)}
 
 CURRENT TRANSLATION:
-${field.translated.slice(0, 6000)}
+${smartTruncate(field.translated, getModelContentLimit(config.model) / 3)}
 
 Return the corrected translation:`;
 
@@ -1598,6 +1842,691 @@ Return the corrected translation:`;
   } catch (err) {
     return { success: false, reason: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/* ═══ Streaming AI Deep Verify — section by section ═══ */
+
+export interface StreamingVerifyProgress {
+  currentSection: string;
+  sectionIndex: number;
+  totalSections: number;
+  issuesSoFar: VerifyIssue[];
+  status: 'scanning' | 'done' | 'cancelled';
+  sectionResults: { name: string; status: 'ok' | 'issues' | 'error' | 'pending'; issueCount: number }[];
+}
+
+interface VerifySection {
+  name: string;       // "regex[0] Display_System"
+  origContent: string;
+  transContent: string;
+  type: 'regex' | 'tavern_helper' | 'lorebook' | 'core';
+}
+
+function buildVerifySections(
+  originalCard: CharacterCard,
+  translatedCard: CharacterCard,
+): VerifySection[] {
+  const sections: VerifySection[] = [];
+  const origData = originalCard.data;
+  const transData = translatedCard.data;
+  if (!origData || !transData) return sections;
+
+  // Regex scripts
+  if (origData.extensions?.regex_scripts && transData.extensions?.regex_scripts) {
+    const origRegex = origData.extensions.regex_scripts;
+    const transRegex = transData.extensions.regex_scripts;
+    for (let i = 0; i < Math.min(origRegex.length, transRegex.length); i++) {
+      const hasContent = origRegex[i].replaceString?.length > 50 || origRegex[i].findRegex?.length > 20;
+      if (hasContent) {
+        let origContent = '';
+        let transContent = '';
+        if (origRegex[i].replaceString) {
+          origContent += `=== replaceString ===\n${origRegex[i].replaceString}`;
+          transContent += `=== replaceString ===\n${transRegex[i].replaceString || ''}`;
+        }
+        if (origRegex[i].findRegex) {
+          origContent += `\n\n=== findRegex ===\n${origRegex[i].findRegex}`;
+          transContent += `\n\n=== findRegex ===\n${transRegex[i].findRegex || ''}`;
+        }
+        if (origRegex[i].trimStrings?.length) {
+          origContent += `\n\n=== trimStrings ===\n${(origRegex[i].trimStrings ?? []).join('\n---\n')}`;
+          transContent += `\n\n=== trimStrings ===\n${(transRegex[i].trimStrings || []).join('\n---\n')}`;
+        }
+        sections.push({
+          name: `regex[${i}] ${origRegex[i].scriptName || ''}`.trim(),
+          origContent,
+          transContent,
+          type: 'regex',
+        });
+      }
+    }
+  }
+
+  // TavernHelper scripts
+  const extractTH = (ext: any): any[] => {
+    const raw = ext?.tavern_helper;
+    if (Array.isArray(raw)) {
+      for (const item of raw) {
+        if (Array.isArray(item) && item[0] === 'scripts' && Array.isArray(item[1])) return item[1];
+      }
+      return raw.filter((s: any) => s && typeof s === 'object' && !Array.isArray(s));
+    }
+    return raw?.scripts || [];
+  };
+  const origTH = extractTH(origData.extensions);
+  const transTH = extractTH(transData.extensions);
+  for (let i = 0; i < Math.min(origTH.length, transTH.length); i++) {
+    if (origTH[i]?.content?.length > 50) {
+      sections.push({
+        name: `tavernHelper[${i}] ${origTH[i].name || ''}`.trim(),
+        origContent: origTH[i].content,
+        transContent: transTH[i]?.content || '',
+        type: 'tavern_helper',
+      });
+    }
+  }
+
+  // Lorebook entries (only code-heavy ones)
+  if (origData.character_book?.entries && transData.character_book?.entries) {
+    const origEntries = origData.character_book.entries;
+    const transEntries = transData.character_book.entries;
+    for (let i = 0; i < Math.min(origEntries.length, transEntries.length); i++) {
+      const content = origEntries[i].content;
+      if (content && content.length > 100 && /\{\{(get|set|add)(var|globalvar)::|z\.\w+|<script|function\s|=>\s*\{|class\s*=/.test(content)) {
+        sections.push({
+          name: `lorebook[${i}] ${origEntries[i].name || origEntries[i].comment || ''}`.trim(),
+          origContent: content,
+          transContent: transEntries[i]?.content || '',
+          type: 'lorebook',
+        });
+      }
+    }
+  }
+
+  // Core fields (grouped)
+  const coreOrig: string[] = [];
+  const coreTrans: string[] = [];
+  const coreFields = [
+    { key: 'system_prompt', orig: origData.system_prompt, trans: transData.system_prompt },
+    { key: 'description', orig: origData.description, trans: transData.description },
+    { key: 'first_mes', orig: origData.first_mes, trans: transData.first_mes },
+    { key: 'mes_example', orig: origData.mes_example, trans: transData.mes_example },
+  ];
+  for (const cf of coreFields) {
+    if (cf.orig && cf.orig.length > 50 && /\{\{|<[a-z]|function\s/.test(cf.orig)) {
+      coreOrig.push(`=== ${cf.key} ===\n${cf.orig}`);
+      coreTrans.push(`=== ${cf.key} ===\n${cf.trans || ''}`);
+    }
+  }
+  if (coreOrig.length > 0) {
+    sections.push({
+      name: 'core (system_prompt, description, first_mes)',
+      origContent: coreOrig.join('\n\n'),
+      transContent: coreTrans.join('\n\n'),
+      type: 'core',
+    });
+  }
+
+  return sections;
+}
+
+export async function aiVerifyCardStreaming(
+  originalCard: CharacterCard,
+  translatedCard: CharacterCard,
+  config: ProxySettings,
+  targetLang: string,
+  mvuDictionary: Record<string, string>,
+  onProgress: (progress: StreamingVerifyProgress) => void,
+  signal?: AbortSignal,
+): Promise<VerifyResult> {
+  // Step 1: Local verification first
+  const localIssues = quickVerify(originalCard, translatedCard);
+  const allIssues: VerifyIssue[] = [...localIssues];
+
+  // Step 2: Build sections
+  const sections = buildVerifySections(originalCard, translatedCard);
+  
+  if (sections.length === 0) {
+    return {
+      totalIssues: localIssues.length,
+      errors: localIssues.filter(i => i.severity === 'error').length,
+      warnings: localIssues.filter(i => i.severity === 'warning').length,
+      info: 0,
+      issues: localIssues,
+      summary: localIssues.length === 0
+        ? 'No code-heavy content found to verify. Card looks clean.'
+        : `Found ${localIssues.length} issue(s) from local verification.`,
+    };
+  }
+
+  const sectionResults: StreamingVerifyProgress['sectionResults'] = sections.map(s => ({
+    name: s.name, status: 'pending' as const, issueCount: 0,
+  }));
+
+  // MVU context
+  const mvuBlock = Object.keys(mvuDictionary).length > 0
+    ? `\n\nMVU Variable Dictionary (Strategy B mappings):\n${Object.entries(mvuDictionary).map(([k, v]) => `  "${k}" → "${v}"`).join('\n')}`
+    : '';
+
+  // Content limit per section
+  const modelLimit = getModelContentLimit(config.model);
+  const sectionLimit = Math.floor(modelLimit / 2.5); // leave room for system prompt + response
+
+  // Step 3: Iterate through each section
+  for (let i = 0; i < sections.length; i++) {
+    if (signal?.aborted) {
+      onProgress({
+        currentSection: '', sectionIndex: i, totalSections: sections.length,
+        issuesSoFar: allIssues, status: 'cancelled', sectionResults,
+      });
+      break;
+    }
+
+    const section = sections[i];
+    onProgress({
+      currentSection: section.name, sectionIndex: i, totalSections: sections.length,
+      issuesSoFar: allIssues, status: 'scanning', sectionResults,
+    });
+
+    // Build per-section prompt
+    const origContent = section.origContent.length > sectionLimit
+      ? smartTruncate(section.origContent, sectionLimit)
+      : section.origContent;
+    const transContent = section.transContent.length > sectionLimit
+      ? smartTruncate(section.transContent, sectionLimit)
+      : section.transContent;
+
+    const systemPrompt = `You are a SillyTavern character card integrity auditor checking ONE SECTION of a translated card.
+Compare ORIGINAL and TRANSLATED content, finding issues where translation broke functional elements.
+
+CRITICAL ELEMENTS TO CHECK:
+1. **SillyTavern Macros**: {{char}}, {{user}}, {{getvar::XXX}}, {{setvar::XXX::VALUE}} preserved EXACTLY
+2. **Zod Schema Fields**: Field names, .prefault() values, schema structure
+3. **EJS Templates**: <% %>, <%= %> blocks structurally preserved
+4. **HTML data-var Attributes**: data-var="XXX" references valid variable names
+5. **JavaScript Logic**: Function names, API calls, import statements NOT translated
+6. **CSS Classes/IDs**: class="XXX" and id="XXX" NOT translated
+7. **JSON Structure**: Embedded JSON remains valid
+8. **Variable Consistency**: All MVU Dictionary mappings applied consistently
+9. **Template Literals**: \${...} expressions NOT translated
+10. **Length**: Translation should be similar length (especially for code-heavy content)
+${mvuBlock}
+
+RESPOND IN THIS EXACT JSON FORMAT (no markdown wrapping):
+{
+  "issues": [
+    {
+      "severity": "error|warning|info",
+      "location": "${section.name}",
+      "description": "Description of the issue",
+      "original_snippet": "original code/text snippet",
+      "translated_snippet": "current translated snippet",
+      "suggested_fix": "what the translated snippet should be"
+    }
+  ],
+  "summary": "One line summary for this section"
+}
+
+If everything is correct: {"issues": [], "summary": "Section verified OK."}`;
+
+    const userPrompt = `Verify this section: **${section.name}** (${section.type})
+
+ORIGINAL:
+${origContent}
+
+TRANSLATED:
+${transContent}
+
+Check ALL functional elements are preserved or correctly renamed per MVU Dictionary.`;
+
+    try {
+      const result = await callLLM(config, systemPrompt, userPrompt, signal);
+      const parsed = parseAIVerifyResponse(result);
+      
+      // Add section name to issues that don't have it
+      for (const issue of parsed.issues) {
+        if (!issue.location || issue.location === 'unknown') {
+          issue.location = section.name;
+        }
+      }
+
+      allIssues.push(...parsed.issues);
+      sectionResults[i] = {
+        name: section.name,
+        status: parsed.issues.length > 0 ? 'issues' : 'ok',
+        issueCount: parsed.issues.length,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (signal?.aborted) break;
+      
+      sectionResults[i] = { name: section.name, status: 'error', issueCount: 0 };
+      allIssues.push({
+        id: crypto.randomUUID(),
+        severity: 'info',
+        location: section.name,
+        description: `AI verification failed for this section: ${msg.slice(0, 150)}`,
+        original: '', current: '', suggestion: '',
+        autoFixable: false,
+      });
+    }
+
+    // Report progress after each section
+    onProgress({
+      currentSection: section.name, sectionIndex: i + 1, totalSections: sections.length,
+      issuesSoFar: allIssues, status: i === sections.length - 1 ? 'done' : 'scanning',
+      sectionResults,
+    });
+  }
+
+  return {
+    totalIssues: allIssues.length,
+    errors: allIssues.filter(i => i.severity === 'error').length,
+    warnings: allIssues.filter(i => i.severity === 'warning').length,
+    info: allIssues.filter(i => i.severity === 'info').length,
+    issues: allIssues,
+    summary: allIssues.length === 0
+      ? `✅ All ${sections.length} sections verified. No issues found.`
+      : `Scanned ${sections.length} sections. Found ${allIssues.length} issue(s).`,
+  };
+}
+
+/* ═══ Regex-Only Scan & Fix ═══ */
+
+export interface RegexScanProgress {
+  currentRegex: string;
+  regexIndex: number;
+  totalRegex: number;
+  issuesSoFar: VerifyIssue[];
+  status: 'scanning' | 'fixing' | 'done' | 'cancelled';
+  regexResults: { name: string; status: 'ok' | 'issues' | 'error' | 'pending'; issueCount: number }[];
+}
+
+export interface RegexFixResult {
+  regexIndex: number;
+  scriptName: string;
+  fieldPath: string;
+  fieldType: 'replaceString' | 'findRegex' | 'trimStrings';
+  success: boolean;
+  before: string;
+  after: string;
+  reason?: string;
+}
+
+/**
+ * Scan all regex scripts for translation issues.
+ * For each regex: sends FULL original + translated for AI comparison.
+ * If a regex is too large, uses smartTruncate to stay within model limits.
+ */
+export async function aiRegexScan(
+  fields: TranslationField[],
+  config: ProxySettings,
+  targetLang: string,
+  mvuDictionary: Record<string, string>,
+  sourceLang: string,
+  onProgress: (progress: RegexScanProgress) => void,
+  signal?: AbortSignal,
+): Promise<{ issues: VerifyIssue[]; regexResults: RegexScanProgress['regexResults'] }> {
+  // Collect regex fields grouped by script index
+  const regexScripts = new Map<number, { name: string; fields: TranslationField[] }>();
+  for (const f of fields) {
+    if (f.group !== 'regex' || !f.translated) continue;
+    const idxMatch = f.path.match(/regex_scripts\[(\d+)\]/);
+    if (!idxMatch) continue;
+    const idx = parseInt(idxMatch[1]);
+    if (!regexScripts.has(idx)) {
+      const nameField = fields.find(nf => nf.path === `data.extensions.regex_scripts[${idx}].scriptName`);
+      regexScripts.set(idx, { name: nameField?.translated || nameField?.original || `regex[${idx}]`, fields: [] });
+    }
+    regexScripts.get(idx)!.fields.push(f);
+  }
+
+  const scripts = [...regexScripts.entries()].sort((a, b) => a[0] - b[0]);
+  const allIssues: VerifyIssue[] = [];
+  const regexResults: RegexScanProgress['regexResults'] = scripts.map(([idx, s]) => ({
+    name: `regex[${idx}] ${s.name}`, status: 'pending' as const, issueCount: 0,
+  }));
+
+  // Also run local verifyFields for regex fields only
+  const regexFields = fields.filter(f => f.group === 'regex' && f.translated);
+  const localIssues = verifyFields(regexFields, mvuDictionary, sourceLang);
+  allIssues.push(...localIssues);
+
+  const modelLimit = getModelContentLimit(config.model);
+  const perRegexLimit = Math.floor(modelLimit / 2.5);
+
+  const mvuBlock = Object.keys(mvuDictionary).length > 0
+    ? `\n\nMVU Variable Dictionary:\n${Object.entries(mvuDictionary).map(([k, v]) => `  "${k}" → "${v}"`).join('\n')}`
+    : '';
+
+  for (let si = 0; si < scripts.length; si++) {
+    if (signal?.aborted) {
+      onProgress({
+        currentRegex: '', regexIndex: si, totalRegex: scripts.length,
+        issuesSoFar: allIssues, status: 'cancelled', regexResults,
+      });
+      break;
+    }
+
+    const [idx, script] = scripts[si];
+    const label = `regex[${idx}] ${script.name}`;
+
+    onProgress({
+      currentRegex: label, regexIndex: si, totalRegex: scripts.length,
+      issuesSoFar: allIssues, status: 'scanning', regexResults,
+    });
+
+    // Build content for this regex
+    let origBlock = '';
+    let transBlock = '';
+    for (const f of script.fields) {
+      const fieldType = f.path.includes('replaceString') ? 'replaceString'
+        : f.path.includes('findRegex') ? 'findRegex'
+        : f.path.includes('trimStrings') ? 'trimStrings'
+        : f.label;
+      origBlock += `\n=== ${fieldType} ===\n${f.original}\n`;
+      transBlock += `\n=== ${fieldType} ===\n${f.translated}\n`;
+    }
+
+    // Truncate if needed
+    const origContent = origBlock.length > perRegexLimit ? smartTruncate(origBlock, perRegexLimit) : origBlock;
+    const transContent = transBlock.length > perRegexLimit ? smartTruncate(transBlock, perRegexLimit) : transBlock;
+
+    const systemPrompt = `You are a SillyTavern regex script translation auditor. You check ONE regex script's translation for errors.
+
+REGEX-SPECIFIC RULES:
+1. **replaceString** often contains HTML+CSS+JavaScript — these are the most critical fields
+2. CSS class names, IDs (class="xxx", id="xxx") must NEVER be translated
+3. JavaScript function names, variable names, API calls must NEVER be translated
+4. HTML data-var attributes must NEVER be translated (or renamed per MVU dictionary)
+5. {{macros}} like {{char}}, {{user}}, {{getvar::XXX}} must be preserved EXACTLY
+6. Template literals \${...} content must NOT be translated
+7. **findRegex** must remain a valid JavaScript regex literal (/pattern/flags)
+8. Translation length should be similar to original (especially for code-heavy content)
+9. Brackets {}, [], () must be balanced exactly as original
+10. Only translate natural language text — leave ALL code/markup untouched
+${mvuBlock}
+
+RESPOND IN JSON (no markdown):
+{
+  "issues": [
+    {
+      "severity": "error|warning",
+      "location": "${label}",
+      "description": "What's wrong",
+      "original_snippet": "snippet from original",
+      "translated_snippet": "current translated snippet",
+      "suggested_fix": "what it should be"
+    }
+  ],
+  "summary": "One line"
+}
+
+If all OK: {"issues": [], "summary": "Regex translation verified OK."}`;
+
+    const userPrompt = `Check this regex script translation: **${label}**
+
+ORIGINAL:
+${origContent}
+
+TRANSLATED (${targetLang}):
+${transContent}`;
+
+    try {
+      const result = await callLLM(config, systemPrompt, userPrompt, signal);
+      const parsed = parseAIVerifyResponse(result);
+
+      for (const issue of parsed.issues) {
+        if (!issue.location || issue.location === 'unknown') issue.location = label;
+      }
+
+      allIssues.push(...parsed.issues);
+      regexResults[si] = {
+        name: label,
+        status: parsed.issues.length > 0 ? 'issues' : 'ok',
+        issueCount: parsed.issues.length,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (signal?.aborted) break;
+      regexResults[si] = { name: label, status: 'error', issueCount: 0 };
+      allIssues.push({
+        id: crypto.randomUUID(), severity: 'info', location: label,
+        description: `Scan failed: ${msg.slice(0, 150)}`,
+        original: '', current: '', suggestion: '', autoFixable: false,
+      });
+    }
+
+    onProgress({
+      currentRegex: label, regexIndex: si + 1, totalRegex: scripts.length,
+      issuesSoFar: allIssues, status: si === scripts.length - 1 ? 'done' : 'scanning',
+      regexResults,
+    });
+  }
+
+  return { issues: allIssues, regexResults };
+}
+
+/**
+ * Fix regex issues found by aiRegexScan.
+ * Fixes each regex field one at a time with strict validation.
+ */
+export async function aiRegexFixAll(
+  issues: VerifyIssue[],
+  fields: TranslationField[],
+  config: ProxySettings,
+  targetLang: string,
+  mvuDictionary: Record<string, string>,
+  sourceLang: string,
+  onProgress: (progress: { fixing: string; done: number; total: number; results: RegexFixResult[] }) => void,
+  signal?: AbortSignal,
+): Promise<RegexFixResult[]> {
+  const results: RegexFixResult[] = [];
+
+  // Group issues by regex index for context
+  const regexFieldPaths = new Set<string>();
+  for (const issue of issues) {
+    // Find the field path from issue location
+    const locMatch = issue.location.match(/regex\[(\d+)\]/);
+    if (!locMatch) continue;
+    const idx = parseInt(locMatch[1]);
+    // Find all fields for this regex
+    for (const f of fields) {
+      if (f.group === 'regex' && f.path.includes(`regex_scripts[${idx}]`) && f.translated) {
+        regexFieldPaths.add(f.path);
+      }
+    }
+  }
+
+  const fieldPaths = [...regexFieldPaths];
+  const modelLimit = getModelContentLimit(config.model);
+  const contentLimit = Math.floor(modelLimit / 3);
+
+  const mvuTerms = Object.entries(mvuDictionary).map(([k, v]) => `"${k}" → "${v}"`).slice(0, 50);
+  const mvuBlock = mvuTerms.length > 0 ? `\nMVU DICTIONARY:\n${mvuTerms.join('\n')}` : '';
+
+  for (let fi = 0; fi < fieldPaths.length; fi++) {
+    if (signal?.aborted) break;
+
+    const fieldPath = fieldPaths[fi];
+    const field = fields.find(f => f.path === fieldPath);
+    if (!field?.translated) continue;
+
+    const idxMatch = fieldPath.match(/regex_scripts\[(\d+)\]/);
+    const regexIdx = idxMatch ? parseInt(idxMatch[1]) : -1;
+    const fieldType = fieldPath.includes('replaceString') ? 'replaceString' as const
+      : fieldPath.includes('findRegex') ? 'findRegex' as const
+      : 'trimStrings' as const;
+    const nameField = fields.find(nf => nf.path === `data.extensions.regex_scripts[${regexIdx}].scriptName`);
+    const scriptName = nameField?.translated || nameField?.original || `regex[${regexIdx}]`;
+
+    onProgress({ fixing: `${scriptName} → ${fieldType}`, done: fi, total: fieldPaths.length, results });
+
+    // Collect relevant issues for this field
+    const fieldIssues = issues.filter(i => {
+      const loc = i.location || '';
+      return loc.includes(`regex[${regexIdx}]`);
+    });
+    if (fieldIssues.length === 0) continue;
+
+    const issueDesc = fieldIssues.map((i, idx) =>
+      `${idx + 1}. [${i.severity}] ${i.description}${i.original ? ` | original: "${i.original}"` : ''}${i.suggestion ? ` | fix: ${i.suggestion}` : ''}`
+    ).join('\n');
+
+    const origContent = field.original.length > contentLimit
+      ? smartTruncate(field.original, contentLimit) : field.original;
+    const transContent = field.translated.length > contentLimit
+      ? smartTruncate(field.translated, contentLimit) : field.translated;
+
+    const systemPrompt = `You fix translation errors in a SillyTavern regex script field.
+Return ONLY the corrected translated text. No explanations, no markdown code fences.
+
+CRITICAL REGEX FIX RULES:
+- Fix ONLY the issues listed. Do NOT modify anything else.
+- NEVER translate: CSS class names, IDs, JS function names, variable names, API calls
+- NEVER translate: HTML attributes (data-var, class, id, style values)
+- NEVER translate: template literal expressions \${...}
+- PRESERVE ALL {{macros}} exactly ({{char}}, {{user}}, {{getvar::xxx}}, etc.)
+- PRESERVE exact bracket counts: {}, [], ()
+- PRESERVE all HTML tag structure: every <tag> must have </tag>
+- If field is findRegex: output MUST be a valid /regex/flags literal
+- Output length MUST be similar to input length (±20%)
+- Do NOT add markdown code fences (\`\`\`) to the output
+${mvuBlock}`;
+
+    const userPrompt = `Fix the listed issues in this ${fieldType} field of "${scriptName}".
+
+ORIGINAL ${fieldType}:
+${origContent}
+
+CURRENT TRANSLATION (${targetLang}):
+${transContent}
+
+ISSUES TO FIX:
+${issueDesc}
+
+Return the corrected ${fieldType} (fix listed issues, change NOTHING else):`;
+
+    try {
+      let fixed = await callLLM(config, systemPrompt, userPrompt, signal);
+
+      // Strip markdown fences
+      const mdMatch = fixed.match(/```(?:html|javascript|json|regex)?\s*\n([\s\S]*?)\n```/);
+      if (mdMatch) fixed = mdMatch[1].trim();
+      else fixed = fixed.replace(/^```[\s\S]*?\n/, '').replace(/\n```\s*$/, '').trim();
+
+      if (!fixed || fixed.length < Math.max(10, field.translated.length * 0.3)) {
+        results.push({
+          regexIndex: regexIdx, scriptName, fieldPath, fieldType,
+          success: false, before: field.translated, after: '',
+          reason: `Empty or too short (${fixed?.length || 0} chars)`,
+        });
+        continue;
+      }
+
+      // ─── Strict validation for regex fields ───
+      const orig = field.original;
+      const current = field.translated;
+
+      // 1. Length check (±50% for regex, they can vary)
+      const lengthRatio = fixed.length / current.length;
+      if (lengthRatio < 0.4 || lengthRatio > 2.5) {
+        results.push({
+          regexIndex: regexIdx, scriptName, fieldPath, fieldType,
+          success: false, before: current, after: fixed,
+          reason: `Length ratio ${(lengthRatio * 100).toFixed(0)}% — too different`,
+        });
+        continue;
+      }
+
+      // 2. Bracket balance must match original
+      const origBr = countBrackets(orig);
+      const fixBr = countBrackets(fixed);
+      let bracketBroken = false;
+      for (const [pair, [oOpen, oClose]] of Object.entries(origBr)) {
+        const [fOpen, fClose] = fixBr[pair];
+        if (Math.abs((oOpen - oClose) - (fOpen - fClose)) > 1) {
+          bracketBroken = true;
+          break;
+        }
+      }
+      if (bracketBroken) {
+        results.push({
+          regexIndex: regexIdx, scriptName, fieldPath, fieldType,
+          success: false, before: current, after: fixed,
+          reason: 'Fix broke bracket balance',
+        });
+        continue;
+      }
+
+      // 3. findRegex must remain a valid regex literal
+      if (fieldType === 'findRegex' && /^\/[\s\S]+\/[a-z]*$/i.test(orig)) {
+        if (!/^\/[\s\S]+\/[a-z]*$/i.test(fixed)) {
+          results.push({
+            regexIndex: regexIdx, scriptName, fieldPath, fieldType,
+            success: false, before: current, after: fixed,
+            reason: 'Fix broke regex literal format (/pattern/flags)',
+          });
+          continue;
+        }
+      }
+
+      // 4. Macro preservation
+      const origMacros = extractMacros(orig);
+      const fixMacros = extractMacros(fixed);
+      const stdMacro = /^\{\{(char|user|random|roll|time|date|idle_duration|input|lastMessage|newline|trim|noop)\}\}$/i;
+      let macroLost = false;
+      for (const m of origMacros) {
+        if (stdMacro.test(m) && !fixMacros.includes(m)) {
+          macroLost = true;
+          break;
+        }
+      }
+      if (macroLost) {
+        results.push({
+          regexIndex: regexIdx, scriptName, fieldPath, fieldType,
+          success: false, before: current, after: fixed,
+          reason: 'Fix lost standard macros',
+        });
+        continue;
+      }
+
+      // 5. Verify fix actually reduces issues
+      const mockBefore = { ...field, translated: current };
+      const mockAfter = { ...field, translated: fixed };
+      const issuesBefore = verifyFields([mockBefore], mvuDictionary, sourceLang);
+      const issuesAfter = verifyFields([mockAfter], mvuDictionary, sourceLang);
+      const scoreBefore = issuesBefore.reduce((s, i) => s + (i.severity === 'error' ? 3 : 1), 0);
+      const scoreAfter = issuesAfter.reduce((s, i) => s + (i.severity === 'error' ? 3 : 1), 0);
+
+      if (scoreAfter > scoreBefore + 2) {
+        results.push({
+          regexIndex: regexIdx, scriptName, fieldPath, fieldType,
+          success: false, before: current, after: fixed,
+          reason: `Fix worsened issues: ${scoreBefore} → ${scoreAfter}`,
+        });
+        continue;
+      }
+
+      // ✅ All validation passed
+      results.push({
+        regexIndex: regexIdx, scriptName, fieldPath, fieldType,
+        success: true, before: current, after: fixed,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (signal?.aborted) break;
+      results.push({
+        regexIndex: regexIdx, scriptName, fieldPath, fieldType,
+        success: false, before: field.translated, after: '',
+        reason: msg.slice(0, 150),
+      });
+    }
+
+    onProgress({ fixing: `${scriptName} → ${fieldType}`, done: fi + 1, total: fieldPaths.length, results });
+  }
+
+  return results;
 }
 
 export async function aiVerifyCard(

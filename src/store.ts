@@ -344,6 +344,7 @@ export const useStore = create<AppState>((set) => ({
     ejsEntryNameDict: LS.get('st-translator-ejs-entry-dict', {}) as Record<string, string>,
     ejsKeywordDict: LS.get('st-translator-ejs-keyword-dict', {}) as Record<string, string>,
     ejsDecoratorPreserve: LS.get('st-translator-ejs-decorator-preserve', true),
+    enableChunkVerification: LS.get('st-translator-chunk-verification', false),
   },
   setTranslationConfig: (partial) =>
     set((s) => {
@@ -428,6 +429,9 @@ export const useStore = create<AppState>((set) => ({
       }
       if ('ejsDecoratorPreserve' in partial) {
         LS.set('st-translator-ejs-decorator-preserve', next.ejsDecoratorPreserve);
+      }
+      if ('enableChunkVerification' in partial) {
+        LS.set('st-translator-chunk-verification', next.enableChunkVerification);
       }
       if ('mode' in partial) {
         LS.set('st-translator-translation-mode', next.mode);

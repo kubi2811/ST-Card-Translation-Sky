@@ -227,6 +227,59 @@ const en = {
   catMvuInconsistent: 'MVU Inconsistent',
   catLengthAnomaly: 'Length Anomaly',
   catEmpty: 'Empty',
+  catRegexBroken: 'Regex Broken',
+  catCodeSplice: 'Code Splice',
+  catStructuralTruncation: 'Structural Truncation',
+  catCssClassSync: 'CSS Class/ID Sync',
+  catFunctionSignature: 'Function Signature',
+  catTemplateLiteralContent: 'Template Literal',
+  
+  // Streaming Verify
+  verifyStreamingTitle: 'AI Deep Verify (Streaming)',
+  verifyScanning: 'Scanning: {section}',
+  verifySectionProgress: '{current}/{total} sections',
+  verifySectionOk: 'OK',
+  verifySectionIssues: '{count} issues',
+  verifySectionError: 'Error',
+  verifySectionPending: 'Pending',
+  verifyCancelled: 'Verification cancelled',
+  verifyDoneStreaming: 'Done — scanned {total} sections',
+  
+  // Diff Viewer
+  diffCompare: 'Compare',
+  diffOriginal: 'Original',
+  diffTranslated: 'Translated',
+  diffSelectField: 'Select field...',
+  diffWordCount: 'Words',
+  diffCharCount: 'Chars',
+  diffStructures: 'Structures',
+  
+  // Preview Fix
+  previewFix: 'Preview Fix',
+  previewBefore: 'Before',
+  previewAfter: 'After',
+  previewAccept: 'Accept',
+  previewReject: 'Reject',
+  previewAcceptAll: 'Accept All',
+  
+  // Severity Filter
+  filterAll: 'All',
+  filterErrors: 'Errors',
+  filterWarnings: 'Warnings',
+  filterInfo: 'Info',
+  
+  // Regex Scan & Fix
+  regexScanFix: 'Regex Scan & Fix',
+  regexScanBtn: 'Scan Regex Only',
+  regexScanning: 'Scanning regex: {name}',
+  regexScanDone: 'Scanned {count} regex scripts',
+  regexFixBtn: 'Fix {count} Regex Issues',
+  regexFixing: 'Fixing: {name}',
+  regexFixDone: '{accepted} fixed, {rejected} rejected',
+  regexFixPreview: 'Preview: {name}',
+  regexAccept: 'Apply',
+  regexReject: 'Skip',
+  regexAcceptAll: 'Apply All ({count})',
 
   // Model Routing
   enableModelRouting: 'Enable Model Routing',
@@ -463,6 +516,59 @@ const vi: TranslationKeys = {
   catMvuInconsistent: 'MVU không khớp',
   catLengthAnomaly: 'Độ dài bất thường',
   catEmpty: 'Trống',
+  catRegexBroken: 'Regex hỏng',
+  catCodeSplice: 'Code hỏng',
+  catStructuralTruncation: 'Cắt cụt cấu trúc',
+  catCssClassSync: 'CSS Class/ID lệch',
+  catFunctionSignature: 'Tên hàm bị dịch',
+  catTemplateLiteralContent: 'Template Literal',
+  
+  // Streaming Verify
+  verifyStreamingTitle: 'AI Deep Verify (Streaming)',
+  verifyScanning: 'Đang quét: {section}',
+  verifySectionProgress: '{current}/{total} phần',
+  verifySectionOk: 'OK',
+  verifySectionIssues: '{count} lỗi',
+  verifySectionError: 'Lỗi',
+  verifySectionPending: 'Đang chờ',
+  verifyCancelled: 'Đã hủy kiểm tra',
+  verifyDoneStreaming: 'Xong — đã quét {total} phần',
+  
+  // Diff Viewer
+  diffCompare: 'So sánh',
+  diffOriginal: 'Bản gốc',
+  diffTranslated: 'Bản dịch',
+  diffSelectField: 'Chọn trường...',
+  diffWordCount: 'Số từ',
+  diffCharCount: 'Ký tự',
+  diffStructures: 'Cấu trúc',
+  
+  // Preview Fix
+  previewFix: 'Xem trước',
+  previewBefore: 'Trước',
+  previewAfter: 'Sau',
+  previewAccept: 'Chấp nhận',
+  previewReject: 'Từ chối',
+  previewAcceptAll: 'Chấp nhận tất cả',
+  
+  // Severity Filter
+  filterAll: 'Tất cả',
+  filterErrors: 'Lỗi',
+  filterWarnings: 'Cảnh báo',
+  filterInfo: 'Thông tin',
+  
+  // Regex Scan & Fix
+  regexScanFix: 'Quét & Sửa Regex',
+  regexScanBtn: 'Quét Regex',
+  regexScanning: 'Đang quét: {name}',
+  regexScanDone: 'Đã quét {count} regex scripts',
+  regexFixBtn: 'Sửa {count} lỗi Regex',
+  regexFixing: 'Đang sửa: {name}',
+  regexFixDone: '{accepted} đã sửa, {rejected} bỏ qua',
+  regexFixPreview: 'Xem trước: {name}',
+  regexAccept: 'Áp dụng',
+  regexReject: 'Bỏ qua',
+  regexAcceptAll: 'Áp dụng tất cả ({count})',
 
   // Model Routing
   enableModelRouting: 'Bật Model Routing',

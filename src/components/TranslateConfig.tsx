@@ -942,6 +942,23 @@ export default function TranslateConfig() {
                     : '1 = sequential (default, best for narrative consistency). 2-5 = translate multiple chunks simultaneously, much faster for large Regex cards. ⚠️ Parallel chunks lack context from previous chunks.'}
                 </div>
               </div>
+
+              {/* AI Chunk Verification */}
+              <div style={{ marginTop: '10px' }}>
+                <label className="checkbox-wrapper">
+                  <input
+                    type="checkbox"
+                    checked={translationConfig.enableChunkVerification || false}
+                    onChange={(e) => setTranslationConfig({ enableChunkVerification: e.target.checked })}
+                  />
+                  <span>{locale === 'vi' ? '🔍 AI xác minh chunk (so sánh gốc ↔ dịch)' : '🔍 AI Chunk Verification (compare original ↔ translated)'}</span>
+                </label>
+                <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '4px', lineHeight: '1.4' }}>
+                  {locale === 'vi' 
+                    ? 'Sau mỗi chunk dịch xong, AI sẽ so sánh bản gốc với bản dịch để phát hiện: code bị hỏng (backticks, brackets), nội dung bị thiếu/cắt, và cấu trúc bị sai lệch. Tự động sửa lỗi nếu phát hiện. ⚠️ Tốn thêm 1 API call/chunk.' 
+                    : 'After each chunk is translated, AI verifies structural integrity by comparing original vs translated: detects broken code (backticks, brackets), missing content, and structural corruption. Auto-repairs if issues found. ⚠️ Costs 1 extra API call per chunk.'}
+                </div>
+              </div>
             </div>
             )}
 

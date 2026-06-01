@@ -242,6 +242,7 @@ export interface TranslationConfig {
   ejsEntryNameDict: Record<string, string>;  // EJS getwi() entry name → translated name
   ejsKeywordDict: Record<string, string>;    // EJS keyword/alias → translated
   ejsDecoratorPreserve: boolean;       // Auto-detect & protect EJS decorators (@@, [GENERATE:], @INJECT)
+  enableChunkVerification: boolean;     // Enable AI-powered chunk verification (compare original vs translated)
 }
 
 /* ─── Log Entry ─── */

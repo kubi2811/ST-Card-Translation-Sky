@@ -18,6 +18,8 @@ import type { Worldbook } from './utils/worldbookParser';
 import { DEFAULT_FIELD_GROUPS } from './utils/cardFields';
 import { IDB } from './utils/idb';
 import { clearRAGCache } from './utils/ragContext';
+import { clearTranslationMemory } from './utils/translationMemory';
+import type { MvuKeyMetadata } from './utils/mvuSync';
 
 /* ─── localStorage helpers ─── */
 const LS = {
@@ -107,6 +109,12 @@ interface AppState {
   mvuConversionProgress: string;
   setMvuConversionProgress: (p: string) => void;
 
+  // MVU Key Metadata & Dictionary History
+  mvuKeyMetadata: Record<string, MvuKeyMetadata>;
+  setMvuKeyMetadata: (m: Record<string, MvuKeyMetadata>) => void;
+  mvuDictionaryHistory: Record<string, string>[];
+  pushDictionaryHistory: (dict: Record<string, string>) => void;
+
   // Per-file translation cache
   saveTranslationCache: () => void;
   loadTranslationCache: (fileName: string) => Promise<boolean>;
@@ -148,7 +156,11 @@ export const useStore = create<AppState>((set) => ({
         ejsEntryNameDict: {}, // Clear EJS dictionaries for new card
         ejsKeywordDict: {},
       },
+      mvuKeyMetadata: {},
+      mvuDictionaryHistory: [],
     }));
+    // Clear Translation Memory on card load
+    clearTranslationMemory().catch(e => console.warn('[TM] Clear error:', e));
     LS.set('st-translator-mvu-dict', {});
     LS.set('st-translator-ejs-entry-dict', {});
     LS.set('st-translator-ejs-keyword-dict', {});
@@ -208,6 +220,8 @@ export const useStore = create<AppState>((set) => ({
         ejsEntryNameDict: {},
         ejsKeywordDict: {},
       },
+      mvuKeyMetadata: {},
+      mvuDictionaryHistory: [],
     }));
     LS.set('st-translator-mvu-dict', {});
     LS.set('st-translator-ejs-entry-dict', {});
@@ -345,6 +359,7 @@ export const useStore = create<AppState>((set) => ({
     ejsKeywordDict: LS.get('st-translator-ejs-keyword-dict', {}) as Record<string, string>,
     ejsDecoratorPreserve: LS.get('st-translator-ejs-decorator-preserve', true),
     enableChunkVerification: LS.get('st-translator-chunk-verification', false),
+    enableTranslationMemory: LS.get('st-translator-tm-enabled', true),
   },
   setTranslationConfig: (partial) =>
     set((s) => {
@@ -432,6 +447,9 @@ export const useStore = create<AppState>((set) => ({
       }
       if ('enableChunkVerification' in partial) {
         LS.set('st-translator-chunk-verification', next.enableChunkVerification);
+      }
+      if ('enableTranslationMemory' in partial) {
+        LS.set('st-translator-tm-enabled', next.enableTranslationMemory);
       }
       if ('mode' in partial) {
         LS.set('st-translator-translation-mode', next.mode);
@@ -539,6 +557,15 @@ export const useStore = create<AppState>((set) => ({
   mvuConversionProgress: '',
   setMvuConversionProgress: (p) => set({ mvuConversionProgress: p }),
 
+  // MVU Key Metadata & Dictionary History
+  mvuKeyMetadata: {},
+  setMvuKeyMetadata: (m) => set({ mvuKeyMetadata: m }),
+  mvuDictionaryHistory: [],
+  pushDictionaryHistory: (dict) => set((s) => ({
+    // Keep max 10 history entries
+    mvuDictionaryHistory: [...s.mvuDictionaryHistory.slice(-9), { ...dict }],
+  })),
+
   // ─── Per-file Translation Cache ───
   saveTranslationCache: () => {
     const s = useStore.getState();
@@ -591,6 +618,8 @@ export const useStore = create<AppState>((set) => ({
         currentFieldIndex: 0,
         liveSchemaContext: '',
         mvuConversionProgress: '',
+        mvuKeyMetadata: {},
+        mvuDictionaryHistory: [],
         translationConfig: {
           ...state.translationConfig,
           mvuDictionary: {},
@@ -637,6 +666,8 @@ export const useStore = create<AppState>((set) => ({
       currentFieldIndex: 0,
       liveSchemaContext: '',
       mvuConversionProgress: '',
+      mvuKeyMetadata: {},
+      mvuDictionaryHistory: [],
       translationConfig: {
         ...state.translationConfig,
         mvuDictionary: {},

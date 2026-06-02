@@ -243,6 +243,7 @@ export interface TranslationConfig {
   ejsKeywordDict: Record<string, string>;    // EJS keyword/alias → translated
   ejsDecoratorPreserve: boolean;       // Auto-detect & protect EJS decorators (@@, [GENERATE:], @INJECT)
   enableChunkVerification: boolean;     // Enable AI-powered chunk verification (compare original vs translated)
+  enableTranslationMemory: boolean;    // Enable Translation Memory (persistent cross-session term/translation cache)
 }
 
 /* ─── Log Entry ─── */

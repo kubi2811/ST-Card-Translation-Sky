@@ -1,10 +1,12 @@
-import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
+import { useState, useMemo, useRef, useCallback, useEffect, lazy, Suspense } from 'react';
 import { useStore } from '../store';
 import { useTranslation } from '../hooks/useTranslation';
 import { useT } from '../i18n/useLocale';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import type { FieldGroup, TranslationStatus } from '../types/card';
-import { RotateCcw, AlertTriangle, CheckCircle2, Clock, ArrowLeftRight, BarChart3, Ban, Search, X, Copy, Check, Eye, Wand2, Zap } from 'lucide-react';
+import type { FieldGroup, TranslationField, TranslationStatus } from '../types/card';
+import { RotateCcw, AlertTriangle, CheckCircle2, Clock, ArrowLeftRight, BarChart3, Ban, Search, X, Copy, Check, Eye, Wand2, Zap, Brain } from 'lucide-react';
+
+const RAGDebugPanel = lazy(() => import('./RAGDebugPanel'));
 
 const getFieldBaseKey = (path: string) => {
   const lastPart = path.split('.').pop() || '';
@@ -650,7 +652,15 @@ function VirtualTableView({
     overscan: 8,
   });
 
+  const [ragDebugField, setRagDebugField] = useState<TranslationField | null>(null);
+
   return (
+    <>
+    {ragDebugField && (
+      <Suspense fallback={null}>
+        <RAGDebugPanel field={ragDebugField} onClose={() => setRagDebugField(null)} />
+      </Suspense>
+    )}
     <div
       ref={parentRef}
       style={{
@@ -880,6 +890,14 @@ function VirtualTableView({
                             <RotateCcw size={14} />
                           </button>
                         )}
+                        <button
+                          className="btn btn-ghost btn-xs tooltip"
+                          data-tooltip="RAG Debug"
+                          onClick={() => setRagDebugField(field)}
+                          style={{ padding: '4px', color: 'var(--text-muted)', opacity: 0.6 }}
+                        >
+                          <Brain size={14} />
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -890,6 +908,7 @@ function VirtualTableView({
         })}
       </div>
     </div>
+    </>
   );
 }
 

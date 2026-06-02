@@ -1,12 +1,53 @@
 import React, { useState, useMemo } from 'react';
 import { useStore } from '../store';
 import { useT } from '../i18n/useLocale';
-import { extractPotentialMvuKeys, aiTranslateMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, type MvuKeyInfo } from '../utils/mvuSync';
+import { 
+  extractPotentialMvuKeys, 
+  aiTranslateMvuKeys, 
+  extractZodDescriptions, 
+  extractSchemaContextFromCard, 
+  extractMappingFromTranslatedSchemas, 
+  type MvuKeyInfo,
+  enforceExactConsistency,
+  validateDictionaryConflicts
+} from '../utils/mvuSync';
 import { isMvuCard, getMvuZodSummary } from '../utils/mvuDetector';
-import { Settings, Plus, Trash2, Wand2, Info, Loader2, Bot, Search, Download, Upload, BarChart3, Zap, AlertTriangle } from 'lucide-react';
+import { 
+  Settings, 
+  Plus, 
+  Trash2, 
+  Wand2, 
+  Info, 
+  Loader2, 
+  Bot, 
+  Search, 
+  Download, 
+  Upload, 
+  BarChart3, 
+  Zap, 
+  AlertTriangle,
+  Undo2,
+  CheckSquare,
+  Square,
+  RefreshCw,
+  ChevronDown,
+  ChevronRight
+} from 'lucide-react';
 
 export default function MvuSyncPanel() {
-  const { card, fields, translationConfig, setTranslationConfig, locale, proxy, addToast } = useStore();
+  const { 
+    card, 
+    fields, 
+    translationConfig, 
+    setTranslationConfig, 
+    locale, 
+    proxy, 
+    addToast,
+    mvuKeyMetadata,
+    setMvuKeyMetadata,
+    mvuDictionaryHistory,
+    pushDictionaryHistory
+  } = useStore();
   const t = useT();
   const [isExpanded, setIsExpanded] = useState(false);
   const [newKey, setNewKey] = useState('');
@@ -14,8 +55,16 @@ export default function MvuSyncPanel() {
   const [isAutoTranslating, setIsAutoTranslating] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showStats, setShowStats] = useState(false);
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({
+    field_name: false,
+    enum_value: false,
+    string_literal: false,
+    unknown: false
+  });
+  
   const isVi = locale === 'vi';
-
   const { enableMvuSync, mvuDictionary } = translationConfig;
 
   if (!card) return null;
@@ -27,30 +76,71 @@ export default function MvuSyncPanel() {
 
   const addEntry = () => {
     if (newKey.trim() && newValue.trim()) {
-      setTranslationConfig({
-        mvuDictionary: {
-          ...mvuDictionary,
-          [newKey.trim()]: newValue.trim(),
-        },
-      });
+      const key = newKey.trim();
+      const val = newValue.trim();
+      
+      pushDictionaryHistory(mvuDictionary);
+      const nextDict = {
+        ...mvuDictionary,
+        [key]: val,
+      };
+      
+      const nextMetadata = { ...mvuKeyMetadata };
+      nextMetadata[key] = {
+        sources: ['manual'],
+        confidence: 'manual',
+        occurrences: 1
+      };
+      
+      setMvuKeyMetadata(nextMetadata);
+      setTranslationConfig({ mvuDictionary: nextDict });
       setNewKey('');
       setNewValue('');
     }
   };
 
   const removeEntry = (key: string) => {
+    pushDictionaryHistory(mvuDictionary);
     const nextDict = { ...mvuDictionary };
     delete nextDict[key];
+    const nextMetadata = { ...mvuKeyMetadata };
+    delete nextMetadata[key];
+    
+    setMvuKeyMetadata(nextMetadata);
     setTranslationConfig({ mvuDictionary: nextDict });
+    
+    // Deselect if removed
+    if (selectedKeys.has(key)) {
+      const nextSelected = new Set(selectedKeys);
+      nextSelected.delete(key);
+      setSelectedKeys(nextSelected);
+    }
   };
 
   const updateEntry = (key: string, value: string) => {
-    setTranslationConfig({
-      mvuDictionary: {
-        ...mvuDictionary,
-        [key]: value,
-      },
-    });
+    pushDictionaryHistory(mvuDictionary);
+    
+    const nextDict = {
+      ...mvuDictionary,
+      [key]: value,
+    };
+    
+    const nextMetadata = { ...mvuKeyMetadata };
+    if (!nextMetadata[key]) {
+      nextMetadata[key] = {
+        sources: ['manual'],
+        confidence: 'manual',
+        occurrences: 1
+      };
+    } else {
+      nextMetadata[key] = {
+        ...nextMetadata[key],
+        confidence: 'manual'
+      };
+    }
+    
+    setMvuKeyMetadata(nextMetadata);
+    setTranslationConfig({ mvuDictionary: nextDict });
   };
 
   const autoExtract = () => {
@@ -64,16 +154,40 @@ export default function MvuSyncPanel() {
     const schemaMappings = extractMappingFromTranslatedSchemas(card, fields);
     const schemaMappingKeys = Object.keys(schemaMappings);
     
+    pushDictionaryHistory(mvuDictionary);
     const nextDict = { ...mvuDictionary, ...schemaMappings };
-    let added = schemaMappingKeys.filter(k => !(k in mvuDictionary)).length;
+    const nextMetadata = { ...mvuKeyMetadata };
+    let added = 0;
+    
+    // Schema mappings gets 'schema' confidence
+    for (const k of schemaMappingKeys) {
+      if (!(k in mvuDictionary)) {
+        added++;
+      }
+      nextMetadata[k] = {
+        sources: ['zod'],
+        confidence: 'schema',
+        occurrences: 1
+      };
+    }
     
     keyInfos.forEach(ki => {
       if (!(ki.key in nextDict)) {
         nextDict[ki.key] = '';
         added++;
       }
+      if (!nextMetadata[ki.key]) {
+        nextMetadata[ki.key] = {
+          sources: ki.sources,
+          keyType: ki.keyType,
+          description: ki.description,
+          occurrences: ki.occurrences,
+          confidence: 'ai'
+        };
+      }
     });
     
+    setMvuKeyMetadata(nextMetadata);
     setTranslationConfig({ mvuDictionary: nextDict });
     
     if (schemaMappingKeys.length > 0) {
@@ -102,14 +216,22 @@ export default function MvuSyncPanel() {
     let currentDict = { ...mvuDictionary };
     let extractedCount = 0;
     
+    const nextMetadata = { ...mvuKeyMetadata };
     if (schemaMappingKeys.length > 0) {
+      pushDictionaryHistory(currentDict);
       for (const [k, v] of Object.entries(schemaMappings)) {
         if (v && v.trim() && k !== v && currentDict[k] !== v) {
           currentDict[k] = v;
           extractedCount++;
+          nextMetadata[k] = {
+            sources: ['zod'],
+            confidence: 'schema',
+            occurrences: 1
+          };
         }
       }
       if (extractedCount > 0) {
+        setMvuKeyMetadata(nextMetadata);
         setTranslationConfig({ mvuDictionary: currentDict });
       }
     }
@@ -150,12 +272,17 @@ export default function MvuSyncPanel() {
         keyDescriptions
       );
 
-      const nextDict = { ...mvuDictionary };
+      pushDictionaryHistory(currentDict);
+      const nextDict = { ...currentDict };
       let added = 0;
       for (const [k, v] of Object.entries(translations)) {
         if (v && v.trim() && k !== v) {
           nextDict[k] = v;
           added++;
+          nextMetadata[k] = {
+            ...nextMetadata[k],
+            confidence: 'ai'
+          };
         }
       }
 
@@ -166,11 +293,22 @@ export default function MvuSyncPanel() {
         }
       }
 
-      setTranslationConfig({ mvuDictionary: nextDict });
-      addToast('success', isVi
-        ? `AI đã dịch ${added}/${keysNeedTranslation.length} tên biến.`
-        : `AI translated ${added}/${keysNeedTranslation.length} variable names.`
-      );
+      setMvuKeyMetadata(nextMetadata);
+      
+      // Enforce exact consistency after AI translation
+      const { fixedDict, fixes } = enforceExactConsistency(nextDict, nextMetadata);
+      if (fixes.length > 0) {
+        setTranslationConfig({ mvuDictionary: fixedDict });
+        addToast('success', isVi 
+          ? `Đã dịch ${added} biến và sửa ${fixes.length} biến thể.` 
+          : `AI translated ${added} variables and fixed ${fixes.length} variants.`);
+      } else {
+        setTranslationConfig({ mvuDictionary: nextDict });
+        addToast('success', isVi
+          ? `AI đã dịch ${added}/${keysNeedTranslation.length} tên biến.`
+          : `AI translated ${added}/${keysNeedTranslation.length} variable names.`
+        );
+      }
     } catch (err) {
       addToast('error', isVi
         ? `Lỗi AI: ${err instanceof Error ? err.message : String(err)}`
@@ -204,6 +342,7 @@ export default function MvuSyncPanel() {
         const text = await file.text();
         const imported = JSON.parse(text);
         if (typeof imported === 'object' && imported !== null) {
+          pushDictionaryHistory(mvuDictionary);
           const merged = { ...mvuDictionary, ...imported };
           setTranslationConfig({ mvuDictionary: merged });
           const newCount = Object.keys(imported).length;
@@ -239,28 +378,51 @@ export default function MvuSyncPanel() {
     );
   }, [dictEntries, searchQuery]);
 
+  // ─── Grouped entries ───
+  const groupedEntries = useMemo(() => {
+    const groups: Record<string, [string, string][]> = {
+      field_name: [],
+      enum_value: [],
+      string_literal: [],
+      unknown: []
+    };
+    for (const [k, v] of filteredEntries) {
+      const info = keyInfoMap.get(k);
+      const kt = info?.keyType || mvuKeyMetadata[k]?.keyType || 'unknown';
+      if (groups[kt]) {
+        groups[kt].push([k, v]);
+      } else {
+        groups['unknown'].push([k, v]);
+      }
+    }
+    return groups;
+  }, [filteredEntries, keyInfoMap, mvuKeyMetadata]);
+
+  // ─── Conflict validation ───
+  const conflicts = useMemo(() => validateDictionaryConflicts(mvuDictionary), [mvuDictionary]);
+
   // ─── Source badge colors ───
   const sourceBadgeStyle = (source: string): React.CSSProperties => {
     const colors: Record<string, { bg: string; color: string }> = {
-      zod: { bg: 'rgba(99,102,241,0.1)', color: '#818cf8' },
-      yaml: { bg: 'rgba(34,197,94,0.1)', color: '#4ade80' },
-      macro: { bg: 'rgba(245,158,11,0.1)', color: '#fbbf24' },
-      datavar: { bg: 'rgba(236,72,153,0.1)', color: '#f472b6' },
-      enum: { bg: 'rgba(168,85,247,0.1)', color: '#c084fc' },
-      bracket: { bg: 'rgba(14,165,233,0.1)', color: '#38bdf8' },
-      comparison: { bg: 'rgba(251,146,60,0.1)', color: '#fb923c' },
-      lodash: { bg: 'rgba(20,184,166,0.1)', color: '#2dd4bf' },
+      zod: { bg: 'rgba(99,102,241,0.08)', color: '#818cf8' },
+      yaml: { bg: 'rgba(34,197,94,0.08)', color: '#4ade80' },
+      macro: { bg: 'rgba(245,158,11,0.08)', color: '#fbbf24' },
+      datavar: { bg: 'rgba(236,72,153,0.08)', color: '#f472b6' },
+      enum: { bg: 'rgba(168,85,247,0.08)', color: '#c084fc' },
+      bracket: { bg: 'rgba(14,165,233,0.08)', color: '#38bdf8' },
+      comparison: { bg: 'rgba(251,146,60,0.08)', color: '#fb923c' },
+      lodash: { bg: 'rgba(20,184,166,0.08)', color: '#2dd4bf' },
     };
-    const c = colors[source] || { bg: 'rgba(148,163,184,0.1)', color: '#94a3b8' };
+    const c = colors[source] || { bg: 'rgba(148,163,184,0.08)', color: '#94a3b8' };
     return {
-      padding: '0 4px',
+      padding: '0px 4px',
       borderRadius: '3px',
-      fontSize: '0.55rem',
+      fontSize: '0.52rem',
       fontWeight: 700,
       textTransform: 'uppercase' as const,
       background: c.bg,
       color: c.color,
-      letterSpacing: '0.5px',
+      letterSpacing: '0.3px',
     };
   };
 
@@ -274,20 +436,133 @@ export default function MvuSyncPanel() {
     const c = colors[kt];
     if (!c) return null;
     return {
-      padding: '0 4px',
+      padding: '0px 4px',
       borderRadius: '3px',
-      fontSize: '0.5rem',
+      fontSize: '0.52rem',
       fontWeight: 700,
       textTransform: 'uppercase' as const,
       background: c.bg,
       color: c.color,
-      letterSpacing: '0.5px',
-      border: `1px solid ${c.color}20`,
+      letterSpacing: '0.3px',
+      border: `1px solid ${c.color}15`,
     };
   };
   const keyTypeLabel = (kt?: string) => {
     const labels: Record<string, string> = { field_name: 'FIELD', enum_value: 'ENUM', string_literal: 'STR' };
     return kt ? labels[kt] || '' : '';
+  };
+
+  // ─── Confidence Badge Styling ───
+  const confidenceBadgeStyle = (conf?: string): React.CSSProperties | null => {
+    if (!conf) return null;
+    const colors: Record<string, { bg: string; color: string; label: string }> = {
+      schema: { bg: 'rgba(34, 197, 94, 0.08)', color: '#22c55e', label: 'SCHEMA' },
+      manual: { bg: 'rgba(14, 165, 233, 0.08)', color: '#0ea5e9', label: 'MANUAL' },
+      ai: { bg: 'rgba(245, 158, 11, 0.08)', color: '#fbbf24', label: 'AI' },
+      progressive: { bg: 'rgba(100, 116, 139, 0.08)', color: '#94a3b8', label: 'PROG' }
+    };
+    const c = colors[conf] || { bg: 'rgba(148,163,184,0.08)', color: '#94a3b8', label: 'UNKNOWN' };
+    return {
+      padding: '0px 4px',
+      borderRadius: '3px',
+      fontSize: '0.52rem',
+      fontWeight: 700,
+      background: c.bg,
+      color: c.color,
+      letterSpacing: '0.3px',
+      border: `1px solid ${c.color}15`
+    };
+  };
+
+  // ─── Group display metadata ───
+  const groupMeta: Record<string, { vi: string; en: string; icon: string }> = {
+    field_name: { vi: 'Tên trường (Fields)', en: 'Field Names', icon: '🏷️' },
+    enum_value: { vi: 'Giá trị Enum (Enums)', en: 'Enum Values', icon: '🔢' },
+    string_literal: { vi: 'Hằng chuỗi (Literals)', en: 'String Literals', icon: '📝' },
+    unknown: { vi: 'Chưa phân loại (Unknown)', en: 'Unknown / Other', icon: '❓' }
+  };
+
+  const toggleGroup = (group: string) => {
+    setCollapsedGroups(prev => ({ ...prev, [group]: !prev[group] }));
+  };
+
+  // ─── Selection Helpers ───
+  const toggleSelectKey = (key: string) => {
+    const next = new Set(selectedKeys);
+    if (next.has(key)) {
+      next.delete(key);
+    } else {
+      next.add(key);
+    }
+    setSelectedKeys(next);
+  };
+
+  const toggleSelectGroup = (keysInGroup: [string, string][]) => {
+    const next = new Set(selectedKeys);
+    const allSelected = keysInGroup.every(([k]) => next.has(k));
+    for (const [k] of keysInGroup) {
+      if (allSelected) {
+        next.delete(k);
+      } else {
+        next.add(k);
+      }
+    }
+    setSelectedKeys(next);
+  };
+
+  const handleBulkDelete = () => {
+    if (selectedKeys.size === 0) return;
+    pushDictionaryHistory(mvuDictionary);
+    const nextDict = { ...mvuDictionary };
+    const nextMetadata = { ...mvuKeyMetadata };
+    for (const k of selectedKeys) {
+      delete nextDict[k];
+      delete nextMetadata[k];
+    }
+    setTranslationConfig({ mvuDictionary: nextDict });
+    setMvuKeyMetadata(nextMetadata);
+    addToast('success', isVi ? `Đã xóa ${selectedKeys.size} khóa.` : `Deleted ${selectedKeys.size} keys.`);
+    setSelectedKeys(new Set());
+  };
+
+  const handleBulkReset = () => {
+    if (selectedKeys.size === 0) return;
+    pushDictionaryHistory(mvuDictionary);
+    const nextDict = { ...mvuDictionary };
+    const nextMetadata = { ...mvuKeyMetadata };
+    for (const k of selectedKeys) {
+      nextDict[k] = '';
+      if (nextMetadata[k]) {
+        nextMetadata[k] = { ...nextMetadata[k], confidence: 'manual' };
+      }
+    }
+    setTranslationConfig({ mvuDictionary: nextDict });
+    setMvuKeyMetadata(nextMetadata);
+    addToast('success', isVi ? `Đã đặt lại ${selectedKeys.size} khóa.` : `Reset ${selectedKeys.size} keys.`);
+    setSelectedKeys(new Set());
+  };
+
+  const handleUndo = () => {
+    if (mvuDictionaryHistory.length === 0) return;
+    const prev = mvuDictionaryHistory[mvuDictionaryHistory.length - 1];
+    setTranslationConfig({ mvuDictionary: prev });
+    useStore.setState({
+      mvuDictionaryHistory: mvuDictionaryHistory.slice(0, -1)
+    });
+    addToast('success', isVi ? 'Đã hoàn tác thay đổi.' : 'Undid last change.');
+  };
+
+  const handleForceConsistency = () => {
+    const { fixedDict, fixes } = enforceExactConsistency(mvuDictionary, mvuKeyMetadata);
+    if (fixes.length > 0) {
+      pushDictionaryHistory(mvuDictionary);
+      setTranslationConfig({ mvuDictionary: fixedDict });
+      addToast('success', isVi 
+        ? `Đã sửa ${fixes.length} biến thể viết hoa/chính tả.` 
+        : `Fixed ${fixes.length} case/spelling variants.`);
+    } else {
+      addToast('info', isVi ? 'Từ điển đã hoàn toàn nhất quán.' : 'Dictionary is fully consistent.');
+    }
   };
 
   return (
@@ -371,6 +646,38 @@ export default function MvuSyncPanel() {
             </div>
           )}
 
+          {/* Conflict Warning Banner */}
+          {conflicts.length > 0 && (
+            <div style={{
+              margin: '12px 0 8px',
+              padding: '10px 12px',
+              borderRadius: 'var(--radius-sm)',
+              background: 'rgba(239, 68, 68, 0.06)',
+              border: '1px solid rgba(239, 68, 68, 0.18)',
+              fontSize: '0.72rem',
+              color: '#f87171',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '4px',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700 }}>
+                <AlertTriangle size={14} />
+                <span>
+                  {isVi 
+                    ? `Phát hiện ${conflicts.length} xung đột bản dịch (trùng tên dịch):` 
+                    : `Detected ${conflicts.length} translation conflict(s) (same translation name):`}
+                </span>
+              </div>
+              <div style={{ maxHeight: '90px', overflowY: 'auto', paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                {conflicts.map((c, idx) => (
+                  <div key={idx} style={{ opacity: 0.9 }}>
+                    <code>"{c.key1}"</code> & <code>"{c.key2}"</code> {isVi ? 'đều dịch thành' : 'both translate to'} <strong>"{c.sharedValue}"</strong>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div style={{
             fontSize: '0.75rem',
             color: 'var(--text-muted)',
@@ -406,7 +713,7 @@ export default function MvuSyncPanel() {
             </button>
           </div>
 
-          {/* Toolbar: Search + Stats + Import/Export */}
+          {/* Toolbar: Search + Stats + Undo + Exact Consistency + Import/Export */}
           <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', alignItems: 'center' }}>
             <div style={{ 
               flex: 1, display: 'flex', alignItems: 'center', 
@@ -425,6 +732,37 @@ export default function MvuSyncPanel() {
                 }}
               />
             </div>
+
+            {mvuDictionaryHistory.length > 0 && (
+              <button
+                onClick={handleUndo}
+                title={isVi ? 'Hoàn tác' : 'Undo'}
+                style={{
+                  background: 'rgba(99,102,241,0.06)',
+                  border: '1px solid rgba(99,102,241,0.18)',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: '5px', cursor: 'pointer', color: '#818cf8',
+                  display: 'flex', alignItems: 'center',
+                }}
+              >
+                <Undo2 size={14} />
+              </button>
+            )}
+
+            <button
+              onClick={handleForceConsistency}
+              title={isVi ? 'Chuẩn hóa tính nhất quán 100%' : 'Force 100% exact consistency'}
+              style={{
+                background: 'rgba(34,197,94,0.06)',
+                border: '1px solid rgba(34,197,94,0.18)',
+                borderRadius: 'var(--radius-sm)',
+                padding: '5px', cursor: 'pointer', color: '#4ade80',
+                display: 'flex', alignItems: 'center',
+              }}
+            >
+              <RefreshCw size={14} />
+            </button>
+
             <button
               onClick={() => setShowStats(!showStats)}
               title={isVi ? 'Thống kê' : 'Statistics'}
@@ -492,71 +830,200 @@ export default function MvuSyncPanel() {
             </div>
           )}
 
-          {/* Dictionary entries */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '250px', overflowY: 'auto' }}>
-            {filteredEntries.map(([k, v]) => {
-              const keyInfo = keyInfoMap.get(k);
+          {/* Bulk Actions Toolbar */}
+          {selectedKeys.size > 0 && (
+            <div style={{
+              padding: '8px 12px',
+              marginBottom: '10px',
+              borderRadius: 'var(--radius-sm)',
+              background: 'rgba(99,102,241,0.06)',
+              border: '1px solid rgba(99,102,241,0.18)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              fontSize: '0.72rem',
+            }}>
+              <div style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>
+                {isVi ? `Đang chọn ${selectedKeys.size} mục` : `Selected ${selectedKeys.size} items`}
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button 
+                  onClick={handleBulkReset} 
+                  style={{
+                    background: 'none', border: '1px solid var(--border-subtle)',
+                    borderRadius: 'var(--radius-xs)', padding: '3px 8px', cursor: 'pointer',
+                    color: 'var(--text-secondary)'
+                  }}
+                >
+                  {isVi ? 'Đặt lại' : 'Reset'}
+                </button>
+                <button 
+                  onClick={handleBulkDelete}
+                  style={{
+                    background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)',
+                    borderRadius: 'var(--radius-xs)', padding: '3px 8px', cursor: 'pointer',
+                    color: '#f87171', display: 'flex', alignItems: 'center', gap: '3px'
+                  }}
+                >
+                  <Trash2 size={12} />
+                  {isVi ? 'Xóa' : 'Delete'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Dictionary entries grouped by category */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '380px', overflowY: 'auto' }}>
+            {Object.entries(groupedEntries).map(([groupName, entries]) => {
+              if (entries.length === 0) return null;
+              
+              const meta = groupMeta[groupName] || groupMeta.unknown;
+              const isCollapsed = collapsedGroups[groupName];
+              const groupTitle = isVi ? meta.vi : meta.en;
+              const allSelected = entries.every(([k]) => selectedKeys.has(k));
+              const someSelected = entries.some(([k]) => selectedKeys.has(k)) && !allSelected;
+
               return (
-                <div key={k} style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
-                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <input
-                        type="text"
-                        value={k}
-                        readOnly
-                        title={keyInfo?.description || k}
-                        style={{
-                          flex: 1, padding: '5px 7px', fontSize: '0.72rem',
-                          background: 'var(--bg-primary)', border: '1px solid var(--border-subtle)',
-                          borderRadius: 'var(--radius-sm)', color: 'var(--text-muted)',
-                          fontFamily: 'var(--font-mono, monospace)',
-                        }}
-                      />
-                      {keyInfo?.sources && keyInfo.sources.length > 0 && (
-                        <div style={{ display: 'flex', gap: '2px', flexShrink: 0 }}>
-                          {keyInfo.keyType && keyTypeBadgeStyle(keyInfo.keyType) && (
-                            <span style={keyTypeBadgeStyle(keyInfo.keyType)!}>{keyTypeLabel(keyInfo.keyType)}</span>
-                          )}
-                          {keyInfo.sources.map(s => (
-                            <span key={s} style={sourceBadgeStyle(s)}>{s}</span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    {keyInfo?.description && (
-                      <div style={{ 
-                        fontSize: '0.6rem', color: 'var(--text-muted)', paddingLeft: '7px',
-                        fontStyle: 'italic', opacity: 0.7,
-                      }}>
-                        {keyInfo.description}
-                      </div>
-                    )}
-                  </div>
-                  <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>→</span>
-                  <input
-                    type="text"
-                    value={v}
-                    onChange={(e) => updateEntry(k, e.target.value)}
-                    placeholder={isVi ? 'Bản dịch (VD: Độ Hảo Cảm)' : 'Translation'}
+                <div key={groupName} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  {/* Group Header */}
+                  <div 
+                    onClick={() => toggleGroup(groupName)}
                     style={{
-                      flex: 1, padding: '5px 7px', fontSize: '0.72rem',
-                      background: v ? 'var(--bg-primary)' : 'rgba(240,196,106,0.06)',
-                      border: `1px solid ${v ? 'var(--border-subtle)' : 'rgba(240,196,106,0.3)'}`,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '4px 6px',
+                      background: 'rgba(255,255,255,0.03)',
                       borderRadius: 'var(--radius-sm)',
-                      outline: 'none',
-                      fontFamily: 'var(--font-mono, monospace)',
+                      cursor: 'pointer',
+                      userSelect: 'none'
                     }}
-                    autoFocus={v === ''}
-                  />
-                  <button
-                    onClick={() => removeEntry(k)}
-                    style={{ background: 'none', border: 'none', color: 'var(--accent-danger)', cursor: 'pointer', padding: '4px' }}
                   >
-                    <Trash2 size={13} />
-                  </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleSelectGroup(entries);
+                        }}
+                        style={{
+                          background: 'none', border: 'none', color: 'var(--text-muted)',
+                          cursor: 'pointer', display: 'flex', alignItems: 'center', padding: '0 2px'
+                        }}
+                      >
+                        {allSelected ? (
+                          <CheckSquare size={13} color="var(--accent-primary)" />
+                        ) : someSelected ? (
+                          <div style={{
+                            width: '13px', height: '13px', border: '1px solid var(--accent-primary)',
+                            borderRadius: '2px', background: 'var(--accent-primary)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center'
+                          }}>
+                            <div style={{ width: '7px', height: '1px', background: 'white' }} />
+                          </div>
+                        ) : (
+                          <Square size={13} />
+                        )}
+                      </button>
+                      <span style={{ fontSize: '0.62rem', marginRight: '2px' }}>{meta.icon}</span>
+                      <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
+                        {groupTitle}
+                      </span>
+                      <span style={{ fontSize: '0.62rem', color: 'var(--text-muted)' }}>
+                        ({entries.length})
+                      </span>
+                    </div>
+                    <div>
+                      {isCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+                    </div>
+                  </div>
+
+                  {/* Group Content */}
+                  {!isCollapsed && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', paddingLeft: '8px', marginTop: '2px' }}>
+                      {entries.map(([k, v]) => {
+                        const keyInfo = keyInfoMap.get(k);
+                        const isSelected = selectedKeys.has(k);
+                        const confidence = mvuKeyMetadata[k]?.confidence;
+
+                        return (
+                          <div key={k} style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
+                            <button
+                              onClick={() => toggleSelectKey(k)}
+                              style={{
+                                background: 'none', border: 'none', color: 'var(--text-muted)',
+                                cursor: 'pointer', display: 'flex', alignItems: 'center', padding: '4px'
+                              }}
+                            >
+                              {isSelected ? <CheckSquare size={13} color="var(--accent-primary)" /> : <Square size={13} />}
+                            </button>
+                            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                <input
+                                  type="text"
+                                  value={k}
+                                  readOnly
+                                  title={keyInfo?.description || k}
+                                  style={{
+                                    flex: 1, padding: '5px 7px', fontSize: '0.72rem',
+                                    background: 'var(--bg-primary)', border: '1px solid var(--border-subtle)',
+                                    borderRadius: 'var(--radius-sm)', color: 'var(--text-muted)',
+                                    fontFamily: 'var(--font-mono, monospace)',
+                                  }}
+                                />
+                                {confidence && confidenceBadgeStyle(confidence) && (
+                                  <span style={confidenceBadgeStyle(confidence)!}>{confidence}</span>
+                                )}
+                                {keyInfo?.sources && keyInfo.sources.length > 0 && (
+                                  <div style={{ display: 'flex', gap: '2px', flexShrink: 0 }}>
+                                    {keyInfo.keyType && keyTypeBadgeStyle(keyInfo.keyType) && (
+                                      <span style={keyTypeBadgeStyle(keyInfo.keyType)!}>{keyTypeLabel(keyInfo.keyType)}</span>
+                                    )}
+                                    {keyInfo.sources.map(s => (
+                                      <span key={s} style={sourceBadgeStyle(s)}>{s}</span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                              {keyInfo?.description && (
+                                <div style={{ 
+                                  fontSize: '0.6rem', color: 'var(--text-muted)', paddingLeft: '7px',
+                                  fontStyle: 'italic', opacity: 0.7,
+                                }}>
+                                  {keyInfo.description}
+                                </div>
+                              )}
+                            </div>
+                            <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>→</span>
+                            <input
+                              type="text"
+                              value={v}
+                              onChange={(e) => updateEntry(k, e.target.value)}
+                              placeholder={isVi ? 'Bản dịch (VD: Độ Hảo Cảm)' : 'Translation'}
+                              style={{
+                                flex: 1, padding: '5px 7px', fontSize: '0.72rem',
+                                background: v ? 'var(--bg-primary)' : 'rgba(240,196,106,0.06)',
+                                border: `1px solid ${v ? 'var(--border-subtle)' : 'rgba(240,196,106,0.3)'}`,
+                                borderRadius: 'var(--radius-sm)',
+                                outline: 'none',
+                                fontFamily: 'var(--font-mono, monospace)',
+                              }}
+                              autoFocus={v === ''}
+                            />
+                            <button
+                              onClick={() => removeEntry(k)}
+                              style={{ background: 'none', border: 'none', color: 'var(--accent-danger)', cursor: 'pointer', padding: '4px' }}
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               );
             })}
+            
             {filteredEntries.length === 0 && dictEntries.length > 0 && (
               <div style={{ textAlign: 'center', padding: '16px', color: 'var(--text-muted)', fontSize: '0.75rem' }}>
                 {isVi ? 'Không tìm thấy kết quả' : 'No results found'}

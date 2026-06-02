@@ -18,7 +18,7 @@
  */
 
 import type { TranslationField, GlossaryEntry } from '../types/card';
-import { buildUnifiedRAGContext } from './ragContext';
+import { buildUnifiedRAGContext, type TranslationMemoryHit } from './ragContext';
 import { buildEjsPromptBlock } from './ejsSync';
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -397,6 +397,8 @@ export interface PromptBuildOptions {
   ejsDecoratorPreserve?: boolean;
   /** Full translated TavernHelper/Schema content to inject when translating initvar/controller/mvu_logic */
   translatedSchemaContent?: string;
+  /** Translation Memory hits (from IDB lookup, optional) */
+  translationMemoryHits?: TranslationMemoryHit[];
 }
 
 export interface PromptBuildResult {
@@ -520,30 +522,6 @@ ENFORCEMENT RULES (HIGHEST PRIORITY):
 5. The schema (z.object) already uses these exact names — your YAML keys MUST match 100%
 6. Enum values (.default(), .prefault(), z.enum()) from this table MUST also be used exactly as-is in YAML values`;
 
-    // ─── FULL SCHEMA INJECTION: send the complete translated schema code ───
-    // This gives the AI full context about variable types, enum options,
-    // default values, and structural relationships — not just a flat dictionary.
-    if (translatedSchemaContent && translatedSchemaContent.trim()) {
-      // Cap at 30000 chars to avoid exceeding token limits
-      const schemaSnippet = translatedSchemaContent.length > 30000
-        ? translatedSchemaContent.slice(0, 30000) + '\n... (truncated)'
-        : translatedSchemaContent;
-      injection += `\n\n═══ TRANSLATED SCHEMA (FULL SOURCE CODE — REFERENCE ONLY) ═══
-Below is the ALREADY-TRANSLATED schema/TavernHelper script. Use it as THE authoritative reference for:
-- Exact variable names (z.object field names)
-- Enum values (z.enum options)
-- Default values (.prefault(), .default())
-- Variable types (z.string, z.number, z.boolean, z.enum)
-- Structural relationships (nested objects)
-
-Your YAML keys, macro variable names, and all references MUST match this schema EXACTLY.
-
-\`\`\`javascript
-${schemaSnippet}
-\`\`\`
-═══ END OF SCHEMA ═══`;
-    }
-
     return injection;
   }
 
@@ -574,6 +552,51 @@ Rules:
 /* ═══════════════════════════════════════════════════════════════════
    MAIN FACTORY — buildEffectivePrompt()
    ═══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Check if a field (or any field in a batch) needs translated schema context.
+ * Returns true for regex, tavern_helper, and lorebook logic fields.
+ */
+function needsTranslatedSchemaContext(
+  field: TranslationField,
+  batchFields?: TranslationField[],
+): boolean {
+  const check = (f: TranslationField) =>
+    f.group === 'regex' ||
+    f.group === 'tavern_helper' ||
+    f.entryType === 'initvar' ||
+    f.entryType === 'controller' ||
+    f.entryType === 'mvu_logic';
+
+  if (batchFields && batchFields.length > 0) {
+    return batchFields.some(check);
+  }
+  return check(field);
+}
+
+/**
+ * Build the translated schema injection block.
+ * Sends the FULL translated TavernHelper scripts — no truncation.
+ * Gemini 2.5 Pro: 1M input tokens, schema ~30K tokens = 3% budget.
+ */
+function buildTranslatedSchemaBlock(translatedSchemaContent: string): string {
+  return `\n\n═══ TRANSLATED SCHEMA (FULL SOURCE CODE — AUTHORITATIVE REFERENCE) ═══
+Below is the ALREADY-TRANSLATED schema/TavernHelper script.
+Use it as THE authoritative reference for:
+- Exact variable names (z.object field names)
+- Enum values (z.enum options)
+- Default values (.prefault(), .default())
+- Variable types (z.string, z.number, z.boolean, z.enum)
+- Structural relationships (nested objects)
+
+Your translation MUST use the EXACT SAME variable names, enum values, and field names as this schema.
+Do NOT invent your own translations — copy names CHARACTER-FOR-CHARACTER from this schema.
+
+\`\`\`javascript
+${translatedSchemaContent}
+\`\`\`
+═══ END OF SCHEMA ═══`;
+}
 
 /**
  * Build the effective prompt for ANY translation code path.
@@ -746,12 +769,19 @@ ${glossaryList}`;
         entryNameDictionary,
         maxFields: isBatchMode ? Math.min(ragMaxFields, 3) : ragMaxFields,
         maxChars: isBatchMode ? Math.min(ragMaxChars, 2000) : ragMaxChars,
+        translationMemory: options.translationMemoryHits,
       });
       if (ragCtx) {
         modPrompt += ragCtx;
         schemaForApi = undefined;
         glossaryForApi = [];
       }
+    }
+
+    // ─── FULL TRANSLATED SCHEMA INJECTION (mod mode) ───
+    // Same as step 4.5 in normal mode — inject independently of RAG
+    if (enableMvuSync && translatedSchemaContent?.trim() && needsTranslatedSchemaContext(field, batchFields)) {
+      modPrompt += buildTranslatedSchemaBlock(translatedSchemaContent);
     }
 
     return {
@@ -843,6 +873,7 @@ ${modInstructionsBlock}`;
       entryNameDictionary,
       maxFields: isBatchMode ? Math.min(ragMaxFields, 3) : ragMaxFields,
       maxChars: isBatchMode ? Math.min(ragMaxChars, 2000) : ragMaxChars,
+      translationMemory: options.translationMemoryHits,
     });
     if (ragCtx) {
       prompt = (prompt || '') + ragCtx;
@@ -863,6 +894,14 @@ ${modInstructionsBlock}`;
         : field.entryType;
       prompt = (prompt || '') + buildMvuDictInjection(mvuDictionary, checkLogic, dominantEntryType, translatedSchemaContent);
     }
+  }
+
+  // ─── 4.5. FULL TRANSLATED SCHEMA INJECTION ───
+  // Inject INDEPENDENTLY of RAG/expertMode — this is ALWAYS needed for
+  // regex/lorebook fields that reference schema variables.
+  // Gemini 2.5 Pro: 1M input tokens. Schema ~30K tokens = 3% budget. No cap needed.
+  if (enableMvuSync && translatedSchemaContent?.trim() && needsTranslatedSchemaContext(field, batchFields)) {
+    prompt = (prompt || '') + buildTranslatedSchemaBlock(translatedSchemaContent);
   }
 
   // ─── 5. EJS Sync prompt block (Strategy C) ───

@@ -972,12 +972,12 @@ export default function TranslateConfig() {
                 />
                 <div>
                   <span style={{ color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                    🧠 {locale === 'vi' ? 'Cross-field Context RAG' : 'Cross-field Context RAG'}
+                    🧠 {locale === 'vi' ? 'Cross-field Context RAG v2 (TF-IDF)' : 'Cross-field Context RAG v2 (TF-IDF)'}
                   </span>
                   <span style={{ color: 'var(--text-muted)', fontSize: '0.65rem', display: 'block', marginTop: '2px' }}>
                     {locale === 'vi'
-                      ? 'Tự động kéo context từ các field đã dịch trong cùng card → AI dịch nhất quán thuật ngữ, tên, văn phong.'
-                      : 'Automatically pull context from already-translated fields → AI maintains consistent terminology, names, and style.'}
+                      ? 'TF-IDF + Tiered Retrieval: kéo context thông minh từ field đã dịch, ưu tiên cấu trúc (schema/biến MVU), fuzzy glossary matching.'
+                      : 'TF-IDF + Tiered Retrieval: smart context from translated fields, structural priority (schema/MVU vars), fuzzy glossary matching.'}
                   </span>
                 </div>
               </label>
@@ -993,9 +993,9 @@ export default function TranslateConfig() {
                         className="input"
                         type="number"
                         min={2}
-                        max={15}
+                        max={25}
                         value={translationConfig.ragMaxFields}
-                        onChange={(e) => setTranslationConfig({ ragMaxFields: Math.max(2, Math.min(15, parseInt(e.target.value) || 5)) })}
+                        onChange={(e) => setTranslationConfig({ ragMaxFields: Math.max(2, Math.min(25, parseInt(e.target.value) || 5)) })}
                         style={{ fontSize: '0.78rem', padding: '4px 8px' }}
                       />
                     </div>
@@ -1007,21 +1007,42 @@ export default function TranslateConfig() {
                         className="input"
                         type="number"
                         min={500}
-                        max={8000}
+                        max={20000}
                         step={500}
                         value={translationConfig.ragMaxChars}
-                        onChange={(e) => setTranslationConfig({ ragMaxChars: Math.max(500, Math.min(8000, parseInt(e.target.value) || 3000)) })}
+                        onChange={(e) => setTranslationConfig({ ragMaxChars: Math.max(500, Math.min(20000, parseInt(e.target.value) || 3000)) })}
                         style={{ fontSize: '0.78rem', padding: '4px 8px' }}
                       />
                     </div>
                   </div>
                   <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', lineHeight: '1.3' }}>
                     {locale === 'vi'
-                      ? '💡 Số field càng cao → AI có nhiều context hơn nhưng tốn thêm token. Mặc định 5 field / 3000 ký tự là cân bằng tốt.'
-                      : '💡 More fields = more context for AI but costs more tokens. Default 5 fields / 3000 chars is a good balance.'}
+                      ? '💡 Budget tự động theo loại field (narrative: 3K, code: 6-8K). Đặt giá trị ở đây để ghi đè auto. 0 = tự động. Gemini 2.5 Pro: 1M tokens → 20K chars ≈ 2% budget.'
+                      : '💡 Budget auto-scales by field type (narrative: 3K, code: 6-8K). Set a value here to override auto. 0 = auto. Gemini 2.5 Pro: 1M tokens → 20K chars ≈ 2% budget.'}
                   </div>
                 </div>
               )}
+            </div>
+
+            {/* ═══ Translation Memory — persistent cross-session ═══ */}
+            <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '10px' }}>
+              <label className="checkbox-wrapper">
+                <input
+                  type="checkbox"
+                  checked={translationConfig.enableTranslationMemory}
+                  onChange={(e) => setTranslationConfig({ enableTranslationMemory: e.target.checked })}
+                />
+                <div>
+                  <span style={{ color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    💾 {locale === 'vi' ? 'Translation Memory (Cross-session)' : 'Translation Memory (Cross-session)'}
+                  </span>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '0.65rem', display: 'block', marginTop: '2px' }}>
+                    {locale === 'vi'
+                      ? 'Lưu bản dịch vào bộ nhớ vĩnh viễn. Khi dịch card mới, AI sẽ tham khảo bản dịch cũ tương tự để nhất quán. Tự động xóa sạch khi load card mới.'
+                      : 'Persist translations to permanent memory. When translating new cards, AI references similar past translations for consistency. Auto-clears on card load.'}
+                  </span>
+                </div>
+              </label>
             </div>
 
             {/* ═══ Surgical CJK Translation Mode — only in translate mode ═══ */}

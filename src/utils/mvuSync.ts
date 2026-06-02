@@ -446,15 +446,123 @@ export function enforceInitvarCovariance(
     }
   }
 
+  // ─── Pass 4: EJS function call covariance ───
+  // Fix getvar('KEY') / setvar('KEY', ...) where KEY is a mismatched translation
+  const ejsRegex = /((?:getvar|setvar|addvar|getglobalvar|setglobalvar|addglobalvar|getVariable|setVariable)\s*\(\s*['"])([^'"]+)(['"])/g;
+  result = result.replace(ejsRegex, (match, prefix, inner, suffix) => {
+    if (!inner) return match;
+    const segments = inner.split('.');
+    let changed = false;
+    const newSegments = segments.map((seg: string) => {
+      if (!seg || seg.length < 2) return seg;
+      if (translatedToOriginal.has(seg.toLowerCase())) return seg;
+      if (originalToTranslated.has(seg)) return seg;
+
+      const correctValue = findClosestDictValue(seg, mvuDictionary);
+      if (correctValue && correctValue !== seg) {
+        changed = true;
+        if (!fixes.some(f => f.found === seg)) {
+          fixes.push({ found: seg, replaced: correctValue });
+        }
+        return correctValue;
+      }
+      return seg;
+    });
+    return changed ? `${prefix}${newSegments.join('.')}${suffix}` : match;
+  });
+
+  // ─── Pass 5: String comparison covariance ───
+  // Fix === 'KEY' / !== "KEY" / case 'KEY'
+  const compRegex = /((?:===|!==|==|!=|case)\s*['"])([^'"]+)(['"])/g;
+  result = result.replace(compRegex, (match, prefix, inner, suffix) => {
+    if (!inner || inner.length < 2) return match;
+    if (translatedToOriginal.has(inner.toLowerCase())) return match;
+    if (originalToTranslated.has(inner)) return match;
+
+    const correctValue = findClosestDictValue(inner, mvuDictionary);
+    if (correctValue && correctValue !== inner) {
+      if (!fixes.some(f => f.found === inner)) {
+        fixes.push({ found: inner, replaced: correctValue });
+      }
+      return `${prefix}${correctValue}${suffix}`;
+    }
+    return match;
+  });
+
+  // ─── Pass 6: Lodash path covariance ───
+  // Fix _.get(data, 'KEY') / _.set(obj, 'KEY', ...)
+  const lodashRegex = /(_\.(?:get|set|has|result|pick|omit)\s*\([^,]+,\s*['"])([^'"]+)(['"])/g;
+  result = result.replace(lodashRegex, (match, prefix, inner, suffix) => {
+    if (!inner) return match;
+    const segments = inner.split('.');
+    let changed = false;
+    const newSegments = segments.map((seg: string) => {
+      if (!seg || seg.length < 2) return seg;
+      if (translatedToOriginal.has(seg.toLowerCase())) return seg;
+      if (originalToTranslated.has(seg)) return seg;
+
+      const correctValue = findClosestDictValue(seg, mvuDictionary);
+      if (correctValue && correctValue !== seg) {
+        changed = true;
+        if (!fixes.some(f => f.found === seg)) {
+          fixes.push({ found: seg, replaced: correctValue });
+        }
+        return correctValue;
+      }
+      return seg;
+    });
+    return changed ? `${prefix}${newSegments.join('.')}${suffix}` : match;
+  });
+
+  // Lodash array-style paths: _.get(data, ['Key1', 'Key2'])
+  const lodashArrRegex = /(_\.(?:get|set|has|result)\s*\([^,]+,\s*\[)([^\]]+)(\])/g;
+  result = result.replace(lodashArrRegex, (match, prefix, inner, suffix) => {
+    const items = inner.split(',');
+    let changed = false;
+    const newItems = items.map((item: string) => {
+      const trimmed = item.trim();
+      const quoteMatch = trimmed.match(/^(['"])([^'"]+)(['"])$/);
+      if (!quoteMatch) return item;
+      const quoteStart = quoteMatch[1];
+      const val = quoteMatch[2];
+      const quoteEnd = quoteMatch[3];
+
+      if (!val || val.length < 2) return item;
+      if (translatedToOriginal.has(val.toLowerCase())) return item;
+      if (originalToTranslated.has(val)) return item;
+
+      const correctValue = findClosestDictValue(val, mvuDictionary);
+      if (correctValue && correctValue !== val) {
+        changed = true;
+        if (!fixes.some(f => f.found === val)) {
+          fixes.push({ found: val, replaced: correctValue });
+        }
+        return `${quoteStart}${correctValue}${quoteEnd}`;
+      }
+      return item;
+    });
+    if (changed) {
+      let newInner = '';
+      for (let i = 0; i < items.length; i++) {
+        const orig = items[i];
+        const leadingWhitespace = orig.match(/^\s*/)?.[0] || '';
+        const trailingWhitespace = orig.match(/\s*$/)?.[0] || '';
+        newInner += leadingWhitespace + newItems[i].trim() + trailingWhitespace + (i < items.length - 1 ? ',' : '');
+      }
+      return `${prefix}${newInner}${suffix}`;
+    }
+    return match;
+  });
+
   return { text: result, fixes };
 }
 
 /**
  * Find the closest matching dictionary value for a potentially mismatched YAML key.
- * Uses normalized comparison to handle common AI translation variations:
- * - Case differences: "Hảo cảm" vs "Hảo Cảm"
- * - Prefix additions: "Độ Hảo Cảm" vs "Hảo Cảm"
- * - Word order: "Cảm Hảo" vs "Hảo Cảm"
+ * Uses 3-pass matching strategy:
+ * Pass 1: Normalized exact match (case, whitespace, underscore insensitive)
+ * Pass 2: Substring containment with length ratio check
+ * Pass 3: Levenshtein distance fallback (max distance 2) for typos/diacritics
  */
 function findClosestDictValue(
   yamlKey: string,
@@ -463,7 +571,7 @@ function findClosestDictValue(
   const normalize = (s: string) => s.toLowerCase().replace(/[\s_-]+/g, ' ').trim();
   const normalizedKey = normalize(yamlKey);
 
-  // Direct case-insensitive match against translated values
+  // Pass 1: Direct case-insensitive match against translated values
   for (const [, trans] of Object.entries(mvuDictionary)) {
     if (!trans || trans === yamlKey) continue;
     if (normalize(trans) === normalizedKey) {
@@ -471,14 +579,12 @@ function findClosestDictValue(
     }
   }
 
-  // Substring containment: "Độ Hảo Cảm" contains "Hảo Cảm"
+  // Pass 2: Substring containment: "Độ Hảo Cảm" contains "Hảo Cảm"
   // Only match if the dict value is a significant portion of the key
   for (const [, trans] of Object.entries(mvuDictionary)) {
     if (!trans || trans.length < 2) continue;
     const normalizedTrans = normalize(trans);
-    // Check if key contains the dict value or vice versa
     if (normalizedKey.includes(normalizedTrans) || normalizedTrans.includes(normalizedKey)) {
-      // Only accept if length ratio is reasonable (> 60%)
       const ratio = Math.min(normalizedKey.length, normalizedTrans.length) /
                     Math.max(normalizedKey.length, normalizedTrans.length);
       if (ratio > 0.6) {
@@ -487,7 +593,21 @@ function findClosestDictValue(
     }
   }
 
-  return null;
+  // Pass 3: Levenshtein distance fallback — catch typos and diacritics
+  // e.g. "Hảo Câm" (typo) → "Hảo Cảm" (distance = 1)
+  let bestMatch: string | null = null;
+  let bestDist = Infinity;
+  for (const [, trans] of Object.entries(mvuDictionary)) {
+    if (!trans || trans.length < 2) continue;
+    const dist = levenshteinDistance(normalizedKey, normalize(trans));
+    // Only accept matches within distance 2, and prefer shorter distance
+    if (dist <= 2 && dist < bestDist) {
+      bestDist = dist;
+      bestMatch = trans;
+    }
+  }
+
+  return bestMatch;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -733,6 +853,229 @@ export interface MvuKeyInfo {
   keyType?: 'field_name' | 'enum_value' | 'string_literal';
   description?: string; // from Zod .describe()
   occurrences: number;  // how many times it appears in card
+}
+
+/** Metadata for a single MVU dictionary entry — stored separately from dict */
+export interface MvuKeyMetadata {
+  sources: string[];         // ['zod', 'yaml', 'macro', 'enum', ...]
+  keyType?: 'field_name' | 'enum_value' | 'string_literal';
+  description?: string;      // From Zod .describe()
+  occurrences: number;       // Number of appearances in card
+  confidence: 'schema' | 'ai' | 'manual' | 'progressive'; // Translation source
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Levenshtein Distance — for fuzzy matching in covariance checks
+   ═══════════════════════════════════════════════════════════════ */
+
+/**
+ * Compute Levenshtein (edit) distance between two strings.
+ * Used by findClosestDictValue and enforceExactConsistency to catch
+ * near-miss translations (typos, diacritics, case variations).
+ */
+export function levenshteinDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+
+  // Use two-row optimization for O(min(m,n)) space
+  const la = a.length, lb = b.length;
+  let prev = new Array(lb + 1);
+  let curr = new Array(lb + 1);
+
+  for (let j = 0; j <= lb; j++) prev[j] = j;
+
+  for (let i = 1; i <= la; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= lb; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(
+        prev[j] + 1,      // deletion
+        curr[j - 1] + 1,  // insertion
+        prev[j - 1] + cost // substitution
+      );
+    }
+    [prev, curr] = [curr, prev];
+  }
+
+  return prev[lb];
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Dictionary Conflict Detection
+   ═══════════════════════════════════════════════════════════════ */
+
+/**
+ * Detect conflicts: 2+ original CJK keys mapping to the SAME translated value.
+ * This causes runtime ambiguity — the card can't distinguish between two
+ * different variables if they have identical translated names.
+ */
+export function validateDictionaryConflicts(
+  dict: Record<string, string>
+): { key1: string; key2: string; sharedValue: string }[] {
+  const conflicts: { key1: string; key2: string; sharedValue: string }[] = [];
+  const reverseMap = new Map<string, string[]>();
+
+  for (const [orig, trans] of Object.entries(dict)) {
+    if (!trans || orig === trans) continue;
+    const normalized = trans.toLowerCase().trim();
+    if (!reverseMap.has(normalized)) reverseMap.set(normalized, []);
+    reverseMap.get(normalized)!.push(orig);
+  }
+
+  for (const [, origKeys] of reverseMap) {
+    if (origKeys.length > 1) {
+      // Report all pairs
+      for (let i = 0; i < origKeys.length; i++) {
+        for (let j = i + 1; j < origKeys.length; j++) {
+          conflicts.push({
+            key1: origKeys[i],
+            key2: origKeys[j],
+            sharedValue: dict[origKeys[i]],
+          });
+        }
+      }
+    }
+  }
+
+  return conflicts;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Exact Consistency Enforcement
+   ═══════════════════════════════════════════════════════════════ */
+
+/**
+ * Enforce 100% character-exact consistency across all dictionary values.
+ * Finds near-duplicate translated values (e.g. "Hảo Cảm" vs "Hảo cảm")
+ * and normalizes them to a single canonical form.
+ *
+ * Canonical selection priority:
+ * 1. Schema-sourced mapping (if metadata available)
+ * 2. Most common form (by frequency in dict)
+ * 3. First encountered form
+ */
+export function enforceExactConsistency(
+  dict: Record<string, string>,
+  metadata?: Record<string, MvuKeyMetadata>
+): { fixedDict: Record<string, string>; fixes: string[] } {
+  const fixedDict = { ...dict };
+  const fixes: string[] = [];
+
+  // Group values by normalized form
+  const normalize = (s: string) => s.toLowerCase().replace(/[\s_-]+/g, ' ').trim();
+  const groups = new Map<string, { origKey: string; transValue: string }[]>();
+
+  for (const [origKey, transValue] of Object.entries(dict)) {
+    if (!transValue || origKey === transValue) continue;
+    const norm = normalize(transValue);
+    if (!groups.has(norm)) groups.set(norm, []);
+    groups.get(norm)!.push({ origKey, transValue });
+  }
+
+  // Also check Levenshtein-close groups that normalize differently
+  const normKeys = [...groups.keys()];
+  const mergedGroups = new Map<string, string[]>(); // canonical norm → all similar norms
+  const visited = new Set<string>();
+
+  for (let i = 0; i < normKeys.length; i++) {
+    if (visited.has(normKeys[i])) continue;
+    const cluster = [normKeys[i]];
+    visited.add(normKeys[i]);
+    for (let j = i + 1; j < normKeys.length; j++) {
+      if (visited.has(normKeys[j])) continue;
+      if (levenshteinDistance(normKeys[i], normKeys[j]) <= 2) {
+        cluster.push(normKeys[j]);
+        visited.add(normKeys[j]);
+      }
+    }
+    if (cluster.length > 1) {
+      mergedGroups.set(normKeys[i], cluster);
+    }
+  }
+
+  // For each cluster of similar normalized forms, pick canonical and fix
+  for (const [, clusterNorms] of mergedGroups) {
+    // Collect all entries from all norms in this cluster
+    const allEntries: { origKey: string; transValue: string }[] = [];
+    for (const norm of clusterNorms) {
+      const entries = groups.get(norm);
+      if (entries) allEntries.push(...entries);
+    }
+    if (allEntries.length < 2) continue;
+
+    // Pick canonical: prefer schema confidence, then frequency
+    let canonical = allEntries[0].transValue;
+    if (metadata) {
+      const schemaEntry = allEntries.find(e => metadata[e.origKey]?.confidence === 'schema');
+      if (schemaEntry) canonical = schemaEntry.transValue;
+    }
+    if (!metadata) {
+      // Pick most frequent form
+      const freq = new Map<string, number>();
+      for (const e of allEntries) {
+        freq.set(e.transValue, (freq.get(e.transValue) || 0) + 1);
+      }
+      let maxCount = 0;
+      for (const [val, count] of freq) {
+        if (count > maxCount) { maxCount = count; canonical = val; }
+      }
+    }
+
+    // Fix all non-canonical to canonical
+    for (const entry of allEntries) {
+      if (entry.transValue !== canonical) {
+        fixedDict[entry.origKey] = canonical;
+        fixes.push(`"${entry.origKey}": "${entry.transValue}" → "${canonical}"`);
+      }
+    }
+  }
+
+  // Also fix exact-normalize duplicates within single groups
+  for (const [, entries] of groups) {
+    if (entries.length < 2) continue;
+    // Check if any entries have different exact strings
+    const uniqueValues = new Set(entries.map(e => e.transValue));
+    if (uniqueValues.size <= 1) continue;
+
+    // Pick canonical
+    let canonical = entries[0].transValue;
+    if (metadata) {
+      const schemaEntry = entries.find(e => metadata[e.origKey]?.confidence === 'schema');
+      if (schemaEntry) canonical = schemaEntry.transValue;
+    }
+
+    for (const entry of entries) {
+      if (entry.transValue !== canonical) {
+        fixedDict[entry.origKey] = canonical;
+        fixes.push(`"${entry.origKey}": "${entry.transValue}" → "${canonical}"`);
+      }
+    }
+  }
+
+  return { fixedDict, fixes };
+}
+
+/**
+ * Build metadata registry from extracted key infos.
+ * Called after extractPotentialMvuKeys() to create metadata for the panel.
+ */
+export function buildKeyMetadata(
+  keyInfos: MvuKeyInfo[],
+  dict: Record<string, string>
+): Record<string, MvuKeyMetadata> {
+  const result: Record<string, MvuKeyMetadata> = {};
+  for (const ki of keyInfos) {
+    const hasTranslation = ki.key in dict && dict[ki.key] && dict[ki.key] !== ki.key;
+    result[ki.key] = {
+      sources: ki.sources,
+      keyType: ki.keyType,
+      description: ki.description,
+      occurrences: ki.occurrences,
+      confidence: hasTranslation ? 'ai' : 'ai', // Will be updated by callers
+    };
+  }
+  return result;
 }
 
 /**
@@ -1240,16 +1583,18 @@ RESPOND in EXACT JSON format (no markdown): {"translations": {"original_key": "T
       contextBlock = `\nHere is the Zod schema or script context where these variables are defined. USE THIS CONTEXT to understand what the variables mean (look at the .describe() text or comments):\n\`\`\`javascript\n${schemaContext.slice(0, 5000)}\n\`\`\`\n\n`;
     }
 
-    // Build covariance constraint block from existing schema mappings
+    // Build covariance constraint block from existing + accumulated batch mappings
+    // This ensures batch 2 knows what batch 1 already translated
     let covarianceBlock = '';
-    if (existingMappings && Object.keys(existingMappings).length > 0) {
-      const mappingLines = Object.entries(existingMappings)
+    const allConstraints = { ...(existingMappings || {}), ...result };
+    if (Object.keys(allConstraints).length > 0) {
+      const mappingLines = Object.entries(allConstraints)
         .filter(([k, v]) => k !== v)
-        .slice(0, 50) // Limit to avoid token overflow
+        .slice(0, 80) // Increased limit to include batch results
         .map(([k, v]) => `  "${k}" → "${v}"`)
         .join('\n');
       if (mappingLines) {
-        covarianceBlock = `\n═══ MANDATORY COVARIANCE CONSTRAINTS ═══\nThe following variables have ALREADY been translated in the Zod Schema. You MUST follow the same naming patterns and style for consistency. If any variable you are translating is semantically related to these, use the same conventions (e.g. same prefix, same word choice for shared concepts):\n${mappingLines}\n═══ END COVARIANCE CONSTRAINTS ═══\n\n`;
+        covarianceBlock = `\n═══ MANDATORY COVARIANCE CONSTRAINTS ═══\nThe following variables have ALREADY been translated. You MUST follow the same naming patterns and style for consistency. If any variable you are translating is semantically related to these, use the same conventions (e.g. same prefix, same word choice for shared concepts):\n${mappingLines}\n═══ END COVARIANCE CONSTRAINTS ═══\n\n`;
       }
     }
 
@@ -1843,20 +2188,57 @@ export function extractMappingFromTranslatedSchemas(
     const origBlocks = extractZodObjectBlocks(script.originalContent);
     const transBlocks = extractZodObjectBlocks(script.translatedContent);
 
-    // ═══ PHASE A: Extract Zod field name mappings (existing logic) ═══
+    // ═══ PHASE A: Extract Zod field name mappings ═══
     const len = Math.min(origBlocks.length, transBlocks.length);
     for (let bIdx = 0; bIdx < len; bIdx++) {
       try {
         const origFields = parseZodFields(origBlocks[bIdx]);
         const transFields = parseZodFields(transBlocks[bIdx]);
 
-        // Nếu số lượng trường bằng nhau, ánh xạ 1-1
+        // Strategy 1: Position-based mapping (when field counts match)
         if (origFields.length === transFields.length) {
           for (let fIdx = 0; fIdx < origFields.length; fIdx++) {
             const origF = origFields[fIdx];
             const transF = transFields[fIdx];
             if (origF.name && transF.name && origF.name !== transF.name) {
               mapping[origF.name] = transF.name;
+            }
+          }
+        }
+
+        // Strategy 2: Type-chain matching fallback
+        // When AI reorders fields or counts differ, match by Zod type signature
+        // e.g. origField "好感度: z.number().min(0).max(100)" matches
+        //      transField "Hảo Cảm: z.number().min(0).max(100)" by type chain
+        const unmappedOrig = origFields.filter(f => f.name && !(f.name in mapping));
+        const unmappedTrans = transFields.filter(f => {
+          const isAlreadyMapped = Object.values(mapping).includes(f.name);
+          return f.name && !isAlreadyMapped;
+        });
+
+        if (unmappedOrig.length > 0 && unmappedTrans.length > 0) {
+          // Build type signature for matching: "type|optional|nullable|enumCount"
+          const getTypeSignature = (f: { type: string; isOptional?: boolean; isNullable?: boolean; constraints?: any }) => {
+            const parts = [f.type];
+            if (f.isOptional) parts.push('opt');
+            if (f.isNullable) parts.push('null');
+            if (f.constraints?.enumValues) parts.push(`enum${f.constraints.enumValues.length}`);
+            if (f.constraints?.min !== undefined) parts.push(`min${f.constraints.min}`);
+            if (f.constraints?.max !== undefined) parts.push(`max${f.constraints.max}`);
+            return parts.join('|');
+          };
+
+          const usedTrans = new Set<number>();
+          for (const origF of unmappedOrig) {
+            const origSig = getTypeSignature(origF);
+            for (let tIdx = 0; tIdx < unmappedTrans.length; tIdx++) {
+              if (usedTrans.has(tIdx)) continue;
+              const transF = unmappedTrans[tIdx];
+              if (getTypeSignature(transF) === origSig && origF.name !== transF.name) {
+                mapping[origF.name] = transF.name;
+                usedTrans.add(tIdx);
+                break;
+              }
             }
           }
         }

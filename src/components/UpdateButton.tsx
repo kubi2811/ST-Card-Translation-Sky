@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Download, X } from 'lucide-react';
+import { Download, X, History } from 'lucide-react';
 import { useT } from '../i18n/useLocale';
 
 export default function UpdateButton() {
@@ -7,14 +7,16 @@ export default function UpdateButton() {
   const [isOpen, setIsOpen] = useState(false);
   const [log, setLog] = useState('');
   const [isUpdating, setIsUpdating] = useState(false);
+  const [modalTitle, setModalTitle] = useState('');
 
-  const handleUpdate = async () => {
+  const runCommand = async (endpoint: string, displayTitle: string) => {
     setIsOpen(true);
     setLog('');
     setIsUpdating(true);
+    setModalTitle(displayTitle);
 
     try {
-      const response = await fetch('/api/update', {
+      const response = await fetch(endpoint, {
         method: 'POST',
       });
 
@@ -38,29 +40,58 @@ export default function UpdateButton() {
     }
   };
 
+  const handleUpdate = () => runCommand('/api/update', 'Cập nhật ứng dụng');
+  const handleDowngrade = () => runCommand('/api/downgrade', 'Hạ cấp phiên bản');
+
   return (
     <>
-      <button
-        onClick={handleUpdate}
-        title="Cập nhật ứng dụng"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          width: '32px',
-          height: '32px',
-          background: 'var(--bg-elevated)',
-          border: '1px solid var(--border-subtle)',
-          borderRadius: 'var(--radius-sm)',
-          cursor: 'pointer',
-          color: 'var(--text-primary)',
-          flexShrink: 0,
-        }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
-        onMouseLeave={(e) => (e.currentTarget.style.background = 'var(--bg-elevated)')}
-      >
-        <Download size={16} />
-      </button>
+      <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+        {/* Downgrade button */}
+        <button
+          onClick={handleDowngrade}
+          title="Hạ cấp phiên bản (Trở lại 1 commit)"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: '32px',
+            height: '32px',
+            background: 'var(--bg-elevated)',
+            border: '1px solid var(--border-subtle)',
+            borderRadius: 'var(--radius-sm)',
+            cursor: 'pointer',
+            color: 'var(--text-secondary)',
+            flexShrink: 0,
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'var(--bg-elevated)')}
+        >
+          <History size={16} />
+        </button>
+
+        {/* Update button */}
+        <button
+          onClick={handleUpdate}
+          title="Cập nhật ứng dụng (Bản mới nhất)"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: '32px',
+            height: '32px',
+            background: 'var(--bg-elevated)',
+            border: '1px solid var(--border-subtle)',
+            borderRadius: 'var(--radius-sm)',
+            cursor: 'pointer',
+            color: 'var(--accent-primary)',
+            flexShrink: 0,
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'var(--bg-elevated)')}
+        >
+          <Download size={16} />
+        </button>
+      </div>
 
       {isOpen && (
         <div
@@ -95,7 +126,7 @@ export default function UpdateButton() {
                 justifyContent: 'space-between',
               }}
             >
-              <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Cập nhật ứng dụng</h3>
+              <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>{modalTitle}</h3>
               <button
                 onClick={() => !isUpdating && setIsOpen(false)}
                 disabled={isUpdating}
@@ -130,7 +161,7 @@ export default function UpdateButton() {
                   margin: 0,
                 }}
               >
-                {log || 'Chuẩn bị cập nhật...'}
+                {log || 'Đang chuẩn bị thực hiện...'}
               </pre>
             </div>
 

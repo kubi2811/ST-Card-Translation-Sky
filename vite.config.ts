@@ -52,6 +52,26 @@ export default defineConfig({
             return;
           }
 
+          if (req.url === '/api/downgrade' && req.method === 'POST') {
+            res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+            res.setHeader('Cache-Control', 'no-cache');
+            
+            res.write('Đang hạ cấp phiên bản xuống 1 commit (git reset --hard HEAD~1)...\n');
+            const child = exec('git reset --hard HEAD~1 && npm install');
+            
+            child.stdout?.on('data', (data) => {
+              res.write(data);
+            });
+            child.stderr?.on('data', (data) => {
+              res.write(data);
+            });
+            child.on('close', (code) => {
+              res.write(`\nHạ cấp hoàn tất (code ${code}). Vui lòng tải lại trang hoặc khởi động lại app nếu cần.\n`);
+              res.end();
+            });
+            return;
+          }
+
           const match = (req.url ?? '').match(/^\/api-proxy\/custom\/([A-Za-z0-9_-]+)\/(.*)/);
           if (match) {
             try {

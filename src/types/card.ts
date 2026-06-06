@@ -45,6 +45,16 @@ export interface RegexScript {
   [key: string]: unknown;
 }
 
+export interface RegexPreset {
+  id: string;
+  name: string;
+  find: string;
+  replace: string;
+  flags: string;
+  description: string;
+  isCustom?: boolean;
+}
+
 export interface TavernHelperScript {
   name?: string;
   content: string;

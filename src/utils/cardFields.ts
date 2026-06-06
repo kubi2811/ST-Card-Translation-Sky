@@ -8,9 +8,9 @@ export const DEFAULT_FIELD_GROUPS: FieldGroupConfig[] = [
   { id: 'creator', label: 'Creator Notes', description: 'creator_notes, creatorcomment', enabled: true },
   { id: 'lorebook', label: 'Lorebook Entries', description: 'character_book entries content + comment + name', enabled: true },
   { id: 'lorebook_keys', label: 'Lorebook Keys', description: 'character_book entries keywords + secondary_keys', enabled: true },
-  { id: 'regex', label: 'Regex Scripts', description: 'replaceString, scriptName, findRegex, trimStrings', enabled: true },
   { id: 'depth_prompt', label: 'Depth Prompt', description: 'extensions.depth_prompt.prompt', enabled: true },
   { id: 'tavern_helper', label: 'TavernHelper Scripts', description: 'TavernHelper/JS-Slash-Runner script content', enabled: true },
+  { id: 'regex', label: 'Regex Scripts', description: 'Regex scripts replaceString + trimStrings', enabled: true },
 ];
 
 /* ─── Language Options ─── */
@@ -282,21 +282,30 @@ export function extractTranslatableFields(
       data.extensions.depth_prompt.prompt
     );
   }
-
-  // Regex scripts — extract all translatable sub-fields
-  if (data.extensions?.regex_scripts) {
+  // Regex scripts (scriptName, findRegex, replaceString & trimStrings)
+  if (enabledGroups.includes('regex') && data.extensions?.regex_scripts && Array.isArray(data.extensions.regex_scripts)) {
     data.extensions.regex_scripts.forEach((script, i) => {
-      addField(
-        `data.extensions.regex_scripts[${i}].scriptName`,
-        `regex[${i}].scriptName`,
-        'regex',
-        script.scriptName
-      );
-      // Regex pattern itself (sometimes contains natural language text to match)
-      if (enabledGroups.includes('regex') && typeof script.findRegex === 'string' && script.findRegex.trim() !== '') {
+      if (!script || typeof script !== 'object') return;
+      const scriptName = script.scriptName ? ` (${script.scriptName})` : ` (Script ${i + 1})`;
+
+      // 1. scriptName
+      if (typeof script.scriptName === 'string' && script.scriptName.trim() !== '') {
+        fields.push({
+          path: `data.extensions.regex_scripts[${i}].scriptName`,
+          label: `regex[${i}].scriptName${scriptName}`,
+          group: 'regex',
+          original: script.scriptName,
+          translated: '',
+          status: 'pending',
+          retries: 0,
+        });
+      }
+
+      // 2. findRegex
+      if (typeof script.findRegex === 'string' && script.findRegex.trim() !== '') {
         fields.push({
           path: `data.extensions.regex_scripts[${i}].findRegex`,
-          label: `regex[${i}].findRegex`,
+          label: `regex[${i}].findRegex${scriptName}`,
           group: 'regex',
           original: script.findRegex,
           translated: '',
@@ -304,11 +313,12 @@ export function extractTranslatableFields(
           retries: 0,
         });
       }
-      // replaceString
-      if (enabledGroups.includes('regex') && typeof script.replaceString === 'string' && script.replaceString.trim() !== '') {
+
+      // 3. replaceString
+      if (typeof script.replaceString === 'string' && script.replaceString.trim() !== '') {
         fields.push({
           path: `data.extensions.regex_scripts[${i}].replaceString`,
-          label: `regex[${i}].replaceString`,
+          label: `regex[${i}].replaceString${scriptName}`,
           group: 'regex',
           original: script.replaceString,
           translated: '',
@@ -316,15 +326,16 @@ export function extractTranslatableFields(
           retries: 0,
         });
       }
-      // trimStrings — array of strings to trim from output
-      if (enabledGroups.includes('regex') && Array.isArray(script.trimStrings)) {
-        script.trimStrings.forEach((trimStr, j) => {
-          if (typeof trimStr === 'string' && trimStr.trim() !== '' && hasTranslatableText(trimStr)) {
+
+      // 4. trimStrings
+      if (Array.isArray(script.trimStrings)) {
+        script.trimStrings.forEach((ts, j) => {
+          if (typeof ts === 'string' && ts.trim() !== '') {
             fields.push({
               path: `data.extensions.regex_scripts[${i}].trimStrings[${j}]`,
-              label: `regex[${i}].trimStrings[${j}]`,
+              label: `regex[${i}].trimStrings[${j}]${scriptName}`,
               group: 'regex',
-              original: trimStr,
+              original: ts,
               translated: '',
               status: 'pending',
               retries: 0,
@@ -334,8 +345,6 @@ export function extractTranslatableFields(
       }
     });
   }
-
-  // TavernHelper scripts (JS-Slash-Runner)
   if (enabledGroups.includes('tavern_helper')) {
     const possibleKeys = ['tavern_helper', 'TavernHelper', 'js_slash_runner', 'TavernHelper_scripts'];
     

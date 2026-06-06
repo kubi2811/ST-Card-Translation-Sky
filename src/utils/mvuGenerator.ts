@@ -9,7 +9,7 @@ import type { CharacterCard, CharacterBookEntry, RegexScript, TavernHelperScript
  */
 
 // Các regex chuẩn cần tiêm vào
-const MVU_REGEXES: RegexScript[] = [
+export const MVU_REGEXES: RegexScript[] = [
   {
     scriptName: 'MVU: Ẩn thanh trạng thái khởi tạo',
     findRegex: '[\\r\\n]*<StatusPlaceHolderImpl\\/>',
@@ -65,7 +65,7 @@ const MVU_REGEXES: RegexScript[] = [
 ];
 
 // Hàm tạo UUID tạm
-function generateUUID() {
+export function generateUUID() {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
     const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
     return v.toString(16);
@@ -73,7 +73,7 @@ function generateUUID() {
 }
 
 // Các script chuẩn cần tiêm vào
-const MVU_RUNTIME_SCRIPT: TavernHelperScript = {
+export const MVU_RUNTIME_SCRIPT: TavernHelperScript = {
   type: "script",
   enabled: true,
   name: "MVU",
@@ -94,7 +94,7 @@ const MVU_RUNTIME_SCRIPT: TavernHelperScript = {
   data: {}
 };
 
-const ZOD_SCHEMA_SCRIPT_TEMPLATE: TavernHelperScript = {
+export const ZOD_SCHEMA_SCRIPT_TEMPLATE: TavernHelperScript = {
   type: "script",
   enabled: true,
   name: "MVU Zod Schema",
@@ -112,7 +112,7 @@ const ZOD_SCHEMA_SCRIPT_TEMPLATE: TavernHelperScript = {
  * Hàm hỗ trợ gọi API liên tục (vượt qua giới hạn cắt đoạn token).
  * Nếu chuỗi JSON hoặc XML không hoàn chỉnh, nó sẽ gọi lại AI.
  */
-async function generateWithContinuation(
+export async function generateWithContinuation(
   config: ProxySettings,
   systemPrompt: string,
   userPrompt: string,
@@ -129,7 +129,7 @@ async function generateWithContinuation(
 
     // Mẹo: Thêm lịch sử (fullResponse) vào prompt nếu đang gọi nối tiếp
     const effectivePrompt = fullResponse 
-      ? currentPrompt + '\n\n---\nĐoạn văn bản sau đây bị cắt dở dang do giới hạn (chưa thấy ký tự kết thúc \'' + endToken + '\'). Hãy VIẾT TIẾP tục ngay từ chỗ bị cắt, KHÔNG LẶP LẠI phần đã viết:\n' + fullResponse.slice(-500)
+      ? `${currentPrompt}\n\n[TIẾP TỤC PHẢN HỒI BỊ CẮT]\nBạn đang viết dở dang do giới hạn độ dài của mô hình (chưa thấy ký tự kết thúc '${endToken}'). Dưới đây là TOÀN BỘ nội dung bạn đã viết cho đến hiện tại:\n"""\n${fullResponse}\n"""\n\nHãy tiếp tục viết tiếp ngay sau ký tự cuối cùng của nội dung trên để hoàn thiện phản hồi đầy đủ. KHÔNG viết lại hoặc lặp lại những phần đã có ở trên. Bắt đầu viết trực tiếp từ chữ bị cắt.`
       : currentPrompt;
 
     let chunk = await callProvider(config, systemPrompt, effectivePrompt, abortSignal);
@@ -154,6 +154,145 @@ async function generateWithContinuation(
   }
 
   return fullResponse.trim();
+}
+
+/**
+ * Helper to correctly inject TavernHelper runtime and schema scripts into any supported format
+ */
+export function injectTavernHelperScripts(extensions: any, zodSchemaStr: string) {
+  if (!extensions) return;
+
+  const runtimeScript: TavernHelperScript = {
+    ...MVU_RUNTIME_SCRIPT,
+    id: generateUUID()
+  };
+  const schemaScript: TavernHelperScript = {
+    ...ZOD_SCHEMA_SCRIPT_TEMPLATE,
+    content: zodSchemaStr,
+    id: generateUUID()
+  };
+
+  const possibleKeys = ['tavern_helper', 'TavernHelper', 'js_slash_runner', 'TavernHelper_scripts'];
+  let injectedAny = false;
+
+  possibleKeys.forEach(key => {
+    const extData = extensions[key];
+    if (!extData) return;
+
+    if (Array.isArray(extData)) {
+      // 1. Tuple format: [ ["scripts", [...] ] ]
+      const tupleEntry = extData.find(
+        (item: any) => Array.isArray(item) && item[0] === 'scripts' && Array.isArray(item[1])
+      );
+      if (tupleEntry) {
+        let scripts = tupleEntry[1] as TavernHelperScript[];
+        scripts = scripts.filter(s => s && s.name !== 'MVU' && s.name !== 'MVU Zod Schema');
+        scripts.push(runtimeScript);
+        scripts.push(schemaScript);
+        tupleEntry[1] = scripts;
+        injectedAny = true;
+        return;
+      }
+
+      // 2. Direct array format: [ {name: '...'}, ... ]
+      const isTupleArray = extData.some((item: any) => Array.isArray(item));
+      if (!isTupleArray) {
+        let scripts = extData as TavernHelperScript[];
+        scripts = scripts.filter(s => s && s.name !== 'MVU' && s.name !== 'MVU Zod Schema');
+        scripts.push(runtimeScript);
+        scripts.push(schemaScript);
+        extensions[key] = scripts;
+        injectedAny = true;
+        return;
+      }
+    } else if (typeof extData === 'object' && extData !== null) {
+      // 3. Object format: { scripts: [ ... ] }
+      if ('scripts' in extData && Array.isArray(extData.scripts)) {
+        let scripts = extData.scripts as TavernHelperScript[];
+        scripts = scripts.filter(s => s && s.name !== 'MVU' && s.name !== 'MVU Zod Schema');
+        scripts.push(runtimeScript);
+        scripts.push(schemaScript);
+        extData.scripts = scripts;
+        injectedAny = true;
+        return;
+      }
+    }
+  });
+
+  // If no existing tavern helper was found/injected, initialize defaults
+  if (!injectedAny) {
+    extensions.tavern_helper = {
+      scripts: [runtimeScript, schemaScript]
+    };
+    extensions.TavernHelper_scripts = [runtimeScript, schemaScript];
+  }
+}
+
+/**
+ * Helper to inject a custom TavernHelper script into any supported format
+ */
+export function injectCustomTavernHelperScript(extensions: any, customScript: TavernHelperScript) {
+  if (!extensions) return;
+
+  const possibleKeys = ['tavern_helper', 'TavernHelper', 'js_slash_runner', 'TavernHelper_scripts'];
+  let injectedAny = false;
+
+  possibleKeys.forEach(key => {
+    const extData = extensions[key];
+    if (!extData) return;
+
+    if (Array.isArray(extData)) {
+      // 1. Tuple format: [ ["scripts", [...] ] ]
+      const tupleEntry = extData.find(
+        (item: any) => Array.isArray(item) && item[0] === 'scripts' && Array.isArray(item[1])
+      );
+      if (tupleEntry) {
+        let scripts = tupleEntry[1] as TavernHelperScript[];
+        scripts = scripts.filter(s => s && s.name !== customScript.name);
+        scripts.push(customScript);
+        tupleEntry[1] = scripts;
+        injectedAny = true;
+        return;
+      }
+
+      // 2. Direct array format: [ {name: '...'}, ... ]
+      const isTupleArray = extData.some((item: any) => Array.isArray(item));
+      if (!isTupleArray) {
+        let scripts = extData as TavernHelperScript[];
+        scripts = scripts.filter(s => s && s.name !== customScript.name);
+        scripts.push(customScript);
+        extensions[key] = scripts;
+        injectedAny = true;
+        return;
+      }
+    } else if (typeof extData === 'object' && extData !== null) {
+      // 3. Object format: { scripts: [ ... ] }
+      if ('scripts' in extData && Array.isArray(extData.scripts)) {
+        let scripts = extData.scripts as TavernHelperScript[];
+        scripts = scripts.filter(s => s && s.name !== customScript.name);
+        scripts.push(customScript);
+        extData.scripts = scripts;
+        injectedAny = true;
+        return;
+      }
+    }
+  });
+
+  // If no existing tavern helper was found/injected, initialize
+  if (!injectedAny) {
+    if (!extensions.tavern_helper) {
+      extensions.tavern_helper = { scripts: [] };
+    }
+    if (!extensions.tavern_helper.scripts) {
+      extensions.tavern_helper.scripts = [];
+    }
+    extensions.tavern_helper.scripts.push(customScript);
+
+    if (!extensions.TavernHelper_scripts) {
+      extensions.TavernHelper_scripts = [];
+    }
+    extensions.TavernHelper_scripts.push(customScript);
+  }
 }
 
 /**
@@ -245,40 +384,8 @@ Tin nhắn đầu: ${newCard.data.first_mes || ''}`;
     }
   }
 
-  // 3.3: Tiêm TavernHelper Scripts (CẢ HAI format để tương thích mọi phiên bản ST)
-  // Format 1 (mới, ưu tiên): data.extensions.tavern_helper.scripts
-  if (!newCard.data.extensions.tavern_helper) {
-    newCard.data.extensions.tavern_helper = { scripts: [] };
-  }
-  const tavernHelper = newCard.data.extensions.tavern_helper as { scripts: TavernHelperScript[]; [key: string]: unknown };
-  if (!tavernHelper.scripts) {
-    tavernHelper.scripts = [];
-  }
-  // Remove old MVU scripts if exists
-  tavernHelper.scripts = tavernHelper.scripts.filter(
-    s => s.name !== 'MVU Zod Schema' && s.name !== 'MVU'
-  );
-  tavernHelper.scripts.push(MVU_RUNTIME_SCRIPT);
-  tavernHelper.scripts.push({
-    ...ZOD_SCHEMA_SCRIPT_TEMPLATE,
-    content: zodSchemaStr,
-    id: generateUUID(),
-  });
-
-  // Format 2 (legacy, fallback): data.extensions.TavernHelper_scripts
-  if (!newCard.data.extensions.TavernHelper_scripts) {
-    newCard.data.extensions.TavernHelper_scripts = [];
-  }
-  // Remove old MVU schema script if exists
-  newCard.data.extensions.TavernHelper_scripts = newCard.data.extensions.TavernHelper_scripts.filter(
-    s => s.name !== 'MVU Zod Schema' && s.name !== 'MVU'
-  );
-  newCard.data.extensions.TavernHelper_scripts.push(MVU_RUNTIME_SCRIPT);
-  newCard.data.extensions.TavernHelper_scripts.push({
-    ...ZOD_SCHEMA_SCRIPT_TEMPLATE,
-    content: zodSchemaStr,
-    id: generateUUID(),
-  });
+  // 3.3: Tiêm TavernHelper Scripts
+  injectTavernHelperScripts(newCard.data.extensions, zodSchemaStr);
 
   // 3.4: Tiêm Lorebook Entries
   // Xoá các entry MVU cũ nếu có để tránh trùng

@@ -15,7 +15,7 @@ import type {
   ModPreset,
 } from './types/card';
 import type { Worldbook } from './utils/worldbookParser';
-import { DEFAULT_FIELD_GROUPS } from './utils/cardFields';
+import { DEFAULT_FIELD_GROUPS, extractTranslatableFields } from './utils/cardFields';
 import { IDB } from './utils/idb';
 import { clearRAGCache } from './utils/ragContext';
 import { clearTranslationMemory } from './utils/translationMemory';
@@ -489,11 +489,38 @@ export const useStore = create<AppState>((set) => ({
         return acc;
       }, {} as Record<string, boolean>);
       LS.set('st-translator-field-groups-enabled', enabledMap);
+
+      let updatedFields = s.fields;
+      if (s.card) {
+        const enabledGroupIds = updatedGroups.filter(g => g.enabled).map(g => g.id);
+        const newFields = extractTranslatableFields(s.card, enabledGroupIds);
+        
+        // Merge: preserve done, skipped, and ignored fields from previous fields
+        const existingMap = new Map(s.fields.map(f => [f.path, f]));
+        updatedFields = newFields.map(nf => {
+          const existing = existingMap.get(nf.path);
+          if (existing && (existing.status === 'done' || existing.status === 'skipped' || existing.status === 'ignored')) {
+            return existing;
+          }
+          return nf;
+        });
+
+        // Also keep done/skipped/ignored fields from groups not currently enabled
+        for (const ef of s.fields) {
+          if ((ef.status === 'done' || ef.status === 'skipped' || ef.status === 'ignored') && !updatedFields.find(m => m.path === ef.path)) {
+            updatedFields.push(ef);
+          }
+        }
+
+        IDB.set('st-translator-fields-data', { fields: updatedFields, phase: s.phase });
+      }
+
       return {
         translationConfig: {
           ...s.translationConfig,
           fieldGroups: updatedGroups,
         },
+        fields: updatedFields,
       };
     }),
 

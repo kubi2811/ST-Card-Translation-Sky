@@ -106,15 +106,15 @@ export function useTranslation() {
 
     if (store.translationConfig.enableMvuSync) {
       const MVU_GROUP_ORDER: Record<string, number> = {
-        tavern_helper: 0,
-        lorebook: 1,
-        lorebook_keys: 2,
-        regex: 3,
-        system: 4,
-        core: 5,
-        messages: 6,
-        depth_prompt: 7,
-        creator: 8,
+        core: 0,
+        messages: 1,
+        system: 2,
+        lorebook: 3,
+        lorebook_keys: 4,
+        depth_prompt: 5,
+        regex: 6,
+        creator: 7,
+        tavern_helper: 8,
       };
       
       const TYPE_ORDER: Record<string, number> = {
@@ -1035,15 +1035,15 @@ export function useTranslation() {
     // (Already sorted in prepareFields, but we ensure consistency here)
     if (store.translationConfig.enableMvuSync) {
       const MVU_GROUP_ORDER: Record<string, number> = {
-        tavern_helper: 0,
-        lorebook: 1,
-        lorebook_keys: 2,
-        regex: 3,
-        system: 4,
-        core: 5,
-        messages: 6,
-        depth_prompt: 7,
-        creator: 8,
+        core: 0,
+        messages: 1,
+        system: 2,
+        lorebook: 3,
+        lorebook_keys: 4,
+        depth_prompt: 5,
+        regex: 6,
+        creator: 7,
+        tavern_helper: 8,
       };
       const TYPE_ORDER: Record<string, number> = {
         initvar: 0,
@@ -1064,7 +1064,7 @@ export function useTranslation() {
         }
         return 0;
       });
-      store.addLog('info', '📋 Strategy B: Reordered fields → schema → lorebook → regex → OP → rest');
+      store.addLog('info', '📋 Strategy B: Reordered fields → core → messages → system → lorebook → regex → TavernHelper');
     } else {
       // B1 FIX: Even without MVU, move findRegex fields BEFORE narrative/system fields.
       // This ensures regex trigger patterns are translated first, so the regex trigger
@@ -1083,9 +1083,193 @@ export function useTranslation() {
     const batchSize = store.translationConfig.lorebookBatchSize || 20;
     const lorebookGroups: FieldGroup[] = ['lorebook', 'lorebook_keys'];
 
+    // ═══ Strategy B: Build MVU Dictionary BEFORE starting loop ═══
+    if (store.translationConfig.enableMvuSync && store.card) {
+      try {
+        store.addLog('info', '🔧 Strategy B: Auto-detecting MVU/Zod variables...');
+        const extractedKeys = extractPotentialMvuKeyStrings(store.card);
+        
+        if (extractedKeys.length > 0) {
+          let existingDict = store.translationConfig.mvuDictionary;
+          const totalMvuPasses = Math.max(1, Math.min(5, store.translationConfig.mvuScanPasses || 1));
+          
+          for (let mvuPass = 0; mvuPass < totalMvuPasses; mvuPass++) {
+            if (checkAbort()) {
+              runningRef.current = false;
+              store.setPhase('cancelled');
+              store.addLog('warning', 'Translation cancelled by user');
+              return;
+            }
+            if (await waitForPause()) {
+              runningRef.current = false;
+              store.setPhase('cancelled');
+              return;
+            }
+
+            existingDict = useStore.getState().translationConfig.mvuDictionary;
+            const newKeys = extractedKeys.filter(k => !(k in existingDict));
+            
+            if (totalMvuPasses > 1) {
+              store.addLog('info', `🔧 Strategy B Pass ${mvuPass + 1}/${totalMvuPasses}: Found ${extractedKeys.length} variables (${newKeys.length} new, ${extractedKeys.length - newKeys.length} already mapped)`);
+            } else {
+              store.addLog('info', `Found ${extractedKeys.length} variables (${newKeys.length} new, ${extractedKeys.length - newKeys.length} already mapped)`);
+            }
+
+            if (newKeys.length === 0) {
+              if (totalMvuPasses > 1 && mvuPass > 0) {
+                store.addLog('success', `🔧 Strategy B: All variables mapped after ${mvuPass} pass(es) — no new keys to translate`);
+              }
+              break;
+            }
+
+            store.addLog('active', `🤖 Calling AI to translate ${newKeys.length} variable names...`);
+            
+            // Build schema context
+            let schemaContext = store.translationConfig.customSchema || '';
+            if (!schemaContext.trim()) {
+              schemaContext = extractSchemaContextFromCard(store.card!);
+            }
+
+            let keyDescriptions: Record<string, string> = {};
+            if (schemaContext) {
+              keyDescriptions = extractZodDescriptions(schemaContext);
+            }
+
+            const aiTranslations = await aiTranslateMvuKeys(
+              newKeys,
+              store.translationConfig.targetLanguage,
+              store.proxy,
+              abortRef.current?.signal,
+              schemaContext,
+              keyDescriptions,
+              undefined,
+              undefined
+            );
+            
+            const mergedDict = { ...existingDict };
+            let addedCount = 0;
+            const currentMetadata = { ...useStore.getState().mvuKeyMetadata };
+            for (const [k, v] of Object.entries(aiTranslations)) {
+              if (v && v.trim() && k !== v && !(k in mergedDict)) {
+                mergedDict[k] = v;
+                addedCount++;
+                currentMetadata[k] = { sources: ['ai'], confidence: 'ai', occurrences: 1 };
+              }
+            }
+            
+            if (addedCount > 0) {
+              store.setMvuKeyMetadata(currentMetadata);
+              const { fixedDict, fixes } = enforceExactConsistency(mergedDict, currentMetadata);
+              store.setTranslationConfig({ mvuDictionary: fixedDict });
+              store.addLog('success', `✅ Auto-added ${addedCount} variable translations to MVU Dictionary`);
+            } else {
+              store.addLog('info', 'All variables are already ASCII or mapped — no AI translation needed');
+              break;
+            }
+          }
+        } else {
+          store.addLog('info', 'No MVU/Zod variables detected in this card');
+        }
+      } catch (mvuErr) {
+        const mvuMsg = mvuErr instanceof Error ? mvuErr.message : String(mvuErr);
+        if (mvuMsg === 'Cancelled' || checkAbort()) {
+          runningRef.current = false;
+          store.setPhase('cancelled');
+          return;
+        }
+        store.addLog('warning', `⚠️ MVU auto-detect failed (non-critical): ${mvuMsg}`);
+      }
+    }
+
+    // ═══ Strategy C: Build EJS Dictionary BEFORE starting loop ═══
+    if (store.translationConfig.enableEjsSync && store.card) {
+      try {
+        store.addLog('info', '🔮 Strategy C: Scanning EJS entry names & keywords...');
+        const ejsEntryRefs = extractEjsEntryNames(store.card);
+        const ejsKeywords = extractEjsKeywords(store.card);
+        const totalEjsPasses = Math.max(1, Math.min(5, store.translationConfig.ejsScanPasses || 1));
+
+        for (let ejsPass = 0; ejsPass < totalEjsPasses; ejsPass++) {
+          if (checkAbort()) {
+            runningRef.current = false;
+            store.setPhase('cancelled');
+            store.addLog('warning', 'Translation cancelled by user');
+            return;
+          }
+          if (await waitForPause()) {
+            runningRef.current = false;
+            store.setPhase('cancelled');
+            return;
+          }
+
+          const existingEntryDict = useStore.getState().translationConfig.ejsEntryNameDict;
+          const existingKwDict = useStore.getState().translationConfig.ejsKeywordDict;
+
+          const newEntryNames = ejsEntryRefs.map(r => r.name).filter(n => !(n in existingEntryDict));
+          const newKeywords = ejsKeywords.map(k => k.keyword).filter(k => !(k in existingKwDict));
+
+          if (totalEjsPasses > 1) {
+            store.addLog('info', `🔮 Strategy C Pass ${ejsPass + 1}/${totalEjsPasses}: Found ${ejsEntryRefs.length} entry refs (${newEntryNames.length} new), ${ejsKeywords.length} keywords (${newKeywords.length} new)`);
+          } else {
+            store.addLog('info', `Found ${ejsEntryRefs.length} entry refs (${newEntryNames.length} new), ${ejsKeywords.length} keywords (${newKeywords.length} new)`);
+          }
+
+          if (newEntryNames.length === 0 && newKeywords.length === 0) {
+            if (totalEjsPasses > 1 && ejsPass > 0) {
+              store.addLog('success', `🔮 Strategy C: All EJS items mapped after ${ejsPass} pass(es)`);
+            }
+            break;
+          }
+
+          store.addLog('active', `🤖 Calling AI to translate ${newEntryNames.length} entry names + ${newKeywords.length} keywords...`);
+
+          const ejsContext = (store.card!.data?.character_book?.entries || [])
+            .filter((e: any) => e.content && /<%[\s\S]*?%>/.test(e.content))
+            .map((e: any) => e.content)
+            .join('\n\n')
+            .slice(0, 3000);
+
+          const { entryTranslations, keywordTranslations } = await aiTranslateEjsEntries(
+            newEntryNames,
+            newKeywords,
+            store.translationConfig.targetLanguage,
+            store.proxy,
+            abortRef.current?.signal,
+            ejsContext,
+          );
+
+          const mergedEntryDict = { ...existingEntryDict, ...entryTranslations };
+          const mergedKwDict = { ...existingKwDict, ...keywordTranslations };
+          const addedEntries = Object.keys(entryTranslations).length;
+          const addedKw = Object.keys(keywordTranslations).length;
+
+          if (addedEntries > 0 || addedKw > 0) {
+            store.setTranslationConfig({ ejsEntryNameDict: mergedEntryDict, ejsKeywordDict: mergedKwDict });
+            store.addLog('success', `✅ Strategy C: Added ${addedEntries} entry name translations + ${addedKw} keyword translations`);
+          } else {
+            store.addLog('info', 'All EJS items already mapped or no CJK content to translate');
+            break;
+          }
+        }
+
+        if (store.translationConfig.ejsDecoratorPreserve) {
+          const ejsDetection = detectEjsCard(store.card);
+          if (ejsDetection.hasDecorators) {
+            store.addLog('info', '🛡️ Strategy C: Decorator preservation active — @@, [GENERATE:], @INJECT lines will be protected');
+          }
+        }
+      } catch (ejsErr) {
+        const ejsMsg = ejsErr instanceof Error ? ejsErr.message : String(ejsErr);
+        if (ejsMsg === 'Cancelled' || checkAbort()) {
+          runningRef.current = false;
+          store.setPhase('cancelled');
+          return;
+        }
+        store.addLog('warning', `⚠️ EJS auto-detect failed (non-critical): ${ejsMsg}`);
+      }
+    }
+
     let i = 0;
-    let hasBuiltMvuDict = false;
-    let hasBuiltEjsDict = false;
 
     while (i < fields.length) {
       // Check abort
@@ -1104,260 +1288,6 @@ export function useTranslation() {
       }
 
       const field = fields[i];
-
-      // ═══ Deferred MVU Dictionary Building (Strategy B) ═══
-      // Translate TavernHelper scripts FIRST, then use their TRANSLATED output as context
-      // for the AI to perfectly translate variable names into the MVU dictionary.
-      if (store.translationConfig.enableMvuSync && !hasBuiltMvuDict && field.group !== 'tavern_helper' && store.card) {
-        hasBuiltMvuDict = true;
-        try {
-          store.addLog('info', '🔧 Strategy B: Auto-detecting MVU/Zod variables...');
-          const extractedKeys = extractPotentialMvuKeyStrings(store.card);
-          
-          if (extractedKeys.length > 0) {
-            // 1. Try to extract exact mappings from the already-translated Schema (TavernHelper)
-            // This now captures BOTH field names AND string literals (enum values, defaults, describes)
-            const schemaMappings = extractMappingFromTranslatedSchemas(store.card, useStore.getState().fields);
-            const schemaMappingKeys = Object.keys(schemaMappings);
-            
-            let existingDict = store.translationConfig.mvuDictionary;
-            
-            if (schemaMappingKeys.length > 0) {
-              const updatedDict = { ...existingDict, ...schemaMappings };
-              const currentMetadata = { ...useStore.getState().mvuKeyMetadata };
-              for (const k of schemaMappingKeys) {
-                if (!currentMetadata[k]) {
-                  currentMetadata[k] = {
-                    sources: ['zod'],
-                    confidence: 'schema',
-                    occurrences: 1
-                  };
-                } else {
-                  currentMetadata[k] = {
-                    ...currentMetadata[k],
-                    confidence: 'schema'
-                  };
-                }
-              }
-              store.setMvuKeyMetadata(currentMetadata);
-
-              // Enforce 100% exact consistency
-              const { fixedDict, fixes } = enforceExactConsistency(updatedDict, currentMetadata);
-              if (fixes.length > 0) {
-                store.setTranslationConfig({ mvuDictionary: fixedDict });
-                existingDict = fixedDict;
-                store.addLog('info', `🔒 Exact consistency: fixed ${fixes.length} case/spelling variations: ${fixes.join(', ')}`);
-              } else {
-                store.setTranslationConfig({ mvuDictionary: updatedDict });
-                existingDict = updatedDict;
-              }
-
-              // Log field names and string literals separately for clarity
-              const fieldNameCount = schemaMappingKeys.filter(k => !/[\s]/.test(k) && k.length < 30).length;
-              const literalCount = schemaMappingKeys.length - fieldNameCount;
-              const logParts = [`📋 Extracted ${schemaMappingKeys.length} exact mapping(s) from translated schema`];
-              if (fieldNameCount > 0) logParts.push(`(${fieldNameCount} field names`);
-              if (literalCount > 0) logParts.push(`${fieldNameCount > 0 ? ', ' : '('}${literalCount} enum/default values`);
-              if (fieldNameCount > 0 || literalCount > 0) logParts.push(')');
-              store.addLog('success', logParts.join(''));
-            }
-            
-            // 2. Multi-pass scan: filter and translate new keys
-            const totalMvuPasses = Math.max(1, Math.min(5, store.translationConfig.mvuScanPasses || 1));
-            for (let mvuPass = 0; mvuPass < totalMvuPasses; mvuPass++) {
-              // Re-read dictionary each pass (accumulated from previous passes)
-              existingDict = useStore.getState().translationConfig.mvuDictionary;
-              const newKeys = extractedKeys.filter(k => !(k in existingDict));
-            
-              if (totalMvuPasses > 1) {
-                store.addLog('info', `🔧 Strategy B Pass ${mvuPass + 1}/${totalMvuPasses}: Found ${extractedKeys.length} variables (${newKeys.length} new, ${extractedKeys.length - newKeys.length} already mapped)`);
-              } else {
-                store.addLog('info', `Found ${extractedKeys.length} variables (${newKeys.length} new, ${extractedKeys.length - newKeys.length} already mapped)`);
-              }
-
-              if (newKeys.length === 0) {
-                if (totalMvuPasses > 1 && mvuPass > 0) {
-                  store.addLog('success', `🔧 Strategy B: All variables mapped after ${mvuPass} pass(es) — no new keys to translate`);
-                }
-                break;
-              }
-
-              store.addLog('active', `🤖 Calling AI to translate ${newKeys.length} variable names...`);
-              
-              // Use translated TavernHelper scripts as context
-              let schemaContext = store.translationConfig.customSchema || '';
-              if (!schemaContext.trim()) {
-                const allTranslatedSchemas = useStore.getState().fields
-                  .filter(f => f.group === 'tavern_helper' && f.status === 'done' && f.translated)
-                  .map(f => f.translated)
-                  .join('\n\n');
-                if (allTranslatedSchemas.trim()) {
-                  schemaContext = allTranslatedSchemas;
-                  if (mvuPass === 0) store.addLog('info', '📋 Used translated TavernHelper scripts as context for variable translation');
-                } else {
-                  schemaContext = extractSchemaContextFromCard(store.card!);
-                }
-              }
-
-              let keyDescriptions: Record<string, string> = {};
-              if (schemaContext) {
-                keyDescriptions = extractZodDescriptions(schemaContext);
-              }
-
-              // Pass schemaMappings as covariance constraints so AI follows established naming patterns
-              const aiTranslations = await aiTranslateMvuKeys(
-                newKeys,
-                store.translationConfig.targetLanguage,
-                store.proxy,
-                abortRef.current?.signal,
-                schemaContext,
-                keyDescriptions,
-                undefined, // modInstructions
-                schemaMappingKeys.length > 0 ? schemaMappings : undefined // existingMappings for covariance
-              );
-              
-              const mergedDict = { ...existingDict };
-              let addedCount = 0;
-              const currentMetadata = { ...useStore.getState().mvuKeyMetadata };
-              for (const [k, v] of Object.entries(aiTranslations)) {
-                if (v && v.trim() && k !== v && !(k in mergedDict)) {
-                  mergedDict[k] = v;
-                  addedCount++;
-
-                  if (!currentMetadata[k]) {
-                    currentMetadata[k] = {
-                      sources: ['ai'],
-                      confidence: 'ai',
-                      occurrences: 1
-                    };
-                  } else {
-                    currentMetadata[k] = {
-                      ...currentMetadata[k],
-                      confidence: 'ai'
-                    };
-                  }
-                }
-              }
-              
-              if (addedCount > 0) {
-                store.setMvuKeyMetadata(currentMetadata);
-                // Enforce 100% exact consistency
-                const { fixedDict, fixes } = enforceExactConsistency(mergedDict, currentMetadata);
-                if (fixes.length > 0) {
-                  store.setTranslationConfig({ mvuDictionary: fixedDict });
-                  store.addLog('info', `🔒 Exact consistency: fixed ${fixes.length} case/spelling variations: ${fixes.join(', ')}`);
-                } else {
-                  store.setTranslationConfig({ mvuDictionary: mergedDict });
-                }
-                store.addLog('success', `✅ Auto-added ${addedCount} variable translations to MVU Dictionary`);
-              } else {
-                store.addLog('info', 'All variables are already ASCII or mapped — no AI translation needed');
-                break; // No point continuing passes if AI returned nothing new
-              }
-            }
-          } else {
-            store.addLog('info', 'No MVU/Zod variables detected in this card');
-          }
-        } catch (mvuErr) {
-          const mvuMsg = mvuErr instanceof Error ? mvuErr.message : String(mvuErr);
-          if (mvuMsg === 'Cancelled' || checkAbort()) {
-            runningRef.current = false;
-            store.setPhase('cancelled');
-            return;
-          }
-          store.addLog('warning', `⚠️ MVU auto-detect failed (non-critical): ${mvuMsg}`);
-        }
-      }
-
-      // ═══ Deferred EJS Dictionary Building (Strategy C) ═══
-      // Extract and AI-translate EJS entry names & keywords before translating narrative
-      if (store.translationConfig.enableEjsSync && !hasBuiltEjsDict && field.group !== 'tavern_helper' && store.card) {
-        hasBuiltEjsDict = true;
-        try {
-          store.addLog('info', '🔮 Strategy C: Scanning EJS entry names & keywords...');
-
-          // Extract getwi()/activewi() entry name references
-          const ejsEntryRefs = extractEjsEntryNames(store.card);
-          // Extract keyword/alias references
-          const ejsKeywords = extractEjsKeywords(store.card);
-
-          // Multi-pass scan: filter and translate new items
-          const totalEjsPasses = Math.max(1, Math.min(5, store.translationConfig.ejsScanPasses || 1));
-          for (let ejsPass = 0; ejsPass < totalEjsPasses; ejsPass++) {
-            // Re-read dictionaries each pass (accumulated from previous passes)
-            const existingEntryDict = useStore.getState().translationConfig.ejsEntryNameDict;
-            const existingKwDict = useStore.getState().translationConfig.ejsKeywordDict;
-
-            const newEntryNames = ejsEntryRefs
-              .map(r => r.name)
-              .filter(n => !(n in existingEntryDict));
-            const newKeywords = ejsKeywords
-              .map(k => k.keyword)
-              .filter(k => !(k in existingKwDict));
-
-            if (totalEjsPasses > 1) {
-              store.addLog('info', `🔮 Strategy C Pass ${ejsPass + 1}/${totalEjsPasses}: Found ${ejsEntryRefs.length} entry refs (${newEntryNames.length} new), ${ejsKeywords.length} keywords (${newKeywords.length} new)`);
-            } else {
-              store.addLog('info', `Found ${ejsEntryRefs.length} entry refs (${newEntryNames.length} new), ${ejsKeywords.length} keywords (${newKeywords.length} new)`);
-            }
-
-            if (newEntryNames.length === 0 && newKeywords.length === 0) {
-              if (totalEjsPasses > 1 && ejsPass > 0) {
-                store.addLog('success', `🔮 Strategy C: All EJS items mapped after ${ejsPass} pass(es)`);
-              }
-              break;
-            }
-
-            store.addLog('active', `🤖 Calling AI to translate ${newEntryNames.length} entry names + ${newKeywords.length} keywords...`);
-
-            // Build EJS context from card
-            const ejsContext = (store.card!.data?.character_book?.entries || [])
-              .filter((e: any) => e.content && /<%[\s\S]*?%>/.test(e.content))
-              .map((e: any) => e.content)
-              .join('\n\n')
-              .slice(0, 3000);
-
-            const { entryTranslations, keywordTranslations } = await aiTranslateEjsEntries(
-              newEntryNames,
-              newKeywords,
-              store.translationConfig.targetLanguage,
-              store.proxy,
-              abortRef.current?.signal,
-              ejsContext,
-            );
-
-            const mergedEntryDict = { ...existingEntryDict, ...entryTranslations };
-            const mergedKwDict = { ...existingKwDict, ...keywordTranslations };
-
-            const addedEntries = Object.keys(entryTranslations).length;
-            const addedKw = Object.keys(keywordTranslations).length;
-
-            if (addedEntries > 0 || addedKw > 0) {
-              store.setTranslationConfig({ ejsEntryNameDict: mergedEntryDict, ejsKeywordDict: mergedKwDict });
-              store.addLog('success', `✅ Strategy C: Added ${addedEntries} entry name translations + ${addedKw} keyword translations`);
-            } else {
-              store.addLog('info', 'All EJS items already mapped or no CJK content to translate');
-              break; // No point continuing passes if AI returned nothing new
-            }
-          }
-
-          // Detect decorators for info
-          if (store.translationConfig.ejsDecoratorPreserve) {
-            const ejsDetection = detectEjsCard(store.card);
-            if (ejsDetection.hasDecorators) {
-              store.addLog('info', '🛡️ Strategy C: Decorator preservation active — @@, [GENERATE:], @INJECT lines will be protected');
-            }
-          }
-        } catch (ejsErr) {
-          const ejsMsg = ejsErr instanceof Error ? ejsErr.message : String(ejsErr);
-          if (ejsMsg === 'Cancelled' || checkAbort()) {
-            runningRef.current = false;
-            store.setPhase('cancelled');
-            return;
-          }
-          store.addLog('warning', `⚠️ EJS auto-detect failed (non-critical): ${ejsMsg}`);
-        }
-      }
 
       // ─── Batch mode for lorebook fields ───
       if (isBatchLorebook && lorebookGroups.includes(field.group)) {
@@ -3193,31 +3123,6 @@ export function useTranslation() {
 
     // ═══ Bake all modded fields into card so next operations use updated base ═══
     bakeModdedFieldsIntoCard();
-
-    // ═══ MVU-ZOD Conversion Pipeline ═══
-    if (store.translationConfig.enableMvuConversion) {
-      const baseCard = useStore.getState().card;
-      if (baseCard) {
-        try {
-          const mvuCard = await injectMvuZodSystem(
-            baseCard,
-            store.proxy,
-            (msg) => store.setMvuConversionProgress(msg),
-            store.translationConfig.customSchema || '',
-            abortRef.current?.signal
-          );
-          useStore.getState().updateCard(mvuCard);
-          store.addLog('success', '✨ Thẻ đã được chuyển đổi thành MVU-Zod thành công!');
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          if (msg !== 'Cancelled') {
-            store.addLog('error', `❌ Lỗi chuyển đổi MVU-Zod: ${msg}`);
-          }
-        } finally {
-          store.setMvuConversionProgress('');
-        }
-      }
-    }
 
     runningRef.current = false;
     // Only set to 'done' if not already cancelled

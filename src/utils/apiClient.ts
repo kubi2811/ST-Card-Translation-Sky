@@ -1031,17 +1031,28 @@ async function callOpenAICompatible(
   config: ProxySettings,
   system: string,
   user: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  images?: string[]
 ): Promise<string> {
   const useStream = config.useStream !== false;
   const rawUrl = config.proxyUrl.replace(/\/+$/, '') + '/chat/completions';
   const url = corsProxyUrl(rawUrl, config.useCorsProxy);
 
+  const userContent: any[] = [{ type: 'text', text: user }];
+  if (images && images.length > 0) {
+    images.forEach(img => {
+      userContent.push({
+        type: 'image_url',
+        image_url: { url: img }
+      });
+    });
+  }
+
   const body = {
     model: config.model,
     messages: [
       { role: 'system', content: system },
-      { role: 'user', content: user },
+      { role: 'user', content: images && images.length > 0 ? userContent : user },
     ],
     max_tokens: getMaxOutputTokens(config.model, config.maxTokens),
     temperature: config.temperature,
@@ -1141,17 +1152,35 @@ async function callAnthropic(
   config: ProxySettings,
   system: string,
   user: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  images?: string[]
 ): Promise<string> {
   const useStream = config.useStream !== false;
   const rawUrl = config.proxyUrl.replace(/\/+$/, '') + '/messages';
   const url = corsProxyUrl(rawUrl, config.useCorsProxy);
 
+  const userContent: any[] = [{ type: 'text', text: user }];
+  if (images && images.length > 0) {
+    images.forEach(img => {
+      const match = img.match(/^data:([^;]+);base64,(.*)$/);
+      if (match) {
+        userContent.push({
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: match[1],
+            data: match[2]
+          }
+        });
+      }
+    });
+  }
+
   const body = {
     model: config.model,
     max_tokens: getMaxOutputTokens(config.model, config.maxTokens),
     system,
-    messages: [{ role: 'user', content: user }],
+    messages: [{ role: 'user', content: images && images.length > 0 ? userContent : user }],
     temperature: config.temperature,
     stream: useStream,
   };
@@ -1254,7 +1283,8 @@ async function callGemini(
   config: ProxySettings,
   system: string,
   user: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  images?: string[]
 ): Promise<string> {
   const useStream = config.useStream !== false;
   const baseUrl = config.proxyUrl.replace(/\/+$/, '');
@@ -1262,9 +1292,24 @@ async function callGemini(
   const rawUrl = `${baseUrl}/models/${config.model}:${endpoint}key=${config.apiKey}`;
   const url = corsProxyUrl(rawUrl, config.useCorsProxy);
 
+  const parts: any[] = [{ text: user }];
+  if (images && images.length > 0) {
+    images.forEach(img => {
+      const match = img.match(/^data:([^;]+);base64,(.*)$/);
+      if (match) {
+        parts.push({
+          inlineData: {
+            mimeType: match[1],
+            data: match[2]
+          }
+        });
+      }
+    });
+  }
+
   const body = {
     system_instruction: { parts: [{ text: system }] },
-    contents: [{ role: 'user', parts: [{ text: user }] }],
+    contents: [{ role: 'user', parts: parts }],
     generationConfig: {
       maxOutputTokens: getMaxOutputTokens(config.model, config.maxTokens),
       temperature: config.temperature,
@@ -1439,7 +1484,8 @@ export async function callProvider(
   config: ProxySettings,
   system: string,
   user: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  images?: string[]
 ): Promise<string> {
   // ═══ Rate limit gate ═══
   await waitForRateLimit(signal);
@@ -1451,13 +1497,13 @@ export async function callProvider(
   try {
     switch (config.provider) {
       case 'anthropic':
-        return await callAnthropic(rotatedConfig, system, user, signal);
+        return await callAnthropic(rotatedConfig, system, user, signal, images);
       case 'google':
-        return await callGemini(rotatedConfig, system, user, signal);
+        return await callGemini(rotatedConfig, system, user, signal, images);
       case 'openai':
       case 'custom':
       default:
-        return await callOpenAICompatible(rotatedConfig, system, user, signal);
+        return await callOpenAICompatible(rotatedConfig, system, user, signal, images);
     }
   } catch (err) {
     // On rate limit, advance to next key for the retry
@@ -2578,6 +2624,48 @@ function unmaskUrls(text: string, map: UrlMaskMap): string {
   return unmaskedText;
 }
 
+// ─── Code Block Masking Utilities ───
+interface CodeBlockMaskMap {
+  [placeholder: string]: string;
+}
+
+function maskCodeBlocks(text: string): { maskedText: string; map: CodeBlockMaskMap } {
+  const map: CodeBlockMaskMap = {};
+  let maskedText = text;
+  let counter = 0;
+
+  // Pattern to find <script>...</script> blocks
+  const scriptRegex = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
+  // Pattern to find <style>...</style> blocks
+  const styleRegex = /<style\b([^>]*)>([\s\S]*?)<\/style>/gi;
+
+  // Replace script blocks
+  maskedText = maskedText.replace(scriptRegex, (match, attrs, content) => {
+    if (!content.trim()) return match;
+    const ph = `__PROTECTED_SCRIPT_${counter++}__`;
+    map[ph] = content;
+    return `<script${attrs}>${ph}</script>`;
+  });
+
+  // Replace style blocks
+  maskedText = maskedText.replace(styleRegex, (match, attrs, content) => {
+    if (!content.trim()) return match;
+    const ph = `__PROTECTED_STYLE_${counter++}__`;
+    map[ph] = content;
+    return `<style${attrs}>${ph}</style>`;
+  });
+
+  return { maskedText, map };
+}
+
+function unmaskCodeBlocks(text: string, map: CodeBlockMaskMap): string {
+  let unmaskedText = text;
+  for (const [placeholder, code] of Object.entries(map)) {
+    unmaskedText = unmaskedText.split(placeholder).join(code);
+  }
+  return unmaskedText;
+}
+
 export async function translateText(
   text: string,
   fieldName: string,
@@ -2609,8 +2697,10 @@ export async function translateText(
 ): Promise<string> {
   if (!text || text.trim() === '') return '';
 
+  // 0. Mask code blocks (<script>, <style>) before translation
+  const { maskedText: codeMasked, map: codeMap } = maskCodeBlocks(text);
   // 1. Mask secrets (API keys, tokens, passwords) before translation
-  const { maskedText: secretMasked, map: secretMap } = maskSecrets(text);
+  const { maskedText: secretMasked, map: secretMap } = maskSecrets(codeMasked);
   // 2. Mask URLs/image links to prevent AI from translating them
   const { maskedText, map: urlMap } = maskUrls(secretMasked);
 
@@ -2631,6 +2721,7 @@ export async function translateText(
     const unmaskedChunks = chunks.map(chunk => {
       let unmasked = unmaskUrls(chunk, urlMap);
       unmasked = unmaskSecrets(unmasked, secretMap);
+      unmasked = unmaskCodeBlocks(unmasked, codeMap);
       return unmasked;
     });
     onChunksReady(unmaskedChunks);
@@ -2661,16 +2752,17 @@ export async function translateText(
     
     // ═══ SINGLE-CHUNK BLOAT GUARD ═══
     // MOD MODE: skip — mod output can legitimately be much larger than input
-    const singleBloatRatio = cleaned.length / Math.max(1, text.length);
-    if (!isModMode && singleBloatRatio > 1.8 && text.length > 5000) {
-      console.error(`[translateText] ⚠️ SINGLE CHUNK BLOAT for ${fieldName}: ${cleaned.length} chars is ${(singleBloatRatio * 100).toFixed(0)}% of original ${text.length} — trimming`);
-      cleaned = cleaned.slice(0, Math.floor(text.length * 1.3));
+    const singleBloatRatio = cleaned.length / Math.max(1, maskedText.length);
+    if (!isModMode && singleBloatRatio > 1.8 && maskedText.length > 5000) {
+      console.error(`[translateText] ⚠️ SINGLE CHUNK BLOAT for ${fieldName}: ${cleaned.length} chars is ${(singleBloatRatio * 100).toFixed(0)}% of original ${maskedText.length} — trimming`);
+      cleaned = cleaned.slice(0, Math.floor(maskedText.length * 1.3));
     }
 
     // RESIDUAL CJK CHECK: auto-retry if Chinese text remains
-    return postTranslationResidualCheck(
-      text, cleaned, fieldName, config, targetLang, sourceLang, signal, fieldType, mvuDictionary
+    const finalResult = await postTranslationResidualCheck(
+      maskedText, cleaned, fieldName, config, targetLang, sourceLang, signal, fieldType, mvuDictionary
     );
+    return unmaskCodeBlocks(finalResult, codeMap);
   }
 
   // ═══ MULTIPLE CHUNKS — sequential OR parallel translation ═══
@@ -2973,9 +3065,9 @@ export async function translateText(
   // structural truncation, duplicate continuations, etc.). Log and trim.
   // MOD MODE: skip entirely — mod output can legitimately be much larger than input
   // (e.g. a 200-word prompt can produce 2000+ words of modded content)
-  const bloatRatio = cleaned.length / Math.max(1, text.length);
-  if (!isModMode && bloatRatio > 1.8 && text.length > 5000) {
-    console.error(`[translateText] ⚠️ BLOAT DETECTED for ${fieldName}: result ${cleaned.length} chars is ${(bloatRatio * 100).toFixed(0)}% of original ${text.length} chars — trimming to prevent content doubling`);
+  const bloatRatio = cleaned.length / Math.max(1, maskedText.length);
+  if (!isModMode && bloatRatio > 1.8 && maskedText.length > 5000) {
+    console.error(`[translateText] ⚠️ BLOAT DETECTED for ${fieldName}: result ${cleaned.length} chars is ${(bloatRatio * 100).toFixed(0)}% of original ${maskedText.length} chars — trimming to prevent content doubling`);
     // Try to find where the duplication starts by checking if the second half
     // is similar to the first half (common pattern: translation + original tail)
     const halfLen = Math.floor(cleaned.length / 2);
@@ -2995,20 +3087,21 @@ export async function translateText(
     
     if (overlapLen > firstStructure.length * 0.3) {
       console.error(`[translateText] BLOAT CONFIRMED: structural overlap at midpoint (${overlapLen}/${firstStructure.length}) — keeping first ${halfLen} chars`);
-      cleaned = cleaned.slice(0, Math.floor(text.length * 1.3));
+      cleaned = cleaned.slice(0, Math.floor(maskedText.length * 1.3));
     } else {
       // Not a clear duplicate, but still too long — trim conservatively
       console.warn(`[translateText] BLOAT WARNING: no clear duplicate pattern, trimming to 130% of original`);
-      cleaned = cleaned.slice(0, Math.floor(text.length * 1.3));
+      cleaned = cleaned.slice(0, Math.floor(maskedText.length * 1.3));
     }
   } else if (isModMode && bloatRatio > 1.8) {
-    console.log(`[translateText] ℹ️ MOD MODE: output ${cleaned.length} chars is ${(bloatRatio * 100).toFixed(0)}% of original ${text.length} — bloat guard skipped (mod mode allows larger output)`);
+    console.log(`[translateText] ℹ️ MOD MODE: output ${cleaned.length} chars is ${(bloatRatio * 100).toFixed(0)}% of original ${maskedText.length} — bloat guard skipped (mod mode allows larger output)`);
   }
 
   // RESIDUAL CJK CHECK: auto-retry if Chinese text remains
-  return postTranslationResidualCheck(
-    text, cleaned, fieldName, config, targetLang, sourceLang, signal, fieldType, mvuDictionary
+  const finalResult = await postTranslationResidualCheck(
+    maskedText, cleaned, fieldName, config, targetLang, sourceLang, signal, fieldType, mvuDictionary
   );
+  return unmaskCodeBlocks(finalResult, codeMap);
 }
 
 /* ─── Batch translate multiple fields in one API call ─── */

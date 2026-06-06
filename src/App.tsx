@@ -16,15 +16,51 @@ const ExportPanel = lazy(() => import('./components/ExportPanel'));
 const VerifyPanel = lazy(() => import('./components/VerifyPanel'));
 const CustomTranslatePanel = lazy(() => import('./components/CustomTranslatePanel'));
 const EjsCreatorPanel = lazy(() => import('./components/EjsCreatorPanel'));
+const RegexManagerPanel = lazy(() => import('./components/RegexManagerPanel'));
+const AiCompanionPanel = lazy(() => import('./components/AiCompanionPanel'));
 
 export default function App() {
   const { toasts, removeToast, card, locale, setLocale, loadStateFromIDB } = useStore();
   const t = useT();
   const [showEjsCreator, setShowEjsCreator] = useState(false);
+  const [showRegexManager, setShowRegexManager] = useState(false);
+  const [showAiCompanion, setShowAiCompanion] = useState(false);
 
   useEffect(() => {
     loadStateFromIDB();
   }, [loadStateFromIDB]);
+
+  if (showRegexManager) {
+    return (
+      <div style={{ width: '100vw', height: '100vh', background: 'var(--bg-primary)' }}>
+        <Suspense fallback={<LazyFallback />}>
+          <RegexManagerPanel onClose={() => setShowRegexManager(false)} isFullscreen />
+        </Suspense>
+        <div className="toast-container">
+          {toasts.map((toast) => (
+            <div key={toast.id} className={`toast toast-${toast.level}`}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+                <span style={{ flex: 1 }}>{toast.message}</span>
+                <button
+                  onClick={() => removeToast(toast.id)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: 'inherit',
+                    cursor: 'pointer',
+                    padding: '0',
+                    flexShrink: 0,
+                  }}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="app-layout">
@@ -98,6 +134,52 @@ export default function App() {
               onMouseOut={e => e.currentTarget.style.borderColor = 'var(--border-default)'}
             >
               <Globe size={16} /> EJS Creator / Lorebook
+            </button>
+            <button
+              onClick={() => setShowRegexManager(true)}
+              style={{
+                width: '100%',
+                padding: '10px',
+                marginTop: '6px',
+                background: 'var(--bg-elevated)',
+                border: '1px solid var(--border-default)',
+                borderRadius: 'var(--radius-md)',
+                color: '#f97316',
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                transition: 'all 0.2s'
+              }}
+              onMouseOver={e => e.currentTarget.style.borderColor = '#f97316'}
+              onMouseOut={e => e.currentTarget.style.borderColor = 'var(--border-default)'}
+            >
+              ⚡ Regex Manager
+            </button>
+            <button
+              onClick={() => setShowAiCompanion(true)}
+              style={{
+                width: '100%',
+                padding: '10px',
+                marginTop: '6px',
+                background: 'var(--bg-elevated)',
+                border: '1px solid var(--border-default)',
+                borderRadius: 'var(--radius-md)',
+                color: '#a855f7',
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                transition: 'all 0.2s'
+              }}
+              onMouseOver={e => e.currentTarget.style.borderColor = '#a855f7'}
+              onMouseOut={e => e.currentTarget.style.borderColor = 'var(--border-default)'}
+            >
+              🔮 Trợ Lý AI
             </button>
           </div>
         )}
@@ -177,6 +259,13 @@ export default function App() {
         {showEjsCreator && (
           <Suspense fallback={<LazyFallback />}>
             <EjsCreatorPanel onClose={() => setShowEjsCreator(false)} />
+          </Suspense>
+        )}
+
+        {/* AI Assistant Modal */}
+        {showAiCompanion && (
+          <Suspense fallback={<LazyFallback />}>
+            <AiCompanionPanel onClose={() => setShowAiCompanion(false)} />
           </Suspense>
         )}
 

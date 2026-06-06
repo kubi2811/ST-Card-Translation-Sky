@@ -328,23 +328,6 @@ export default function TranslateConfig() {
                   </span>
                 </div>
               </label>
-
-              {/* MVU-Zod Conversion toggle */}
-              <label className="checkbox-wrapper" style={{ marginTop: '2px' }}>
-                <input
-                  type="checkbox"
-                  checked={translationConfig.enableMvuConversion || false}
-                  onChange={(e) => setTranslationConfig({ enableMvuConversion: e.target.checked })}
-                />
-                <div>
-                  <span style={{ color: translationConfig.enableMvuConversion ? '#3b82f6' : 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.8rem', fontWeight: 500 }}>
-                    ✨ Biến thành thẻ MVU-Zod
-                  </span>
-                  <span style={{ color: 'var(--text-muted)', fontSize: '0.6rem', display: 'block', marginTop: '2px' }}>
-                    Tự động sinh cấu trúc Zod, viết Rules và tiêm các Regex tiện ích. Thẻ sẽ biến thành thẻ MVU!
-                  </span>
-                </div>
-              </label>
             </div>
           )}
         </div>

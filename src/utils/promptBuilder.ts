@@ -1069,35 +1069,38 @@ ${modInstructionsBlock}`;
 /* ─── MVU-ZOD Generator Prompts ─── */
 
 export const MVU_SCHEMA_GENERATION_PROMPT = `Bạn là một chuyên gia thiết kế hệ thống biến trạng thái MVU-Zod cho thẻ nhân vật (Character Card) SillyTavern.
-Nhiệm vụ của bạn là đọc thông tin về nhân vật và bối cảnh (thể loại, phong cách), sau đó sinh ra MỘT LƯỢC ĐỒ (Zod Schema) phù hợp để theo dõi trạng thái.
+Nhiệm vụ của bạn là đọc thông tin về nhân vật và bối cảnh (thể loại, phong cách), sau đó sinh ra MỘT LƯỢC ĐỒ (Zod Schema) cực kỳ đồ sộ, chi tiết, chuyên nghiệp, siêu dài và toàn diện nhất để theo dõi trạng thái nhân vật.
 
-QUY TẮC BẮT BUỘC:
-1. Bạn phải trả về định dạng JSON thuần túy (không bọc trong markdown code block \`\`\`), chứa 2 thuộc tính: "zod_schema" (dạng chuỗi mã JavaScript) và "initvar" (dạng chuỗi JSON).
-2. Schema Zod PHẢI sử dụng phương thức \`.prefault()\` để tương thích. Ví dụ: \`z.object({ health: z.number().prefault(100) }).prefault({ health: 100 })\`.
-3. ID của biến không được chứa dấu cách (dùng snake_case hoặc camelCase).
-4. Thiết kế các biến hợp lý (Ví dụ: Thể lực, Tình cảm, Trạng thái, Chức vụ, Điểm kinh nghiệm...) tuỳ theo bối cảnh (Tiên hiệp, RPG, Đời thường).
-5. "initvar" phải tương đồng hoàn toàn 100% với cấu trúc của "zod_schema".
-6. Không thêm các trường không cần thiết. Giữ cấu trúc rõ ràng.
+QUY TẮC BẮT BUỘC ĐỂ ĐẠT ĐỘ DÀI CỰC ĐẠI (SIÊU DÀI - HƯỚNG TỚI 15,000 TỪ):
+1. Bạn phải thiết kế một lược đồ cực kỳ phức tạp và phong phú (tối thiểu 15-25 biến số trạng thái quan trọng). Phân chia thành các nhóm biến rõ ràng:
+   - Chỉ số thể chất & RPG: hp, max_hp, mp, max_mp, stamina, level, exp, combat_power, status_effects (các hiệu ứng trạng thái).
+   - Chỉ số tâm lý & Trí tuệ: stress, sanity, mental_stability, mood_description (mô tả tâm trạng chi tiết), emotional_state.
+   - Chỉ số mối quan hệ nâng cao: affection, trust, intimacy_points, relationship_stage, memory_of_user (ký ức gần nhất về user), affection_level_description (mô tả chi tiết thái độ tình cảm).
+   - Túi đồ & Tài nguyên: gold, inventory (mảng vật phẩm chi tiết gồm tên, loại, mô tả, số lượng), equipped_items, active_quests.
+   - Trạng thái trang phục & Ngoại hình: clothing_integrity (độ nguyên vẹn trang phục từ 0-100), current_outfit_style, blush_intensity.
+2. BẮT BUỘC viết phần tả thực mô tả (.describe("...")) cực kỳ chi tiết, dài dòng, giàu thông tin văn học cho TẤT CẢ các trường Zod. Mỗi mô tả phải dài ít nhất 3-4 câu tiếng Việt, giải thích cặn kẽ ý nghĩa, cách thức tác động của biến này đến suy nghĩ, hành động, lời thoại và phản ứng của nhân vật đối với {{user}}.
+3. Sử dụng định dạng Zod nâng cao (như z.enum([...]) cho các biến trạng thái/giai đoạn) với nhiều trạng thái chi tiết.
+4. Schema Zod PHẢI sử dụng phương thức \`.prefault()\` để tương thích hoàn toàn với MVU. Ví dụ: \`z.object({ health: z.number().prefault(100) }).prefault({ health: 100 })\`.
+5. Bạn phải trả về định dạng JSON thuần túy (không bọc trong markdown code block \`\`\`), chứa 2 thuộc tính: "zod_schema" (dạng chuỗi mã JavaScript) và "initvar" (dạng chuỗi JSON).
+6. "initvar" phải tương đồng hoàn toàn 100% với cấu trúc của "zod_schema".
 
 ĐỊNH DẠNG TRẢ VỀ CHÍNH XÁC NHƯ SAU:
 {
   "zod_schema": "z.object({ hp: z.number().prefault(100), affection: z.number().prefault(0) }).prefault({ hp: 100, affection: 0 })",
-  "initvar": "{\\"hp\\": 100, \\"affection\\": 0}"
+  "initvar": "{\\\"hp\\\": 100, \\\"affection\\\": 0}"
 }`;
 
 export const MVU_RULES_GENERATION_PROMPT = `Bạn là một hệ thống thiết lập luật lệ cho trí tuệ nhân tạo (AI Rules) chạy trong môi trường SillyTavern MVU.
 Tôi sẽ cung cấp cho bạn cấu trúc Zod Schema (Các biến số hiện có).
-Nhiệm vụ của bạn là viết một khối XML <Variable_rules> để hướng dẫn AI cách thức và điều kiện thay đổi các biến số này trong quá trình Roleplay.
+Nhiệm vụ của bạn là viết một khối XML <Variable_rules> cực kỳ chi tiết, siêu dài, đầy đủ và phong phú để hướng dẫn AI cách thức và điều kiện thay đổi các biến số này trong quá trình Roleplay.
 
-QUY TẮC BẮT BUỘC:
-1. Bạn chỉ trả về ĐÚNG MỘT khối XML <Variable_rules>... </Variable_rules>. KHÔNG TRẢ VỀ BẤT KỲ VĂN BẢN NÀO KHÁC BÊN NGOÀI.
-2. Bên trong <Variable_rules>, liệt kê từng biến và quy tắc mô tả khi nào biến đó bị tăng, giảm, hoặc thay đổi.
-3. Giải thích ngắn gọn và dễ hiểu cho AI hiểu rõ logic Roleplay.
-4. KHÔNG SỬ DỤNG Markdown code block (như \`\`\`xml). Viết trực tiếp mã XML.
-5. Nếu văn bản bị ngắt giữa chừng do quá dài, hãy sẵn sàng viết tiếp ở lượt sau.
-
-Ví dụ định dạng đầu ra:
-<Variable_rules>
-  - hp: Điểm sinh mệnh. Giảm khi bị tấn công, tăng khi được hồi phục.
-  - affection: Tình cảm. Tăng khi được quan tâm, giảm khi bị lạnh nhạt. Tối đa 100.
-</Variable_rules>`;
+QUY TẮC BẮT BUỘC ĐỂ ĐẠT ĐỘ DÀI CỰC ĐẠI (SIÊU DÀI - HƯỚNG TỚI 15,000 TỪ):
+1. Bạn phải viết quy tắc cập nhật cực kỳ chi tiết cho MỌI biến số trong Schema. Với mỗi biến số, hãy viết tối thiểu 5-10 quy tắc logic khác nhau cho các trường hợp roleplay đa dạng (đời thường, lãng mạn, chiến đấu, xung đột, mệt mỏi).
+2. Hãy giải thích bằng tiếng Việt một cách dài dòng, tường minh về:
+   - Các hành động, câu nói hoặc sự kiện cụ thể của {{user}} hoặc {{char}} sẽ làm TĂNG biến số (kèm theo khoảng tăng cụ thể, ví dụ: +5, +10, +20).
+   - Các hành động, câu nói hoặc sự kiện cụ thể sẽ làm GIẢM biến số (kèm theo khoảng giảm cụ thể).
+   - Các ngưỡng chuyển đổi trạng thái đặc biệt và tác động vật lý/tâm lý sâu rộng đối với nhân vật.
+3. Sử dụng các thẻ XML bổ sung bên trong nếu cần để phân biệt các trường hợp (ví dụ: <rule_condition>, <change_effect>).
+4. Bạn chỉ trả về ĐÚNG MỘT khối XML <Variable_rules>... </Variable_rules>. KHÔNG TRẢ VỀ BẤT KỲ VĂN BẢN NÀO KHÁC BÊN NGOÀI.
+5. KHÔNG SỬ DỤNG Markdown code block (như \`\`\`xml). Viết trực tiếp mã XML.
+6. Nếu văn bản bị ngắt giữa chừng do quá dài, hãy sẵn sàng viết tiếp ở lượt sau.`;

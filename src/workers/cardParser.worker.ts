@@ -330,20 +330,64 @@ function extractTranslatableFields(card: any, enabledGroups: string[]): any[] {
     addField('data.extensions.depth_prompt.prompt', 'depth_prompt.prompt', 'depth_prompt', data.extensions.depth_prompt.prompt);
   }
 
-  // Regex scripts
-  if (data.extensions?.regex_scripts) {
+  // Regex scripts (scriptName, findRegex, replaceString & trimStrings)
+  if (enabledGroups.includes('regex') && data.extensions?.regex_scripts && Array.isArray(data.extensions.regex_scripts)) {
     data.extensions.regex_scripts.forEach((script: any, i: number) => {
-      addField(`data.extensions.regex_scripts[${i}].scriptName`, `regex[${i}].scriptName`, 'regex', script.scriptName);
-      if (enabledGroups.includes('regex') && typeof script.findRegex === 'string' && script.findRegex.trim() !== '') {
-        fields.push({ path: `data.extensions.regex_scripts[${i}].findRegex`, label: `regex[${i}].findRegex`, group: 'regex', original: script.findRegex, translated: '', status: 'pending', retries: 0 });
+      if (!script || typeof script !== 'object') return;
+      const scriptName = script.scriptName ? ` (${script.scriptName})` : ` (Script ${i + 1})`;
+
+      // 1. scriptName
+      if (typeof script.scriptName === 'string' && script.scriptName.trim() !== '') {
+        fields.push({
+          path: `data.extensions.regex_scripts[${i}].scriptName`,
+          label: `regex[${i}].scriptName${scriptName}`,
+          group: 'regex',
+          original: script.scriptName,
+          translated: '',
+          status: 'pending',
+          retries: 0,
+        });
       }
-      if (enabledGroups.includes('regex') && typeof script.replaceString === 'string' && script.replaceString.trim() !== '') {
-        fields.push({ path: `data.extensions.regex_scripts[${i}].replaceString`, label: `regex[${i}].replaceString`, group: 'regex', original: script.replaceString, translated: '', status: 'pending', retries: 0 });
+
+      // 2. findRegex
+      if (typeof script.findRegex === 'string' && script.findRegex.trim() !== '') {
+        fields.push({
+          path: `data.extensions.regex_scripts[${i}].findRegex`,
+          label: `regex[${i}].findRegex${scriptName}`,
+          group: 'regex',
+          original: script.findRegex,
+          translated: '',
+          status: 'pending',
+          retries: 0,
+        });
       }
-      if (enabledGroups.includes('regex') && Array.isArray(script.trimStrings)) {
-        script.trimStrings.forEach((trimStr: string, j: number) => {
-          if (typeof trimStr === 'string' && trimStr.trim() !== '' && hasTranslatableText(trimStr)) {
-            fields.push({ path: `data.extensions.regex_scripts[${i}].trimStrings[${j}]`, label: `regex[${i}].trimStrings[${j}]`, group: 'regex', original: trimStr, translated: '', status: 'pending', retries: 0 });
+
+      // 3. replaceString
+      if (typeof script.replaceString === 'string' && script.replaceString.trim() !== '') {
+        fields.push({
+          path: `data.extensions.regex_scripts[${i}].replaceString`,
+          label: `regex[${i}].replaceString${scriptName}`,
+          group: 'regex',
+          original: script.replaceString,
+          translated: '',
+          status: 'pending',
+          retries: 0,
+        });
+      }
+
+      // 4. trimStrings
+      if (Array.isArray(script.trimStrings)) {
+        script.trimStrings.forEach((ts: any, j: number) => {
+          if (typeof ts === 'string' && ts.trim() !== '') {
+            fields.push({
+              path: `data.extensions.regex_scripts[${i}].trimStrings[${j}]`,
+              label: `regex[${i}].trimStrings[${j}]${scriptName}`,
+              group: 'regex',
+              original: ts,
+              translated: '',
+              status: 'pending',
+              retries: 0,
+            });
           }
         });
       }

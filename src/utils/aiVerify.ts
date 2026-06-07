@@ -1,5 +1,5 @@
 import type { CharacterCard, ProxySettings, TranslationField } from '../types/card';
-import { detectStructuralTruncation } from './apiClient';
+import { detectStructuralTruncation, callProvider } from './apiClient';
 
 /* ═══ Types ═══ */
 
@@ -1193,33 +1193,7 @@ export function applyAutoFix(issue: FieldIssue, fields: TranslationField[]): Tra
 /* ═══ Reusable LLM API call ═══ */
 
 async function callLLM(config: ProxySettings, systemPrompt: string, userPrompt: string, signal?: AbortSignal): Promise<string> {
-  const url = config.proxyUrl.replace(/\/+$/, '');
-  let apiUrl: string;
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  let body: any;
-
-  if (config.provider === 'anthropic') {
-    apiUrl = url + '/messages';
-    headers['x-api-key'] = config.apiKey;
-    headers['anthropic-version'] = '2023-06-01';
-    headers['anthropic-dangerous-direct-browser-access'] = 'true';
-    body = { model: config.model, max_tokens: config.maxTokens, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }], temperature: 0.1 };
-  } else if (config.provider === 'google') {
-    apiUrl = `${url}/models/${config.model}:generateContent?key=${config.apiKey}`;
-    body = { system_instruction: { parts: [{ text: systemPrompt }] }, contents: [{ role: 'user', parts: [{ text: userPrompt }] }], generationConfig: { maxOutputTokens: config.maxTokens, temperature: 0.1 }, safetySettings: [{ category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' }, { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' }, { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' }, { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' }] };
-  } else {
-    apiUrl = url + '/chat/completions';
-    if (config.apiKey) headers['Authorization'] = `Bearer ${config.apiKey}`;
-    body = { model: config.model, messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], max_tokens: config.maxTokens, temperature: 0.1 };
-  }
-
-  const res = await fetch(apiUrl, { method: 'POST', headers, body: JSON.stringify(body), signal });
-  if (!res.ok) { const e = await res.text().catch(() => ''); throw new Error(`API ${res.status}: ${e.slice(0, 200)}`); }
-  const json = await res.json();
-
-  if (config.provider === 'anthropic') return json.content?.[0]?.text || '';
-  if (config.provider === 'google') return json.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  return json.choices?.[0]?.message?.content || '';
+  return await callProvider(config, systemPrompt, userPrompt, signal);
 }
 
 /* ═══ Map card-level issue location to field path ═══ */
@@ -2662,73 +2636,9 @@ ${sections.join('\n\n---\n\n')}`;
 
   try {
     // Import callProvider dynamically to avoid circular dependencies
-    const url = config.proxyUrl.replace(/\/+$/, '');
-    let apiUrl: string;
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    let body: any;
-
-    if (config.provider === 'anthropic') {
-      apiUrl = url + '/messages';
-      headers['x-api-key'] = config.apiKey;
-      headers['anthropic-version'] = '2023-06-01';
-      headers['anthropic-dangerous-direct-browser-access'] = 'true';
-      body = {
-        model: config.model,
-        max_tokens: config.maxTokens,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userPrompt }],
-        temperature: 0.2,
-      };
-    } else if (config.provider === 'google') {
-      apiUrl = `${url}/models/${config.model}:generateContent?key=${config.apiKey}`;
-      body = {
-        system_instruction: { parts: [{ text: systemPrompt }] },
-        contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-        generationConfig: { maxOutputTokens: config.maxTokens, temperature: 0.2 },
-        safetySettings: [
-          { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
-        ],
-      };
-    } else {
-      apiUrl = url + '/chat/completions';
-      if (config.apiKey) headers['Authorization'] = `Bearer ${config.apiKey}`;
-      body = {
-        model: config.model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-        max_tokens: config.maxTokens,
-        temperature: 0.2,
-      };
-    }
-
-    const res = await fetch(apiUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal,
-    });
-
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '');
-      throw new Error(`API ${res.status}: ${errText.slice(0, 200)}`);
-    }
-
-    const json = await res.json();
-
-    // Extract text from response
-    let responseText = '';
-    if (config.provider === 'anthropic') {
-      responseText = json.content?.[0]?.text || '';
-    } else if (config.provider === 'google') {
-      responseText = json.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    } else {
-      responseText = json.choices?.[0]?.message?.content || '';
-    }
+    const { callProvider } = await import('./apiClient');
+    const rotatedConfig = { ...config, temperature: 0.2 };
+    const responseText = await callProvider(rotatedConfig, systemPrompt, userPrompt, signal);
 
     // Parse AI response
     const aiIssues = parseAIVerifyResponse(responseText);

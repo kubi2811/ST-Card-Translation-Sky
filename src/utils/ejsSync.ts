@@ -9,7 +9,7 @@
  */
 
 import type { CharacterCard, TranslationField, ProxySettings } from '../types/card';
-import { getMaxOutputTokens } from './apiClient';
+import { callProvider } from './apiClient';
 
 /**
  * Parse JSON from AI response, handling markdown code blocks and surrounding text.
@@ -630,79 +630,7 @@ Output ONLY the JSON object. No markdown, no explanation.`;
   const userPrompt = `Translate these items to ${targetLang}:\n${entryList}`;
 
   try {
-    const url = proxy.proxyUrl.replace(/\/+$/, '');
-    let apiUrl: string;
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    let body: any;
-
-    if (proxy.provider === 'anthropic') {
-      apiUrl = url + '/messages';
-      headers['x-api-key'] = proxy.apiKey;
-      headers['anthropic-version'] = '2023-06-01';
-      headers['anthropic-dangerous-direct-browser-access'] = 'true';
-      body = {
-        model: proxy.model,
-        max_tokens: getMaxOutputTokens(proxy.model, proxy.maxTokens),
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userPrompt }],
-        temperature: 0.1,
-      };
-    } else if (proxy.provider === 'google') {
-      apiUrl = `${url}/models/${proxy.model}:generateContent?key=${proxy.apiKey}`;
-      body = {
-        system_instruction: { parts: [{ text: systemPrompt }] },
-        contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-        generationConfig: { maxOutputTokens: getMaxOutputTokens(proxy.model, proxy.maxTokens), temperature: 0.1 },
-        safetySettings: [
-          { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
-        ],
-      };
-    } else {
-      apiUrl = url + '/chat/completions';
-      if (proxy.apiKey) headers['Authorization'] = `Bearer ${proxy.apiKey}`;
-      body = {
-        model: proxy.model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-        max_tokens: getMaxOutputTokens(proxy.model, proxy.maxTokens),
-        temperature: 0.1,
-      };
-    }
-
-    const requestTimeout = (proxy as any).requestTimeout || 300000;
-    const timeoutController = new AbortController();
-    const timeoutId = setTimeout(() => timeoutController.abort('EJS key translation timeout'), requestTimeout * 2);
-    const fetchSignal = signal
-      ? AbortSignal.any([signal, timeoutController.signal])
-      : timeoutController.signal;
-
-    const res = await fetch(apiUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal: fetchSignal,
-    });
-    clearTimeout(timeoutId);
-
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '');
-      throw new Error(`API ${res.status}: ${errText.slice(0, 200)}`);
-    }
-
-    const json = await res.json();
-    let responseText = '';
-    if (proxy.provider === 'anthropic') {
-      responseText = json.content?.[0]?.text || '';
-    } else if (proxy.provider === 'google') {
-      responseText = json.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    } else {
-      responseText = json.choices?.[0]?.message?.content || '';
-    }
+    const responseText = await callProvider(proxy, systemPrompt, userPrompt, signal);
 
     const parsed = parseJsonFromAi(responseText);
     const translations = parsed.translations || parsed;

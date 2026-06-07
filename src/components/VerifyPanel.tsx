@@ -6,7 +6,7 @@ import { aiVerifyCard, aiVerifyCardStreaming, aiRegexScan, aiRegexFixAll, quickV
 import type { VerifyIssue, VerifyResult, FieldIssue, AIFixReport, StreamingVerifyProgress, RegexScanProgress, RegexFixResult } from '../utils/aiVerify';
 import { crossCheckHtmlVsInitvar, validateFindRegexVsNarrative } from '../utils/mvuValidator';
 import type { CrossCheckResult, FindRegexValidationResult } from '../utils/mvuValidator';
-import { ShieldCheck, AlertTriangle, AlertCircle, Info, Loader2, Zap, Eye, ChevronDown, ChevronUp, Wrench, FileWarning, Code2, Braces, Hash, Type, ArrowLeftRight, CheckCircle2, Pencil, Save, Bot, XCircle, Link2, Diff, GitCompare, Fingerprint, Regex, Check, X } from 'lucide-react';
+import { ShieldCheck, AlertTriangle, AlertCircle, Info, Loader2, Zap, Eye, ChevronDown, ChevronUp, Wrench, FileWarning, Code2, Braces, Hash, Type, ArrowLeftRight, CheckCircle2, Pencil, Save, Bot, XCircle, Link2, Diff, GitCompare, Fingerprint, Regex, Check, X, Copy } from 'lucide-react';
 
 const SEVERITY_CONFIG = {
   error: { color: 'var(--accent-danger)', bg: 'rgba(255,82,82,0.06)', icon: AlertCircle, label: 'Error' },
@@ -1068,7 +1068,10 @@ function IssueRow({ issue, isVi, expanded, onToggle, onAutoFix, onAIFix, isAIFix
           {issue.description.length > 100 && <div style={{ color: 'var(--text-secondary)', lineHeight: 1.4 }}>{issue.description}</div>}
           {issue.original && (
             <div>
-              <span style={{ fontWeight: 600, color: 'var(--accent-danger)', fontSize: '0.58rem', textTransform: 'uppercase' }}>Original:</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontWeight: 600, color: 'var(--accent-danger)', fontSize: '0.58rem', textTransform: 'uppercase' }}>Original:</span>
+                <CopyButton text={issue.original} />
+              </div>
               <pre style={{ margin: '2px 0 0', padding: '5px 7px', background: 'rgba(0,0,0,0.05)', borderRadius: 'var(--radius-sm)', whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: '0.66rem', maxHeight: '80px', overflowY: 'auto' }}>{issue.original}</pre>
             </div>
           )}
@@ -1170,8 +1173,11 @@ function DiffViewer({ fields, selectedPath, onSelectPath, t, isVi }: {
       {/* Side-by-side panels */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
         <div>
-          <div style={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--accent-danger)', marginBottom: '3px', textTransform: 'uppercase' }}>
-            {t.diffOriginal}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '3px' }}>
+            <span style={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--accent-danger)', textTransform: 'uppercase' }}>
+              {t.diffOriginal}
+            </span>
+            <CopyButton text={selected.original} />
           </div>
           <pre style={{
             margin: 0, padding: '8px', fontSize: '0.62rem', lineHeight: 1.4,
@@ -1214,5 +1220,25 @@ function StatBadge({ label, orig, trans }: { label: string; orig: number; trans:
       {label}: {orig}→{trans}
       {diff !== 0 && <span style={{ opacity: 0.7 }}> ({diff > 0 ? '+' : ''}{diff})</span>}
     </span>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <button
+      onClick={handleCopy}
+      className="btn btn-ghost btn-xs tooltip"
+      data-tooltip={copied ? "Copied!" : "Copy"}
+      style={{ padding: '2px 4px', height: 'auto', minHeight: 'auto', opacity: 0.6 }}
+      title={copied ? "Copied!" : "Copy original text"}
+    >
+      {copied ? <Check size={12} color="var(--accent-success)" /> : <Copy size={12} />}
+    </button>
   );
 }

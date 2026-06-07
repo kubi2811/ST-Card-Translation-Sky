@@ -2,7 +2,7 @@ import React, { useState, useMemo, useCallback } from 'react';
 import { useStore } from '../store';
 import { useTranslation } from '../hooks/useTranslation';
 import { useT } from '../i18n/useLocale';
-import { X, Regex, Languages, Save, Check, Loader2, Sparkles, RefreshCw } from 'lucide-react';
+import { X, Regex, Languages, Save, Check, Loader2, Sparkles, RefreshCw, Copy } from 'lucide-react';
 import type { RegexScript } from '../types/card';
 import AiCompanionPanel from './AiCompanionPanel';
 
@@ -639,7 +639,10 @@ function FieldsTab({
 
               {/* Original */}
               <div style={{ marginBottom: '6px' }}>
-                <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginBottom: '2px' }}>Original:</div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+                  <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Original:</span>
+                  <CopyButton text={row.original} />
+                </div>
                 <pre style={{
                   fontSize: '0.78rem', color: 'var(--text-secondary)',
                   fontFamily: 'var(--font-mono)',
@@ -735,5 +738,25 @@ function DetailBadge({ label, value }: { label: string; value: string }) {
         {value}
       </span>
     </span>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <button
+      onClick={handleCopy}
+      className="btn btn-ghost btn-xs tooltip"
+      data-tooltip={copied ? "Copied!" : "Copy"}
+      style={{ padding: '2px 4px', height: 'auto', minHeight: 'auto', opacity: 0.6 }}
+      title={copied ? "Copied!" : "Copy original text"}
+    >
+      {copied ? <Check size={12} color="var(--accent-success)" /> : <Copy size={12} />}
+    </button>
   );
 }

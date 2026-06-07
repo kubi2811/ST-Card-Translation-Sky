@@ -415,63 +415,66 @@ export function useTranslation() {
           }
         }
 
-        // ─── COVARIANCE FIX: Enforce initvar YAML keys match MVU Dictionary exactly ───
-        if (field.entryType === 'initvar' || field.entryType === 'controller' || field.entryType === 'mvu_logic') {
+        // ─── COVARIANCE FIX: Enforce covariance across initvar, controller, mvu_logic, regex, and tavern_helper fields ───
+        const isCodeOrLogic = field.entryType === 'initvar' || field.entryType === 'controller' || field.entryType === 'mvu_logic' || field.group === 'regex' || field.group === 'tavern_helper';
+        if (isCodeOrLogic) {
           const covariance = enforceInitvarCovariance(translated, currentMvuDict);
           if (covariance.fixes.length > 0) {
             translated = covariance.text;
             const fixSummary = covariance.fixes.map(f => `"${f.found}"→"${f.replaced}"`).join(', ');
-            store.addLog('info', `🔗 Covariance: fixed ${covariance.fixes.length} YAML key(s) in ${field.label}: ${fixSummary}`);
+            store.addLog('info', `🔗 Covariance: fixed ${covariance.fixes.length} key(s) in ${field.label}: ${fixSummary}`);
           }
 
           // ═══ PROGRESSIVE DICT: Extract new variable mappings from this just-translated entry ═══
           // Entries like initvar/controller may define variables NOT in the Zod schema.
           // By extracting mappings here, we ensure subsequent entries use the same translated names.
-          const entryMappings = extractMappingFromTranslatedInitvar([
-            { original: field.original, translated, status: 'done', entryType: field.entryType }
-          ]);
-          const newMappingKeys = Object.keys(entryMappings);
-          if (newMappingKeys.length > 0) {
-            const freshDict = useStore.getState().translationConfig.mvuDictionary;
-            const updatedDict = { ...freshDict };
-            let addedCount = 0;
-            const currentMetadata = { ...useStore.getState().mvuKeyMetadata };
-            for (const [k, v] of Object.entries(entryMappings)) {
-              if (v && v.trim()) {
-                const existingConf = currentMetadata[k]?.confidence;
-                if (existingConf === 'schema') {
-                  continue; // Schema mapping overrides/takes priority
-                }
-                if (!(k in updatedDict)) {
-                  updatedDict[k] = v;
-                  addedCount++;
-                  
-                  if (!currentMetadata[k]) {
-                    currentMetadata[k] = {
-                      sources: [field.entryType || 'progressive'],
-                      confidence: 'progressive',
-                      occurrences: 1
-                    };
-                  } else {
-                    currentMetadata[k] = {
-                      ...currentMetadata[k],
-                      confidence: 'progressive'
-                    };
+          if (field.entryType === 'initvar' || field.entryType === 'controller' || field.entryType === 'mvu_logic') {
+            const entryMappings = extractMappingFromTranslatedInitvar([
+              { original: field.original, translated, status: 'done', entryType: field.entryType }
+            ]);
+            const newMappingKeys = Object.keys(entryMappings);
+            if (newMappingKeys.length > 0) {
+              const freshDict = useStore.getState().translationConfig.mvuDictionary;
+              const updatedDict = { ...freshDict };
+              let addedCount = 0;
+              const currentMetadata = { ...useStore.getState().mvuKeyMetadata };
+              for (const [k, v] of Object.entries(entryMappings)) {
+                if (v && v.trim()) {
+                  const existingConf = currentMetadata[k]?.confidence;
+                  if (existingConf === 'schema') {
+                    continue; // Schema mapping overrides/takes priority
+                  }
+                  if (!(k in updatedDict)) {
+                    updatedDict[k] = v;
+                    addedCount++;
+                    
+                    if (!currentMetadata[k]) {
+                      currentMetadata[k] = {
+                        sources: [field.entryType || 'progressive'],
+                        confidence: 'progressive',
+                        occurrences: 1
+                      };
+                    } else {
+                      currentMetadata[k] = {
+                        ...currentMetadata[k],
+                        confidence: 'progressive'
+                      };
+                    }
                   }
                 }
               }
-            }
-            if (addedCount > 0) {
-              store.setMvuKeyMetadata(currentMetadata);
-              // Enforce 100% exact consistency
-              const { fixedDict, fixes } = enforceExactConsistency(updatedDict, currentMetadata);
-              if (fixes.length > 0) {
-                store.setTranslationConfig({ mvuDictionary: fixedDict });
-                store.addLog('info', `🔒 Exact consistency: fixed ${fixes.length} case/spelling variations: ${fixes.join(', ')}`);
-              } else {
-                store.setTranslationConfig({ mvuDictionary: updatedDict });
+              if (addedCount > 0) {
+                store.setMvuKeyMetadata(currentMetadata);
+                // Enforce 100% exact consistency
+                const { fixedDict, fixes } = enforceExactConsistency(updatedDict, currentMetadata);
+                if (fixes.length > 0) {
+                  store.setTranslationConfig({ mvuDictionary: fixedDict });
+                  store.addLog('info', `🔒 Exact consistency: fixed ${fixes.length} case/spelling variations: ${fixes.join(', ')}`);
+                } else {
+                  store.setTranslationConfig({ mvuDictionary: updatedDict });
+                }
+                store.addLog('info', `🔗 Progressive: +${addedCount} entry-specific var(s) from ${field.label}`);
               }
-              store.addLog('info', `🔗 Progressive: +${addedCount} entry-specific var(s) from ${field.label}`);
             }
           }
         }
@@ -806,35 +809,38 @@ export function useTranslation() {
             }
           }
 
-          // ─── COVARIANCE FIX: Enforce initvar/controller/mvu_logic YAML keys ───
+          // ─── COVARIANCE FIX: Enforce covariance across initvar, controller, mvu_logic, regex, and tavern_helper fields ───
           const bf = batchFields[j];
-          if (bf.entryType === 'initvar' || bf.entryType === 'controller' || bf.entryType === 'mvu_logic') {
+          const isBfCodeOrLogic = bf.entryType === 'initvar' || bf.entryType === 'controller' || bf.entryType === 'mvu_logic' || bf.group === 'regex' || bf.group === 'tavern_helper';
+          if (isBfCodeOrLogic) {
             const covariance = enforceInitvarCovariance(translated, mvuDict);
             if (covariance.fixes.length > 0) {
               translated = covariance.text;
               autoFixCount += covariance.fixes.length;
               const fixSummary = covariance.fixes.map(f => `"${f.found}"→"${f.replaced}"`).join(', ');
-              store.addLog('info', `🔗 Covariance: fixed ${covariance.fixes.length} YAML key(s) in ${bf.label}: ${fixSummary}`);
+              store.addLog('info', `🔗 Covariance: fixed ${covariance.fixes.length} key(s) in ${bf.label}: ${fixSummary}`);
             }
 
             // ═══ PROGRESSIVE DICT: Extract new variable mappings from batch-translated entry ═══
-            const entryMappings = extractMappingFromTranslatedInitvar([
-              { original: bf.original, translated, status: 'done', entryType: bf.entryType }
-            ]);
-            const newMappingKeys = Object.keys(entryMappings);
-            if (newMappingKeys.length > 0) {
-              const freshDict = useStore.getState().translationConfig.mvuDictionary;
-              const updatedDict = { ...freshDict };
-              let addedCount = 0;
-              for (const [k, v] of Object.entries(entryMappings)) {
-                if (v && v.trim() && !(k in updatedDict)) {
-                  updatedDict[k] = v;
-                  addedCount++;
+            if (bf.entryType === 'initvar' || bf.entryType === 'controller' || bf.entryType === 'mvu_logic') {
+              const entryMappings = extractMappingFromTranslatedInitvar([
+                { original: bf.original, translated, status: 'done', entryType: bf.entryType }
+              ]);
+              const newMappingKeys = Object.keys(entryMappings);
+              if (newMappingKeys.length > 0) {
+                const freshDict = useStore.getState().translationConfig.mvuDictionary;
+                const updatedDict = { ...freshDict };
+                let addedCount = 0;
+                for (const [k, v] of Object.entries(entryMappings)) {
+                  if (v && v.trim() && !(k in updatedDict)) {
+                    updatedDict[k] = v;
+                    addedCount++;
+                  }
                 }
-              }
-              if (addedCount > 0) {
-                store.setTranslationConfig({ mvuDictionary: updatedDict });
-                store.addLog('info', `🔗 Progressive: +${addedCount} entry-specific var(s) from ${bf.label}`);
+                if (addedCount > 0) {
+                  store.setTranslationConfig({ mvuDictionary: updatedDict });
+                  store.addLog('info', `🔗 Progressive: +${addedCount} entry-specific var(s) from ${bf.label}`);
+                }
               }
             }
           }

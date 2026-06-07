@@ -28,7 +28,7 @@ const PROVIDERS: { value: AIProvider; label: string }[] = [
 ];
 
 export default function ProxyConfig() {
-  const { proxy, setProxy, connectionStatus, setConnectionStatus, scannedModels, setScannedModels, addToast, locale } = useStore();
+  const { proxy, setProxy, connectionStatus, setConnectionStatus, scannedModels, setScannedModels, addToast, locale, resetProxy } = useStore();
   const t = useT();
   const [showKey, setShowKey] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -445,6 +445,27 @@ export default function ProxyConfig() {
         >
           {testing ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
           {testing ? t.testing : t.testConnection}
+        </button>
+
+        {/* Reset API Configuration */}
+        <button
+          className="btn btn-ghost"
+          style={{
+            color: 'var(--accent-warning)',
+            border: '1px dashed var(--border-subtle)',
+            fontSize: '0.8rem',
+            gap: '6px',
+            marginTop: '2px',
+          }}
+          onClick={() => {
+            if (confirm(t.confirmResetApi)) {
+              resetProxy();
+              addToast('success', t.apiConfigResetSuccess);
+            }
+          }}
+        >
+          <RotateCcw size={13} />
+          {t.resetApiConfig}
         </button>
         {testMessage && (
           <div

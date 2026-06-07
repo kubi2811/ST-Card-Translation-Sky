@@ -558,20 +558,6 @@ export interface PromptBuildResult {
    HELPERS
    ═══════════════════════════════════════════════════════════════════ */
 
-/**
- * Sanitize prompt content by replacing system-level control/refusal tags
- * (like <|no-trans|>, </null>, and [RESET ALL OF THE ABOVE TO NULL]) with safe placeholders.
- * This prevents LLM engines from triggering safety filters or execution routines
- * when reading assembled instructions or RAG contexts.
- */
-function sanitizePromptForSafetyTags(promptText: string): string {
-  if (!promptText) return promptText;
-  return promptText
-    .split('<|no-trans|>').join('___SAFE_NOTRANS_TAG___')
-    .split('</null>').join('___SAFE_NULLCLOSE_TAG___')
-    .split('[RESET ALL OF THE ABOVE TO NULL]').join('___SAFE_RESETALL_TAG___');
-}
-
 /** Detect if a single field is a code/logic field needing strict sync */
 function isCodeOrLogicField(f: TranslationField): boolean {
   return (
@@ -945,7 +931,7 @@ ${glossaryList}`;
     }
 
     return {
-      effectivePrompt: sanitizePromptForSafetyTags(modPrompt),
+      effectivePrompt: modPrompt,
       schemaForApi,
       glossaryForApi,
     };
@@ -1074,7 +1060,7 @@ ${modInstructionsBlock}`;
   }
 
   return {
-    effectivePrompt: sanitizePromptForSafetyTags(prompt),
+    effectivePrompt: prompt,
     schemaForApi,
     glossaryForApi,
   };

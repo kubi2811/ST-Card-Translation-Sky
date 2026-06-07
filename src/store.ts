@@ -59,6 +59,7 @@ interface AppState {
   // Proxy config
   proxy: ProxySettings;
   setProxy: (partial: Partial<ProxySettings>) => void;
+  resetProxy: () => void;
   connectionStatus: ConnectionStatus;
   setConnectionStatus: (s: ConnectionStatus) => void;
   scannedModels: string[];
@@ -68,6 +69,7 @@ interface AppState {
   translationConfig: TranslationConfig;
   setTranslationConfig: (partial: Partial<TranslationConfig>) => void;
   toggleFieldGroup: (id: FieldGroup) => void;
+  resetTranslationConfig: () => void;
 
   // Translation state
   fields: TranslationField[];
@@ -306,6 +308,45 @@ export const useStore = create<AppState>((set) => ({
       return { proxy: next };
     });
   },
+  resetProxy: () => {
+    const defaultProxy = {
+      provider: 'openai' as const,
+      proxyUrl: 'https://api.openai.com/v1',
+      apiKey: '',
+      apiKeys: [],
+      model: 'gpt-4o-mini',
+      maxTokens: 65536,
+      temperature: 0.3,
+      requestDelay: 500,
+      retryDelay: 1000,
+      requestTimeout: 600000,
+      maxRetries: 3,
+      minResponseRatio: 0.15,
+      systemPromptPrefix: '',
+      useCorsProxy: true,
+      useStream: true,
+      expertMode: false,
+    };
+    LS.set('st-translator-provider', defaultProxy.provider);
+    LS.set('st-translator-proxy-url', defaultProxy.proxyUrl);
+    LS.set('st-translator-api-key', defaultProxy.apiKey);
+    LS.set('st-translator-api-keys', defaultProxy.apiKeys);
+    LS.set('st-translator-model', defaultProxy.model);
+    LS.set('st-translator-use-cors-proxy', defaultProxy.useCorsProxy);
+    LS.set('st-translator-use-stream', defaultProxy.useStream);
+    LS.set('st-translator-advanced-settings', {
+      maxTokens: defaultProxy.maxTokens,
+      temperature: defaultProxy.temperature,
+      requestDelay: defaultProxy.requestDelay,
+      retryDelay: defaultProxy.retryDelay,
+      requestTimeout: defaultProxy.requestTimeout,
+      maxRetries: defaultProxy.maxRetries,
+      minResponseRatio: defaultProxy.minResponseRatio,
+      systemPromptPrefix: defaultProxy.systemPromptPrefix,
+      expertMode: defaultProxy.expertMode,
+    });
+    set({ proxy: defaultProxy, connectionStatus: 'untested' });
+  },
   connectionStatus: 'untested',
   setConnectionStatus: (s) => set({ connectionStatus: s }),
   scannedModels: LS.get('st-translator-scanned-models', []),
@@ -523,6 +564,125 @@ export const useStore = create<AppState>((set) => ({
         fields: updatedFields,
       };
     }),
+  resetTranslationConfig: () => {
+    const defaultFields = DEFAULT_FIELD_GROUPS.map(g => ({ ...g, enabled: true }));
+    const defaultTranslationConfig = {
+      sourceLanguage: '中文',
+      targetLanguage: 'Tiếng Việt',
+      translationPrompt: '',
+      mode: 'field' as const,
+      lorebookStrategy: 'single' as const,
+      lorebookBatchSize: 5,
+      concurrentBatches: 1,
+      skipAlreadyTranslated: true,
+      fieldGroups: defaultFields,
+      customSchema: '',
+      exportKeyMode: 'merge' as const,
+      glossary: [],
+      enableMvuSync: false,
+      mvuDictionary: {},
+      enableRAGContext: true,
+      ragMaxFields: 5,
+      ragMaxChars: 3000,
+      chunkSize: 0,
+      parallelChunks: 1,
+      enableJailbreak: true,
+      enableObjectiveMode: true,
+      surgicalMode: false,
+      enableModMode: false,
+      modInstructions: '',
+      enablePatchMode: false,
+      enableMvuConversion: false,
+      enableModelRouting: false,
+      groupModelRouting: {},
+      entryModelRouting: {},
+      modPreset: 'none' as const,
+      enableModThinking: false,
+      enableEjsThinking: false,
+      enableEjsSync: false,
+      ejsEntryNameDict: {},
+      ejsKeywordDict: {},
+      ejsDecoratorPreserve: true,
+      enableChunkVerification: false,
+      enableTranslationMemory: true,
+      mvuScanPasses: 1,
+      ejsScanPasses: 1,
+    };
+
+    LS.set('st-translator-source-lang', defaultTranslationConfig.sourceLanguage);
+    LS.set('st-translator-target-lang', defaultTranslationConfig.targetLanguage);
+    LS.set('st-translator-custom-prompt', defaultTranslationConfig.translationPrompt);
+    LS.set('st-translator-translation-mode', defaultTranslationConfig.mode);
+    LS.set('st-translator-lorebook-strategy', defaultTranslationConfig.lorebookStrategy);
+    LS.set('st-translator-lorebook-batch-size', defaultTranslationConfig.lorebookBatchSize);
+    LS.set('st-translator-concurrent-batches', defaultTranslationConfig.concurrentBatches);
+    LS.set('st-translator-skip-already-translated', defaultTranslationConfig.skipAlreadyTranslated);
+    
+    const enabledMap = defaultFields.reduce((acc, g) => {
+      acc[g.id] = g.enabled;
+      return acc;
+    }, {} as Record<string, boolean>);
+    LS.set('st-translator-field-groups-enabled', enabledMap);
+    
+    LS.set('st-translator-custom-schema', defaultTranslationConfig.customSchema);
+    LS.set('st-translator-export-key-mode', defaultTranslationConfig.exportKeyMode);
+    LS.set('st-translator-glossary', defaultTranslationConfig.glossary);
+    LS.set('st-translator-mvu-dict', defaultTranslationConfig.mvuDictionary);
+    LS.set('st-translator-rag-enabled', defaultTranslationConfig.enableRAGContext);
+    LS.set('st-translator-rag-max-fields', defaultTranslationConfig.ragMaxFields);
+    LS.set('st-translator-rag-max-chars', defaultTranslationConfig.ragMaxChars);
+    LS.set('st-translator-chunk-size', defaultTranslationConfig.chunkSize);
+    LS.set('st-translator-parallel-chunks', defaultTranslationConfig.parallelChunks);
+    LS.set('st-translator-jailbreak', defaultTranslationConfig.enableJailbreak);
+    LS.set('st-translator-objective-mode', defaultTranslationConfig.enableObjectiveMode);
+    LS.set('st-translator-surgical-mode', defaultTranslationConfig.surgicalMode);
+    LS.set('st-translator-mod-mode', defaultTranslationConfig.enableModMode);
+    LS.set('st-translator-mod-instructions', defaultTranslationConfig.modInstructions);
+    LS.set('st-translator-patch-mode', defaultTranslationConfig.enablePatchMode);
+    LS.set('st-translator-mvu-conversion', defaultTranslationConfig.enableMvuConversion);
+    LS.set('st-translator-model-routing-enabled', defaultTranslationConfig.enableModelRouting);
+    LS.set('st-translator-group-model-routing', defaultTranslationConfig.groupModelRouting);
+    LS.set('st-translator-entry-model-routing', defaultTranslationConfig.entryModelRouting);
+    LS.set('st-translator-mod-preset', defaultTranslationConfig.modPreset);
+    LS.set('st-translator-mod-thinking', defaultTranslationConfig.enableModThinking);
+    LS.set('st-translator-ejs-thinking', defaultTranslationConfig.enableEjsThinking);
+    LS.set('st-translator-ejs-entry-dict', defaultTranslationConfig.ejsEntryNameDict);
+    LS.set('st-translator-ejs-keyword-dict', defaultTranslationConfig.ejsKeywordDict);
+    LS.set('st-translator-ejs-decorator-preserve', defaultTranslationConfig.ejsDecoratorPreserve);
+    LS.set('st-translator-chunk-verification', defaultTranslationConfig.enableChunkVerification);
+    LS.set('st-translator-tm-enabled', defaultTranslationConfig.enableTranslationMemory);
+    LS.set('st-translator-mvu-scan-passes', defaultTranslationConfig.mvuScanPasses);
+    LS.set('st-translator-ejs-scan-passes', defaultTranslationConfig.ejsScanPasses);
+
+    set((s) => {
+      let updatedFields = s.fields;
+      if (s.card) {
+        const enabledGroupIds = defaultFields.filter(g => g.enabled).map(g => g.id);
+        const newFields = extractTranslatableFields(s.card, enabledGroupIds);
+        
+        const existingMap = new Map(s.fields.map(f => [f.path, f]));
+        updatedFields = newFields.map(nf => {
+          const existing = existingMap.get(nf.path);
+          if (existing && (existing.status === 'done' || existing.status === 'skipped' || existing.status === 'ignored')) {
+            return existing;
+          }
+          return nf;
+        });
+
+        for (const ef of s.fields) {
+          if ((ef.status === 'done' || ef.status === 'skipped' || ef.status === 'ignored') && !updatedFields.find(m => m.path === ef.path)) {
+            updatedFields.push(ef);
+          }
+        }
+        IDB.set('st-translator-fields-data', { fields: updatedFields, phase: s.phase });
+      }
+
+      return {
+        translationConfig: defaultTranslationConfig,
+        fields: updatedFields,
+      };
+    });
+  },
 
   // ─── Translation State ───
   fields: [],

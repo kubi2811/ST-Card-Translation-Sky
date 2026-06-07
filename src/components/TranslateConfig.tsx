@@ -33,7 +33,7 @@ const getFieldBaseKey = (path: string) => {
 };
 
 export default function TranslateConfig() {
-  const { translationConfig, setTranslationConfig, toggleFieldGroup, card, locale, proxy, addToast, fields, deleteCurrentCardCache, deleteAllCaches, scannedModels } = useStore();
+  const { translationConfig, setTranslationConfig, toggleFieldGroup, card, locale, proxy, addToast, fields, deleteCurrentCardCache, deleteAllCaches, scannedModels, resetTranslationConfig } = useStore();
 
   const allAvailableFields = useMemo(() => {
     if (!card) return [];
@@ -1098,6 +1098,28 @@ export default function TranslateConfig() {
               <Trash2 size={12} /> {locale === 'vi' ? 'Xóa toàn bộ cache dịch' : 'Clear all translation caches'}
             </button>
           </div>
+        </div>
+
+        {/* ─── Settings Management ─── */}
+        <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '10px', marginTop: '4px' }}>
+          <label className="label" style={{ display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '8px', fontWeight: 600 }}>
+            ⚙️ {locale === 'vi' ? 'Quản lý Cài đặt' : 'Settings Management'}
+          </label>
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => {
+              if (confirm(t.confirmResetTranslation)) {
+                resetTranslationConfig();
+                setPromptDraft('');
+                setSchemaDraft('');
+                setModInstructionsDraft('');
+                addToast('success', t.translationConfigResetSuccess);
+              }
+            }}
+            style={{ width: '100%', fontSize: '0.75rem', borderColor: 'var(--accent-warning)', color: 'var(--accent-warning)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}
+          >
+            <RotateCcw size={12} /> {t.resetTranslationConfig}
+          </button>
         </div>
       </div>
     </div>

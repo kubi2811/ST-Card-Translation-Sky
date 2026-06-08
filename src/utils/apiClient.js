@@ -2375,33 +2375,9 @@ function maskCssCjkValues(text, mode = 'preserve') {
 }
 function unmaskCssCjkValues(text, map, mode = 'preserve') {
     let unmasked = text;
-    const userChoices = {};
     for (const [placeholder, value] of Object.entries(map)) {
-        let resolvedMode = mode;
-        if (mode === 'ask') {
-            if (userChoices[value] !== undefined) {
-                resolvedMode = userChoices[value];
-            }
-            else if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
-                const preserve = window.confirm(`[ST Card Translator]\n\n` +
-                    `Phát hiện ký tự CJK "${value}" trong CSS.\n` +
-                    `Bạn có muốn GIỮ LẠI (Preserve) ký tự này không?\n\n` +
-                    `- OK: Giữ lại (Preserve)\n` +
-                    `- Cancel: Dịch (Translate)\n\n` +
-                    `-----------------------------------\n\n` +
-                    `Detected CJK character "${value}" inside CSS.\n` +
-                    `Do you want to PRESERVE it?\n\n` +
-                    `- OK: Preserve\n` +
-                    `- Cancel: Translate`);
-                resolvedMode = preserve ? 'preserve' : 'translate';
-                userChoices[value] = resolvedMode;
-            }
-            else {
-                resolvedMode = 'preserve';
-            }
-        }
         // preserve: restore original CJK char | translate: remove it (replace with empty)
-        unmasked = unmasked.split(placeholder).join(resolvedMode === 'translate' ? '' : value);
+        unmasked = unmasked.split(placeholder).join(mode === 'translate' ? '' : value);
     }
     return unmasked;
 }
@@ -2441,7 +2417,7 @@ async function maskCodeBlocks(text, config, targetLang, sourceLang, signal, glos
     for (const m of matches) {
         let translatedContent = m.content;
         try {
-            const result = await surgicalTranslate(m.content, config, targetLang, signal, glossary, mvuDictionary);
+            const result = await surgicalTranslate(m.content, config, targetLang, signal, glossary, mvuDictionary, true, undefined, cssCjkHandling || 'preserve');
             translatedContent = result.translated;
         }
         catch (err) {
@@ -2488,7 +2464,7 @@ cssCjkHandling) {
         console.log(`[translateText] Field "${fieldName}" is a replaceString. Performing surgical translation (lenient verification)...`);
         try {
             // Use lenient verification directly — replaceString with <script> blocks will never pass strict char-count verification
-            const result = await surgicalTranslate(text, config, targetLang, signal, glossary, mvuDictionary, false);
+            const result = await surgicalTranslate(text, config, targetLang, signal, glossary, mvuDictionary, false, undefined, cssCjkHandling || 'preserve');
             return result.translated;
         }
         catch (err) {

@@ -240,7 +240,8 @@ function restoreCSSFromOriginal(original: string, translated: string): string {
  */
 export function extractCJKTokens(
   text: string,
-  protectedZones?: ProtectedZone[]
+  protectedZones?: ProtectedZone[],
+  cssCjkHandling: 'preserve' | 'translate' = 'preserve'
 ): CJKToken[] {
   const tokens: CJKToken[] = [];
   const regex =
@@ -271,6 +272,10 @@ export function extractCJKTokens(
     const isObjectKey = /^\s*:/.test(contextAfter) && !/^\s*:\/\//.test(contextAfter);
     const isDotNotation = /\.\s*$/.test(contextBefore);
     const isIdentifier = isObjectKey || isDotNotation;
+
+    if (isIdentifier && cssCjkHandling === 'preserve') {
+      continue;
+    }
 
     tokens.push({ id: id++, text: match[0], start: mStart, end: mEnd, isIdentifier });
   }
@@ -505,6 +510,7 @@ function applyBatchTranslations(
  * @param mvuDictionary      Optional MVU variable-name mappings
  * @param strictVerification If false, accept even if structural check fails
  * @param onProgress         Optional progress callback
+ * @param cssCjkHandling     Whether to preserve or translate CJK CSS/JS identifiers
  */
 export async function surgicalTranslate(
   text: string,
@@ -514,13 +520,14 @@ export async function surgicalTranslate(
   glossary?: GlossaryEntry[],
   mvuDictionary?: Record<string, string>,
   strictVerification: boolean = true,
-  onProgress?: TranslationProgressCallback
+  onProgress?: TranslationProgressCallback,
+  cssCjkHandling: 'preserve' | 'translate' = 'preserve'
 ): Promise<{ translated: string; success: boolean; fallbackTriggered: boolean }> {
   const { callProvider } = await import('./apiClient');
 
   // ── Step 1: Extract CSS protected zones, then CJK tokens ──────────────────
   const cssZones = extractCSSPropertyZones(text);
-  const tokens   = extractCJKTokens(text, cssZones);
+  const tokens   = extractCJKTokens(text, cssZones, cssCjkHandling);
 
   writeDebugLog(
     `[surgicalTranslate] Start — strict=${strictVerification}, cssZones=${cssZones.length}, tokens=${tokens.length}`

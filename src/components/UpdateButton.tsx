@@ -41,7 +41,14 @@ export default function UpdateButton() {
   };
 
   const handleUpdate = () => runCommand('/api/update', 'Cập nhật ứng dụng');
-  const handleDowngrade = () => runCommand('/api/downgrade', 'Hạ cấp phiên bản');
+  const handleDowngrade = () => {
+    const confirmDowngrade = window.confirm(
+      'CẢNH BÁO NGUY HIỂM:\n\nHành động này sẽ HẠ CẤP phiên bản ứng dụng xuống 1 commit (git reset --hard HEAD~1) và XÓA SẠCH toàn bộ thay đổi chưa commit của bạn.\n\nBạn có chắc chắn muốn tiếp tục không?'
+    );
+    if (confirmDowngrade) {
+      runCommand('/api/downgrade', 'Hạ cấp phiên bản');
+    }
+  };
 
   return (
     <>

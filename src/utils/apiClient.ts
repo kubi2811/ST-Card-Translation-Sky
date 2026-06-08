@@ -2652,7 +2652,7 @@ interface CssCjkMaskMap {
   [placeholder: string]: string;
 }
 
-function maskCssCjkValues(text: string, mode: 'preserve' | 'translate' | 'ask' = 'preserve'): { maskedText: string; map: CssCjkMaskMap; mode: 'preserve' | 'translate' | 'ask' } {
+function maskCssCjkValues(text: string, mode: 'preserve' | 'translate' = 'preserve'): { maskedText: string; map: CssCjkMaskMap; mode: 'preserve' | 'translate' } {
   const map: CssCjkMaskMap = {};
   let maskedText = text;
   let counter = 0;
@@ -2686,36 +2686,11 @@ function maskCssCjkValues(text: string, mode: 'preserve' | 'translate' | 'ask' =
   return { maskedText, map, mode };
 }
 
-function unmaskCssCjkValues(text: string, map: CssCjkMaskMap, mode: 'preserve' | 'translate' | 'ask' = 'preserve'): string {
+function unmaskCssCjkValues(text: string, map: CssCjkMaskMap, mode: 'preserve' | 'translate' = 'preserve'): string {
   let unmasked = text;
-  const userChoices: { [val: string]: 'preserve' | 'translate' } = {};
-
   for (const [placeholder, value] of Object.entries(map)) {
-    let resolvedMode = mode;
-    if (mode === 'ask') {
-      if (userChoices[value] !== undefined) {
-        resolvedMode = userChoices[value];
-      } else if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
-        const preserve = window.confirm(
-          `[ST Card Translator]\n\n` +
-          `Phát hiện ký tự CJK "${value}" trong CSS.\n` +
-          `Bạn có muốn GIỮ LẠI (Preserve) ký tự này không?\n\n` +
-          `- OK: Giữ lại (Preserve)\n` +
-          `- Cancel: Dịch (Translate)\n\n` +
-          `-----------------------------------\n\n` +
-          `Detected CJK character "${value}" inside CSS.\n` +
-          `Do you want to PRESERVE it?\n\n` +
-          `- OK: Preserve\n` +
-          `- Cancel: Translate`
-        );
-        resolvedMode = preserve ? 'preserve' : 'translate';
-        userChoices[value] = resolvedMode;
-      } else {
-        resolvedMode = 'preserve';
-      }
-    }
     // preserve: restore original CJK char | translate: remove it (replace with empty)
-    unmasked = unmasked.split(placeholder).join(resolvedMode === 'translate' ? '' : value);
+    unmasked = unmasked.split(placeholder).join(mode === 'translate' ? '' : value);
   }
   return unmasked;
 }
@@ -2733,7 +2708,7 @@ async function maskCodeBlocks(
   signal?: AbortSignal,
   glossary?: GlossaryEntry[],
   mvuDictionary?: Record<string, string>,
-  cssCjkHandling?: 'preserve' | 'translate' | 'ask'
+  cssCjkHandling?: 'preserve' | 'translate'
 ): Promise<{ maskedText: string; map: CodeBlockMaskMap }> {
   const map: CodeBlockMaskMap = {};
   let maskedText = text;
@@ -2786,7 +2761,10 @@ async function maskCodeBlocks(
         targetLang,
         signal,
         glossary,
-        mvuDictionary
+        mvuDictionary,
+        true,
+        undefined,
+        cssCjkHandling || 'preserve'
       );
       translatedContent = result.translated;
     } catch (err) {
@@ -2841,8 +2819,8 @@ export async function translateText(
   enableChunkVerification?: boolean,
   /** Callback fired when chunks are determined and unmasked */
   onChunksReady?: (rawChunks: string[]) => void,
-  /** CSS CJK handling mode: 'preserve' keeps CJK in CSS as-is, 'strip' removes them, 'ask' prompts user */
-  cssCjkHandling?: 'preserve' | 'translate' | 'ask',
+  /** CSS CJK handling mode: 'preserve' keeps CJK in CSS as-is, 'strip' removes them */
+  cssCjkHandling?: 'preserve' | 'translate',
 ): Promise<string> {
   if (!text || text.trim() === '') return '';
 
@@ -2850,7 +2828,7 @@ export async function translateText(
     console.log(`[translateText] Field "${fieldName}" is a replaceString. Performing surgical translation (lenient verification)...`);
     try {
       // Use lenient verification directly — replaceString with <script> blocks will never pass strict char-count verification
-      const result = await surgicalTranslate(text, config, targetLang, signal, glossary, mvuDictionary, false);
+      const result = await surgicalTranslate(text, config, targetLang, signal, glossary, mvuDictionary, false, undefined, cssCjkHandling || 'preserve');
       return result.translated;
     } catch (err) {
       console.error(`[translateText] Error during surgical translation for "${fieldName}":`, err);

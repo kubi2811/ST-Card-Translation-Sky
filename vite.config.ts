@@ -79,7 +79,11 @@ export default defineConfig({
               res.write(data);
             });
             child.on('close', (code) => {
-              res.write(`\nCập nhật hoàn tất (code ${code}). Vui lòng tải lại trang hoặc khởi động lại app nếu cần.\n`);
+              if (code === 0) {
+                res.write(`\nCập nhật hoàn tất thành công. Vui lòng tải lại trang hoặc khởi động lại app nếu cần.\n`);
+              } else {
+                res.write(`\nCập nhật thất bại (mã lỗi ${code}). Có thể bạn đang có thay đổi chưa commit gây xung đột.\n`);
+              }
               res.end();
             });
             return;
@@ -99,7 +103,11 @@ export default defineConfig({
               res.write(data);
             });
             child.on('close', (code) => {
-              res.write(`\nHạ cấp hoàn tất (code ${code}). Vui lòng tải lại trang hoặc khởi động lại app nếu cần.\n`);
+              if (code === 0) {
+                res.write(`\nHạ cấp hoàn tất thành công. Vui lòng tải lại trang hoặc khởi động lại app nếu cần.\n`);
+              } else {
+                res.write(`\nHạ cấp thất bại (mã lỗi ${code}).\n`);
+              }
               res.end();
             });
             return;

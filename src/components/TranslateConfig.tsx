@@ -1084,24 +1084,11 @@ export default function TranslateConfig() {
                 >
                   {locale === 'vi' ? '📝 Dịch (Translate)' : '📝 Translate'}
                 </button>
-                <button
-                  onClick={() => setTranslationConfig({ cssCjkHandling: 'ask' })}
-                  style={{
-                    flex: 1, padding: '6px 10px', fontSize: '0.72rem', fontWeight: 600,
-                    border: translationConfig.cssCjkHandling === 'ask' ? '1px solid var(--accent-warning, #f59e0b)' : '1px solid var(--border-subtle)',
-                    borderRadius: 'var(--radius-sm)',
-                    background: translationConfig.cssCjkHandling === 'ask' ? 'rgba(245,158,11,0.12)' : 'transparent',
-                    color: translationConfig.cssCjkHandling === 'ask' ? 'var(--accent-warning, #f59e0b)' : 'var(--text-muted)',
-                    cursor: 'pointer', transition: 'all 0.15s',
-                  }}
-                >
-                  {locale === 'vi' ? '❓ Hỏi (Ask)' : '❓ Ask'}
-                </button>
               </div>
               <div style={{ fontSize: '0.63rem', color: 'var(--text-muted)', marginTop: '5px', lineHeight: '1.4' }}>
                 {locale === 'vi'
-                  ? 'Xử lý ký tự Hán/CJK đơn lẻ trong CSS values (VD: drop-shadow(商 10px ...)). "Giữ nguyên" = mã hoá ẩn đi để không bị dịch, "Dịch" = cho phép AI dịch các ký tự này, "Hỏi" = hiển thị hộp thoại xác nhận khi phát hiện.'
-                  : 'How to handle lone CJK chars inside CSS values (e.g. drop-shadow(商 10px ...)). "Preserve" = hide from AI to keep as-is, "Translate" = let AI translate them, "Ask" = show confirm dialog when found.'}
+                  ? 'Xử lý ký tự Hán/CJK đơn lẻ trong CSS values (VD: drop-shadow(商 10px ...)). "Giữ nguyên" = mã hoá ẩn đi để không bị dịch, "Dịch" = cho phép AI dịch các ký tự này và chuyển khoảng trắng thành gạch dưới đối với Object Key JS.'
+                  : 'How to handle lone CJK chars inside CSS values (e.g. drop-shadow(商 10px ...)). "Preserve" = hide from AI to keep as-is, "Translate" = let AI translate them and replace spaces with underscores for JS Object Keys.'}
               </div>
             </div>
             )}

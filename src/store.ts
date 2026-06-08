@@ -403,7 +403,7 @@ export const useStore = create<AppState>((set) => ({
     enableTranslationMemory: LS.get('st-translator-tm-enabled', true),
     mvuScanPasses: LS.get('st-translator-mvu-scan-passes', 1),
     ejsScanPasses: LS.get('st-translator-ejs-scan-passes', 1),
-    cssCjkHandling: LS.get('st-translator-css-cjk-handling', 'preserve') as 'preserve' | 'translate' | 'ask',
+    cssCjkHandling: LS.get('st-translator-css-cjk-handling', 'preserve') as 'preserve' | 'translate',
   },
   setTranslationConfig: (partial) =>
     set((s) => {

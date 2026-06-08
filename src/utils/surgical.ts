@@ -7,12 +7,25 @@ export interface CJKToken {
 }
 
 /**
- * Extracts segments of CJK text, avoiding code brackets and braces.
+ * Extracts segments of CJK text, avoiding code brackets, braces,
+ * and fullwidth punctuation (（），。：；！？) which must be preserved as-is.
+ *
+ * EXCLUDED ranges:
+ * - \u3000-\u303f: CJK Symbols & Punctuation (。、「」 etc.)
+ * - \uff00-\uff64: Fullwidth punctuation (（），：；！？ etc.)
+ * INCLUDED ranges:
+ * - \u4e00-\u9fff: CJK Unified Ideographs (Chinese characters)
+ * - \u3400-\u4dbf: CJK Extension A
+ * - \u3040-\u30ff: Hiragana + Katakana
+ * - \uac00-\ud7af: Hangul Syllables
+ * - \uff65-\uffdc: Halfwidth Katakana + Fullwidth Latin/Hangul (rare but safe)
  */
 export function extractCJKTokens(text: string): CJKToken[] {
   const tokens: CJKToken[] = [];
-  // Match CJK blocks optionally joined by safe non-code characters (spaces, letters, numbers, hyphens, periods, slashes, etc.)
-  const regex = /[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff\uac00-\ud7af\u3000-\u303f\uff00-\uffef]+(?:[ \tA-Za-z0-9.\-_/!?%~]+[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff\uac00-\ud7af\u3000-\u303f\uff00-\uffef]+)*/g;
+  // Match CJK ideographs + kana + hangul, optionally joined by safe non-code characters.
+  // EXCLUDES fullwidth punctuation (\uff00-\uff64) and CJK symbols (\u3000-\u303f)
+  // to prevent capturing （），。：；！？ as part of CJK tokens.
+  const regex = /[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff\uac00-\ud7af\uff65-\uffdc]+(?:[ \tA-Za-z0-9.\-_/!?%~]+[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff\uac00-\ud7af\uff65-\uffdc]+)*/g;
   
   let match;
   let id = 1;
@@ -61,16 +74,34 @@ export function reinsertTranslations(original: string, tokens: CJKToken[]): stri
 
 /**
  * Verifies if structural integrity of code has been broken during translation.
+ * Treats fullwidth and halfwidth variants as equivalent (e.g. （ = (, ） = )).
  */
 export function verifySurgicalResult(original: string, translated: string): boolean {
-  // Check if backticks count matches
   const countChar = (str: string, char: string) => (str.match(new RegExp(`\\${char}`, 'g')) || []).length;
   
+  // Backticks must match exactly
   if (countChar(original, '`') !== countChar(translated, '`')) return false;
-  if (countChar(original, '{') !== countChar(translated, '{')) return false;
-  if (countChar(original, '}') !== countChar(translated, '}')) return false;
-  if (countChar(original, '<') !== countChar(translated, '<')) return false;
-  if (countChar(original, '>') !== countChar(translated, '>')) return false;
+  
+  // For braces, brackets, angle brackets: count both fullwidth and halfwidth as equivalent
+  const countEquiv = (str: string, halfwidth: string, fullwidth: string) => {
+    return countChar(str, halfwidth) + countChar(str, fullwidth);
+  };
+  
+  // Braces: { ＋ ｛ and } ＋ ｝
+  if (countEquiv(original, '{', '\uff5b') !== countEquiv(translated, '{', '\uff5b')) return false;
+  if (countEquiv(original, '}', '\uff5d') !== countEquiv(translated, '}', '\uff5d')) return false;
+  
+  // Angle brackets: < ＋ ＜ and > ＋ ＞
+  if (countEquiv(original, '<', '\uff1c') !== countEquiv(translated, '<', '\uff1c')) return false;
+  if (countEquiv(original, '>', '\uff1e') !== countEquiv(translated, '>', '\uff1e')) return false;
+  
+  // Parentheses: ( ＋ （ and ) ＋ ）
+  const origParenOpen = countEquiv(original, '\\(', '\uff08');
+  const origParenClose = countEquiv(original, '\\)', '\uff09');
+  const transParenOpen = countEquiv(translated, '\\(', '\uff08');
+  const transParenClose = countEquiv(translated, '\\)', '\uff09');
+  if (origParenOpen !== transParenOpen) return false;
+  if (origParenClose !== transParenClose) return false;
   
   return true;
 }
@@ -80,13 +111,37 @@ import type { ProxySettings, GlossaryEntry } from '../types/card';
 import { writeDebugLog } from './debugLogger';
 
 /**
- * Sanitize structural characters from LLM translated text.
- * Prevents verification failures caused by LLM adding < > { } ` to translations.
+ * Lightly sanitize LLM translated text.
+ * Only strips markdown formatting artifacts (```, ***, etc.) that LLM may add.
+ * Does NOT strip <>{} — these are valid in HTML-heavy replaceString fields.
  */
 function sanitizeTranslatedText(text: string): string {
   return text
-    .replace(/[<>{}`]/g, '')
+    .replace(/^```[\w]*\n?/gm, '')  // Strip opening code fences
+    .replace(/\n?```$/gm, '')       // Strip closing code fences
+    .replace(/^\*{3,}$/gm, '')     // Strip horizontal rules from markdown
     .trim();
+}
+
+/**
+ * Normalize fullwidth CJK punctuation to halfwidth equivalents.
+ * Applied after reinsertion to fix inconsistencies where LLM converts
+ * some fullwidth chars (like （) to halfwidth but leaves others (like ）).
+ *
+ * This ensures balanced parentheses and consistent punctuation in the output.
+ */
+function normalizeFullwidthPunctuation(text: string): string {
+  const map: Record<string, string> = {
+    '\uff08': '(',  // （ → (
+    '\uff09': ')',  // ） → )
+    '\uff0c': ',',  // ， → ,
+    '\u3002': '.',  // 。 → .
+    '\uff1a': ':',  // ： → :
+    '\uff1b': ';',  // ； → ;
+    '\uff01': '!',  // ！ → !
+    '\uff1f': '?',  // ？ → ?
+  };
+  return text.replace(/[\uff08\uff09\uff0c\u3002\uff1a\uff1b\uff01\uff1f]/g, ch => map[ch] || ch);
 }
 
 /**
@@ -217,18 +272,18 @@ export async function surgicalTranslate(
     return { translated: reinserted, success: true, fallbackTriggered: false };
   }
 
-  // Adaptive batch sizing: bigger batches for bigger jobs to reduce API calls
-  const BATCH_SIZE = uniquePendingTokens.length > 2000 ? 300 :
-                     uniquePendingTokens.length > 500 ? 200 :
-                     uniquePendingTokens.length > 100 ? 120 : 80;
+  // Strategy: try ALL tokens in a single batch first (most LLMs handle 3000+ items fine with 65K output).
+  // If match rate < 50% (LLM truncated), automatically fall back to parallel smaller batches.
+  const FALLBACK_BATCH_SIZE = 500;
   const MAX_RETRIES = 2;
-  const tokenBatches: CJKToken[][] = [];
-  for (let i = 0; i < uniquePendingTokens.length; i += BATCH_SIZE) {
-    tokenBatches.push(uniquePendingTokens.slice(i, i + BATCH_SIZE));
-  }
+  const PARALLEL_CONCURRENCY = 3;
 
-  console.log(`[surgicalTranslate] Extracted ${tokens.length} tokens (${uniquePendingTokens.length} unique pending, ${tokens.length - pendingTokens.length} local-resolved), ${tokenBatches.length} batches × ${BATCH_SIZE} planned`);
-  writeDebugLog(`[surgicalTranslate] Unique pending tokens: ${uniquePendingTokens.length}, Batches: ${tokenBatches.length}, Batch Size: ${BATCH_SIZE}`);
+  // Start with a single mega-batch containing all tokens
+  let tokenBatches: CJKToken[][] = [uniquePendingTokens];
+  let usedMegaBatch = true;
+
+  console.log(`[surgicalTranslate] Extracted ${tokens.length} tokens (${uniquePendingTokens.length} unique pending, ${tokens.length - pendingTokens.length} local-resolved). Trying single mega-batch first...`);
+  writeDebugLog(`[surgicalTranslate] Unique pending tokens: ${uniquePendingTokens.length}. Strategy: mega-batch → fallback ${FALLBACK_BATCH_SIZE} × ${PARALLEL_CONCURRENCY} parallel`);
   
   let glossaryPrompt = '';
   if (glossary && glossary.length > 0) {
@@ -314,20 +369,52 @@ ${langRules}${glossaryPrompt}${mvuPrompt}`;
       }
     };
 
-    for (let batchIdx = 0; batchIdx < tokenBatches.length; batchIdx++) {
-      const batch = tokenBatches[batchIdx];
-      await processBatch(batch, `Batch ${batchIdx + 1}/${tokenBatches.length}`);
+    // ── Phase 1: Try mega-batch (all tokens in 1 API call) ──
+    await processBatch(tokenBatches[0], `Mega-batch (${uniquePendingTokens.length} tokens)`);
+    
+    // Check mega-batch success rate
+    const megaMatched = uniquePendingTokens.filter(t => t.translated && t.translated.trim() !== '').length;
+    const megaMatchRate = megaMatched / uniquePendingTokens.length;
+    
+    if (megaMatchRate < 0.5 && usedMegaBatch) {
+      // ── Phase 2: Mega-batch failed (LLM truncated) → split into parallel smaller batches ──
+      console.warn(`[surgicalTranslate] Mega-batch only matched ${megaMatched}/${uniquePendingTokens.length} (${(megaMatchRate * 100).toFixed(0)}%). Falling back to parallel ${FALLBACK_BATCH_SIZE}-token batches...`);
+      writeDebugLog(`[surgicalTranslate] Mega-batch fallback triggered. Match rate: ${(megaMatchRate * 100).toFixed(0)}%`);
       
-      // Sub-batch recovery: if many tokens in this batch are still untranslated, split and retry
-      const untranslated = batch.filter(t => !t.translated || t.translated.trim() === '');
-      if (untranslated.length > 5 && untranslated.length > batch.length * 0.2) {
-        console.log(`[surgicalTranslate] Batch ${batchIdx + 1}: ${untranslated.length} tokens still untranslated, splitting into sub-batches...`);
-        const SUB_BATCH_SIZE = 50;
-        for (let si = 0; si < untranslated.length; si += SUB_BATCH_SIZE) {
-          const subBatch = untranslated.slice(si, si + SUB_BATCH_SIZE);
-          await processBatch(subBatch, `Batch ${batchIdx + 1} sub ${Math.floor(si / SUB_BATCH_SIZE) + 1}`);
-        }
+      // Collect tokens that still need translation
+      const stillPending = uniquePendingTokens.filter(t => !t.translated || t.translated.trim() === '');
+      tokenBatches = [];
+      for (let i = 0; i < stillPending.length; i += FALLBACK_BATCH_SIZE) {
+        tokenBatches.push(stillPending.slice(i, i + FALLBACK_BATCH_SIZE));
       }
+      
+      // Process fallback batches in parallel waves
+      for (let waveStart = 0; waveStart < tokenBatches.length; waveStart += PARALLEL_CONCURRENCY) {
+        const waveEnd = Math.min(waveStart + PARALLEL_CONCURRENCY, tokenBatches.length);
+        const wave = tokenBatches.slice(waveStart, waveEnd);
+        
+        console.log(`[surgicalTranslate] Fallback wave ${Math.floor(waveStart / PARALLEL_CONCURRENCY) + 1}/${Math.ceil(tokenBatches.length / PARALLEL_CONCURRENCY)}: batches ${waveStart + 1}-${waveEnd}/${tokenBatches.length} in parallel...`);
+        
+        await Promise.all(wave.map((batch, i) => 
+          processBatch(batch, `Fallback batch ${waveStart + i + 1}/${tokenBatches.length}`)
+        ));
+      }
+    } else {
+      console.log(`[surgicalTranslate] Mega-batch success: ${megaMatched}/${uniquePendingTokens.length} matched (${(megaMatchRate * 100).toFixed(0)}%)`);
+    }
+    
+    // ── Phase 3: Sub-batch recovery for any remaining untranslated tokens ──
+    const finalUntranslated = uniquePendingTokens.filter(t => !t.translated || t.translated.trim() === '');
+    if (finalUntranslated.length > 5) {
+      console.log(`[surgicalTranslate] Recovery: ${finalUntranslated.length} tokens still untranslated, retrying in micro-batches...`);
+      const MICRO_BATCH = 50;
+      const microBatches = [];
+      for (let si = 0; si < finalUntranslated.length; si += MICRO_BATCH) {
+        microBatches.push(finalUntranslated.slice(si, si + MICRO_BATCH));
+      }
+      await Promise.all(microBatches.map((mb, i) =>
+        processBatch(mb, `Recovery micro-batch ${i + 1}/${microBatches.length}`)
+      ));
     }
     
     // Build a cache of successful translations from unique tokens (and local glossary matches)
@@ -349,7 +436,9 @@ ${langRules}${glossaryPrompt}${mvuPrompt}`;
       }
     }
     
-    const reinserted = reinsertTranslations(text, tokens);
+    const rawReinserted = reinsertTranslations(text, tokens);
+    // Normalize fullwidth punctuation to prevent imbalanced parens/brackets
+    const reinserted = normalizeFullwidthPunctuation(rawReinserted);
     const isValid = verifySurgicalResult(text, reinserted);
     
     const translatedCount = tokens.filter(t => t.translated !== t.text).length;

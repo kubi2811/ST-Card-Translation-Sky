@@ -548,12 +548,16 @@ function applyBatchTranslations(
     t = t.replace(/\[context:.*?\]/gi, '').trim();
 
     if (t.startsWith(token.text)) {
-      t = t.substring(token.text.length).trim().replace(/^[\s:=>t()\[\]{}]+/, '').trim();
+      t = t.substring(token.text.length).trim().replace(/^[\s:=>-]+/, '').trim();
     }
     const paren   = `(${token.text})`;
     const bracket = `[${token.text}]`;
     if (t.endsWith(paren))   t = t.slice(0, -paren.length).trim();
     if (t.endsWith(bracket)) t = t.slice(0, -bracket.length).trim();
+
+    // Strip matching wrapping parentheses or brackets that might remain (e.g. "(trĩ)" -> "trĩ")
+    if (t.startsWith('(') && t.endsWith(')')) t = t.slice(1, -1).trim();
+    if (t.startsWith('[') && t.endsWith(']')) t = t.slice(1, -1).trim();
     
     t = sanitizeTranslatedText(t);
 
@@ -569,6 +573,10 @@ function applyBatchTranslations(
     // Long tokens (>6 chars, full sentences with punct) -> allow quotes in natural text
     if (/[<>{}`]/.test(t)) return '';
     if (/['"]/.test(t) && token.text.length <= 6) return '';
+
+    // Reject translations that still contain CJK characters (LLM echoed them back or failed to translate)
+    if (/[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff\uac00-\ud7af]/.test(t)) return '';
+
     return t;
   };
 
@@ -925,6 +933,106 @@ ${langRules}${surgicalUserPrompt ? `\n\nUSER SURGICAL INSTRUCTIONS (HIGHEST PRIO
       for (let ws = 0; ws < microBatches.length; ws += PARALLEL_CONCUR) {
         const wave = microBatches.slice(ws, ws + PARALLEL_CONCUR);
         await staggeredParallel(wave, i => `Recovery ${ws + i + 1}/${microBatches.length}`);
+      }
+    }
+
+    // ── Step 8.5: Hán Việt / Sino-Vietnamese Fallback Wave for remaining untranslated tokens ──
+    const fallbackUntranslated = tokens.filter(t => !t.translated?.trim());
+    if (fallbackUntranslated.length > 0) {
+      console.log(
+        `[surgicalTranslate] Fallback Wave: ${fallbackUntranslated.length} token(s) still untranslated` +
+        ` — translating in dedicated Sino-Vietnamese fallback wave`
+      );
+      writeDebugLog(
+        `[surgicalTranslate] Fallback Wave start for ${fallbackUntranslated.length} tokens`
+      );
+
+      const fallbackUniqueMap = new Map<string, CJKToken[]>();
+      for (const t of fallbackUntranslated) {
+        const key = t.text.trim();
+        if (!fallbackUniqueMap.has(key)) {
+          fallbackUniqueMap.set(key, []);
+        }
+        fallbackUniqueMap.get(key)!.push(t);
+      }
+
+      const fallbackUniqueTokens = Array.from(fallbackUniqueMap.values()).map(arr => arr[0]);
+
+      const fallbackBatches: CJKToken[][] = [];
+      for (let i = 0; i < fallbackUniqueTokens.length; i += MICRO_BATCH) {
+        fallbackBatches.push(fallbackUniqueTokens.slice(i, i + MICRO_BATCH));
+      }
+
+      const processFallbackBatch = async (batch: CJKToken[], label: string): Promise<void> => {
+        if (signal?.aborted) return;
+
+        const payload = batch
+          .map(t => `#${t.id}\t${t.text}`)
+          .join('\n');
+
+        const fallbackSystemPrompt =
+          `You are a professional CJK Sino-Vietnamese (Hán Việt) dictionary and translation engine.
+Your task is to translate the following isolated CJK terms to Vietnamese:
+1. For single Chinese characters (length 1): Return ONLY their standard Sino-Vietnamese (Hán Việt) reading in lowercase.
+   Examples: 峙 -> trĩ, 庸 -> dung, 饷 -> hướng, 铠 -> khải, 槊 -> sóc, 兵 -> binh.
+2. For multi-character words: Translate them to plain, natural Vietnamese.
+   Examples: 曹操 -> Tào Tháo, 骑兵 -> kỵ binh, 战斗力 -> sức chiến đấu.
+
+INPUT FORMAT: Lines formatted as "#{{id}}\t{{CJK text}}"
+OUTPUT FORMAT: Return ONLY "#{{id}}\t{{translated text}}" for EACH input line, one per item.
+CRITICAL RULES:
+- Absolutely ZERO Chinese/Japanese/Korean characters allowed in output.
+- Do NOT output explanations, context, markdown formatting, or conversational text.
+- Do NOT use quotes or any punctuation in the translation unless part of a natural Vietnamese word.`;
+
+        const callWithTimeout = (): Promise<string> =>
+          new Promise<string>((resolve, reject) => {
+            const timerId = setTimeout(
+              () => reject(new Error(`Fallback Batch timeout after 100s`)),
+              100000
+            );
+            callProvider(config, fallbackSystemPrompt, payload, signal)
+              .then(r  => { clearTimeout(timerId); resolve(r); })
+              .catch(e => { clearTimeout(timerId); reject(e); });
+          });
+
+        for (let attempt = 0; attempt <= 1; attempt++) {
+          if (signal?.aborted) break;
+          try {
+            writeDebugLog(`[surgicalTranslate] ${label} attempt ${attempt + 1}`);
+            const rawResult = await callWithTimeout();
+            const parsed = parseBatchResponse(rawResult);
+
+            let matched = 0;
+            for (const p of parsed) {
+              if (p.id !== undefined) {
+                const sourceToken = batch.find(t => t.id === p.id);
+                if (sourceToken) {
+                  let cleaned = p.text.trim();
+                  cleaned = cleaned.replace(/^['"`\s]+|['"`\s,;]+$/g, '');
+                  
+                  const hasCjk = /[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff\uac00-\ud7af]/.test(cleaned);
+                  if (cleaned && !hasCjk) {
+                    const group = fallbackUniqueMap.get(sourceToken.text.trim()) || [];
+                    for (const t of group) {
+                      t.translated = cleaned;
+                    }
+                    matched++;
+                  }
+                }
+              }
+            }
+
+            writeDebugLog(`[surgicalTranslate] ${label}: matched=${matched}/${batch.length}`);
+            if (matched >= batch.length * 0.5) break;
+          } catch (err: any) {
+            console.warn(`[surgicalTranslate] ${label} error:`, err.message);
+          }
+        }
+      };
+
+      for (const batch of fallbackBatches) {
+        await processFallbackBatch(batch, `Fallback Batch`);
       }
     }
 

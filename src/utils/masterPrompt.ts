@@ -575,7 +575,12 @@ RULE C10 — Do NOT translate text already in ${targetLang}.
 RULE C11 — Do NOT translate URLs, File Paths, or Image Links.
   Never translate any part of a URL, web link, file path, or image source
   (e.g., https://..., src="...", href="...", .html, .png, .jpg), even if they
-  contain foreign characters. Doing so will break the links and cause 404 errors.`;
+  contain foreign characters. Doing so will break the links and cause 404 errors.
+
+RULE C14 — NO CHATTINESS (CRITICAL).
+  Output ONLY the raw translated text. Do NOT add greetings, explanations, notes, or conversational text.
+  Do NOT continue the story or generate extra content beyond what is in the source text.
+  If you add any conversational text or continue generating beyond the translation, the system will crash.`;
 
   if (isVietnamese) {
     rules += `

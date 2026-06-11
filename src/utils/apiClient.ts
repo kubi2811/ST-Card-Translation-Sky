@@ -2024,27 +2024,28 @@ async function translateChunk(
       }
 
       // ─── Multi-round truncation detection & continuation ───
-      // Nếu AI trả về < input → gần chắc chắn bị cắt do max output tokens.
+      // Nếu AI trả về < expected output → gần chắc chắn bị cắt do max output tokens.
       // Code-heavy content (như Regex, Custom Code) thường có tỷ lệ 1:1 do code giữ nguyên.
       // CJK→Latin expansion: CJK text is very compact (~1 char = 1 word), Vietnamese/English
-      // translations are 1.3-2x longer. Adjust threshold so continuation triggers correctly.
+      // translations are 1.3-2x longer. Must compare against EXPECTED output length, not input.
       const isCodeHeavy = fieldName.toLowerCase().includes('regex') || fieldName.toLowerCase().includes('code') || fieldName.toLowerCase().includes('script') || fieldName.toLowerCase().includes('helper');
       const cjkRatioInChunk = getCJKRatio(chunk);
-      // High CJK ratio = expect longer output, so raise threshold to avoid premature stop
-      const cjkExpansionFactor = cjkRatioInChunk > 0.3 ? 1.4 : (cjkRatioInChunk > 0.1 ? 1.2 : 1.0);
+      // CJK→Latin expansion factor: CJK text expands 1.3-2x when translated to Latin-script languages
+      const cjkExpansionFactor = cjkRatioInChunk > 0.3 ? 1.5 : (cjkRatioInChunk > 0.1 ? 1.3 : 1.0);
+      // Expected output length: input * expansion factor
+      const expectedOutputLen = chunk.length * cjkExpansionFactor;
       // Code-heavy: ratio thấp là bình thường (code giữ nguyên, chỉ dịch CJK)
-      // Giảm threshold để không trigger continuation vô ích
-      const CONT_THRESHOLD = isCodeHeavy ? 0.50 : Math.min(0.7 * cjkExpansionFactor, 0.95);
+      // Use ratio against EXPECTED output, not raw input
+      const CONT_THRESHOLD = isCodeHeavy ? 0.50 : 0.85;
       const MAX_CONT_ROUNDS = 5;
 
       if (chunk.length > 500 && result.length > 0) {
         for (let contRound = 0; contRound < MAX_CONT_ROUNDS; contRound++) {
-          const responseRatio = result.length / chunk.length;
+          // Compare against EXPECTED output length (accounts for CJK→Latin expansion)
+          const responseRatio = result.length / expectedOutputLen;
           
           if (responseRatio >= CONT_THRESHOLD) {
-            // If response is already >= 100% of original, it's very unlikely to be truncated.
-            // Structural mismatches at this point are typically false positives (LLM changed
-            // backtick/quote parity during translation, which is legitimate).
+            // If response already meets expected output length, check structural only
             if (responseRatio >= 1.0) {
               break;
             }
@@ -2052,24 +2053,24 @@ async function translateChunk(
             if (!structuralCheck.isTruncated) {
               break;
             }
-            console.log(`[translateChunk] Structural truncation detected in ${fieldName} chunk ${chunkIdx + 1}/${totalChunks} despite ratio ${(responseRatio * 100).toFixed(0)}%: ${structuralCheck.reason}`);
-          } else if (isCodeHeavy && responseRatio >= 0.30) {
+            console.log(`[translateChunk] Structural truncation detected in ${fieldName} chunk ${chunkIdx + 1}/${totalChunks} despite ratio ${(responseRatio * 100).toFixed(0)}% of expected: ${structuralCheck.reason}`);
+          } else if (isCodeHeavy && result.length >= chunk.length * 0.30) {
             // Code-heavy: ratio thấp là bình thường (code giữ nguyên, chỉ dịch CJK rải rác)
             // Kiểm tra structural — nếu cấu trúc OK thì dịch xong rồi, dừng continuation
             const structuralCheck = detectStructuralTruncation(chunk, result);
             if (!structuralCheck.isTruncated) {
-              console.log(`[translateChunk] Code-heavy ${fieldName}: ratio ${(responseRatio * 100).toFixed(0)}% but structure OK — skipping continuation`);
+              console.log(`[translateChunk] Code-heavy ${fieldName}: ratio ${((result.length / chunk.length) * 100).toFixed(0)}% but structure OK — skipping continuation`);
               break;
             }
           }
 
-          console.log(`[translateChunk] ${fieldName} chunk ${chunkIdx + 1}/${totalChunks}: response ${(responseRatio * 100).toFixed(0)}% < ${(CONT_THRESHOLD * 100).toFixed(0)}% (or structural issue) → continuation round ${contRound + 1}/${MAX_CONT_ROUNDS}...`);
+          console.log(`[translateChunk] ${fieldName} chunk ${chunkIdx + 1}/${totalChunks}: response ${(responseRatio * 100).toFixed(0)}% of expected (${result.length}/${Math.round(expectedOutputLen)} chars) < ${(CONT_THRESHOLD * 100).toFixed(0)}% (or structural issue) → continuation round ${contRound + 1}/${MAX_CONT_ROUNDS}...`);
 
           // ═══ SIZE GUARD: prevent bloat from false-positive structural checks ═══
-          // If result is already bigger than the chunk, continuation is not needed.
-          // MOD MODE: skip this guard — mod output can legitimately be much larger than input
-          if (!isModMode && result.length > chunk.length * 1.8) {
-            console.warn(`[translateChunk] STOPPING continuation: result (${result.length}) already > 1.8x chunk (${chunk.length}) — likely false positive truncation`);
+          // Only stop if result is absurdly large (3x expected output)
+          // CJK→Latin expansion can legitimately reach 1.5-2x input length
+          if (!isModMode && result.length > expectedOutputLen * 3.0) {
+            console.warn(`[translateChunk] STOPPING continuation: result (${result.length}) already > 3x expected output (${Math.round(expectedOutputLen)}) — likely false positive truncation`);
             break;
           }
 
@@ -2098,9 +2099,9 @@ async function translateChunk(
 
             if (continuation.trim()) {
               // ═══ SIZE GUARD: don't append if it would make result absurdly large ═══
-              // MOD MODE: skip this guard — mod output can legitimately be much larger than input
-              if (!isModMode && (result.length + continuation.length) > chunk.length * 2.5) {
-                console.warn(`[translateChunk] SKIPPED continuation append: would make result ${result.length + continuation.length} chars (${((result.length + continuation.length) / chunk.length * 100).toFixed(0)}% of chunk) — likely duplicate content`);
+              // CJK→Latin expansion can legitimately reach 2x input length, so use expectedOutputLen
+              if (!isModMode && (result.length + continuation.length) > expectedOutputLen * 3.0) {
+                console.warn(`[translateChunk] SKIPPED continuation append: would make result ${result.length + continuation.length} chars (${((result.length + continuation.length) / expectedOutputLen * 100).toFixed(0)}% of expected) — likely duplicate content`);
                 break;
               }
               result = result + '\n' + continuation;
@@ -2922,10 +2923,18 @@ export async function translateText(
     
     // ═══ SINGLE-CHUNK BLOAT GUARD ═══
     // MOD MODE: skip — mod output can legitimately be much larger than input
-    const singleBloatRatio = cleaned.length / Math.max(1, maskedText.length);
-    if (!isModMode && singleBloatRatio > 1.8 && maskedText.length > 5000) {
-      console.error(`[translateText] ⚠️ SINGLE CHUNK BLOAT for ${fieldName}: ${cleaned.length} chars is ${(singleBloatRatio * 100).toFixed(0)}% of original ${maskedText.length} — trimming`);
-      cleaned = cleaned.slice(0, Math.floor(maskedText.length * 1.3));
+    // CJK→Latin expansion can legitimately reach 1.5-2.0x, so only flag extreme bloat (>2x expected)
+    const cjkRatioSingle = getCJKRatio(maskedText);
+    const expectedExpansionSingle = cjkRatioSingle > 0.3 ? 1.5 : (cjkRatioSingle > 0.1 ? 1.3 : 1.0);
+    const expectedFinalLenSingle = maskedText.length * expectedExpansionSingle;
+    
+    // Absolute max allowed length to prevent hallucinations (especially on short texts)
+    // Allows at least 150 chars or 2.5x expected length
+    const maxAllowedLen = Math.max(150, expectedFinalLenSingle * 2.5);
+    
+    if (!isModMode && cleaned.length > maxAllowedLen) {
+      console.error(`[translateText] ⚠️ SINGLE CHUNK BLOAT for ${fieldName}: ${cleaned.length} chars > allowed max ${Math.round(maxAllowedLen)} — trimming to prevent hallucination loops`);
+      cleaned = cleaned.slice(0, Math.floor(maxAllowedLen));
     }
 
     // RESIDUAL CJK CHECK: auto-retry if Chinese text remains
@@ -3232,13 +3241,14 @@ export async function translateText(
   }
   
   // ═══ ULTIMATE BLOAT GUARD — last line of defense against content doubling ═══
-  // If translation is >1.8x the original, something went very wrong (false positive
-  // structural truncation, duplicate continuations, etc.). Log and trim.
+  // CJK→Latin expansion can legitimately reach 1.5-2.0x, so only flag extreme bloat (>3x expected)
   // MOD MODE: skip entirely — mod output can legitimately be much larger than input
-  // (e.g. a 200-word prompt can produce 2000+ words of modded content)
-  const bloatRatio = cleaned.length / Math.max(1, maskedText.length);
-  if (!isModMode && bloatRatio > 1.8 && maskedText.length > 5000) {
-    console.error(`[translateText] ⚠️ BLOAT DETECTED for ${fieldName}: result ${cleaned.length} chars is ${(bloatRatio * 100).toFixed(0)}% of original ${maskedText.length} chars — trimming to prevent content doubling`);
+  const cjkRatioFinal = getCJKRatio(maskedText);
+  const expectedExpansionFinal = cjkRatioFinal > 0.3 ? 1.5 : (cjkRatioFinal > 0.1 ? 1.3 : 1.0);
+  const expectedFinalLen = maskedText.length * expectedExpansionFinal;
+  const bloatRatio = cleaned.length / Math.max(1, expectedFinalLen);
+  if (!isModMode && bloatRatio > 2.0 && maskedText.length > 5000) {
+    console.error(`[translateText] ⚠️ BLOAT DETECTED for ${fieldName}: result ${cleaned.length} chars is ${(bloatRatio * 100).toFixed(0)}% of expected ${Math.round(expectedFinalLen)} chars — checking for duplication`);
     // Try to find where the duplication starts by checking if the second half
     // is similar to the first half (common pattern: translation + original tail)
     const halfLen = Math.floor(cleaned.length / 2);
@@ -3257,15 +3267,14 @@ export async function translateText(
     const overlapLen = getLcpLength(firstStructure, secondStructure);
     
     if (overlapLen > firstStructure.length * 0.3) {
-      console.error(`[translateText] BLOAT CONFIRMED: structural overlap at midpoint (${overlapLen}/${firstStructure.length}) — keeping first ${halfLen} chars`);
-      cleaned = cleaned.slice(0, Math.floor(maskedText.length * 1.3));
+      console.error(`[translateText] BLOAT CONFIRMED: structural overlap at midpoint (${overlapLen}/${firstStructure.length}) — trimming duplicate`);
+      cleaned = cleaned.slice(0, Math.floor(expectedFinalLen * 2.0));
     } else {
-      // Not a clear duplicate, but still too long — trim conservatively
-      console.warn(`[translateText] BLOAT WARNING: no clear duplicate pattern, trimming to 130% of original`);
-      cleaned = cleaned.slice(0, Math.floor(maskedText.length * 1.3));
+      // Not a clear duplicate — CJK→Latin expansion is probably just large, log only
+      console.warn(`[translateText] BLOAT WARNING: no duplicate pattern found, keeping full translation (${cleaned.length} chars)`);
     }
-  } else if (isModMode && bloatRatio > 1.8) {
-    console.log(`[translateText] ℹ️ MOD MODE: output ${cleaned.length} chars is ${(bloatRatio * 100).toFixed(0)}% of original ${maskedText.length} — bloat guard skipped (mod mode allows larger output)`);
+  } else if (isModMode && cleaned.length > maskedText.length * 1.8) {
+    console.log(`[translateText] ℹ️ MOD MODE: output ${cleaned.length} chars is ${((cleaned.length / maskedText.length) * 100).toFixed(0)}% of original ${maskedText.length} — bloat guard skipped (mod mode allows larger output)`);
   }
 
   // RESIDUAL CJK CHECK: auto-retry if Chinese text remains

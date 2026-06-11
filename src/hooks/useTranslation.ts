@@ -540,29 +540,30 @@ export function useTranslation() {
         translated = postProcessRegexHtml(translated);
       }
 
-      // ═══ COMPLETENESS VALIDATION: output ≥ input cho mọi field ═══
-      // field.original = nội dung gốc CẦN DỊCH (không bao gồm schema, RAG, prompt)
-      // CJK → Latin luôn expand, nên nếu output ngắn hơn = mất nội dung
+      // ═══ COMPLETENESS VALIDATION: detect genuinely truncated output ═══
+      // CJK → Latin expansion means output is normally 1.3-2x LONGER than input.
+      // Only flag as incomplete when output is very short (actual truncation), not ratio-based.
       if (translated && translated.trim() && field.original.length > 100) {
         const origLen = field.original.length;
         const transLen = translated.length;
-        // Regex & TavernHelper: Cấu trúc code và nội dung dịch ra tiếng Việt phải đảm bảo không ngắn hơn bản gốc (minRatio = 1.0)
-        // Text thường: minRatio = 0.95
+        // Regex & TavernHelper: code structure must survive (minRatio = 0.6 of input)
+        // Text thường: CJK→Latin expansion means output should be >= input, so only
+        // flag if severely short (< 0.6x input = probably lost 40%+ content)
         const isCodeField = field.group === 'regex' || field.group === 'tavern_helper';
-        const minRatio = isCodeField ? 1.0 : 0.95;
+        const minRatio = isCodeField ? 0.5 : 0.6;
         
         if (transLen < origLen * minRatio) {
-          if (freshRetries() < (store.proxy.maxRetries || 3)) {
+          if (freshRetries() < 1) {
             store.updateField(field.path, { retries: freshRetries() + 1 });
             store.addLog('retry', 
-              `⚠️ Dịch thiếu: ${transLen}/${origLen} chars ` +
+              `⚠️ Dịch thiếu nghiêm trọng: ${transLen}/${origLen} chars ` +
               `(${(transLen / origLen * 100).toFixed(0)}% < ${(minRatio * 100).toFixed(0)}%). Auto-retry...`
             );
             await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
             return 'retry';
           }
           store.addLog('warning', 
-            `⚠️ Vẫn ngắn sau retries: ${transLen}/${origLen} chars ` +
+            `⚠️ Vẫn ngắn sau retry: ${transLen}/${origLen} chars ` +
             `(${(transLen / origLen * 100).toFixed(0)}%). Có thể thiếu nội dung.`
           );
         }
@@ -704,6 +705,20 @@ export function useTranslation() {
       ? (store.translationConfig.entryModelRouting[batchFields[0].path] || store.translationConfig.groupModelRouting[batchFields[0].group] || store.proxy.model)
       : store.proxy.model;
     const effectiveProxy = targetModel !== store.proxy.model ? { ...store.proxy, model: targetModel } : store.proxy;
+
+    // ═══ NATIVE ROUTING TO SINGLE STREAM ═══
+    // For MVU/Controller scripts, they can be huge. If they are in a batch of 1,
+    // explicitly route them through the single-translation flow to utilize adaptive chunking.
+    const isMvuCritical = batchFields[0].entryType === 'mvu_logic' || batchFields[0].entryType === 'controller' || batchFields[0].entryType === 'initvar';
+    if (batchFields.length === 1 && isMvuCritical) {
+      const allCurrentFields = useStore.getState().fields;
+      const fieldIdx = allCurrentFields.findIndex(sf => sf.path === batchFields[0].path);
+      const result = await translateSingleField(batchFields[0], fieldIdx >= 0 ? fieldIdx : 0, allCurrentFields);
+      if (result === 'error') {
+         throw new Error(`Single translation failed for ${batchFields[0].label}`);
+      }
+      return;
+    }
 
     // Mark all as translating
     for (const f of batchFields) {

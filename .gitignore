@@ -6,3 +6,10 @@ dist/
 .env.*
 .DS_Store
 Thumbs.db
+*.log
+config_dump.json
+check_entries.txt
+content_check.txt
+test-case-found.txt
+test-case-raw.txt
+

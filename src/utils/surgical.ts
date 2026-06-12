@@ -94,6 +94,102 @@ function extractCSSPropertyZones(text: string): ProtectedZone[] {
 }
 
 /**
+ * Identifies URL/link positions in the text.  CJK tokens that overlap
+ * these zones are excluded from extraction, preventing URLs like
+ * `https://cdn.com/骰子系统/stable.js` from having their CJK path
+ * segments translated (which would break the link).
+ *
+ * Covers:
+ * - Standard URLs (http://, https://, ftp://, protocol-relative //)
+ * - HTML attributes containing URLs (src, href, action, data-src, poster, srcset)
+ * - CSS url() references
+ * - JavaScript import() / require() string arguments
+ * - Data URIs (data:...)
+ * - File paths starting with ./ or ../
+ * - Markdown image/link syntax ![...](url) and [...](url)
+ */
+function extractURLZones(text: string): ProtectedZone[] {
+  const zones: ProtectedZone[] = [];
+
+  // ── 1. Standard URLs: http://, https://, ftp://, // ────────────────────
+  const urlRe = /(?:https?|ftp):\/\/[^\s'"<>(){}\]]+|\/\/[a-zA-Z0-9][^\s'"<>(){}\]]*/gi;
+  let m: RegExpExecArray | null;
+  while ((m = urlRe.exec(text)) !== null) {
+    zones.push({ start: m.index, end: m.index + m[0].length, reason: 'url' });
+  }
+
+  // ── 2. HTML src/href/action/poster/srcset/data-src attributes ──────────
+  const attrRe = /(?:src|href|action|data-src|data-href|poster|srcset)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
+  while ((m = attrRe.exec(text)) !== null) {
+    const val = m[1] ?? m[2];
+    if (val) {
+      const vStart = m.index + m[0].indexOf(val);
+      zones.push({ start: vStart, end: vStart + val.length, reason: 'html-url-attr' });
+    }
+  }
+
+  // ── 3. CSS url() references ────────────────────────────────────────────
+  const cssUrlRe = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*?))\s*\)/gi;
+  while ((m = cssUrlRe.exec(text)) !== null) {
+    const val = m[1] ?? m[2] ?? m[3];
+    if (val && val.trim()) {
+      const vStart = m.index + m[0].indexOf(val);
+      zones.push({ start: vStart, end: vStart + val.length, reason: 'css-url' });
+    }
+  }
+
+  // ── 4. JS import() / require() string arguments ────────────────────────
+  const importRe = /(?:import|require)\s*\(\s*(?:[`'"]([^`'"]*)[`'"]|`([^`]*)`)\s*\)/gi;
+  while ((m = importRe.exec(text)) !== null) {
+    const val = m[1] ?? m[2];
+    if (val) {
+      const vStart = m.index + m[0].indexOf(val);
+      zones.push({ start: vStart, end: vStart + val.length, reason: 'import-path' });
+    }
+  }
+
+  // ── 5. Template literal import: import(`...`) ──────────────────────────
+  const importTemplateRe = /(?:import|require)\s*\(\s*`([^`]*)`\s*\)/gi;
+  while ((m = importTemplateRe.exec(text)) !== null) {
+    const val = m[1];
+    if (val) {
+      const vStart = m.index + m[0].indexOf(val);
+      zones.push({ start: vStart, end: vStart + val.length, reason: 'import-template' });
+    }
+  }
+
+  // ── 6. Data URIs (data:image/...) ──────────────────────────────────────
+  const dataUriRe = /data:[a-zA-Z0-9+/.-]+;[^\s'"<>)]+/gi;
+  while ((m = dataUriRe.exec(text)) !== null) {
+    zones.push({ start: m.index, end: m.index + m[0].length, reason: 'data-uri' });
+  }
+
+  // ── 7. Relative file paths: ./... or ../... ────────────────────────────
+  const filePathRe = /(?:\.\.?\/)[^\s'"<>(){}\]]+/g;
+  while ((m = filePathRe.exec(text)) !== null) {
+    zones.push({ start: m.index, end: m.index + m[0].length, reason: 'file-path' });
+  }
+
+  // ── 8. Markdown links: [...](url) and ![...](url) ──────────────────────
+  const mdLinkRe = /!?\[[^\]]*\]\(([^)]+)\)/g;
+  while ((m = mdLinkRe.exec(text)) !== null) {
+    const url = m[1];
+    if (url) {
+      const urlStart = m.index + m[0].indexOf(url);
+      zones.push({ start: urlStart, end: urlStart + url.length, reason: 'markdown-link' });
+    }
+  }
+
+  // ── 9. Email addresses ─────────────────────────────────────────────────
+  const emailRe = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+  while ((m = emailRe.exec(text)) !== null) {
+    zones.push({ start: m.index, end: m.index + m[0].length, reason: 'email' });
+  }
+
+  return zones;
+}
+
+/**
  * Compares <style> blocks between `original` and `translated` and restores
  * any CSS property names that were changed by translation (e.g. "gap" → "Tay").
  *
@@ -643,12 +739,14 @@ export async function surgicalTranslate(
 ): Promise<{ translated: string; success: boolean; fallbackTriggered: boolean }> {
   const { callProvider } = await import('./apiClient');
 
-  // ── Step 1: Extract CSS protected zones, then CJK tokens ──────────────────
+  // ── Step 1: Extract CSS + URL protected zones, then CJK tokens ─────────────
   const cssZones = extractCSSPropertyZones(text);
-  const tokens   = extractCJKTokens(text, cssZones, cssCjkHandling, mvuDictionary);
+  const urlZones = extractURLZones(text);
+  const allProtectedZones = [...cssZones, ...urlZones];
+  const tokens   = extractCJKTokens(text, allProtectedZones, cssCjkHandling, mvuDictionary);
 
   writeDebugLog(
-    `[surgicalTranslate] Start — strict=${strictVerification}, cssZones=${cssZones.length}, tokens=${tokens.length}`
+    `[surgicalTranslate] Start — strict=${strictVerification}, cssZones=${cssZones.length}, urlZones=${urlZones.length}, tokens=${tokens.length}`
   );
 
   if (tokens.length === 0) {

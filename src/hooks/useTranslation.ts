@@ -12,8 +12,25 @@ import { buildEffectivePrompt } from '../utils/promptBuilder';
 import { surgicalTranslate } from '../utils/surgical';
 import { parsePatchOutput, applyPatches, validatePatchResult } from '../utils/patchEngine';
 import { injectMvuZodSystem } from '../utils/mvuGenerator';
-import { detectEjsCard, extractEjsEntryNames, extractEjsKeywords, aiTranslateEjsEntries, validateEjsSync, autoFixEjsEntryNames, autoFixEjsKeywords, enforceEjsEntryName } from '../utils/ejsSync';
+import { detectEjsCard, extractEjsEntryNames, extractEjsKeywords, aiTranslateEjsEntries, validateEjsSync, autoFixEjsEntryNames, autoFixEjsKeywords, enforceEjsEntryName, enforceEjsCovariance, enforceEjsKeywordCasing, autoFixEjsKeywordsExtended } from '../utils/ejsSync';
 import type { FieldGroup, FieldGroupConfig, TranslationField } from '../types/card';
+
+/**
+ * Strip URL/link content from text before CJK residual detection.
+ * Prevents false-positive retries when URLs intentionally contain CJK characters
+ * (e.g., import('https://cdn.com/骰子系统/stable.js') should NOT trigger retry).
+ */
+function stripUrlsForCjkCheck(text: string): string {
+  let s = text;
+  s = s.replace(/(?:https?|ftp):\/\/[^\s'"<>(){}\\]+|\/\/[a-zA-Z0-9][^\s'"<>(){}\\]*/gi, '');
+  s = s.replace(/(?:src|href|action|data-src|data-href|poster|srcset)\s*=\s*(?:"[^"]*"|'[^']*')/gi, '');
+  s = s.replace(/url\(\s*(?:"[^"]*"|'[^']*'|[^)]*?)\s*\)/gi, '');
+  s = s.replace(/(?:import|require)\s*\(\s*(?:[`'"][^`'"]*[`'"]|`[^`]*`)\s*\)/gi, '');
+  s = s.replace(/data:[a-zA-Z0-9+/.-]+;[^\s'"<>)]+/gi, '');
+  s = s.replace(/(?:\.\.?\/)[^\s'"<>(){}\\]+/g, '');
+  s = s.replace(/(!?\[[^\]]*\])\([^)]+\)/g, '$1()');
+  return s;
+}
 
 
 /**
@@ -128,7 +145,9 @@ export function useTranslation() {
 
     // In continue mode: preserve already-done fields from previous runs
     let mergedFields = newFields;
-    if (continueMode && store.fields.length > 0) {
+    if (store.fields.length > 0) {
+      // ALWAYS merge: preserve fields already done/skipped/ignored from store.
+      // This respects manual per-field translations AND continue-mode resumptions.
       const existingMap = new Map(store.fields.map(f => [f.path, f]));
       mergedFields = newFields.map(nf => {
         const existing = existingMap.get(nf.path);
@@ -528,6 +547,52 @@ export function useTranslation() {
             store.addLog('info', `🔗 EJS Keyword: fixed ${kwFixResult.fixes.length} keyword(s) in ${field.label}: ${fixSummary}`);
           }
         }
+
+        // ─── EJS COVARIANCE: Full-context enforcement (Strategy C equivalent of Strategy B) ───
+        // Enforce entry names + keywords across ALL code contexts (comparisons, bracket, attrs, CSS, script blocks)
+        if (Object.keys(ejsEntryDict).length > 0 || Object.keys(ejsKwDict).length > 0) {
+          const covResult = enforceEjsCovariance(translated, ejsEntryDict, ejsKwDict);
+          if (covResult.fixes.length > 0) {
+            translated = covResult.text;
+            const fixSummary = covResult.fixes.map(f => `"${f.found}"→"${f.replaced}"`).join(', ');
+            store.addLog('info', `🔗 EJS Covariance: fixed ${covResult.fixes.length} ref(s) in ${field.label}: ${fixSummary}`);
+          }
+        }
+
+        // ─── EJS CASING: Fix case mismatches for keywords/entry names ───
+        if (Object.keys(ejsEntryDict).length > 0 || Object.keys(ejsKwDict).length > 0) {
+          const casingResult = enforceEjsKeywordCasing(translated, ejsEntryDict, ejsKwDict);
+          if (casingResult.fixes.length > 0) {
+            translated = casingResult.text;
+            const fixSummary = casingResult.fixes.map(f => `"${f.found}"→"${f.replaced}"`).join(', ');
+            store.addLog('info', `🔠 EJS Casing: fixed ${casingResult.fixes.length} casing(s) in ${field.label}: ${fixSummary}`);
+          }
+        }
+
+        // ─── EJS EXTENDED: Fix keywords OUTSIDE <% %> blocks (HTML text, inline scripts) ───
+        if (Object.keys(ejsKwDict).length > 0) {
+          const extResult = autoFixEjsKeywordsExtended(translated, ejsKwDict);
+          if (extResult.fixes.length > 0) {
+            translated = extResult.text;
+            const fixSummary = extResult.fixes.map(f => `"${f.found}"→"${f.replaced}"`).join(', ');
+            store.addLog('info', `🔗 EJS Extended: fixed ${extResult.fixes.length} keyword(s) outside EJS blocks in ${field.label}: ${fixSummary}`);
+          }
+        }
+
+        // ─── PROGRESSIVE EJS DICT: Extract new mappings from translated lorebook entry names ───
+        const isLbNameOrComment = field.group === 'lorebook' && (
+          field.path.endsWith('.name') || field.path.endsWith('.comment')
+        ) && field.path.includes('character_book.entries[');
+        if (isLbNameOrComment && translated && field.original !== translated) {
+          const freshEjsDict = useStore.getState().translationConfig.ejsEntryNameDict;
+          const trimOrig = field.original.trim();
+          const trimTrans = translated.trim();
+          if (trimOrig && trimTrans && !(trimOrig in freshEjsDict) && trimOrig !== trimTrans) {
+            const updatedEjsDict = { ...freshEjsDict, [trimOrig]: trimTrans };
+            store.setTranslationConfig({ ejsEntryNameDict: updatedEjsDict });
+            store.addLog('info', `🔗 EJS Progressive: +1 entry name mapping "${trimOrig}" → "${trimTrans}"`);
+          }
+        }
       }
 
       // Post-process regex HTML: font swap + underscore display
@@ -584,11 +649,13 @@ export function useTranslation() {
       }
 
       // Schema CJK Validation: Ensure schema doesn't have any Chinese
+      // Strip URLs before checking — CJK in URL paths (e.g. 骰子系统 in import paths) is intentional
       const isTargetNonCJK = !(/chinese|中文|japanese|日本語|korean|한국어/i.test(store.translationConfig.targetLanguage));
       const isSchemaCritical = field.entryType === 'initvar' || field.entryType === 'controller' || field.entryType === 'mvu_logic' || field.group === 'tavern_helper';
       if (isTargetNonCJK && isSchemaCritical) {
         const cjkRegex = /[\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f\uff00-\uffef]/;
-        if (cjkRegex.test(translated)) {
+        const translatedStripped = stripUrlsForCjkCheck(translated);
+        if (cjkRegex.test(translatedStripped)) {
           if (freshRetries() < (store.proxy.maxRetries || 3)) {
             store.updateField(field.path, { retries: freshRetries() + 1 });
             store.addLog('retry', `⚠️ Chinese characters detected in Schema (${field.label}). Auto-retrying...`);
@@ -820,9 +887,11 @@ export function useTranslation() {
         const f = batchFields[j];
 
         // ─── Residual CJK detection: retry individually if Chinese text remains ───
+        // Strip URLs first — CJK in URL paths (e.g. 骰子系统 in import paths) is intentional
         if (isTargetNonCJK) {
           const cjkRegex = /[\u4e00-\u9fff\u3400-\u4dbf]/g;
-          const cjkMatches = translated.match(cjkRegex);
+          const translatedStripped = stripUrlsForCjkCheck(translated);
+          const cjkMatches = translatedStripped.match(cjkRegex);
           const residualCount = cjkMatches ? cjkMatches.length : 0;
 
           // ZERO TOLERANCE: Any CJK remaining = retry individually
@@ -950,6 +1019,52 @@ export function useTranslation() {
                 translated = kwFixResult.text;
                 autoFixCount += kwFixResult.fixes.length;
                 store.addLog('info', `🔗 EJS Keyword: fixed ${kwFixResult.fixes.length} keyword(s) in ${batchFields[j].label}`);
+              }
+            }
+
+            // ─── EJS COVARIANCE (batch): Full-context enforcement ───
+            if (Object.keys(ejsEntryDict).length > 0 || Object.keys(ejsKwDict).length > 0) {
+              const covResult = enforceEjsCovariance(translated, ejsEntryDict, ejsKwDict);
+              if (covResult.fixes.length > 0) {
+                translated = covResult.text;
+                autoFixCount += covResult.fixes.length;
+                const fixSummary = covResult.fixes.map(f => `"${f.found}"→"${f.replaced}"`).join(', ');
+                store.addLog('info', `🔗 EJS Covariance: fixed ${covResult.fixes.length} ref(s) in ${batchFields[j].label}: ${fixSummary}`);
+              }
+            }
+
+            // ─── EJS CASING (batch): Fix case mismatches ───
+            if (Object.keys(ejsEntryDict).length > 0 || Object.keys(ejsKwDict).length > 0) {
+              const casingResult = enforceEjsKeywordCasing(translated, ejsEntryDict, ejsKwDict);
+              if (casingResult.fixes.length > 0) {
+                translated = casingResult.text;
+                autoFixCount += casingResult.fixes.length;
+                store.addLog('info', `🔠 EJS Casing: fixed ${casingResult.fixes.length} casing(s) in ${batchFields[j].label}`);
+              }
+            }
+
+            // ─── EJS EXTENDED (batch): Fix keywords OUTSIDE <% %> blocks ───
+            if (Object.keys(ejsKwDict).length > 0) {
+              const extResult = autoFixEjsKeywordsExtended(translated, ejsKwDict);
+              if (extResult.fixes.length > 0) {
+                translated = extResult.text;
+                autoFixCount += extResult.fixes.length;
+                store.addLog('info', `🔗 EJS Extended: fixed ${extResult.fixes.length} keyword(s) outside EJS blocks in ${batchFields[j].label}`);
+              }
+            }
+
+            // ─── PROGRESSIVE EJS DICT (batch): Extract new mappings ───
+            const isLbNameOrComment = batchFields[j].group === 'lorebook' && (
+              batchFields[j].path.endsWith('.name') || batchFields[j].path.endsWith('.comment')
+            ) && batchFields[j].path.includes('character_book.entries[');
+            if (isLbNameOrComment && translated && batchFields[j].original !== translated) {
+              const freshEjsDict = useStore.getState().translationConfig.ejsEntryNameDict;
+              const trimOrig = batchFields[j].original.trim();
+              const trimTrans = translated.trim();
+              if (trimOrig && trimTrans && !(trimOrig in freshEjsDict) && trimOrig !== trimTrans) {
+                const updatedEjsDict = { ...freshEjsDict, [trimOrig]: trimTrans };
+                store.setTranslationConfig({ ejsEntryNameDict: updatedEjsDict });
+                store.addLog('info', `🔗 EJS Progressive: +1 entry name "${trimOrig}" → "${trimTrans}"`);
               }
             }
           }
@@ -1178,7 +1293,10 @@ export function useTranslation() {
     const lorebookGroups: FieldGroup[] = ['lorebook', 'lorebook_keys'];
 
     // ═══ Strategy B: Build MVU Dictionary BEFORE starting loop ═══
-    if (store.translationConfig.enableMvuSync && store.card) {
+    // In continueMode, skip if dictionary already populated (avoid re-calling AI)
+    const existingMvuDictForCheck = useStore.getState().translationConfig.mvuDictionary;
+    const skipMvuBuild = continueMode && Object.keys(existingMvuDictForCheck).length > 0;
+    if (store.translationConfig.enableMvuSync && store.card && !skipMvuBuild) {
       try {
         store.addLog('info', '🔧 Strategy B: Auto-detecting MVU/Zod variables...');
         const extractedKeys = extractPotentialMvuKeyStrings(store.card);
@@ -1274,10 +1392,13 @@ export function useTranslation() {
         }
         store.addLog('warning', `⚠️ MVU auto-detect failed (non-critical): ${mvuMsg}`);
       }
+    } else if (skipMvuBuild) {
+      store.addLog('info', `🔧 Strategy B: Reusing existing MVU dictionary (${Object.keys(existingMvuDictForCheck).length} entries) — skipping AI re-translation`);
     }
 
     // ═══ Strategy B: Auto-resolve conflicts before EJS/translation loop ═══
-    if (store.translationConfig.enableMvuSync && store.card) {
+    // Skip on resume — conflicts were already resolved in the first run
+    if (store.translationConfig.enableMvuSync && store.card && !skipMvuBuild) {
       try {
         const currentDict = useStore.getState().translationConfig.mvuDictionary;
         const conflicts = validateDictionaryConflicts(currentDict);
@@ -1338,7 +1459,11 @@ export function useTranslation() {
     }
 
     // ═══ Strategy C: Build EJS Dictionary BEFORE starting loop ═══
-    if (store.translationConfig.enableEjsSync && store.card) {
+    // In continueMode, skip if dictionaries already populated (avoid re-calling AI)
+    const existingEjsDictForCheck = useStore.getState().translationConfig.ejsEntryNameDict;
+    const existingKwDictForCheck = useStore.getState().translationConfig.ejsKeywordDict;
+    const skipEjsBuild = continueMode && (Object.keys(existingEjsDictForCheck || {}).length > 0 || Object.keys(existingKwDictForCheck || {}).length > 0);
+    if (store.translationConfig.enableEjsSync && store.card && !skipEjsBuild) {
       try {
         store.addLog('info', '🔮 Strategy C: Scanning EJS entry names & keywords...');
         const ejsEntryRefs = extractEjsEntryNames(store.card);
@@ -1424,6 +1549,8 @@ export function useTranslation() {
         }
         store.addLog('warning', `⚠️ EJS auto-detect failed (non-critical): ${ejsMsg}`);
       }
+    } else if (skipEjsBuild) {
+      store.addLog('info', `🔮 Strategy C: Reusing existing EJS dictionaries (${Object.keys(existingEjsDictForCheck || {}).length} entries + ${Object.keys(existingKwDictForCheck || {}).length} keywords) — skipping AI re-translation`);
     }
 
     let i = 0;
@@ -1619,6 +1746,251 @@ export function useTranslation() {
         }
 
         // Delay before next non-lorebook field
+        if (i < fields.length && store.proxy.requestDelay > 0) {
+          await new Promise((r) => setTimeout(r, store.proxy.requestDelay));
+        }
+        continue;
+      }
+      // ─── Regex fields: use Regex Manager mechanism (individual per-field API calls) ───
+      // Instead of going through translateSingleField (which uses surgical/chunk-splitting),
+      // regex fields are translated individually like the RegexManagerPanel does.
+      // Each regex field gets its own prompt build + single translateText call.
+      if (field.group === 'regex') {
+        // Collect all consecutive regex fields
+        const regexFields: TranslationField[] = [];
+        while (i < fields.length && fields[i].group === 'regex') {
+          regexFields.push(fields[i]);
+          i++;
+        }
+
+        store.addLog('info', `🔧 Regex: Translating ${regexFields.length} regex field(s) via Regex Manager mechanism...`);
+
+        for (const rf of regexFields) {
+          // Check abort
+          if (checkAbort()) {
+            runningRef.current = false;
+            store.setPhase('cancelled');
+            store.addLog('warning', 'Translation cancelled by user');
+            return;
+          }
+
+          // Handle pause
+          if (await waitForPause()) {
+            runningRef.current = false;
+            store.setPhase('cancelled');
+            return;
+          }
+
+          // Skip already done fields (for continue mode)
+          if (rf.status === 'done') continue;
+
+          store.updateField(rf.path, { status: 'translating', error: undefined });
+          store.addLog('active', `Translating: ${rf.label}`);
+
+          try {
+            // ═══ Build prompt (same as retranslateField) ═══
+            const regexFreshFields = useStore.getState().fields;
+            const regexEntryNameDict = { ...buildEntryNameDictionary(regexFreshFields), ...buildRegexTriggerDictionary(regexFreshFields) };
+
+            const regexTargetModel = store.translationConfig.enableModelRouting
+              ? (store.translationConfig.entryModelRouting[rf.path] || store.translationConfig.groupModelRouting[rf.group] || store.proxy.model)
+              : store.proxy.model;
+            const regexEffectiveProxy = regexTargetModel !== store.proxy.model ? { ...store.proxy, model: regexTargetModel } : store.proxy;
+
+            const regexPromptResult = buildEffectivePrompt({
+              translationPrompt: store.translationConfig.translationPrompt,
+              enableJailbreak: store.translationConfig.enableJailbreak,
+              enableObjectiveMode: store.translationConfig.enableObjectiveMode,
+              enableMvuSync: store.translationConfig.enableMvuSync,
+              enableRAGContext: store.translationConfig.enableRAGContext,
+              field: rf,
+              allFields: regexFreshFields,
+              mvuDictionary: useStore.getState().translationConfig.mvuDictionary,
+              glossary: store.translationConfig.glossary,
+              customSchema: store.translationConfig.customSchema,
+              liveSchemaContext: store.liveSchemaContext,
+              ragMaxFields: store.translationConfig.ragMaxFields,
+              ragMaxChars: store.translationConfig.ragMaxChars,
+              entryNameDictionary: Object.keys(regexEntryNameDict).length > 0 ? regexEntryNameDict : undefined,
+              expertMode: regexEffectiveProxy.expertMode,
+              enableModMode: store.translationConfig.enableModMode,
+              modInstructions: store.translationConfig.modInstructions,
+              enableModThinking: store.translationConfig.enableModThinking,
+              modPreset: store.translationConfig.modPreset,
+              enableEjsSync: store.translationConfig.enableEjsSync,
+              ejsEntryNameDict: useStore.getState().translationConfig.ejsEntryNameDict,
+              ejsKeywordDict: useStore.getState().translationConfig.ejsKeywordDict,
+              ejsDecoratorPreserve: store.translationConfig.ejsDecoratorPreserve,
+            });
+
+            const regexFieldType = fieldGroupToFieldType(rf.group, rf.entryType);
+            const regexMvuDict = store.translationConfig.enableMvuSync
+              ? useStore.getState().translationConfig.mvuDictionary
+              : undefined;
+
+            // ═══ Surgical Translation (primary path for regex) ═══
+            let regexTranslated = '';
+            let regexUsedSurgical = false;
+            let regexSurgicalFallback = false;
+
+            const regexIsEligibleForSurgical = true; // Regex always uses surgical (like Regex Manager)
+
+            if (regexIsEligibleForSurgical) {
+              regexUsedSurgical = true;
+              store.addLog('active', `🔪 Initiating Surgical Translation for ${rf.label}...`);
+              const sResult = await surgicalTranslate(
+                rf.original,
+                regexEffectiveProxy,
+                store.translationConfig.targetLanguage,
+                abortRef.current?.signal,
+                store.translationConfig.glossary,
+                regexMvuDict,
+                true,
+                undefined,
+                'preserve',
+                store.translationConfig.customSchema,
+                regexPromptResult.effectivePrompt,
+                rf.label,
+                store.translationConfig.surgicalPrompt || undefined
+              );
+              regexTranslated = sResult.translated;
+
+              if (sResult.success) {
+                store.updateField(rf.path, {
+                  surgicalResult: { type: 'success', info: 'Successfully extracted and reinserted CJK without touching code structure.' }
+                });
+              } else {
+                regexSurgicalFallback = true;
+                store.updateField(rf.path, {
+                  surgicalResult: { type: 'fallback', info: 'Structural verification failed. Falling back to standard translation.' }
+                });
+                store.addLog('warning', `Surgical verification failed for ${rf.label}. Falling back to standard translation.`);
+              }
+            }
+
+            // ═══ Standard translateText (fallback or when surgical is disabled) ═══
+            if (!regexIsEligibleForSurgical || regexSurgicalFallback) {
+              regexTranslated = await translateText(
+                rf.original,
+                rf.label,
+                regexEffectiveProxy,
+                store.translationConfig.targetLanguage,
+                store.translationConfig.sourceLanguage,
+                regexPromptResult.effectivePrompt,
+                regexPromptResult.schemaForApi,
+                abortRef.current?.signal,
+                undefined,
+                regexPromptResult.glossaryForApi,
+                rf.previousTranslation,
+                regexFieldType,
+                regexMvuDict,
+                store.translationConfig.chunkSize,
+                undefined, // no prevChunks — fresh translation
+                // onChunkComplete
+                (chunkIdx, translatedChunk, totalChunks) => {
+                  const currentField = useStore.getState().fields.find(f => f.path === rf.path);
+                  const currentCompleted = currentField?.completedChunks || [];
+                  const updatedChunks = [...currentCompleted];
+                  while (updatedChunks.length <= chunkIdx) updatedChunks.push('');
+                  updatedChunks[chunkIdx] = translatedChunk;
+                  store.updateField(rf.path, { completedChunks: updatedChunks, totalChunks });
+                },
+                store.translationConfig.parallelChunks,
+                store.translationConfig.enableChunkVerification,
+                // onChunksReady
+                (rawChunks) => {
+                  store.updateField(rf.path, { rawChunks });
+                },
+                store.translationConfig.cssCjkHandling,
+              );
+            }
+
+            // ═══ Post-process regex HTML ═══
+            const isRegexContent = rf.path.includes('replaceString') || rf.path.includes('trimStrings');
+            if (isRegexContent && regexTranslated) {
+              regexTranslated = postProcessRegexHtml(regexTranslated);
+            }
+
+            // ═══ EJS AUTO-FIX (Strategy C) ═══
+            if (regexTranslated && store.translationConfig.enableEjsSync) {
+              const ejsEntryDict = useStore.getState().translationConfig.ejsEntryNameDict;
+              const ejsKwDict = useStore.getState().translationConfig.ejsKeywordDict;
+
+              if (Object.keys(ejsEntryDict).length > 0) {
+                const entryFixResult = autoFixEjsEntryNames(regexTranslated, ejsEntryDict);
+                if (entryFixResult.fixes.length > 0) {
+                  regexTranslated = entryFixResult.text;
+                  store.addLog('info', `🔗 EJS EntryName: fixed ${entryFixResult.fixes.length} call(s) in ${rf.label}`);
+                }
+              }
+              if (Object.keys(ejsKwDict).length > 0) {
+                const kwFixResult = autoFixEjsKeywords(regexTranslated, ejsKwDict);
+                if (kwFixResult.fixes.length > 0) {
+                  regexTranslated = kwFixResult.text;
+                  store.addLog('info', `🔗 EJS Keyword: fixed ${kwFixResult.fixes.length} keyword(s) in ${rf.label}`);
+                }
+              }
+              // EJS Covariance + Casing + Extended
+              if (Object.keys(ejsEntryDict).length > 0 || Object.keys(ejsKwDict).length > 0) {
+                const covResult = enforceEjsCovariance(regexTranslated, ejsEntryDict, ejsKwDict);
+                if (covResult.fixes.length > 0) {
+                  regexTranslated = covResult.text;
+                  store.addLog('info', `🔗 EJS Covariance: fixed ${covResult.fixes.length} ref(s) in ${rf.label}`);
+                }
+                const casingResult = enforceEjsKeywordCasing(regexTranslated, ejsEntryDict, ejsKwDict);
+                if (casingResult.fixes.length > 0) {
+                  regexTranslated = casingResult.text;
+                  store.addLog('info', `🔠 EJS Casing: fixed ${casingResult.fixes.length} casing(s) in ${rf.label}`);
+                }
+              }
+              if (Object.keys(ejsKwDict).length > 0) {
+                const extResult = autoFixEjsKeywordsExtended(regexTranslated, ejsKwDict);
+                if (extResult.fixes.length > 0) {
+                  regexTranslated = extResult.text;
+                  store.addLog('info', `🔗 EJS Extended: fixed ${extResult.fixes.length} keyword(s) outside EJS blocks in ${rf.label}`);
+                }
+              }
+            }
+
+            // ═══ MVU AUTO-FIX (Strategy B) ═══
+            const regexHasMvuDict = regexMvuDict && Object.keys(regexMvuDict).length > 0;
+            if (regexHasMvuDict && regexTranslated) {
+              const covariance = enforceInitvarCovariance(regexTranslated, regexMvuDict!);
+              if (covariance.fixes.length > 0) {
+                regexTranslated = covariance.text;
+                store.addLog('info', `🔗 MVU Covariance: fixed ${covariance.fixes.length} var(s) in ${rf.label}`);
+              }
+              const casingResult = enforceVariableCasing(regexTranslated, regexMvuDict!);
+              if (casingResult.fixes.length > 0) {
+                regexTranslated = casingResult.text;
+                store.addLog('info', `🔠 MVU Casing: fixed ${casingResult.fixes.length} var(s) in ${rf.label}`);
+              }
+            }
+
+            store.updateField(rf.path, { status: 'done', translated: regexTranslated, failedChunkIndex: undefined });
+            store.addLog('success', `Done: ${rf.label}`);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (msg === 'Cancelled' || msg === 'The operation was aborted' || msg === 'The user aborted a request.' || checkAbort()) {
+              runningRef.current = false;
+              store.setPhase('cancelled');
+              store.addLog('warning', 'Translation cancelled');
+              return;
+            }
+            store.updateField(rf.path, { status: 'error', error: msg });
+            store.addLog('error', `Regex translate failed: ${rf.label} — ${msg}`);
+          }
+
+          // Delay between requests
+          if (store.proxy.requestDelay > 0) {
+            await new Promise((r) => setTimeout(r, store.proxy.requestDelay));
+          }
+
+          // Auto-save cache
+          store.saveTranslationCache();
+        }
+
+        // Delay before next non-regex field
         if (i < fields.length && store.proxy.requestDelay > 0) {
           await new Promise((r) => setTimeout(r, store.proxy.requestDelay));
         }

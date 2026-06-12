@@ -391,29 +391,61 @@ function getCJKRatio(text: string): number {
   return text.length > 0 ? cjkChars / text.length : 0;
 }
 
-/** Count only Chinese characters (CJK Unified Ideographs), excluding Japanese kana */
+/**
+ * Strip URL/link content from text before CJK residual detection.
+ * Prevents false-positive retries when URLs intentionally contain CJK characters
+ * (e.g., https://cdn.com/骰子系统/stable.js should NOT trigger a residual CJK retry).
+ *
+ * Strips: standard URLs, HTML src/href attributes, CSS url(), import()/require() paths,
+ * data URIs, relative file paths, and markdown link URLs.
+ */
+function stripUrlsForCjkCheck(text: string): string {
+  let stripped = text;
+  // 1. Standard URLs: http://, https://, ftp://, //
+  stripped = stripped.replace(/(?:https?|ftp):\/\/[^\s'"<>(){}\\]+|\/\/[a-zA-Z0-9][^\s'"<>(){}\\]*/gi, '');
+  // 2. HTML src/href/action/data-src/poster/srcset attribute values
+  stripped = stripped.replace(/(?:src|href|action|data-src|data-href|poster|srcset)\s*=\s*(?:"[^"]*"|'[^']*')/gi, '');
+  // 3. CSS url() references
+  stripped = stripped.replace(/url\(\s*(?:"[^"]*"|'[^']*'|[^)]*?)\s*\)/gi, '');
+  // 4. import()/require() paths (string and template literal)
+  stripped = stripped.replace(/(?:import|require)\s*\(\s*(?:[`'"][^`'"]*[`'"]|`[^`]*`)\s*\)/gi, '');
+  // 5. Data URIs
+  stripped = stripped.replace(/data:[a-zA-Z0-9+/.-]+;[^\s'"<>)]+/gi, '');
+  // 6. Relative file paths: ./... or ../...
+  stripped = stripped.replace(/(?:\.\.\?\/)[^\s'"<>(){}\\]+/g, '');
+  // 7. Markdown link URLs: [...](url) — strip only the URL part
+  stripped = stripped.replace(/(!?\[[^\]]*\])\([^)]+\)/g, '$1()');
+  return stripped;
+}
+
+/** Count only Chinese characters (CJK Unified Ideographs), excluding Japanese kana.
+ *  Strips URLs first to avoid false positives from CJK chars in URL paths. */
 function countChineseChars(text: string): number {
-  return (text.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
+  const stripped = stripUrlsForCjkCheck(text);
+  return (stripped.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
 }
 
 /**
  * Extract Chinese fragments from a partially-translated text.
  * Returns segments of consecutive Chinese characters with surrounding context.
+ * Strips URLs first to avoid flagging CJK chars in URL paths as untranslated.
  */
 function extractChineseFragments(text: string): string[] {
+  const stripped = stripUrlsForCjkCheck(text);
   const fragments: string[] = [];
   const regex = /[\u4e00-\u9fff\u3400-\u4dbf][\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f\uff00-\uffef\s]{0,200}[\u4e00-\u9fff\u3400-\u4dbf]/g;
   let m;
-  while ((m = regex.exec(text)) !== null) {
+  while ((m = regex.exec(stripped)) !== null) {
     fragments.push(m[0]);
   }
   // Also catch single isolated Chinese chars
-  const singles = text.match(/(?<![\u4e00-\u9fff\u3400-\u4dbf])[\u4e00-\u9fff\u3400-\u4dbf](?![\u4e00-\u9fff\u3400-\u4dbf])/g) || [];
+  const singles = stripped.match(/(?<![\u4e00-\u9fff\u3400-\u4dbf])[\u4e00-\u9fff\u3400-\u4dbf](?![\u4e00-\u9fff\u3400-\u4dbf])/g) || [];
   for (const s of singles) {
     if (!fragments.some(f => f.includes(s))) fragments.push(s);
   }
   return fragments;
 }
+
 
 /**
  * Post-translation residual CJK check & auto-retry.

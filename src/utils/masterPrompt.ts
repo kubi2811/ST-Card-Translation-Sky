@@ -572,10 +572,20 @@ RULE C10 — Do NOT translate text already in ${targetLang}.
   If the source text already contains ${targetLang} or English words
   used as proper nouns/system names, keep them.
 
-RULE C11 — Do NOT translate URLs, File Paths, or Image Links.
-  Never translate any part of a URL, web link, file path, or image source
-  (e.g., https://..., src="...", href="...", .html, .png, .jpg), even if they
-  contain foreign characters. Doing so will break the links and cause 404 errors.
+RULE C11 — Do NOT translate URLs, File Paths, Import Paths, or Link Attributes.
+  NEVER translate any part of a URL, web link, file path, import/require path, or image source — even if they contain CJK characters. Translating URLs will break links and cause 404 errors.
+  THIS APPLIES TO:
+    - Standard URLs: http://, https://, ftp://, protocol-relative //
+    - HTML attribute values: src="...", href="...", action="...", data-src="...", poster="...", srcset="..."
+    - CSS url() references: url('./assets/背景.jpg') → KEEP AS-IS
+    - JS import()/require() paths: import('https://cdn.com/骰子系统/stable.js') → KEEP AS-IS, do NOT translate 骰子系统
+    - Template literal imports: import(\`https://cdn.com/\${version}/dist/骰子系统/stable.js\`) → KEEP PATH AS-IS
+    - Data URIs: data:image/png;base64,...
+    - Relative file paths: ./path/文件.png, ../assets/背景.jpg
+    - Markdown link URLs: [点击这里](https://example.com/图片/bg.png) → translate the link TEXT [Nhấn vào đây], but KEEP the URL as-is
+    - Email addresses: user@example.com
+  EXAMPLE: <a href="https://example.com/图片/bg.png">点击这里</a> → <a href="https://example.com/图片/bg.png">Nhấn vào đây</a>
+  The CJK characters 图片 inside the URL must NOT be translated — they are part of the server path.
 
 RULE C14 — NO CHATTINESS (CRITICAL).
   Output ONLY the raw translated text. Do NOT add greetings, explanations, notes, or conversational text.

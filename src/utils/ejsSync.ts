@@ -1001,6 +1001,396 @@ export function enforceEjsEntryName(
 }
 
 /* ═══════════════════════════════════════════════════════════════════
+   COVARIANCE — Full-context enforcement (equivalent to Strategy B)
+   ═══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Enforce EJS covariance across ALL code contexts in translated text.
+ * This is the Strategy C equivalent of MVU's `enforceInitvarCovariance()`.
+ *
+ * Strategy B enforces covariance for MVU variables across YAML keys, macros,
+ * bracket access, EJS function calls, string comparisons, lodash paths.
+ * Strategy C needs the same treatment for EJS entry names and keywords —
+ * especially in regex `replaceString` fields which contain HTML/JS/CSS with
+ * EJS keywords scattered across many code contexts (not just inside <% %> blocks).
+ *
+ * This function scans translated text and replaces original (untranslated)
+ * EJS entry names and keywords with their translated counterparts in:
+ *   Pass 1: getwi/activewi API calls (entry names)
+ *   Pass 2: String comparisons (===, ==, !==, !=, includes, indexOf, match, startsWith, endsWith, case)
+ *   Pass 3: Bracket access (obj['keyword'], data["keyword"])
+ *   Pass 4: data-* HTML attributes (data-name="keyword", data-label="keyword")
+ *   Pass 5: CSS content property (content: 'keyword')
+ *   Pass 6: Generic quoted string replacements in inline <script> blocks
+ *   Pass 7: .push() / array literal string replacements
+ */
+export function enforceEjsCovariance(
+  translatedText: string,
+  ejsEntryNameDict: Record<string, string>,
+  ejsKeywordDict: Record<string, string>,
+): { text: string; fixes: { found: string; replaced: string }[] } {
+  if (!translatedText || typeof translatedText !== 'string') {
+    return { text: translatedText, fixes: [] };
+  }
+
+  const fixes: { found: string; replaced: string }[] = [];
+  let result = translatedText;
+
+  // Merge both dicts: entry names + keywords (entry names take priority)
+  const allMappings = new Map<string, string>();
+  for (const [k, v] of Object.entries(ejsKeywordDict)) {
+    if (k && v && k !== v) allMappings.set(k, v);
+  }
+  for (const [k, v] of Object.entries(ejsEntryNameDict)) {
+    if (k && v && k !== v) allMappings.set(k, v);
+  }
+
+  if (allMappings.size === 0) {
+    return { text: result, fixes: [] };
+  }
+
+  // Sort by length descending (replace longer strings first to avoid partial matches)
+  const sortedEntries = Array.from(allMappings.entries())
+    .sort((a, b) => b[0].length - a[0].length);
+
+  const addFix = (found: string, replaced: string) => {
+    if (!fixes.some(f => f.found === found && f.replaced === replaced)) {
+      fixes.push({ found, replaced });
+    }
+  };
+
+  // Helper: safe replacement for regex $ characters
+  const safeReplacement = (str: string) => str.replace(/\$/g, '$$$$');
+
+  for (const [original, translated] of sortedEntries) {
+    const escaped = escapeRegex(original);
+    const safe = safeReplacement(translated);
+
+    // ── Pass 1: getwi / activewi / getWorldInfo / activateWorldInfo calls ──
+    const apiPatterns = [
+      new RegExp(
+        `((?:getwi|getWorldInfo)\\s*\\(\\s*(?:null|''|""|[\\w.]+)\\s*,\\s*)(['"\`])${escaped}\\2`,
+        'g',
+      ),
+      new RegExp(
+        `((?:activewi|activateWorldInfo)\\s*\\(\\s*(?:null|''|""|[\\w.]+)\\s*,\\s*)(['"\`])${escaped}\\2`,
+        'g',
+      ),
+      new RegExp(
+        `((?:getWorldInfoData|getWorldInfoActivatedData)\\s*\\(\\s*(?:null|''|""|[\\w.]+)\\s*,\\s*)(['"\`])${escaped}\\2`,
+        'g',
+      ),
+    ];
+    for (const pattern of apiPatterns) {
+      const before = result;
+      result = result.replace(pattern, `$1$2${safe}$2`);
+      if (result !== before) addFix(original, translated);
+    }
+
+    // ── Pass 2: String comparisons ===, ==, !==, !=, case ──
+    const compPattern = new RegExp(
+      `((?:===|!==|==|!=|case)\\s*['"\`])${escaped}(['"\`])`,
+      'g',
+    );
+    {
+      const before = result;
+      result = result.replace(compPattern, `$1${safe}$2`);
+      if (result !== before) addFix(original, translated);
+    }
+
+    // .includes('original'), .indexOf('original'), .match('original'),
+    // .startsWith('original'), .endsWith('original')
+    const methodPatterns = [
+      new RegExp(`(\\.(?:includes|indexOf|match|startsWith|endsWith)\\s*\\(\\s*['"\`])${escaped}(['"\`]\\s*\\))`, 'g'),
+    ];
+    for (const mp of methodPatterns) {
+      const before = result;
+      result = result.replace(mp, `$1${safe}$2`);
+      if (result !== before) addFix(original, translated);
+    }
+
+    // ── Pass 3: Bracket access obj['keyword'] / data["keyword"] ──
+    const bracketPattern = new RegExp(
+      `(\\[\\s*['"\`])${escaped}(['"\`]\\s*\\])`,
+      'g',
+    );
+    {
+      const before = result;
+      result = result.replace(bracketPattern, `$1${safe}$2`);
+      if (result !== before) addFix(original, translated);
+    }
+
+    // ── Pass 4: data-* HTML attributes ──
+    // data-name="keyword", data-label="keyword", data-entry="keyword"
+    const dataAttrPattern = new RegExp(
+      `(data-[a-z_-]+\\s*=\\s*['"\`])${escaped}(['"\`])`,
+      'gi',
+    );
+    {
+      const before = result;
+      result = result.replace(dataAttrPattern, `$1${safe}$2`);
+      if (result !== before) addFix(original, translated);
+    }
+
+    // ── Pass 5: CSS content property ──
+    // content: 'keyword' or content: "keyword"
+    const cssContentPattern = new RegExp(
+      `(content\\s*:\\s*['"\`])${escaped}(['"\`])`,
+      'g',
+    );
+    {
+      const before = result;
+      result = result.replace(cssContentPattern, `$1${safe}$2`);
+      if (result !== before) addFix(original, translated);
+    }
+
+    // ── Pass 6: Inline <script> quoted strings ──
+    // Replace original keywords in quoted strings within <script> blocks
+    // We detect <script>...</script> and process quoted strings inside
+    const scriptBlockRegex = /<script[^>]*>([\s\S]*?)<\/script>/gi;
+    let scriptMatch: RegExpExecArray | null;
+    const scriptFixes: { start: number; end: number; content: string }[] = [];
+    while ((scriptMatch = scriptBlockRegex.exec(result)) !== null) {
+      const scriptContent = scriptMatch[1];
+      const scriptStart = scriptMatch.index + scriptMatch[0].indexOf(scriptContent);
+      const quotedPattern = new RegExp(
+        `(['"\`])([^'"\`]*?)${escaped}([^'"\`]*?)\\1`,
+        'g',
+      );
+      const fixedScript = scriptContent.replace(quotedPattern, (m, q, pre, post) => {
+        return `${q}${pre}${translated}${post}${q}`;
+      });
+      if (fixedScript !== scriptContent) {
+        scriptFixes.push({ start: scriptStart, end: scriptStart + scriptContent.length, content: fixedScript });
+        addFix(original, translated);
+      }
+    }
+    // Apply script fixes in reverse order
+    for (let i = scriptFixes.length - 1; i >= 0; i--) {
+      const sf = scriptFixes[i];
+      result = result.slice(0, sf.start) + sf.content + result.slice(sf.end);
+    }
+
+    // ── Pass 7: .push('keyword') / array literals ['keyword1', 'keyword2'] ──
+    const pushPattern = new RegExp(
+      `(\\.push\\s*\\(\\s*['"\`])${escaped}(['"\`]\\s*\\))`,
+      'g',
+    );
+    {
+      const before = result;
+      result = result.replace(pushPattern, `$1${safe}$2`);
+      if (result !== before) addFix(original, translated);
+    }
+  }
+
+  return { text: result, fixes };
+}
+
+/**
+ * Enforce EJS keyword/entry name casing to match the dictionaries EXACTLY.
+ * This is the Strategy C equivalent of MVU's `enforceVariableCasing()`.
+ *
+ * Problem: AI translates EJS keywords as one casing (e.g., "giai đoạn") but
+ * the dictionary has a different casing (e.g., "Giai Đoạn"). This breaks
+ * comparisons because JavaScript string matching is case-sensitive.
+ *
+ * Solution: After AI translation, scan for all EJS-related references and
+ * replace any that match a dictionary value case-insensitively but differ
+ * in exact casing with the canonical dictionary form.
+ */
+export function enforceEjsKeywordCasing(
+  translatedText: string,
+  ejsEntryNameDict: Record<string, string>,
+  ejsKeywordDict: Record<string, string>,
+): { text: string; fixes: { found: string; replaced: string }[] } {
+  if (!translatedText || typeof translatedText !== 'string') {
+    return { text: translatedText, fixes: [] };
+  }
+
+  const fixes: { found: string; replaced: string }[] = [];
+
+  // Build case-insensitive lookup: lowercased translated value → canonical form
+  const canonicalMap = new Map<string, string>();
+  for (const [, trans] of Object.entries(ejsEntryNameDict)) {
+    if (trans && trans.trim()) {
+      canonicalMap.set(trans.toLowerCase(), trans);
+    }
+  }
+  for (const [, trans] of Object.entries(ejsKeywordDict)) {
+    if (trans && trans.trim()) {
+      // Don't overwrite entry name canonicals (they have priority)
+      if (!canonicalMap.has(trans.toLowerCase())) {
+        canonicalMap.set(trans.toLowerCase(), trans);
+      }
+    }
+  }
+
+  if (canonicalMap.size === 0) {
+    return { text: translatedText, fixes: [] };
+  }
+
+  let result = translatedText;
+
+  const addFix = (found: string, replaced: string) => {
+    if (!fixes.some(f => f.found === found && f.replaced === replaced)) {
+      fixes.push({ found, replaced });
+    }
+  };
+
+  // Helper: check if a string needs casing fix
+  const getCasingFix = (value: string): string | null => {
+    if (!value || value.length < 2) return null;
+    const lower = value.toLowerCase();
+    const canonical = canonicalMap.get(lower);
+    if (canonical && canonical !== value) {
+      return canonical;
+    }
+    return null;
+  };
+
+  // ── Pass 1: getwi/activewi entry name arguments ──
+  const apiRegex = /((?:getwi|getWorldInfo|activewi|activateWorldInfo|getWorldInfoData|getWorldInfoActivatedData)\s*\(\s*(?:null|''|""|[\w.]+)\s*,\s*)(['"`])([^'"`]+)\2/g;
+  result = result.replace(apiRegex, (match, prefix, quote, inner) => {
+    const canonical = getCasingFix(inner);
+    if (canonical) {
+      addFix(inner, canonical);
+      return `${prefix}${quote}${canonical}${quote}`;
+    }
+    return match;
+  });
+
+  // ── Pass 2: String comparisons ===, ==, !==, !=, case ──
+  const compRegex = /((?:===|!==|==|!=|case)\s*['"`])([^'"`]+)(['"`])/g;
+  result = result.replace(compRegex, (match, prefix, inner, suffix) => {
+    const canonical = getCasingFix(inner);
+    if (canonical) {
+      addFix(inner, canonical);
+      return `${prefix}${canonical}${suffix}`;
+    }
+    return match;
+  });
+
+  // ── Pass 3: .includes(), .indexOf(), .match(), .startsWith(), .endsWith() ──
+  const methodRegex = /(\.(?:includes|indexOf|match|startsWith|endsWith)\s*\(\s*['"`])([^'"`]+)(['"`]\s*\))/g;
+  result = result.replace(methodRegex, (match, prefix, inner, suffix) => {
+    const canonical = getCasingFix(inner);
+    if (canonical) {
+      addFix(inner, canonical);
+      return `${prefix}${canonical}${suffix}`;
+    }
+    return match;
+  });
+
+  // ── Pass 4: Bracket access ──
+  const bracketRegex = /(\[\s*['"`])([^'"`]+)(['"`]\s*\])/g;
+  result = result.replace(bracketRegex, (match, prefix, inner, suffix) => {
+    const canonical = getCasingFix(inner);
+    if (canonical) {
+      addFix(inner, canonical);
+      return `${prefix}${canonical}${suffix}`;
+    }
+    return match;
+  });
+
+  // ── Pass 5: data-* attributes ──
+  const dataAttrRegex = /(data-[a-z_-]+\s*=\s*['"`])([^'"`]+)(['"`])/gi;
+  result = result.replace(dataAttrRegex, (match, prefix, inner, suffix) => {
+    const canonical = getCasingFix(inner);
+    if (canonical) {
+      addFix(inner, canonical);
+      return `${prefix}${canonical}${suffix}`;
+    }
+    return match;
+  });
+
+  // ── Pass 6: CSS content property ──
+  const cssContentRegex = /(content\s*:\s*['"`])([^'"`]+)(['"`])/g;
+  result = result.replace(cssContentRegex, (match, prefix, inner, suffix) => {
+    const canonical = getCasingFix(inner);
+    if (canonical) {
+      addFix(inner, canonical);
+      return `${prefix}${canonical}${suffix}`;
+    }
+    return match;
+  });
+
+  return { text: result, fixes };
+}
+
+/**
+ * Extended EJS keyword auto-fix that works OUTSIDE of <% %> blocks as well.
+ * The original autoFixEjsKeywords() only processes keywords inside EJS blocks.
+ * This function additionally handles:
+ *   - Keywords in inline <script> blocks (JS code outside EJS)
+ *   - Keywords in data-* attributes
+ *   - Keywords in string comparisons outside EJS blocks
+ *
+ * Use this AFTER autoFixEjsKeywords() for complete coverage.
+ */
+export function autoFixEjsKeywordsExtended(
+  translated: string,
+  ejsKeywordDict: Record<string, string>,
+): { text: string; fixes: { found: string; replaced: string }[] } {
+  const fixes: { found: string; replaced: string }[] = [];
+
+  const entries = Object.entries(ejsKeywordDict).filter(([k, v]) => k && v && k !== v);
+  if (entries.length === 0) return { text: translated, fixes };
+
+  // Sort by length descending to avoid partial replacement
+  const sortedEntries = entries.sort((a, b) => b[0].length - a[0].length);
+
+  let text = translated;
+
+  // Build a set of EJS block ranges to skip (already handled by autoFixEjsKeywords)
+  const ejsBlockRegex = /<%[\s\S]*?%>/g;
+  const ejsRanges: { start: number; end: number }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = ejsBlockRegex.exec(text)) !== null) {
+    ejsRanges.push({ start: m.index, end: m.index + m[0].length });
+  }
+
+  const isInEjsBlock = (pos: number): boolean => {
+    return ejsRanges.some(r => pos >= r.start && pos < r.end);
+  };
+
+  for (const [original, translatedKw] of sortedEntries) {
+    const escapedOriginal = escapeRegex(original);
+
+    // Only replace inside quoted strings OUTSIDE of EJS blocks
+    // We use a global scan + manual position check
+    const quotedPattern = new RegExp(
+      `(['"\`])([^'"\`]*?)${escapedOriginal}([^'"\`]*?)\\1`,
+      'g',
+    );
+
+    // Process matches from end to start to preserve indices
+    const matches: { index: number; match: string; replacement: string }[] = [];
+    let qm: RegExpExecArray | null;
+    while ((qm = quotedPattern.exec(text)) !== null) {
+      // Skip if this match is inside an EJS block (already handled)
+      if (isInEjsBlock(qm.index)) continue;
+
+      const q = qm[1];
+      const pre = qm[2];
+      const post = qm[3];
+      const replacement = `${q}${pre}${translatedKw}${post}${q}`;
+      matches.push({ index: qm.index, match: qm[0], replacement });
+    }
+
+    // Apply in reverse order
+    for (let i = matches.length - 1; i >= 0; i--) {
+      const { index, match: matchStr, replacement } = matches[i];
+      text = text.slice(0, index) + replacement + text.slice(index + matchStr.length);
+      if (!fixes.some(f => f.found === original && f.replaced === translatedKw)) {
+        fixes.push({ found: original, replaced: translatedKw });
+      }
+    }
+  }
+
+  return { text, fixes };
+}
+
+/* ═══════════════════════════════════════════════════════════════════
    HELPERS
    ═══════════════════════════════════════════════════════════════════ */
 

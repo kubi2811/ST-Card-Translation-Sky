@@ -90,7 +90,19 @@ H. BẢO VỆ CSS — KHÔNG DỊCH KÝ TỰ HÁN/CJK TRONG CSS VALUES:
     - TUYỆT ĐỐI KHÔNG dịch ký tự Hán/CJK đứng đơn lẻ bên trong CSS function calls (drop-shadow(), filter(), transform(), calc(), linear-gradient(), v.v.).
     - Ví dụ: filter: drop-shadow(商 10px 20px rgba(0,0,0,0.8)); → GIỮ NGUYÊN "商", KHÔNG dịch thành "Thương".
     - Các ký tự này có thể là placeholder, lỗi encoding, hoặc ký tự đặc biệt của tác giả — dịch chúng sẽ LÀM HỎNG CSS.
-    - CHỈ dịch CJK khi chúng nằm trong HTML text content (<span>好感度</span>), HTML attributes hiển thị (title, alt, aria-label), hoặc JS string literals.`;
+    - CHỈ dịch CJK khi chúng nằm trong HTML text content (<span>好感度</span>), HTML attributes hiển thị (title, alt, aria-label), hoặc JS string literals.
+I. BẢO VỆ URL/LINK — TUYỆT ĐỐI KHÔNG DỊCH:
+    - GIỮ NGUYÊN 100% mọi URL (http://, https://, ftp://, //) kể cả khi URL chứa ký tự CJK trong path, query string, hoặc fragment.
+    - GIỮ NGUYÊN giá trị của các HTML attributes: src="...", href="...", action="...", data-src="...", poster="...", srcset="..."
+    - GIỮ NGUYÊN CSS url(...) references
+    - GIỮ NGUYÊN file paths: ./path/file.ext, ../path/file.ext, /path/file.ext
+    - GIỮ NGUYÊN import()/require() paths: import('https://cdn.com/骰子系统/stable.js') → GIỮ NGUYÊN, KHÔNG dịch "骰子系统"
+    - GIỮ NGUYÊN data URIs: data:image/png;base64,...
+    - GIỮ NGUYÊN email addresses
+    - GIỮ NGUYÊN Markdown links: [...](url) — chỉ dịch phần text [...], KHÔNG dịch phần url (...)
+    - Ví dụ: href="https://example.com/图片/bg.png" → GIỮ NGUYÊN URL, KHÔNG dịch "图片" thành "hình ảnh"
+    - Ví dụ: import(\`https://cdn.com/\${version}/dist/骰子系统/stable.js\`) → GIỮ NGUYÊN PATH, KHÔNG dịch "骰子系统"
+    - LƯU Ý: Chỉ dịch TEXT CONTENT hiển thị (innerText), KHÔNG dịch URLs/paths trong attributes`;
 
 /** Prompt bổ sung dành riêng cho TavernHelper scripts */
 export const TAVERN_HELPER_EXTRA_PROMPT = `
@@ -135,7 +147,8 @@ ADDITIONAL RULES FOR JAVASCRIPT/TAVERNHELPER SCRIPT CONTENT:
     - Do NOT use safeString() for z.number(), z.boolean(), z.enum(), or z.array() — only z.string().
     - Preserve .prefault(), .default(), .describe(), .optional() chains: safeString().prefault("X").describe("Y") is valid.
     - If the script already has a safeString or similar preprocess wrapper, do NOT duplicate it.
-    - EJS OBJECT LITERAL KEY QUOTING: When translating EJS blocks or JS code, if an object literal contains keys with Vietnamese diacritics, spaces, or special characters (e.g. 'Loại', 'Mô Tả'), you MUST wrap those keys in single quotes '' (e.g. 'Loại': 'Võ công', 'Mô Tả': '...'). Without quotes, EJS compiler throws an immediate syntax error.`;
+    - EJS OBJECT LITERAL KEY QUOTING: When translating EJS blocks or JS code, if an object literal contains keys with Vietnamese diacritics, spaces, or special characters (e.g. 'Loại', 'Mô Tả'), you MUST wrap those keys in single quotes '' (e.g. 'Loại': 'Võ công', 'Mô Tả': '...'). Without quotes, EJS compiler throws an immediate syntax error.
+26. URL/LINK PROTECTION: NEVER translate any part of URLs (http://, https://, ftp://, //). Keep ALL HTML attribute values for src, href, action, data-src, poster, srcset EXACTLY as-is. Keep CSS url() references intact. Keep import()/require() path arguments intact. Even if the URL contains CJK characters in the path (e.g., https://cdn.com/骰子系统/stable.js or import(\`https://cdn.com/\${version}/dist/骰子系统/stable.js\`)), do NOT translate them — they are file paths, not prose. Also preserve data URIs, email addresses, markdown link URLs, and relative file paths (./ or ../).`;
 
 
 /** Prompt bổ sung cho [initvar] entries (YAML variable initialization) */

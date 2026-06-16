@@ -142,6 +142,7 @@ export function validateMvuVariables(
 /**
  * Auto-fix unreplaced variables in translated text using the dictionary.
  * Only applies to code fields (not narrative) where aggressive replacement is safe.
+ * CSS zones (<style> blocks and style= attributes) are protected from replacement.
  */
 export function autoFixMvuVariables(
   translated: string,
@@ -174,7 +175,7 @@ export function autoFixMvuVariables(
     // 2. Replace in EJS function calls: getvar('key') / setvar('key', ...)
     const ejsRegex = new RegExp(`((?:getvar|setvar|addvar|getglobalvar|setglobalvar|addglobalvar|getVariable|setVariable)\\s*\\(\\s*['"])([^'"]+)(['"])`, 'g');
     fixed = fixed.replace(ejsRegex, (match, prefix, inner, suffix) => {
-      const segmentRegex = new RegExp(`(^|\\.)(${escaped})(\\.|$)`, 'g');
+      const segmentRegex = new RegExp(`(^|\\.)(${escaped})(\\.|\$)`, 'g');
       const newInner = inner.replace(segmentRegex, `$1${safeRepl}$3`);
       return `${prefix}${newInner}${suffix}`;
     });
@@ -182,7 +183,7 @@ export function autoFixMvuVariables(
     // 2.5. Replace in object accessors: _get(char, 'key') / _set(char, 'key', val)
     const getSetRegex = new RegExp(`(\\b(?:_get|_set|get|set)\\s*\\(\\s*[a-zA-Z0-9_$]+\\s*,\\s*['"])([^'"]+)(['"])`, 'g');
     fixed = fixed.replace(getSetRegex, (match, prefix, inner, suffix) => {
-      const segmentRegex = new RegExp(`(^|\\.)(${escaped})(\\.|$)`, 'g');
+      const segmentRegex = new RegExp(`(^|\\.)(${escaped})(\\.|\$)`, 'g');
       const newInner = inner.replace(segmentRegex, `$1${safeRepl}$3`);
       return `${prefix}${newInner}${suffix}`;
     });
@@ -191,13 +192,43 @@ export function autoFixMvuVariables(
     const dataVarRegex = new RegExp(`(data-var\\s*=\\s*["'])${escaped}(["'])`, 'g');
     fixed = fixed.replace(dataVarRegex, `$1${safeRepl}$2`);
 
-    // 4. Replace standalone occurrences
+    // 4. Replace standalone occurrences — WITH CSS ZONE PROTECTION
+    // CSS zones (<style>...</style> blocks and style="..." attributes) are extracted
+    // as placeholders before replacement and restored after to prevent corrupting
+    // CSS properties like 'top', 'gap', 'tag' with MVU variable names.
+    const cssPlaceholders: { placeholder: string; content: string }[] = [];
+    let cssIdx = 0;
+
+    // Extract <style>...</style> blocks
+    fixed = fixed.replace(/<style[\s>][\s\S]*?<\/style>/gi, (m) => {
+      const ph = `__CSS_ZONE_${cssIdx++}__`;
+      cssPlaceholders.push({ placeholder: ph, content: m });
+      return ph;
+    });
+
+    // Extract style="..." attributes (both single and double quotes)
+    fixed = fixed.replace(/style\s*=\s*"[^"]*"/gi, (m) => {
+      const ph = `__CSS_ZONE_${cssIdx++}__`;
+      cssPlaceholders.push({ placeholder: ph, content: m });
+      return ph;
+    });
+    fixed = fixed.replace(/style\s*=\s*'[^']*'/gi, (m) => {
+      const ph = `__CSS_ZONE_${cssIdx++}__`;
+      cssPlaceholders.push({ placeholder: ph, content: m });
+      return ph;
+    });
+
     const isAscii = /^[a-zA-Z0-9_]+$/.test(key);
     const regex = isAscii
       ? new RegExp(`\\b${escaped}\\b`, 'g')
       : new RegExp(escaped, 'g');
 
     fixed = fixed.replace(regex, safeRepl);
+
+    // Restore CSS zones
+    for (const { placeholder, content } of cssPlaceholders) {
+      fixed = fixed.replace(placeholder, content);
+    }
   }
 
   return fixed;

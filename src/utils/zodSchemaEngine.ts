@@ -207,9 +207,9 @@ function parseZodExpression(name: string, expr: string): ZodFieldDef {
   };
 
   // Detect base type
-  if (/^(?:z|Zod)\.string\b/.test(expr)) field.type = 'string';
-  else if (/^(?:z|Zod)\.number\b/.test(expr)) field.type = 'number';
-  else if (/^(?:z|Zod)\.boolean\b/.test(expr)) field.type = 'boolean';
+  if (/^(?:z|Zod)\.(?:coerce\.)?string\b/.test(expr)) field.type = 'string';
+  else if (/^(?:z|Zod)\.(?:coerce\.)?number\b/.test(expr)) field.type = 'number';
+  else if (/^(?:z|Zod)\.(?:coerce\.)?boolean\b/.test(expr)) field.type = 'boolean';
   else if (/^(?:z|Zod)\.enum\b/.test(expr)) {
     field.type = 'enum';
     const enumMatch = expr.match(/(?:z|Zod)\.enum\(\s*\[([^\]]+)\]/);
@@ -236,6 +236,14 @@ function parseZodExpression(name: string, expr: string): ZodFieldDef {
   else if (/^(?:z|Zod)\.object\b/.test(expr)) {
     field.type = 'object';
     // Nested objects: extract body and recurse
+    const bodyMatch = expr.match(/(?:z|Zod)\.object\(\s*\{([\s\S]*)\}\s*\)/);
+    if (bodyMatch) {
+      field.children = parseZodFields(bodyMatch[1]);
+    }
+  }
+  else if (/^(?:z|Zod)\.(?:partialRecord|record)\b/.test(expr)) {
+    field.type = 'record';
+    // Nested objects inside record/partialRecord: extract body and recurse
     const bodyMatch = expr.match(/(?:z|Zod)\.object\(\s*\{([\s\S]*)\}\s*\)/);
     if (bodyMatch) {
       field.children = parseZodFields(bodyMatch[1]);
@@ -332,6 +340,11 @@ function buildFieldType(field: ZodFieldDef): z.ZodTypeAny {
     case 'object':
       if (field.children && field.children.length > 0) {
         return buildRuntimeSchema(field.children);
+      }
+      return z.record(z.string(), z.unknown());
+    case 'record':
+      if (field.children && field.children.length > 0) {
+        return z.record(z.string(), buildRuntimeSchema(field.children));
       }
       return z.record(z.string(), z.unknown());
     case 'literal':

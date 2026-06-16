@@ -27,7 +27,7 @@ export interface ZodFieldDef {
 
 export type ZodFieldType =
   | 'string' | 'number' | 'boolean' | 'enum'
-  | 'array' | 'object' | 'literal' | 'union' | 'unknown';
+  | 'array' | 'object' | 'record' | 'literal' | 'union' | 'unknown';
 
 export interface ZodConstraints {
   min?: number;

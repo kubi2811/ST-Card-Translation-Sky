@@ -2,7 +2,7 @@ import { useCallback, useRef } from 'react';
 import { useStore } from '../store';
 import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookEntries, ChunkError } from '../utils/apiClient';
 import { extractTranslatableFields, applyTranslationsToCard, autoTranslateLorebookTriggerKeys, injectNewLorebookEntries } from '../utils/cardFields';
-import { syncMvuVariables, postProcessRegexHtml, extractPotentialMvuKeyStrings, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, enforceInitvarCovariance, extractMappingFromTranslatedInitvar, enforceExactConsistency, enforceVariableCasing, fixZodSyntaxErrors, validateDictionaryConflicts, aiResolveMvuConflicts } from '../utils/mvuSync';
+import { syncMvuVariables, postProcessRegexHtml, fixBrokenLodashPaths, fixDotNotationPaths, extractPotentialMvuKeyStrings, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, enforceInitvarCovariance, extractMappingFromTranslatedInitvar, enforceExactConsistency, enforceVariableCasing, fixZodSyntaxErrors, validateDictionaryConflicts, aiResolveMvuConflicts } from '../utils/mvuSync';
 import { shouldSkipTranslation, detectLanguage } from '../utils/langDetect';
 import { clearRAGCache } from '../utils/ragContext';
 import { storeTranslation, lookupTranslationMemory } from '../utils/translationMemory';
@@ -595,7 +595,7 @@ export function useTranslation() {
         }
       }
 
-      // Post-process regex HTML: font swap + underscore display
+      // Post-process regex HTML: font swap + underscore display + lodash path fix
       const isRegexContent = field.group === 'regex' && (field.path.includes('replaceString') || field.path.includes('trimStrings'));
       if (isRegexContent && translated) {
         translated = postProcessRegexHtml(translated);
@@ -603,6 +603,22 @@ export function useTranslation() {
       // Post-process TavernHelper content that contains HTML
       if (field.group === 'tavern_helper' && translated && /<[a-z][^>]*>/i.test(translated)) {
         translated = postProcessRegexHtml(translated);
+      }
+
+      // ─── LODASH PATH FIX: Fix broken _.get/getvar paths for ALL code-containing fields ───
+      // AI often breaks string paths by inserting newlines or using dot notation with spaced keys.
+      // Apply to lorebook entries with EJS, initvar, controller, mvu_logic, and any field with _.get calls.
+      if (translated && !isRegexContent && field.group !== 'tavern_helper') {
+        const isCodeField = field.entryType === 'initvar' || field.entryType === 'controller' || field.entryType === 'mvu_logic' ||
+          (field.group === 'lorebook' && (translated.includes('_.get') || translated.includes('_.set') || translated.includes('getvar')));
+        if (isCodeField) {
+          const beforeFix = translated;
+          translated = fixBrokenLodashPaths(translated);
+          translated = fixDotNotationPaths(translated);
+          if (translated !== beforeFix) {
+            store.addLog('info', `🔧 Fixed broken _.get/getvar paths in ${field.label}`);
+          }
+        }
       }
 
       // ═══ COMPLETENESS VALIDATION: detect genuinely truncated output ═══

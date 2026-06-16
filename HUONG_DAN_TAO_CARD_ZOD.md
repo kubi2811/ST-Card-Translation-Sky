@@ -1,289 +1,248 @@
-# 📖 HƯỚNG DẪN TẠO CARD SILLYTAVERN VỚI ZOD + MVU (TOÀN DIỆN)
+# 📖 CẨM NANG TOÀN DIỆN: TẠO CARD SILLYTAVERN VỚI ZOD + MVU
 
-> **File tham khảo chuẩn** — Mỗi khi cần tạo card, đọc file này.  
-> Dựa trên phân tích các card hoạt động thực tế (working, public, có battle system).  
-> Cập nhật: 2026-05-20
+> **Tài liệu tham khảo kỹ thuật chuẩn** — Cập nhật: 2026-06-15  
+> Tích hợp đầy đủ các đặc tả API, quy tắc Zod 4, tiêu chuẩn cấu hình Worldbook, Regex tối giản mới, và checklist rà soát chất lượng (QC) từ Kho Kiến Thức Viết Card.
 
 ---
 
 ## MỤC LỤC
 
 1. [Kiến Trúc Tổng Quan](#1-kiến-trúc-tổng-quan)
-2. [Cấu Trúc JSON V3 Chuẩn](#2-cấu-trúc-json-v3-chuẩn)
-3. [Character Info](#3-character-info)
-4. [First Message & Khởi Tạo](#4-first-message--khởi-tạo)
-5. [Lorebook & EJS Preprocessing](#5-lorebook--ejs-preprocessing)
-6. [MVU Entries Hệ Thống](#6-mvu-entries-hệ-thống)
-7. [TavernHelper Scripts](#7-tavernhelper-scripts)
-8. [Zod Schema Chi Tiết & Quy Tắc Zod 4](#8-zod-schema-chi-tiết--quy-tắc-zod-4)
-9. [Regex Scripts](#9-regex-scripts)
-10. [Build Script](#10-build-script)
-11. [Checklist & Troubleshooting](#11-checklist--troubleshooting)
+2. [Cấu Trúc JSON V3 Chuẩn & Sơ Đồ Tiêm](#2-cấu-trúc-json-v3-chuẩn--sơ-đồ-tiêm)
+3. [Character Info (Trường Đầu Cấp)](#3-character-info-trường-đầu-cấp)
+4. [First Message & Khởi Tạo Trạng Thái](#4-first-message--khởi-tạo-trạng-thái)
+5. [Quy Tắc Cấu Hình Worldbook (Lorebook) Chi Tiết](#5-quy-tắc-cấu-hình-worldbook-lorebook-chi-tiết)
+6. [Bộ Điều Khiển Nội Dung Động EJS Preprocessing](#6-bộ-điều-khiển-nội-dung-động-ejs-preprocessing)
+7. [MVU Entries Hệ Thống & Tiền Tố Biến Số](#7-mvu-entries-hệ-thống--tiền-tố-biến-số)
+8. [TavernHelper Scripts (Logic Engine)](#8-tavernhelper-scripts-logic-engine)
+9. [Quy Tắc Viết Zod Schema & Chuẩn Zod 4](#9-quy-tắc-viết-zod-schema--chuẩn-zod-4)
+10. [Cấu Hình Regex Scripts Tối Giản Mới](#10-cấu-hình-regex-scripts-tối-giản-mới)
+11. [Build Script Tự Động Lắp Ráp Card](#11-build-script-tự-động-lắp-ráp-card)
+12. [Checklist Tự Kiểm Giao Diện Frontend](#12-checklist-tự-kiểm-giao-diện-frontend)
+13. [Tiêu Chuẩn Rà Soát Văn Phong & Nhân Thiết (Writing QC)](#13-tiêu-chuẩn-rà-soát-văn-phong--nhân-thiết-writing-qc)
+14. [Xử Lý Sự Cố (Troubleshooting)](#14-xử-lý-sự-cố-troubleshooting)
 
 ---
 
-## 1. KI KIẾN TRÚC TỔNG QUAN
+## 1. KIẾN TRÚC TỔNG QUAN
 
-Một character card SillyTavern hoàn chỉnh với MVU + Zod gồm **5 thành phần**:
-
-```
-Card JSON
-├── 1. Character Info ──── name, description, personality, scenario, system_prompt
-├── 2. First Message ───── first_mes (text "[khởi tạo]" → Regex thay bằng HTML)
-├── 3. Lorebook ─────────── character_book → entries[] (worldbuilding + MVU rules)
-│   ├── World Entries ──── Lore, nhân vật, bối cảnh, timeline...
-│   └── MVU Entries ────── initvar, update rules, format rules, stat display, văn phong
-├── 4. TavernHelper ────── MVU runtime + Zod Schema (2 scripts)
-└── 5. Regex Scripts ───── 6 regex (ẩn biến, xóa update, làm đẹp, dashboard, khởi tạo)
-```
-
-### Luồng hoạt động khi chơi:
+Hệ thống MVU-Zod chuyển đổi mô hình quản lý biến trong SillyTavern từ việc **phân tích cú pháp chuỗi Regex thô** sang **đầu ra có cấu trúc (Structured Output)** dựa trên:
+- **Zod 4:** Lớp xác thực kiểu dữ liệu nghiêm ngặt tại runtime (Type Safety).
+- **JSON Patch (RFC 6902):** Giao thức cập nhật trạng thái dạng gia số (Delta Update) thay vì ghi đè toàn bộ context.
+- **Dynamic Frontend:** Giao diện HTML vẽ động dựa vào trạng thái biến thời gian thực, mount trực tiếp qua thẻ giữ chỗ.
 
 ```
-User bắt đầu chat
-  → first_mes = "...nội dung...\n[khởi tạo]\n<StatusPlaceHolderImpl/>"
-  → Regex "Khởi đầu" thay "[khởi tạo]" bằng HTML form nhập thông tin
-  → Regex "Dashboard" thay <StatusPlaceHolderImpl/> bằng HTML bảng trạng thái
-  → User điền form → gửi
-  → MVU Zod Schema parse biến → lưu state
-  → AI phản hồi kèm <UpdateVariable>...</UpdateVariable> + <StatusPlaceHolderImpl/>
-  → Regex "Làm đẹp" biến HTML collapsible đẹp
-  → Regex "Ẩn" biến khỏi prompt gửi AI
-  → Entry "Danh sách biến" inject {{format_message_variable::stat_data}}
-  → Regex "Dashboard" thay <StatusPlaceHolderImpl/> bằng HTML dashboard (cập nhật mỗi tin)
-  → Hiển thị UI cho user
+                  ┌─────────────────────────────────────┐
+                  │          Người dùng gửi Chat        │
+                  └──────────────────┬──────────────────┘
+                                     │
+                        (Thay các Macro biến số)
+                                     ▼
+                  ┌─────────────────────────────────────┐
+                  │    AI đọc Prompt kèm Danh sách biến │
+                  └──────────────────┬──────────────────┘
+                                     │
+                        (AI suy nghĩ & sinh câu trả lời)
+                                     ▼
+                  ┌─────────────────────────────────────┐
+                  │  AI phản hồi + Khối <UpdateVariable> │
+                  └──────────────────┬──────────────────┘
+                                     │
+            (MVU Engine bắt JSON Patch & cập nhật biến qua Zod Schema)
+                                     ▼
+                  ┌─────────────────────────────────────┐
+                  │   Event VARIABLE_UPDATE_ENDED kích   │
+                  │   hoạt Frontend render lại UI       │
+                  └─────────────────────────────────────┘
 ```
-
-> 🔴 **QUAN TRỌNG:** `<StatusPlaceHolderImpl/>` **BẮT BUỘC** phải có trong `first_mes` VÀ trong mọi tin nhắn AI (do Lorebook entry "Nhấn mạnh định dạng xuất biến" ép AI xuất). Nếu thiếu tag này, Regex 4 không có gì để tìm → bảng trạng thái không hiện.
 
 ---
 
-## 2. CẤU TRÚC JSON V3 CHUẨN
+## 2. CẤU TRÚC JSON V3 CHUẨN & SƠ ĐỒ TIÊM
 
-### 2.1 Mapping từ card hoạt động thực tế
+Để card nhân vật có khả năng tương thích cao trên mọi phiên bản SillyTavern, cấu trúc JSON cần bọc trong định dạng `chara_card_v3`.
 
-Tuy cấu trúc JSON của SillyTavern có thể thay đổi qua các phiên bản, format an toàn nhất cho import là:
-
+### 2.1 Cấu Trúc JSON Phân Cấp
 ```json
 {
   "spec": "chara_card_v3",
   "spec_version": "3.0",
   "data": {
-    // ═══ Character fields ═══
-    "name": "Tên card",
-    "description": "",
+    "name": "Tên nhân vật",
+    "description": "Thường để trống hoặc mô tả ngắn gọn vai trò",
     "personality": "",
     "scenario": "",
-    "first_mes": "...nội dung greeting...\n\n[khởi tạo]\n\n<StatusPlaceHolderImpl/>",
-    "mes_example": "",
-    "creatorcomment": "",
-    "creator_notes": "",
-    "system_prompt": "",
-    "post_history_instructions": "",
-    "tags": [],
-    "creator": "",
-    "character_version": "1.0",
-    "alternate_greetings": [],
-    "avatar": "none",
-    "talkativeness": "0.5",
-    "fav": false,
-    "group_only": false,
-    "create_date": "2026-01-01T00:00:00.000Z",
-
-    // ═══ Lorebook (V3 native) ═══
+    "first_mes": "Nội dung mở đầu...\n\n<StatusPlaceHolderImpl/>",
     "character_book": {
-      "name": "Tên World",
-      "entries": [ ... ]       // ← PHẢI là Array []
+      "name": "Tên Worldbook",
+      "entries": []
     },
-
-    // ═══ Extensions ═══
     "extensions": {
-      "talkativeness": 0.5,
-      "fav": false,
-      "depth_prompt": { "prompt": "", "depth": 4, "role": "system" },
-      "world": "",
-
-      // TH Scripts
+      "regex_scripts": [],
       "tavern_helper": {
-        "scripts": [ ... ],    // ← MVU + Zod
+        "scripts": [],
         "variables": {}
       },
-
-      // Hoặc (tùy bản ST)
-      "TavernHelper_scripts": [ ... ],
-
-      // Regex
-      "regex_scripts": [ ... ],
-
-      // Backup lorebook
+      "TavernHelper_scripts": [],
       "character_book": {
-        "name": "...",
-        "entries": [ ... ]
+        "name": "Tên Worldbook (Dự phòng)",
+        "entries": []
       }
     }
   }
 }
 ```
 
-### 2.2 Vị Trí Đặt Từng Thành Phần (Bảng Tham Chiếu)
-
-| Thành phần | Vị trí trong JSON | Format | Bắt buộc |
-|-----------|-------------------|--------|----------|
-| Character Book | `data.character_book` | `{ name, entries: [] }` | ✅ |
-| Character Book (backup) | `data.extensions.character_book` | Giống trên | ⚠️ Nên có |
-| TH Scripts (cách 1) | `data.extensions.tavern_helper.scripts` | `[{type,name,content,...}]` | ✅ |
-| TH Scripts (cách 2) | `data.extensions.TavernHelper_scripts` | `[{type,name,content,...}]` | ✅ |
-| Regex Scripts | `data.extensions.regex_scripts` | `[{scriptName,findRegex,...}]` | ✅ |
-| Depth Prompt | `data.extensions.depth_prompt` | `{prompt,depth,role}` | ❌ |
-
-> ⚠️ **ĐẶT LOREBOOK Ở CẢ HAI VỊ TRÍ** để tương thích mọi phiên bản SillyTavern.
+### 2.2 Bảng Ánh Xạ Vị Trí Tiêm
+| Thành phần | Vị trí chính xác trong JSON | Định dạng dữ liệu |
+|---|---|---|
+| **Worldbook** | `data.character_book` VÀ `data.extensions.character_book` | `{ name: string, entries: Entry[] }` |
+| **TH Scripts** | `data.extensions.tavern_helper.scripts` VÀ `data.extensions.TavernHelper_scripts` | Mảng chứa mã nguồn Runtime và Zod Schema |
+| **Regex Scripts**| `data.extensions.regex_scripts` | Mảng cấu hình các biểu thức chính quy |
 
 ---
 
-## 3. CHARACTER INFO
+## 3. CHARACTER INFO (TRƯỜNG ĐẦU CẤP)
 
-| Field | Vai trò | Trong card MVU nâng cao |
-|-------|---------|-------------------|
-| `name` | Tên hiển thị | "Tên nhân vật" |
-| `description` | Mô tả AI vai trò gì | (Để trống — dùng các entry lorebook thay thế) |
-| `personality` | Tính cách AI | (Để trống) |
-| `scenario` | Bối cảnh thế giới | (Để trống) |
-| `system_prompt` | Prompt hệ thống | (Để trống — dùng lorebook thay) |
-| `first_mes` | Tin nhắn đầu tiên | `"...\n[khởi tạo]\n<StatusPlaceHolderImpl/>"` |
-
-> **Lưu ý:** Card MVU phức tạp thường để trống hầu hết các trường top-level. Toàn bộ logic được đặt trong **lorebook entries** (ở trạng thái `constant: true` và `enabled: true`) nhằm tối ưu hoá cấu trúc nạp prompt.
+Đối với card Zod + MVU nâng cao, các trường thông tin đầu cấp (`description`, `personality`, `scenario`, `system_prompt`) thường được **để trống** hoặc viết cực kỳ tối giản. Toàn bộ thiết lập thế giới quan, tính cách chi tiết được đưa vào **Lorebook (Worldbook)** ở trạng thái thường trú (constant: true).
+- **Lợi ích:** AI dễ dàng tập trung sự chú ý (attention) vào dòng trạng thái và các chỉ thị cập nhật động thay vì bị phân tán bởi các khối văn bản tĩnh quá lớn ở đầu cấp.
 
 ---
 
-## 4. FIRST MESSAGE & KHỞI TẠO
+## 4. FIRST MESSAGE & KHỞI TẠO TRẠNG THÁI
 
-### 4.1 Pattern chuẩn
+Tin nhắn đầu tiên (`first_mes`) và các tin nhắn thay thế (`alternate_greetings`) phải tuân thủ cấu trúc khởi tạo:
+- Cuối tin nhắn bắt buộc phải chèn thẻ `<StatusPlaceHolderImpl/>`. Thẻ này đóng vai trò là "mỏ neo" để MVU runtime tìm kiếm và vẽ giao diện thanh trạng thái lên màn hình chat.
+- Nếu muốn khởi tạo giá trị ban đầu tùy biến theo từng lời mở đầu khác nhau, có thể nhúng khối cập nhật gia tốc trực tiếp vào greeting:
+  ```xml
+  <UpdateVariable>
+  [
+    { "op": "replace", "path": "/Người_Chơi/Vị_Trí", "value": "Thôn nhỏ ngoại vi" }
+  ]
+  </UpdateVariable>
+  <StatusPlaceHolderImpl/>
+  ```
 
+---
+
+## 5. QUY TẮC CẤU HÌNH WORLDBOOK (LOREBOOK) CHI TIẾT
+
+Cấu hình sai Worldbook là nguyên nhân hàng đầu khiến AI bị "loạn thiết lập" hoặc làm bùng nổ số lượng token sử dụng.
+
+### 5.1 Phân Biệt Cấu Hình Theo Loại Card
+- **Card đơn nhân vật (Chỉ có 1 nhân vật cốt lõi):**
+  - **Quy tắc vàng:** Toàn bộ các entry mô tả nhân vật này (nền tảng, ngoại hình, tính cách, kỹ năng, NSFW) **bắt buộc phải đặt ở trạng thái Thường trú (Constant: True, đèn xanh dương)**.
+  - **CẤM TUYỆT ĐỐI** chuyển các mảnh thiết lập của card đơn nhân vật thành dạng kích hoạt bằng từ khóa (Selective: True, đèn xanh lá), vì điều này sẽ làm AI bị mất một phần thiết lập khi từ khóa không xuất hiện, dẫn đến OOC (Out Of Character).
+- **Card đa nhân vật (Có từ 2 nhân vật cốt lõi trở lên):**
+  - **Thiết lập chung / thế giới quan:** Đèn xanh dương (thường trú).
+  - **Hồ sơ chi tiết từng nhân vật:** Đèn xanh lá (kích hoạt bằng từ khóa). Từ khóa xanh lá bao gồm: Họ tên đầy đủ, tên gọi thân mật, biệt danh, cách gọi khác.
+
+### 5.2 Cấu Hình Kích Hoạt, Vị Trí & Thứ Tự Khuyến Nghị
+- **Tất cả các entry Worldbook** (bao gồm cả đèn xanh dương và xanh lá) đều phải bật đồng thời hai chế độ chặn đệ quy:
+  - **Không đệ quy** (`exclude_recursion: true`)
+  - **Ngăn đệ quy tiếp diễn** (`prevent_recursion: true`)
+  *(Ngoại trừ Bộ điều khiển EJS Preprocessing động)*.
+
+- **Khung phân bổ vị trí & thứ tự (Order):**
+  1. **Thế giới quan & Bối cảnh vĩ mô:** Vị trí `World Info before` (Trước định nghĩa nhân vật), Kích hoạt: Xanh dương, Thứ tự: `1 ~ 3`.
+  2. **Tổng quan nhân vật:** Vị trí `World Info before`, Kích hoạt: Xanh dương, Thứ tự: `4`.
+  3. **Chi tiết cảnh & Sự kiện:** Vị trí `World Info after` (Sau định nghĩa nhân vật), Kích hoạt: Xanh lá, Thứ tự: `50 ~ 98`.
+  4. **Hồ sơ chi tiết nhân vật cốt lõi:** Vị trí `World Info after`, Kích hoạt: Xanh dương (nếu card đơn) hoặc Xanh lá (nếu card đa), Thứ tự: `99`.
+  5. **NPC phụ:** Vị trí `World Info after`, Kích hoạt: Xanh lá, Thứ tự: `100`.
+  6. **Bộ điều khiển EJS Preprocessing:** Vị trí `World Info after`, Kích hoạt: Xanh dương, Thứ tự: `100`, **Tắt ngăn đệ quy**.
+  7. **Tái diễn giải (Prompt Steering):** Vị trí `at_depth` với `depth: 0`, `role: system`, Kích hoạt: Xanh lá (từ khóa là tên nhân vật), Thứ tự: `1` hoặc `2`. Dùng để điều chỉnh hành vi AI cực mạnh ở cuối context.
+
+### 5.3 Bảng Ánh Xạ Tham Số Khi Cấu Hình Qua API (`LorebookToolCall`)
+Khi sử dụng mã nguồn hoặc tool để chỉnh sửa thuộc tính của entry, hãy ánh xạ theo bảng sau:
+```javascript
+// Thường trú (Đèn xanh dương)
+strategy: { type: "constant" }
+
+// Kích hoạt từ khóa (Đèn xanh lá)
+strategy: { type: "selective", keys: ["Tiểu_Vũ", "Lâm_Tiểu_Vũ"] }
+
+// Vị trí trước định nghĩa
+position: { type: "before_character_definition", order: 4 }
+
+// Vị trí sau định nghĩa
+position: { type: "after_character_definition", order: 99 }
+
+// Vị trí D0 (Bánh răng D độ sâu 0)
+position: { type: "at_depth", depth: 0, role: "system", order: 1 }
+
+// Cấu hình đệ quy an toàn
+recursion: { prevent_incoming: true, prevent_outgoing: true }
+
+// Vô hiệu hoá entry (dành cho [initvar] hoặc các entry nạp động qua EJS)
+enabled: false
 ```
-first_mes = "...nội dung chào mừng, lore mở đầu...\n\n[khởi tạo]\n\n<StatusPlaceHolderImpl/>"
-```
-
-**Giải thích 2 tag bắt buộc:**
-
-| Tag | Mục đích | Regex xử lý |
-|-----|----------|-------------|
-| `[khởi tạo]` | Được Regex 5 tìm và **thay thế** bằng HTML form nhập thông tin nhân vật | Regex 5 |
-| `<StatusPlaceHolderImpl/>` | Được Regex 4 tìm và **thay thế** bằng HTML bảng trạng thái | Regex 4 |
-
-> 🔴 **BẮT BUỘC:** `<StatusPlaceHolderImpl/>` **PHẢI** có trong `first_mes`. Nếu thiếu, bảng trạng thái sẽ KHÔNG hiện ở tin nhắn đầu tiên. Với các tin nhắn AI tiếp theo, Lorebook entry "Nhấn mạnh định dạng xuất biến" sẽ ép AI tự thêm `<StatusPlaceHolderImpl/>` vào cuối mỗi phản hồi → Regex 4 sẽ tìm thấy và render bảng.
 
 ---
 
-## 5. LOREBOOK & EJS PREPROCESSING
+## 6. BỘ ĐIỀU KHIỂN NỘI DUNG ĐỘNG EJS PREPROCESSING
 
-### 5.1 Cấu Trúc Entry Lorebook Chuẩn
+EJS Preprocessing (`@@preprocessing`) kết hợp với `getwi` là kỹ thuật tối thượng để nạp động các thiết lập cảnh, vật phẩm hoặc nhân vật phụ dựa vào trạng thái biến MVU thực tế. Các entry được nạp động nên để ở trạng thái **disabled (`enabled: false`)** trong worldbook để tránh bị nạp chồng chéo ngoài ý muốn.
 
-Mỗi entry trong mảng `character_book.entries` phải tuân thủ schema JSON V3:
+### 6.1 Cấu Trúc Script Mẫu
+Đặt khối code sau vào nội dung (`content`) của entry bộ điều khiển EJS:
+```ejs
+@@preprocessing
+<%
+/* 1. Đọc các biến trạng thái MVU */
+const currentLoc = getvar('stat_data.Người_Chơi.Vị_Trí', { defaults: 'Tân Thủ Thôn' });
+const presentNPCs = getvar('stat_data.NPC_Có_Mặt', { defaults: {} });
+const userMsg = getChatMessages(-1, -1, 'user');
+const userText = userMsg.length > 0 ? userMsg[userMsg.length - 1].message : '';
 
-```json
-{
-  "id": 1,
-  "keys": ["từ khóa 1", "từ khóa 2"],
-  "secondary_keys": [],
-  "comment": "Tên hiển thị của entry",
-  "content": "Nội dung...",
-  "constant": false,
-  "selective": true,
-  "insertion_order": 50,
-  "enabled": true,
-  "position": "after_char",
-  "use_regex": false,
-  "extensions": {
-    "position": 1,
-    "exclude_recursion": false,
-    "display_index": 1,
-    "probability": 100,
-    "useProbability": true,
-    "depth": 4,
-    "selectiveLogic": 0,
-    "outlet_name": "",
-    "group": "",
-    "group_override": false,
-    "group_weight": 100,
-    "prevent_recursion": false,
-    "delay_until_recursion": false,
-    "scan_depth": null,
-    "match_whole_words": null,
-    "use_group_scoring": false,
-    "case_sensitive": null,
-    "automation_id": "",
-    "role": 0,
-    "vectorized": false,
-    "sticky": 0,
-    "cooldown": 0,
-    "delay": 0,
-    "match_persona_description": false,
-    "match_character_description": false,
-    "match_character_personality": false,
-    "match_character_depth_prompt": false,
-    "match_scenario": false,
-    "match_creator_notes": false,
-    "triggers": [],
-    "ignore_budget": false
-  }
+/* Bỏ qua lượt 0 (lời mở đầu) */
+if (!isFloorZero) {
+%>
+
+/* 2. Nạp bản đồ/bối cảnh dựa theo vị trí hiện tại */
+<% if (currentLoc.includes('Hào Châu')) { %>
+<%- await getwi('Bối_Cảnh_Hào_Châu') %>
+<% } else if (currentLoc.includes('Tân Thủ Thôn')) { %>
+<%- await getwi('Bối_Cảnh_Tân_Thủ_Thôn') %>
+<% } %>
+
+/* 3. Nạp hồ sơ NPC đang có mặt hoặc được nhắc tới */
+<%
+const detectedNPCs = new Set();
+// Duyệt qua biến danh sách NPC có mặt
+if (presentNPCs && typeof presentNPCs === 'object') {
+  Object.keys(presentNPCs).forEach(name => detectedNPCs.add(name));
 }
+// Quét văn bản chat gần nhất để tự động phát hiện NPC khác
+if (userText.includes('Trưởng thôn')) detectedNPCs.add('NPC_Trưởng_Thôn');
+if (userText.includes('Tiểu Nhị')) detectedNPCs.add('NPC_Tiểu_Nhị');
+%>
+
+<% for (const npcName of detectedNPCs) { %>
+<%- await getwi(npcName) %>
+<% } %>
+
+<% } %>
 ```
-
-### 5.2 Tối Ưu Hoá Context Bằng EJS Preprocessing (`@@preprocessing`)
-Để giảm thiểu tiêu thụ token và tránh quá tải context của mô hình ngôn ngữ, chúng ta tích hợp khối lệnh xử lý EJS nâng cao vào bên trong nội dung (`content`) của entry:
-
-- Dùng tag `@@preprocessing` để khai báo block lệnh xử lý đầu vào của EJS.
-- Lọc động các entry lorebook dựa theo biến trạng thái (ví dụ: chỉ load thông tin địa điểm khi người chơi thực sự có mặt tại địa điểm đó).
-- Cú pháp ví dụ:
-  ```markdown
-  @@preprocessing
-  <% if (_.get(stat_data, 'Người_Chơi.Vị_Trí') === 'Hào Châu') { %>
-  Hào Châu là một đô thị sầm uất tại khu vực miền Trung, là cứ điểm quan trọng...
-  <% } else { %>
-  <!-- skip -->
-  <% } %>
-  ```
+- **Cấu hình entry EJS này:** Đèn xanh dương (constant), Thứ tự: `100`, Vị trí: `after_char`, **Không bật chặn đệ quy** (để EJS có thể tự do gọi hàm nạp từ các entry khác).
 
 ---
 
-## 6. MVU ENTRIES HỆ THỐNG
+## 7. MVU ENTRIES HỆ THỐNG & TIỀN TỐ BIẾN SỐ
 
-Đây là các lorebook entries **bắt buộc** để MVU engine hoạt động:
+Hệ thống MVU-Zod yêu cầu 4 entry hệ thống bắt buộc trong Worldbook:
 
-### 6.1 Entry: `[initvar]Khởi tạo biến` (enabled: FALSE)
-Entry này chứa giá trị mặc định ban đầu định nghĩa theo cấu trúc Zod Schema bằng ngôn ngữ **YAML** (hoặc JSON). Nó được kịch bản MVU phân tích cục bộ ngay khi import card.
+### 7.1 Entry: `[initvar]Khởi tạo biến`
+- **Keys:** `[initvar]`
+- **Enabled:** `false` (Bắt buộc tắt)
+- **Position:** `before_char`, Order: `10`
+- **Content:** Chứa mã khởi tạo định dạng **YAML** khớp cấu trúc Zod Schema.
 
-- **Comment:** `[initvar]Khởi tạo biến`
-- **Enabled:** `false` (Bắt buộc tắt để không gửi cấu trúc rỗng này cho AI)
-- **Content ví dụ (khớp cấu trúc Schema):**
-  ```yaml
-  Thiên_Hạ:
-    Thời_Gian:
-      Giờ: "Giờ Thìn (7h-9h)"
-      Ngày: "Mùng một"
-      Tháng: "Tháng Năm"
-      Năm: "Chí Chính năm thứ mười một (1351)"
-    Thời_Tiết: "Nóng bức oi ả"
-    Thiên_Tai_Dịch_Bệnh: "Bình thường"
-    Biến_Động_Thiên_Hạ: []
-  Người_Chơi:
-    Tên: "Chờ cập nhật"
-    Tuổi: 20
-    Giới_Tính: "Nam"
-    Vị_Trí: "Hào Châu"
-    Giai_Cấp_Nguyên_Triều: "Nam Nhân"
-    Trạng_Thái: "Khỏe mạnh, bụng hơi đói"
-    Tài_Sản_Chính:
-      Bạc_Vụn: 0
-      Muối_Trắng: 0
-    Túi_Đồ: {}
-  ```
-
-### 6.2 Entry: `Danh sách biến số` (Stat Display)
-Entry này hiển thị giá trị biến hiện tại cho AI đọc.
+### 7.2 Entry: `Danh sách biến`
+- **Keys:** `Danh sách biến` (Không thêm tiền tố `[mvu_update]`)
 - **Enabled:** `true`
-- **Position:** `after_char`
-- **Insertion Order:** `999`
+- **Position:** `before_char` (hoặc `after_char`), Order: `200`
+
+#### Cách 1: Thiết lập cơ bản (Dành cho card nhỏ/trung bình)
 - **Content:**
   ```yaml
   ---
@@ -292,101 +251,165 @@ Entry này hiển thị giá trị biến hiện tại cho AI đọc.
   </status_current_variables>
   ```
 
-### 6.3 Entry: `[mvu_update] Quy tắc cập nhật biến` (Update Rules)
-Entry định nghĩa quy tắc logic cho AI biết khi nào và như thế nào để thay đổi các biến số.
-- **Enabled:** `true`
-- **Position:** `after_char`
-- **Insertion Order:** `200` (được chèn trước prompt định dạng)
+#### Cách 2: Thiết lập nâng cao - Lọc biến số bằng EJS (Dành cho card lớn/RPG phức tạp)
+Khi card có cấu trúc biến rất lớn (chứa hàng chục NPC, nhiều loại trang bị, tiền tệ theo thời kỳ), việc gửi toàn bộ biến cho AI đọc ở mỗi lượt chat sẽ gây lãng phí token và làm loãng ngữ cảnh. 
+Chúng ta có thể thay thế nội dung tĩnh trên bằng một khối **EJS Script** để tự động lọc và chỉ in ra các biến số thực sự cần thiết theo ngữ cảnh hiện tại (như cách card Đấu La Đại Lục 3.1 của Hoxilo triển khai):
 - **Content:**
-  ```yaml
-  ---
-  quy_tắc_cập_nhật_biến:
-    Người_Chơi:
-      Trạng_Thái:
-        type: string
-        check: Cập nhật khi người chơi chịu đói khát, kiệt sức hoặc bị thương trong chiến đấu.
-      Tài_Sản_Chính:
-        Bạc_Vụn:
-          type: number
-          range: 0~9999
-          check: Tăng khi bán vật phẩm hoặc hoàn thành nhiệm vụ, giảm ±(1~100) khi mua sắm, trả lộ phí.
+  ```ejs
+  <%_
+  (function() {
+    var statData = getvar('stat_data');
+    if (!statData) {
+      print('{}');
+      return;
+    }
+
+    var output = {};
+    var sType = _.get(statData, 'Người_Chơi.Trạng_Thái_Tu_Luyện.Loại_Cảnh_Hiện_Tại', 'Hàng ngày');
+    var isCombat = (sType === 'Chiến đấu' || sType === 'Thi đấu' || sType === 'Săn bắt');
+
+    /* ─── 1. Thông tin thế giới ─── */
+    if (statData['Thiên_Hạ']) {
+      output['Thiên_Hạ'] = statData['Thiên_Hạ'];
+    }
+
+    /* ─── 2. Người chơi (Lọc theo cảnh) ─── */
+    if (statData['Người_Chơi']) {
+      var player = statData['Người_Chơi'];
+      var pOut = {};
+      
+      // Luôn xuất ra thông tin cơ bản
+      pOut['Tên'] = player['Tên'];
+      pOut['Tuổi'] = player['Tuổi'];
+      
+      // Chỉ xuất chỉ số HP và chiến đấu khi vào cảnh chiến đấu
+      if (isCombat) {
+        pOut['HP'] = player['HP'];
+        pOut['Max_HP'] = player['Max_HP'];
+      }
+      
+      // Chỉ xuất túi đồ nếu túi đồ không trống
+      if (player['Túi_Đồ'] && Object.keys(player['Túi_Đồ']).length > 0) {
+        pOut['Túi_Đồ'] = player['Túi_Đồ'];
+      }
+      output['Người_Chơi'] = pOut;
+    }
+
+    /* ─── 3. NPC có mặt (Chỉ xuất các NPC có thuộc tính Có_Mặt: true) ─── */
+    if (statData['Danh_Sách_NPC']) {
+      var npcOut = {};
+      for (var npcName in statData['Danh_Sách_NPC']) {
+        var npc = statData['Danh_Sách_NPC'][npcName];
+        if (npc && _.get(npc, 'Thông_Tin_Cơ_Bản.Có_Mặt_Hay_Không') === true) {
+          npcOut[npcName] = {
+            'Thân_Phận': _.get(npc, 'Thông_Tin_Cơ_Bản.Thân_Phận'),
+            'Hành_Động_Hiện_Tại': _.get(npc, 'Thông_Tin_Cơ_Bản.Hành_Động_Hiện_Tại'),
+            'Thái_Độ': _.get(npc, 'Mối_Quan_Hệ.Thái_Độ_Với_Người_Chơi')
+          };
+        }
+      }
+      if (Object.keys(npcOut).length > 0) {
+        output['NPC_Có_Mặt'] = npcOut;
+      }
+    }
+
+    print(JSON.stringify(output, null, 2));
+  })();
+  _%>
   ```
 
-### 6.4 Entry: `[mvu_update] Định dạng xuất biến` (Format Rules)
-Entry dạy AI xuất các chỉ thị thay đổi theo cấu trúc JSON Patch (RFC 6902) mở rộng.
-- **Content:**
+
+### 7.3 Entry: `[mvu_update]Quy tắc cập nhật biến`
+- **Keys:** `[mvu_update]`, `quy_tắc_cập_nhật`
+- **Enabled:** `true`
+- **Position:** `before_char`, Order: `200`
+- **Content:** Chỉ định rõ cho AI kiểu dữ liệu và điều kiện kích hoạt thay đổi của từng trường.
+
+### 7.4 Entry: `[mvu_update]Định dạng xuất biến`
+- **Keys:** `[mvu_update]`, `định_dạng_xuất`
+- **Enabled:** `true`
+- **Position:** `after_char` (Gemini: depth `0`, Claude: depth `4`), Order: `200`
+- **Content:** Hướng dẫn AI xuất JSON Patch. Bắt buộc hỗ trợ đầy đủ **5 toán tử** sau:
   ```yaml
   ---
   định_dạng_xuất_biến:
     rule:
       - you must output the update analysis and the actual update commands at once in the end of the next reply
-      - the update commands works like the **JSON Patch (RFC 6902)** standard, must be a valid JSON array containing operation objects, but supports the following operations instead:
+      - the update commands works like the **JSON Patch (RFC 6902)** standard, must be a valid JSON array containing operation objects:
         - replace: replace the value of existing paths (absolute set)
         - delta: update the value of existing number paths by a positive/negative delta value (numerical incremental adjust)
         - insert: insert new items into an object or array (using `-` as array index intends appending to the end)
         - remove: remove an existing path or item
-      - don't update field names starting with `_` (readonly fields)
-      - [History context check]: Before writing updates, scan prior messages for events reflecting these changes. If already processed, do NOT apply redundant updates.
+        - move: move a variable value from one path to another
+      - don't update field names starts with `_` as they are readonly, such as `_biến`
     format: |-
       <UpdateVariable>
       <Analysis>$(IN ENGLISH, no more than 80 words)
       - ${calculate time passed: ...}
-      - ${history check: check if the variable change was already processed in previous messages}
+      - ${decide whether dramatic updates are allowed: yes/no}
       - ${analyze every variable based on its corresponding check: ...}
       </Analysis>
       <JSONPatch>
       [
         { "op": "replace", "path": "/Người_Chơi/Vị_Trí", "value": "Hào Châu" },
-        { "op": "delta", "path": "/Người_Chơi/Tài_Sản_Chính/Bạc_Vụn", "value": -10 },
-        { "op": "insert", "path": "/Người_Chơi/Túi_Đồ/Bình nước", "value": { "Mô_Tả": "Bình nước bằng da dê", "Số_Lượng": 1 } },
-        { "op": "remove", "path": "/Người_Chơi/Túi_Đồ/Lương khô" }
+        { "op": "delta", "path": "/Người_Chơi/HP", "value": -15 },
+        { "op": "insert", "path": "/Người_Chơi/Túi_Đồ/Bản đồ", "value": { "Mô_Tả": "Bản đồ da dê cũ", "Số_Lượng": 1 } },
+        { "op": "remove", "path": "/Người_Chơi/Túi_Đồ/Lương khô" },
+        { "op": "move", "from": "/Người_Chơi/Tài_Sản", "to": "/NPC_Trưởng_Thôn/Hối_Lộ" }
       ]
       </JSONPatch>
       </UpdateVariable>
   ```
+  > ⚠️ **Đường dẫn trong JSON Patch:** Sử dụng dấu gạch chéo `/` phân đoạn và **KHÔNG** chứa tiền tố `stat_data` (ví dụ: `/Người_Chơi/HP` thay vì `/stat_data/Người_Chơi/HP`).
+
+### 7.5 Quy Tắc Tiền Tố Biến Số (Đọc-Ghi của AI)
+Bằng cách đặt tên khóa trong Zod Schema, bạn quyết định quyền hạn tương tác của AI:
+1. **Không có tiền tố (Ví dụ: `độ_hảo_cảm`):** AI có quyền đọc và xuất lệnh JSON Patch để sửa đổi.
+2. **Tiền tố `_` (Ví dụ: `_id_tầng`, `_phiên_bản`):** AI được phép đọc để lấy thông tin nhưng **CẤM** xuất lệnh sửa đổi (Read-only).
+3. **Tiền tố `$` (Ví dụ: `$dữ_liệu_hậu_trường`):** Ẩn hoàn toàn khỏi prompt gửi lên AI. Chỉ có scripts frontend hoặc hệ thống mới đọc ghi được (Private).
 
 ---
 
-## 7. TAVERNHELPER SCRIPTS
+## 8. TAVERNHELPER SCRIPTS (LOGIC ENGINE)
 
-Để vận hành MVU + Zod tại runtime, card JSON bắt buộc phải đính kèm 2 script:
+TavernHelper chạy 2 script cốt lõi độc lập tại runtime:
 
-### 7.1 Script 1: MVU Runtime Engine
-Script này chịu trách nhiệm load engine MVU.
-- **Name:** `MVU`
-- **Content:**
+### 8.1 Script 1: `MVU` (Runtime Engine)
+Script này tải thư viện xử lý MVU từ CDN toàn cục.
+- **Tên script:** `MVU`
+- **Mã nguồn:**
   ```javascript
   import 'https://testingcf.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate/artifact/bundle.js'
   ```
 
-### 7.2 Script 2: MVU Zod Schema
-Script này chứa định nghĩa Zod Schema cho dữ liệu của thẻ nhân vật.
-- **Name:** `MVU Zod Schema`
-- **Content:** (Xem chi tiết cú pháp tại Mục 8)
+### 8.2 Script 2: `MVU Zod Schema` (Lược đồ dữ liệu)
+Chứa định nghĩa cấu trúc dữ liệu và đăng ký với MVU engine.
+- **Tên script:** `MVU Zod Schema`
+- **Mã nguồn:** Định nghĩa theo chuẩn Zod 4 (Xem chi tiết ở Mục 9).
 
 ---
 
-## 8. ZOD SCHEMA CHI TIẾT & QUY TẮC ZOD 4
+## 9. QUY TẮC VIẾT ZOD SCHEMA & CHUẨN ZOD 4
 
-Zod 4 cung cấp khả năng kiểm soát dữ liệu cực kỳ mạnh mẽ. Khi viết mã nguồn Zod Schema, bạn phải tuân thủ nghiêm ngặt các quy tắc kỹ thuật sau:
+Zod 4 kiểm soát chặt chẽ kiểu dữ liệu đầu vào. Hãy tuân thủ các quy tắc sau để tránh crash game:
 
-### 8.1 Các Quy Tắc Bắt Buộc Của Zod 4:
-1. **Sử dụng `z.coerce.number()` thay cho `z.number()`:** Giúp tự động ép kiểu dữ liệu từ chuỗi text nhận được từ AI sang định dạng số nguyên/số thực một cách an toàn.
-2. **Sử dụng `.prefault(value)` thay cho `.default(value)`:** Bắt buộc áp dụng `.prefault()` cho mọi trường trong Schema (kể cả object và array con) để đảm bảo dữ liệu luôn được khởi tạo cấu trúc mặc định, tránh crash runtime.
-3. **Giới hạn biên độ bằng `.transform()`:** Thay vì sử dụng `.min()` hoặc `.max()` (gây lỗi ném biệt lệ khi vượt quá giới hạn làm đứng luồng), hãy dùng lodash `.transform(v => _.clamp(v, min, max))` để giới hạn khoảng giá trị an toàn.
-4. **Ưu tiên `z.record()` thay vì `z.array()` cho danh sách động:** Khi lưu trữ túi đồ hoặc mạng lưới nhân vật, sử dụng `z.record(z.string(), z.object(...))` giúp AI cập nhật dữ liệu dễ dàng hơn qua JSON Patch.
-5. **CẤM sử dụng `.strict()` hoặc `.passthrough()`:** Các phương thức kiểm soát này không tương thích với cơ chế xử lý của MVU.
-6. **KHÔNG dùng `.optional()` cho các biến gốc:** Các trường dữ liệu chính của trạng thái game phải luôn có giá trị mặc định thay vì để `undefined`.
-7. **Bảo toàn tính lũy đẳng (Idempotency):** Đảm bảo `Schema.parse(Schema.parse(x)) === Schema.parse(x)`.
-8. **CDN import chuẩn:** Import duy nhất `registerMvuSchema` từ CDN của StageDog. Thư viện `z` và `_` (lodash) đã được inject toàn cục, tuyệt đối **không được** import lại chúng.
+### 9.1 Các Chỉ Thị Thiết Kế Bắt Buộc
+1. **Bắt buộc dùng `z.coerce.number()` / `z.coerce.boolean()` / `z.coerce.string()`:** AI thường trả về số dưới dạng chuỗi (ví dụ `"45"`). Việc dùng `z.coerce` đảm bảo tự động ép kiểu dữ liệu an toàn mà không gây crash validation.
+2. **Luôn sử dụng `.prefault(value)` thay cho `.default(value)`:** Đây là điểm đặc thù của MVU-Zod. Mọi trường, kể cả các đối tượng lồng nhau (`z.object({...}).prefault({})`) hay bản ghi (`z.record().prefault({})`), đều phải có `.prefault` để đảm bảo luôn tồn tại một cấu trúc dữ liệu cơ sở mặc định, tránh lỗi đọc thuộc tính từ `undefined`.
+3. **Giới hạn biên độ số bằng `.transform()`:** Thay vì dùng `.min(0).max(100)` (gây văng lỗi nghiêm trọng nếu AI xuất số vượt quá giới hạn), hãy dùng lodash transform để ép biên một cách êm ái:
+   `z.coerce.number().transform(v => _.clamp(v, 0, 100)).prefault(100)`
+4. **Ưu tiên sử dụng `z.record()` cho danh sách động:**
+   - **Sai:** Dùng `z.array(z.object({...}))` cho túi đồ (AI rất khó cập nhật chính xác chỉ số phần tử thông qua JSON Patch `/túi_đồ/0/số_lượng`).
+   - **Đúng:** Dùng `z.record(z.string().describe("tên_vật_phẩm"), z.object({...}))`. Khi đó AI có thể dễ dàng cập nhật trực tiếp qua path `/túi_đồ/Băng_dán/số_lượng`.
+5. **CẤM sử dụng các hàm kiểm tra nghiêm ngặt `.strict()` hoặc `.passthrough()`:** Các phương thức này sẽ chặn đứng luồng xử lý động của MVU.
+6. **Không import thêm thư viện `zod` hoặc `lodash`:** Các đối tượng `z` và `_` đã được MVU runtime chèn sẵn vào môi trường toàn cục. Việc khai báo import lại các thư viện này sẽ gây lỗi trùng lặp.
 
-### 8.2 Ví Dụ Zod Schema Chuẩn Vị:
-
+### 9.2 Ví Dụ Zod Schema Chuẩn Mẫu
 ```javascript
 import { registerMvuSchema } from 'https://testingcf.jsdelivr.net/gh/StageDog/tavern_resource/dist/util/mvu_zod.js';
 
 export const Schema = z.object({
-  // ==================== THẾ GIỚI ====================
+  // ==================== TRẠNG THÁI CHUNG ====================
   Thiên_Hạ: z.object({
     Thời_Gian: z.object({
       Giờ: z.string().prefault("Giờ Thìn (7h-9h)"),
@@ -394,29 +417,21 @@ export const Schema = z.object({
       Năm: z.string().prefault("Chí Chính năm thứ mười một (1351)"),
     }).prefault({}),
     Thời_Tiết: z.string().prefault("Nóng bức oi ả"),
-    Thiên_Tai_Dịch_Bệnh: z.enum([
-      "Bình thường", "Nạn đói", "Dịch hạch", "Lũ lụt Hoàng Hà"
-    ]).prefault("Bình thường"),
+    _phiên_bản: z.coerce.number().prefault(1.0), // AI chỉ đọc, không được sửa
   }).prefault({}),
 
-  // ==================== NGƯỜI CHƠI ====================
+  // ==================== THÔNG TIN NGƯỜI CHƠI ====================
   Người_Chơi: z.object({
     Tên: z.string().prefault("Chờ cập nhật"),
-    Tuổi: z.coerce.number().prefault(20),
-    Giới_Tính: z.string().prefault("Nam"),
-    Vị_Trí: z.string().prefault("Hào Châu"),
-    Trạng_Thái: z.string().prefault("Khỏe mạnh, bụng hơi đói"),
-    Tài_Sản_Chính: z.object({
-      Bạc_Vụn: z.coerce.number().transform(v => Math.max(v, 0)).prefault(0),
-      Muối_Trắng: z.coerce.number().transform(v => Math.max(v, 0)).prefault(0),
-    }).prefault({}),
+    HP: z.coerce.number().transform(v => _.clamp(v, 0, 100)).prefault(100),
+    Max_HP: z.coerce.number().transform(v => _.clamp(v, 1, 150)).prefault(100),
     Túi_Đồ: z.record(
       z.string().describe("Tên vật phẩm"),
       z.object({
-        Mô_Tả: z.string().prefault("Chờ cập nhật"),
+        Mô_Tả: z.string().prefault("Không rõ công dụng"),
         Số_Lượng: z.coerce.number().prefault(1),
       }).prefault({})
-    ).prefault({}),
+    ).transform(data => _.pickBy(data, ({Số_Lượng}) => Số_Lượng > 0)).prefault({}), // Tự xóa vật phẩm khi số lượng về 0
   }).prefault({}),
 }).prefault({});
 
@@ -427,44 +442,67 @@ $(() => {
 
 ---
 
-## 9. REGEX SCRIPTS
+## 10. CẤU HÌNH REGEX SCRIPTS TỐI GIẢN MỚI
 
-Để làm đẹp giao diện hiển thị và lọc bỏ thông tin cập nhật khỏi prompt, cấu hình đúng 6 regex sau:
+> ⚠️ **QUY CHUẨN THAY THẾ MỚI:** Trong thiết kế hiện tại, chúng ta **KHÔNG NHÚNG** mã nguồn HTML dashboard hay HTML Form khởi tạo khổng lồ vào trong mục `replaceString` của Regex nữa. Việc này được xử lý hoàn toàn tự động ở phía MVU runtime.
 
-| # | Tên Script | findRegex | replaceString | promptOnly | markdownOnly | placement | minDepth / maxDepth |
-|---|------------|-----------|---------------|------------|--------------|-----------|---------------------|
-| 0 | Ẩn thanh trạng thái | `<StatusPlaceHolderImpl/>` | (Trống) | ✅ | ❌ | `[2]` | minDepth: 3 |
-| 1 | Xóa cập nhật biến | `/<update(?:variable)?>(?:(?!.*<\\/update(?:variable)?>).*$|.*<\\/update(?:variable)?>)/gsi` | (Trống) | ✅ | ❌ | `[2]` | - |
-| 2 | Đang cập nhật biến | `/<update(?:variable)?>(?!.*<\\/update(?:variable)?>)\\s*(.*)\\s*$/gsi` | HTML Box (Loading UI) | ❌ | ✅ | `[2]` | - |
-| 3 | Cập nhật xong | `/<update(?:variable)?>\\s*(.*)\\s*<\\/update(?:variable)?>/gsi` | HTML Box (Completed UI) | ❌ | ✅ | `[2]` | - |
-| 4 | Làm đẹp thanh trạng thái | `<StatusPlaceHolderImpl/>` | Codeblock HTML Dashboard | ❌ | ✅ | `[1, 2]` | - |
-| 5 | Khởi đầu | `\[khởi tạo\]` | Codeblock HTML Form | ❌ | ✅ | `[1, 2]` | maxDepth: 1 |
+Bạn chỉ cần thiết lập **4 Regex lõi** sau trong `regex_scripts`:
+
+### 1. Ẩn thanh trạng thái khởi tạo
+- **findRegex:** `[\r\n]*<StatusPlaceHolderImpl\/>`
+- **replaceString:** `<style>.StatusPlaceHolderImpl { display: none; }</style><div class="StatusPlaceHolderImpl"><StatusPlaceHolderImpl/></div>`
+- **Cấu hình:** `PromptOnly: False | MarkdownOnly: False | RunOnEdit: True | MinDepth: 0 | MaxDepth: 0 | Placement: [1]` (Bọc thẻ neo để runtime chèn dashboard dynamic).
+
+### 2. Ẩn thẻ Update gốc khỏi Prompt gửi AI
+- **findRegex:** `[\r\n]*<UpdateVariable[^>]*>.*?</UpdateVariable>`
+- **replaceString:** `<span style="display:none;">$&</span>`
+- **Cấu hình:** `PromptOnly: True | MarkdownOnly: False | RunOnEdit: True | MinDepth: 3 | MaxDepth: 0 | Placement: [2]` (Ngăn không cho AI đọc lại các lệnh update của các lượt trước để tránh ảo giác lặp).
+
+### 3. Loading Cập Nhật
+- **findRegex:** `<UpdateVariable>(.*?)</UpdateVariable>`
+- **replaceString:** `<div class="mvu-loading" style="padding: 10px; background: #0f0f12; color: #f59e0b; border: 1px solid #d97706; border-radius: 6px; font-family: monospace;">⏳ Đang phân tích và cập nhật chỉ số trạng thái...</div>`
+- **Cấu hình:** `PromptOnly: False | MarkdownOnly: True | RunOnEdit: False | Enabled: True | Placement: [2]` (Hiển thị UI chờ trong quá trình stream tin nhắn).
+
+### 4. Hoàn Thành Cập Nhật
+- **findRegex:** `<UpdateVariable>(.*?)</UpdateVariable>`
+- **replaceString:** `<div class="mvu-done" style="padding: 10px; background: #0f172a; color: #10b981; border: 1px solid #059669; border-radius: 6px; font-family: monospace;">✅ Cập nhật biến số hoàn tất.</div>`
+- **Cấu hình:** `PromptOnly: False | MarkdownOnly: True | RunOnEdit: False | Enabled: True | Placement: [2]` (Hiển thị thông báo sau khi AI hoàn thành phản hồi).
 
 ---
 
-## 10. BUILD SCRIPT
+## 11. BUILD SCRIPT TỰ ĐỘNG LẮP RÁP CARD
 
-Sử dụng script Node.js tự động hoá để lắp ráp các file rời thành một file card JSON hoàn chỉnh. Tránh copy thủ công gây ra lỗi escape kí tự (`\\`).
+Để tránh các lỗi cú pháp escape dấu gạch chéo ngược (`\\`) khi nhập dữ liệu thủ công vào JSON, hãy sử dụng Build Script tự động hóa bằng Node.js:
 
 ```javascript
 const fs = require('fs');
 const path = require('path');
 
-// Đọc và lắp ráp card JSON
 const buildCard = () => {
-  const zodSchemaContent = fs.readFileSync(path.join(__dirname, 'zod_schema.js'), 'utf-8');
-  const dashboardHtmlContent = fs.readFileSync(path.join(__dirname, 'dashboard.html'), 'utf-8');
+  const schemaPath = path.join(__dirname, 'schema_zod.js');
+  const templatePath = path.join(__dirname, 'template.json');
+  const outputPath = path.join(__dirname, 'FINAL_CARD.json');
+
+  if (!fs.existsSync(schemaPath) || !fs.existsSync(templatePath)) {
+    console.error("Thiếu file schema_zod.js hoặc template.json!");
+    return;
+  }
+
+  const zodSchemaContent = fs.readFileSync(schemaPath, 'utf-8');
+  const cardTemplate = JSON.parse(fs.readFileSync(templatePath, 'utf-8'));
+
+  // Tiêm Zod Schema vào đúng TavernHelper Script
+  const helperScripts = cardTemplate.data.extensions.TavernHelper_scripts || cardTemplate.data.extensions.tavern_helper.scripts;
+  const targetScript = helperScripts.find(s => s.name === 'MVU Zod Schema');
   
-  const cardTemplate = JSON.parse(fs.readFileSync(path.join(__dirname, 'template.json'), 'utf-8'));
-  
-  // Nạp mã Zod Schema vào TavernHelper script
-  cardTemplate.data.extensions.TavernHelper_scripts.find(s => s.name === 'MVU Zod Schema').content = zodSchemaContent;
-  
-  // Nạp HTML vào Regex Dashboard
-  cardTemplate.data.extensions.regex_scripts.find(r => r.scriptName === 'Làm đẹp thanh trạng thái').replaceString = `\`\`\`html\n${dashboardHtmlContent}\n\`\`\``;
-  
-  fs.writeFileSync(path.join(__dirname, 'FINAL_CARD.json'), JSON.stringify(cardTemplate, null, 2));
-  console.log("Build card hoàn tất!");
+  if (targetScript) {
+    targetScript.content = zodSchemaContent;
+  } else {
+    console.warn("Không tìm thấy script 'MVU Zod Schema' để tiêm.");
+  }
+
+  fs.writeFileSync(outputPath, JSON.stringify(cardTemplate, null, 2), 'utf-8');
+  console.log("🚀 Lắp ráp card hoàn tất thành công! Đầu ra tại FINAL_CARD.json");
 };
 
 buildCard();
@@ -472,17 +510,63 @@ buildCard();
 
 ---
 
-## 11. CHECKLIST & TROUBLESHOOTING
+## 12. CHECKLIST TỰ KIỂM GIAO DIỆN FRONTEND
 
-### 11.1 Checklist trước khi nhập (Import):
-- [ ] JSON card hợp lệ, đúng cấu trúc v3 (`spec_version: "3.0"`).
-- [ ] `character_book.entries` là một mảng `[]`, không phải object.
-- [ ] Mọi trường trong Zod Schema đều có `.prefault()`.
-- [ ] Tên các trường Zod Schema dùng dấu gạch dưới (`_`) thay cho khoảng trắng để tránh lỗi JSON Patch path.
-- [ ] File `[initvar]Khởi tạo biến` ở trạng thái **disabled** (`enabled: false`).
-- [ ] Iframe HTML Reset margin/padding của body về `0` để tránh vỡ bố cục trên mobile.
+Khi thiết kế giao diện thanh trạng thái Frontend (HTML/CSS/JS) chèn trong Iframe, bạn phải tuân thủ nghiêm ngặt checklist sau:
 
-### 11.2 Xử lý sự cố (Troubleshooting):
-- **Bảng trạng thái không hiện ở tin nhắn đầu tiên:** Kiểm tra xem `first_mes` có chứa thẻ `<StatusPlaceHolderImpl/>` hay không và kiểm tra Regex 4 placement đã có `[1]` (phía user/greeting) chưa.
-- **Lỗi validation crash tại runtime:** Đảm bảo kiểu dữ liệu AI trả về được chuyển đổi chính xác bằng `.coerce.number()` và không sử dụng các phương thức cấm như `.strict()`.
-- **Mất thanh trạng thái khi chat kéo dài:** Đảm bảo Lorebook entry "Định dạng xuất biến" ép AI luôn xuất thẻ `<StatusPlaceHolderImpl/>` ở cuối mỗi câu trả lời.
+- [ ] **Reset CSS bắt buộc:** Thẻ `body` phải có thuộc tính `margin: 0; padding: 0;` (Nghiêm cấm đặt padding cho body khác 0 để tránh vỡ giao diện trên thiết bị di động). Mọi khoảng trống đệm nếu có phải đặt ở `margin` của container ngoài cùng.
+- [ ] **Tải JQuery chuẩn:** Sử dụng hàm nạp mặc định `$(function() { init(); });` (CẤM sử dụng sự kiện `DOMContentLoaded`).
+- [ ] **Khởi tạo MVU an toàn:** Bắt buộc phải chờ khởi tạo `await waitGlobalInitialized('Mvu')` và bọc hàm khởi động trong `$(errorCatched(init))`.
+- [ ] **Lắng nghe sự kiện cập nhật:** Bắt buộc phải có hàm lắng nghe sự kiện cập nhật biến số để tự động vẽ lại giao diện khi biến số thay đổi:
+  ```javascript
+  eventOn(Mvu.events.VARIABLE_UPDATE_ENDED, () => renderUI());
+  ```
+- [ ] **Truy cập đường dẫn an toàn:** Toàn bộ việc lấy biến số phải gọi `getAllVariables()`, bắt đầu bằng tiền tố `'stat_data.'`, và dùng hàm `_.get()` của Lodash để truy cập phòng thủ (tránh crash lỗi khi biến lồng nhau chưa được tạo):
+  `const level = _.get(vars, 'stat_data.Người_Chơi.HP', 100);`
+- [ ] **Quy chuẩn chú thích:** Toàn bộ chú thích trong tệp JavaScript/HTML Frontend bắt buộc phải dùng định dạng `/* */` (Nghiêm cấm dùng chú thích `//`).
+- [ ] **Hạn chế layout:** Tránh dùng đơn vị chiều cao `vh` và hạn chế dùng `position: absolute` để đảm bảo giao diện thích ứng linh hoạt theo độ rộng của khung chứa (responsive container).
+
+---
+
+## 13. TIÊU CHUẨN RÀ SOÁT VĂN PHONG & NHÂN THIẾT (WRITING QC)
+
+Kiểm soát chất lượng văn phong thiết kế nhân vật trong các entry Worldbook:
+
+### 13.1 Phân Hóa Đặc Trưng Ngoại Hình
+- Loại bỏ các mô tả mang tính hiển nhiên (ví dụ: nhân vật bối cảnh Á mà ghi "tóc đen mắt đen", nhân vật 18 tuổi ghi "trẻ trung").
+- Loại bỏ các tính từ sáo rỗng "mỹ nhân vạn năng" (xinh đẹp tinh xảo, làn da trắng trẻo, mắt đào lấp lánh).
+- **Quy chuẩn kiểm tra:** Nếu ẩn tên nhân vật đi, người đọc có thể nhận dạng ra nhân vật qua đặc trưng ngoại hình cụ thể hay không (ví dụ: "tóc buộc đuôi ngựa màu xanh lục bảo, mắt hổ phách, nốt ruồi dưới khóe mắt trái" - Hợp lệ).
+
+### 13.2 Loại Bỏ Lối Viết Khuôn Sáo Của AI
+- **Từ mơ hồ:** Loại bỏ/hạn chế tối đa các từ "dường như", "gần như", "như thể", "giống như".
+- **So sánh cũ mòn:** Xóa bỏ "như con thú nhỏ", "như thỏ con", "mặt hồ lòng dậy sóng lăn tăn", "hòn đá ném xuống mặt hồ phẳng lặng".
+- **Biểu cảm rập khuôn:** Thay thế các mô tả sáo rỗng "khóe môi khẽ cong lên", "trong mắt thoáng qua tia phức tạp", "đầu ngón tay hơi trắng bệch" bằng các biểu đạt hành vi chân thực, trực quan.
+- **Tính từ cực đoan:** Xóa bỏ "xấu hổ cực độ", "vô cùng sợ hãi", "vạn niệm đều tắt".
+
+### 13.3 Nguyên Tắc Tuyệt Đối Không Độ (Zero-Degree Writing)
+- Không đưa các đánh giá chủ quan của tác giả vào mô tả nhân vật.
+- Sử dụng phương pháp **Bạch miêu (Tả thực trực tiếp)**: Tả hành vi cụ thể thay cho việc dán nhãn tính cách (ví dụ: Thay vì ghi "Cô ấy rất dịu dàng, lương thiện" hãy viết "Cô ấy thường mang đồ ăn thừa cho mèo hoang, sẵn sàng nhường ô cho người lạ dưới trời mưa").
+- **Độ tinh khiết ngữ liệu:** Các mẫu hội thoại (`mes_example` hoặc thoại mẫu trong lorebook) bắt buộc chỉ chứa **thoại thuần**, cấm trộn lẫn hoạt động tâm lý, miêu tả biểu cảm hay mô tả động tác của nhân vật vào trong ngoặc thoại.
+
+### 13.4 Cấu Trúc Tam Diện Tính (Three-Dimensional Personality)
+Mỗi khía cạnh tính cách của nhân vật trong lorebook phải được xây dựng qua 5 yếu tố rõ ràng:
+1. **Điều kiện kích hoạt:** Khi nào tính cách này trỗi dậy?
+2. **Trạng thái năng lượng:** Hành vi, biểu cảm đặc trưng.
+3. **Ngữ liệu mẫu:** Các câu thoại đặc trưng cho khía cạnh đó.
+4. **Mô thức hành vi cơ thể:** Thói quen cơ học của cơ thể.
+5. **Chức năng tâm lý:** Khía cạnh này bảo vệ nhân vật khỏi áp lực gì?
+
+---
+
+## 14. XỬ LÝ SỰ CỐ (TROUBLESHOOTING)
+
+- **Bảng trạng thái không hiển thị ở tin nhắn đầu tiên:**
+  - Kiểm tra xem trường `first_mes` của card đã có tag neo `<StatusPlaceHolderImpl/>` chưa.
+  - Kiểm tra xem Regex Script số 1 (Ẩn thanh trạng thái khởi tạo) đã được bật (`Enabled: True`) và cấu hình đúng placement `[1]` chưa.
+- **Validation lỗi liên tục khiến engine dừng hoạt động:**
+  - Kiểm tra xem tất cả các trường biến số trong Schema có bị gán kiểu dữ liệu cứng không. Hãy chuyển hết sang `z.coerce`.
+  - Đảm bảo tất cả các Object cha/con lồng nhau đều được gắn đuôi khởi tạo mặc định `.prefault({...})`.
+- **Dữ liệu mảng bị trùng lặp hoặc lộn xộn:**
+  - Tránh dùng `z.array()` cho các danh sách động có thể cập nhật. Hãy thiết kế lại trường đó dưới dạng `z.record(z.string(), z.object(...))` để JSON Patch thao tác trực tiếp lên các key cố định.
+- **AI không chịu xuất khối cập nhật `<UpdateVariable>`:**
+  - Kích hoạt entry `[mvu_update]Nhấn mạnh định dạng xuất biến` (Thứ tự 200, depth 0) để ép AI bắt buộc phải sinh thẻ mở/đóng ở cuối mỗi câu trả lời.

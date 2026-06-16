@@ -739,11 +739,47 @@ export function enforceVariableCasing(
 }
 
 /**
+ * Common CSS properties, JS keywords, and HTML tag names that must NEVER be
+ * fuzzy-matched to MVU dictionary values. These short ASCII tokens are
+ * especially vulnerable to Levenshtein false-positives (e.g., "top" → "Tay"
+ * has edit distance 2, which was previously accepted).
+ */
+const PROTECTED_CODE_KEYWORDS = new Set([
+  // CSS positioning & layout
+  'top', 'left', 'right', 'bottom', 'gap', 'row', 'auto', 'flex', 'grid',
+  'none', 'block', 'inline', 'wrap', 'start', 'end', 'center', 'space',
+  'fixed', 'sticky', 'static', 'absolute', 'relative', 'inherit', 'initial',
+  'unset', 'revert', 'normal', 'bold', 'italic', 'solid', 'dashed', 'dotted',
+  'hidden', 'visible', 'scroll', 'clip', 'cover', 'contain', 'fill',
+  'both', 'ease', 'linear', 'step',
+  // CSS properties (short ones vulnerable to fuzzy match)
+  'color', 'font', 'size', 'width', 'height', 'margin', 'padding', 'border',
+  'display', 'position', 'float', 'clear', 'overflow', 'opacity', 'cursor',
+  'content', 'order', 'align', 'justify', 'transform', 'transition',
+  'animation', 'filter', 'outline', 'resize', 'zoom',
+  // CSS units & functions
+  'calc', 'var', 'rgb', 'rgba', 'hsl', 'hsla', 'url', 'attr', 'env',
+  // HTML tags (short)
+  'div', 'span', 'img', 'svg', 'nav', 'pre', 'sub', 'sup', 'map', 'col',
+  'tag', 'tab', 'btn', 'bar', 'box', 'row', 'cell', 'icon', 'link', 'meta',
+  'body', 'head', 'main', 'area', 'base', 'form', 'slot', 'mark', 'ruby',
+  // JS keywords
+  'var', 'let', 'new', 'for', 'try', 'set', 'get', 'map', 'key', 'val',
+  'str', 'num', 'int', 'obj', 'arr', 'len', 'idx', 'err', 'msg', 'log',
+  'max', 'min', 'sum', 'avg', 'pop', 'push', 'shift', 'sort', 'find',
+  'join', 'trim', 'split', 'match', 'test', 'exec', 'call', 'bind', 'apply',
+  'true', 'false', 'null', 'void', 'this', 'self', 'type', 'data', 'name',
+  'text', 'value', 'label', 'title', 'class', 'style', 'event', 'index',
+  // Common Vietnamese short words that shouldn't be fuzzy-matched
+  'Thu', 'thu',
+]);
+
+/**
  * Find the closest matching dictionary value for a potentially mismatched YAML key.
  * Uses 3-pass matching strategy:
  * Pass 1: Normalized exact match (case, whitespace, underscore insensitive)
  * Pass 2: Substring containment with length ratio check
- * Pass 3: Levenshtein distance fallback (max distance 2) for typos/diacritics
+ * Pass 3: Levenshtein distance fallback with proportional threshold
  */
 function findClosestDictValue(
   yamlKey: string,
@@ -751,6 +787,11 @@ function findClosestDictValue(
 ): string | null {
   const normalize = (s: string) => s.toLowerCase().replace(/[\s_-]+/g, ' ').trim();
   const normalizedKey = normalize(yamlKey);
+
+  // Reject protected CSS/JS/HTML keywords — these must NEVER be fuzzy-matched
+  if (PROTECTED_CODE_KEYWORDS.has(yamlKey) || PROTECTED_CODE_KEYWORDS.has(normalizedKey)) {
+    return null;
+  }
 
   // Pass 1: Direct case-insensitive match against translated values
   for (const [, trans] of Object.entries(mvuDictionary)) {
@@ -762,27 +803,42 @@ function findClosestDictValue(
 
   // Pass 2: Substring containment: "Độ Hảo Cảm" contains "Hảo Cảm"
   // Only match if the dict value is a significant portion of the key
-  for (const [, trans] of Object.entries(mvuDictionary)) {
-    if (!trans || trans.length < 2) continue;
-    const normalizedTrans = normalize(trans);
-    if (normalizedKey.includes(normalizedTrans) || normalizedTrans.includes(normalizedKey)) {
-      const ratio = Math.min(normalizedKey.length, normalizedTrans.length) /
-                    Math.max(normalizedKey.length, normalizedTrans.length);
-      if (ratio > 0.6) {
-        return trans;
+  // Skip very short keys (≤ 3 chars) to avoid false positives
+  if (normalizedKey.length > 3) {
+    for (const [, trans] of Object.entries(mvuDictionary)) {
+      if (!trans || trans.length < 2) continue;
+      const normalizedTrans = normalize(trans);
+      if (normalizedTrans.length <= 3) continue; // Skip short dict values for substring match
+      if (normalizedKey.includes(normalizedTrans) || normalizedTrans.includes(normalizedKey)) {
+        const ratio = Math.min(normalizedKey.length, normalizedTrans.length) /
+                      Math.max(normalizedKey.length, normalizedTrans.length);
+        if (ratio > 0.6) {
+          return trans;
+        }
       }
     }
   }
 
   // Pass 3: Levenshtein distance fallback — catch typos and diacritics
   // e.g. "Hảo Câm" (typo) → "Hảo Cảm" (distance = 1)
+  // CRITICAL: Use PROPORTIONAL threshold to prevent short-string false positives.
+  // For "top" (len 3) vs "Tay" (len 3): distance 2 / length 3 = 0.67 → rejected.
+  // For "Hảo Câm" (len 7) vs "Hảo Cảm" (len 7): distance 1 / length 7 = 0.14 → accepted.
   let bestMatch: string | null = null;
   let bestDist = Infinity;
   for (const [, trans] of Object.entries(mvuDictionary)) {
     if (!trans || trans.length < 2) continue;
-    const dist = levenshteinDistance(normalizedKey, normalize(trans));
-    // Only accept matches within distance 2, and prefer shorter distance
-    if (dist <= 2 && dist < bestDist) {
+    const normalizedTrans = normalize(trans);
+    const dist = levenshteinDistance(normalizedKey, normalizedTrans);
+    
+    // Proportional threshold: max edit distance depends on string length
+    // Short strings (≤ 4 chars): allow max distance 1 (only diacritics/typos)
+    // Medium strings (5-8 chars): allow max distance 2
+    // Long strings (≥ 9 chars): allow max distance 3
+    const maxLen = Math.max(normalizedKey.length, normalizedTrans.length);
+    const maxDist = maxLen <= 4 ? 1 : maxLen <= 8 ? 2 : 3;
+    
+    if (dist <= maxDist && dist < bestDist) {
       bestDist = dist;
       bestMatch = trans;
     }
@@ -2396,8 +2452,157 @@ const CHINESE_FONT_MAP: [RegExp, string][] = [
 ];
 
 /**
+ * Fix broken lodash/utility paths that were split across lines during AI translation.
+ * 
+ * After AI translation, string paths inside _.get(), _.set(), _.has(), etc. often get
+ * broken across multiple lines with extra whitespace. For example:
+ *   _.get(data, 'stat_data['\n  Bản Tôn.Xuân Thu  ']')
+ * This function normalizes them back to clean single-line strings.
+ * 
+ * Also fixes getvar/setvar paths with similar line-break corruption.
+ */
+export function fixBrokenLodashPaths(text: string): string {
+  if (!text || typeof text !== 'string') return text;
+
+  let result = text;
+
+  // ═══ Phase 1: Fix multi-line string arguments in _.get/_.set/_.has/_.result/_.pick/_.omit ═══
+  // Match: _.get(anything, 'broken\n  path\n  here')  or  _.get(anything, "broken\n  path")
+  // The key insight: the string argument should never contain actual newlines.
+  const lodashFuncPattern = /(_\.(?:get|set|has|result|pick|omit)\s*\(\s*[^,]+,\s*)(['"])([\s\S]*?)\2/g;
+  result = result.replace(lodashFuncPattern, (_match, prefix: string, quote: string, pathContent: string) => {
+    // Check if the path content contains line breaks or excessive whitespace
+    if (/[\n\r]/.test(pathContent) || /\s{2,}/.test(pathContent)) {
+      // Normalize: collapse all whitespace sequences (including newlines) to single spaces, then trim
+      const cleaned = pathContent
+        .replace(/[\n\r]+/g, '') // Remove newlines
+        .replace(/\s{2,}/g, ' ') // Collapse multiple spaces
+        .replace(/\[\s+/g, '[')  // Fix '[ ' → '['
+        .replace(/\s+\]/g, ']')  // Fix ' ]' → ']'
+        .trim();
+      return `${prefix}${quote}${cleaned}${quote}`;
+    }
+    return _match;
+  });
+
+  // ═══ Phase 2: Fix multi-line array path arguments in _.get(obj, ['Key1', 'Key2']) ═══
+  const lodashArrPattern = /(_\.(?:get|set|has|result)\s*\(\s*[^,]+,\s*)\[([\s\S]*?)\]/g;
+  result = result.replace(lodashArrPattern, (_match, prefix: string, arrContent: string) => {
+    if (/[\n\r]/.test(arrContent)) {
+      // Normalize array elements: collapse newlines, trim each element
+      const cleaned = arrContent
+        .replace(/[\n\r]+/g, '') // Remove newlines
+        .replace(/\s{2,}/g, ' ') // Collapse spaces
+        .trim();
+      return `${prefix}[${cleaned}]`;
+    }
+    return _match;
+  });
+
+  // ═══ Phase 3: Fix getvar/setvar paths with line breaks ═══
+  const getsetvarPattern = /((?:getvar|setvar|addvar|getglobalvar|setglobalvar)\s*\(\s*)(['"])([\s\S]*?)\2/g;
+  result = result.replace(getsetvarPattern, (_match, prefix: string, quote: string, pathContent: string) => {
+    if (/[\n\r]/.test(pathContent) || /\s{2,}/.test(pathContent)) {
+      const cleaned = pathContent
+        .replace(/[\n\r]+/g, '')
+        .replace(/\s{2,}/g, ' ')
+        .replace(/\[\s+/g, '[')
+        .replace(/\s+\]/g, ']')
+        .trim();
+      return `${prefix}${quote}${cleaned}${quote}`;
+    }
+    return _match;
+  });
+
+  return result;
+}
+
+/**
+ * Convert dot-delimited paths with spaces/diacritics to bracket notation.
+ * 
+ * When translated keys contain spaces (e.g. "Bản Tôn" instead of "本尊"),
+ * using dot notation in _.get(obj, 'stat_data.Bản Tôn.Xuân Thu') will fail
+ * because lodash interprets dots as path separators — and 'Bản Tôn' has a
+ * space which makes it an invalid JS identifier.
+ * 
+ * This function converts such paths to bracket notation:
+ *   _.get(obj, 'stat_data.Bản Tôn.Xuân Thu')
+ *   → _.get(obj, "stat_data['Bản Tôn']['Xuân Thu']")
+ * 
+ * Or to array path syntax:
+ *   _.get(obj, ['stat_data', 'Bản Tôn', 'Xuân Thu'])
+ */
+export function fixDotNotationPaths(text: string): string {
+  if (!text || typeof text !== 'string') return text;
+
+  let result = text;
+
+  // ═══ Fix _.get/_.set/_.has/_.result with dot-delimited string paths ═══
+  // Pattern: _.get(obj, 'segment1.segment2.segment3')
+  // If any segment contains spaces or diacritics, convert to array path
+  const lodashDotPathPattern = /(_\.(?:get|set|has|result|pick|omit)\s*\(\s*[^,]+,\s*)(['"])([^'"]+)\2(\s*(?:,\s*[^)]+)?\s*\))/g;
+  
+  result = result.replace(lodashDotPathPattern, (_match, prefix: string, quote: string, path: string, suffix: string) => {
+    // Only process if it's a dotted path (has at least one dot)
+    if (!path.includes('.')) return _match;
+
+    const segments = path.split('.');
+    
+    // Check if any segment has spaces or diacritics that would cause path parsing issues
+    const hasProblematicSegment = segments.some(seg => 
+      /\s/.test(seg) || /[À-ỹĐđ]/.test(seg)
+    );
+    
+    if (!hasProblematicSegment) return _match; // No problem, leave as-is
+
+    // Convert to array path: _.get(obj, ['seg1', 'seg2', 'seg3'])
+    const arrayPath = segments.map(seg => `'${seg.replace(/'/g, "\\'")}'`).join(', ');
+    return `${prefix}[${arrayPath}]${suffix}`;
+  });
+
+  // ═══ Fix direct bracket-in-string patterns caused by AI confusion ═══
+  // Pattern: _.get(data, 'stat_data['Bản Tôn']['Xuân Thu']')
+  // This is syntactically broken — the AI tried bracket notation inside a string literal.
+  // Fix: convert to proper array path syntax
+  const brokenBracketInStringPattern = /(_\.(?:get|set|has|result)\s*\(\s*[^,]+,\s*)(['"])([^'"]*?\[['"]\s*[\s\S]*?['"]\s*\][\s\S]*?)\2/g;
+  result = result.replace(brokenBracketInStringPattern, (_match, prefix: string, _quote: string, pathContent: string) => {
+    // Extract all bracket segments: ['Key1']['Key2']
+    const bracketPattern = /\['([^']*?)'\]|\["([^"]*?)"\]/g;
+    const segments: string[] = [];
+    let bm;
+
+    // First, check for a prefix before the first bracket (e.g., "stat_data")
+    const firstBracketIdx = pathContent.indexOf('[');
+    if (firstBracketIdx > 0) {
+      const prefix_seg = pathContent.slice(0, firstBracketIdx).trim();
+      if (prefix_seg) {
+        // Split prefix by dots (e.g., "stat_data")
+        for (const s of prefix_seg.split('.')) {
+          if (s.trim()) segments.push(s.trim());
+        }
+      }
+    }
+
+    while ((bm = bracketPattern.exec(pathContent)) !== null) {
+      const seg = (bm[1] || bm[2] || '').trim();
+      if (seg) segments.push(seg);
+    }
+
+    if (segments.length >= 2) {
+      const arrayPath = segments.map(seg => `'${seg.replace(/'/g, "\\'")}'`).join(', ');
+      return `${prefix}[${arrayPath}]`;
+    }
+
+    return _match;
+  });
+
+  return result;
+}
+
+/**
  * Hậu xử lý HTML trong regex replaceString sau khi dịch:
  * 1. Thay font chữ Trung/Nhật → font tương thích tiếng Việt
+ * 2. Sửa đường dẫn _.get() bị ngắt dòng hoặc dùng dot notation sai cú pháp
  */
 export function postProcessRegexHtml(html: string): string {
   if (!html || typeof html !== 'string') return html;
@@ -2408,6 +2613,12 @@ export function postProcessRegexHtml(html: string): string {
   for (const [pattern, replacement] of CHINESE_FONT_MAP) {
     result = result.replace(pattern, replacement);
   }
+
+  // Sửa đường dẫn _.get/_.set bị ngắt dòng
+  result = fixBrokenLodashPaths(result);
+
+  // Chuyển dot notation có khoảng trắng sang bracket notation
+  result = fixDotNotationPaths(result);
 
   return result;
 }
@@ -2667,10 +2878,14 @@ export function enforceSchemaAuthoritative(
       bestMatch = schemaKeys[exactIndex];
     }
 
-    // Pass 2: Substring matching
-    if (!bestMatch) {
+    // Skip protected CSS/JS keywords — these must NEVER be fuzzy-matched
+    if (PROTECTED_CODE_KEYWORDS.has(yamlKey) || PROTECTED_CODE_KEYWORDS.has(normalizedKey)) continue;
+
+    // Pass 2: Substring matching (skip very short keys to avoid false positives)
+    if (!bestMatch && normalizedKey.length > 3) {
       for (const sk of schemaKeys) {
         const normalizedSk = normalize(sk);
+        if (normalizedSk.length <= 3) continue; // Skip short schema keys for substring match
         if (normalizedKey.includes(normalizedSk) || normalizedSk.includes(normalizedKey)) {
           const ratio = Math.min(normalizedKey.length, normalizedSk.length) /
                         Math.max(normalizedKey.length, normalizedSk.length);
@@ -2682,12 +2897,18 @@ export function enforceSchemaAuthoritative(
       }
     }
 
-    // Pass 3: Levenshtein distance fallback
+    // Pass 3: Levenshtein distance fallback with PROPORTIONAL threshold
+    // Short strings (≤ 4 chars): max distance 1 to avoid false positives like top→Tay
+    // Medium strings (5-8 chars): max distance 2
+    // Long strings (≥ 9 chars): max distance 3
     if (!bestMatch) {
       let bestDist = Infinity;
       for (const sk of schemaKeys) {
-        const dist = levenshteinDistance(normalizedKey, normalize(sk));
-        if (dist <= 2 && dist < bestDist) {
+        const normalizedSk = normalize(sk);
+        const dist = levenshteinDistance(normalizedKey, normalizedSk);
+        const maxLen = Math.max(normalizedKey.length, normalizedSk.length);
+        const maxDist = maxLen <= 4 ? 1 : maxLen <= 8 ? 2 : 3;
+        if (dist <= maxDist && dist < bestDist) {
           bestDist = dist;
           bestMatch = sk;
         }

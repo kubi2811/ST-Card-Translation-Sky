@@ -1,0 +1,225 @@
+﻿HƯỚNG DẪN TOÀN TẬP VỀ các mục entry trong WORLDBOOK (LOREBOOK)
+Mục đích: Tạo ra bộ nhớ động cho AI, giúp AI ghi nhớ các khái niệm, ngoại hình, hoặc quy tắc thế giới chỉ khi cần thiết, giúp tiết kiệm bộ nhớ (Context) và tăng tính logic.
+Hướng dẫn chuyên sâu về worldbook dành cho những cọu có mục đích tạo card hoặc worldbook phụ hướng dẫn AI miêu tả về một thứ gì đó như đùi, mông, ngực chẳng hạn.
+Những cọu thuần túy có mục đích chỉ chơi card không để ý doc này cũng được.
+WorldBook được tạo nên từ nhiều entry khác nhau, mỗi entry đều sẽ có các mục thiết lập cơ bản như sau:
+1. Thông tin cơ bản (Basic Information)
+Title / Memo (Tiêu đề / Ghi chú)
+  
+
+* Khái niệm: Tên định danh của mục nhập (Entry). Nó giúp bạn quản lý và tìm kiếm, AI thường không đọc phần này (trừ khi bật tính năng đặc biệt).
+* Ví dụ áp dụng:
+   * Title: Cốt lõi - Đùi & Tâm lý
+   * Giải thích: Đặt tên rõ ràng để biết đây là file chứa quy tắc vật lý và tâm lý liên quan đến phần đùi nhân vật.
+Strategy (Chiến lược kích hoạt)
+Quyết định "khi nào" thì thông tin này được nạp vào bộ nhớ.  
+
+
+* Constant (Hằng số): Luôn luôn xuất hiện trong bộ nhớ, không cần điều kiện. Dùng cho những sự thật hiển nhiên hoặc quy tắc cốt lõi không thể quên.
+* Normal (Thông thường): Chỉ xuất hiện khi tìm thấy Keyword (Từ khóa) trong đoạn chat. Đây là chế độ tiết kiệm bộ nhớ nhất.
+* Vectorized (Vector hóa): Sử dụng thuật toán tìm kiếm ngữ nghĩa (tương đồng về ý nghĩa chứ không cần đúng chính tả). Ví dụ: nhắc đến "đi bộ" có thể kích hoạt "bắp đùi" mà không cần từ khóa chính xác.
+* Ví dụ áp dụng:
+   * Chọn: Normal (Nếu bạn chỉ muốn AI miêu tả kỹ khi nhắc đến chân/đùi).
+   * Hoặc Chọn: Constant (Nếu bạn muốn AI luôn luôn ghi nhớ tâm lý tự ti/tự tin về đùi trong mọi hành động, hoặc các quy tắc cốt lỗi của worldbooook).
+2. Vị trí & Thứ tự (Position & Order)
+Position (Vị trí chèn)
+Quyết định thông tin nằm ở đâu trong dòng nhắc lệnh (Prompt). Vị trí càng gần dưới cùng càng có sức ảnh hưởng mạnh.  
+
+
+* Before/After Character Definitions (Trước/Sau Định nghĩa nhân vật):
+   * Khái niệm: Nằm ngay cạnh thông tin gốc của nhân vật (Persona). Dùng cho các đặc điểm sinh học cố định.
+   * Ví dụ với WorldBook Đùi: Thiết lập "Size đùi mật ong" và "Khe hở đùi" trở thành một phần cấu tạo cơ thể bất di bất dịch của nhân vật, ngang hàng với màu mắt hay chiều cao. AI sẽ hiểu: "Cô ấy sinh ra đã như vậy."
+* Before/After Example Messages (Trước/Sau Tin nhắn mẫu):
+   * Khái niệm: Ít dùng, thường để cung cấp ngữ cảnh cho văn phong mẫu.
+   * Ví dụ với WB Đùi: Định hình cách viết mẫu, nhắc nhở AI rằng trong các ví dụ mẫu, nhân vật thường có xu hướng khoe chân.
+* Before/After Author's Note (Ghi chú tác giả):
+   * Khái niệm: Nằm gần cuối context, ảnh hưởng mạnh đến giọng văn (narrative style) và sự chỉ đạo.
+   * Ví dụ với WB Đùi: Tác dụng tương tự như đạo diễn nhắc quay phim: "Lưu ý: Camera luôn tập trung vào phần đùi." AI sẽ chủ động hướng sự chú ý của câu văn vào đó thường xuyên hơn.
+* At Depth (System):
+   * Khái niệm: Chèn như một mệnh lệnh hệ thống / luật vật lý bắt buộc.
+   * Ví dụ với WB Đùi: (Như hình ảnh của bạn dùng @D). Đây là luật tuyệt đối. AI buộc phải tuân thủ logic: "Khi ngồi xuống, đùi phải bè ra (thay đổi hình khối)". Nó không phải là miêu tả tùy thích, mà là cơ chế vật lý bắt buộc của thế giới này.
+* At Depth (User):
+   * Khái niệm: Giả lập tin nhắn của người dùng.
+   * Ví dụ với WB Đùi: Giả vờ như bạn vừa chat thêm một câu: "Hãy tả kỹ cặp đùi cho tôi." ngay trước khi AI trả lời. Kết quả là AI sẽ miêu tả rất kỹ để "chiều lòng" yêu cầu ngầm này của bạn.
+* At Depth (Assistant):
+   * Khái niệm: Giả lập suy nghĩ hoặc lời nói trước đó của AI.
+   * Ví dụ với WB Đùi: Chèn dòng suy nghĩ của AI: "Cô ấy cảm thấy tự tin khi khoe đôi chân này." Câu văn tiếp theo AI viết sẽ tiếp nối mạch cảm xúc đó, làm cho hành động trở nên tự nhiên hơn.
+Depth (Độ sâu)  
+
+
+Khái niệm: Khoảng cách từ tin nhắn mới nhất ngược về quá khứ.
+   * 0: Ngay tại tin nhắn mới nhất. (hiệu lực ngay lập tức)
+   * 4: Chèn vào sau 4 tin nhắn trước đó. (kích hoạt sau đó, làm nền tảng cho 0)
+Ví dụ áp dụng: Depth: 0 (Để quy tắc miêu tả áp dụng ngay lập tức cho câu trả lời sắp tới)
+Có thể hiểu đơn giản rằng, depth càng thấp thì ưu tiên của entry đó trong worldbook càng quan trọng.
+Phân tích ví dụ trong ảnh:
+  
+
+* Cốt lõi & Quy tắc cấm (Depth 0): Vì đây là luật quan trọng nhất cần áp dụng cho hành động hiện tại, nên nó cần nằm ngay sát tin nhắn mới nhất để AI không thể bỏ qua.
+* Mô-Đun Giác quan (Depth 4): Những thông tin bổ trợ như "cảm giác", "mùi hương", "xúc giác" không cần thiết phải chèn vào ngay trước mặt (gây rối). Đặt ở Depth 4 giúp AI có kiến thức nền về giác quan, nhưng vẫn ưu tiên xử lý luật Cốt lõi (Depth 0) trước.
+* NSFW (Depth 1): Đặt lùi lại 1 chút so với Cốt lõi, để tránh xung đột trực tiếp nhưng vẫn rất gần để kích hoạt nội dung người lớn nếu cần.
+
+
+Order (Thứ tự ưu tiên hiển thị)
+Khái niệm: Nếu có nhiều mục Worldbook kích hoạt cùng lúc tại cùng một Vị trí (Position), mục nào có số Order cao hơn sẽ nằm dưới (ưu tiên hơn/ghi đè lên mục kia).
+Ví dụ áp dụng: 100 (Đặt số cao để đảm bảo quy tắc miêu tả đùi này quan trọng hơn các miêu tả quần áo thông thường). Có thể hiểu đơn giản rằng, Order càng cao thì ưu tiên của entry đó trong worldbook càng quan trọng.
+* Phân tích ví dụ trong ảnh (Tại cùng Depth 0):
+   * Cốt lõi (Order 100): Quy tắc cơ bản.
+   * Quy tắc cấm (Order 101):
+      * Vì 101 > 100, Quy tắc cấm sẽ nằm sau Cốt lõi.
+      * Ý nghĩa: Nếu Cốt lõi bảo "Hãy miêu tả đùi", nhưng Quy tắc cấm bảo "Không được dùng từ thô tục", thì Quy tắc cấm sẽ thắng vì nó có quyền ghi đè (Order cao hơn). Đây là cách bạn tạo ra các lớp bảo vệ (Safeguards).
+* Phân tích ví dụ các Size đùi (Tại cùng vị trí Character):
+   * Size XS (304), S (305)... Size 3XL (310): Sắp xếp theo thứ tự tăng dần giúp danh sách gọn gàng. Nếu một nhân vật kích hoạt cả 2 mục (ví dụ vừa S vừa M do lỗi), mục có Order cao hơn (M) sẽ được AI lấy làm chuẩn cuối cùng.
+
+
+3. Kích hoạt & Từ khóa (Trigger & Keywords)
+Primary Keywords (Từ khóa chính)  
+
+
+* Khái niệm: Các từ hoặc cụm từ mà khi xuất hiện trong đoạn chat, mục Worldbook này sẽ được kích hoạt (Dành cho Strategy: Normal).
+* Ví dụ áp dụng:
+Cô ấy, Nữ, Đùi, Bắp đùi, Cặp đùi, Tuyệt đối lĩnh vực, Thighs
+Tác dụng: Khi bạn hoặc AI chat câu "Cô ấy bước đi, để lộ cặp đùi...", mục này lập tức được nạp vào.
+Logic (Logic kết hợp từ khóa)  
+
+
+* AND ANY (Và bất kỳ): Chỉ cần xuất hiện 1 trong các từ khóa là kích hoạt. (Phổ biến nhất).
+* AND ALL (Và tất cả): Phải xuất hiện đủ tất cả từ khóa mới kích hoạt.
+* NOT ALL / NOT ANY: Dùng để chặn kích hoạt nếu xuất hiện từ khóa cấm.
+Ví dụ áp dụng: AND ANY (Chỉ cần nhắc đến "Đùi" là kích hoạt quy tắc).
+Matching Settings (Cài đặt khớp từ)  
+
+
+* Case-Sensitive: Phân biệt hoa thường (VD: "Đùi" khác "đùi"). -> Nên tắt (No) hoặc Use Global.
+* Whole Words: Chỉ bắt từ nguyên vẹn (VD: bắt "nam" nhưng không bắt "việt nam"). -> Nên bật (Yes) để tránh bắt nhầm từ ghép.
+* Group Scoring: Tính điểm cho nhóm từ khóa (nâng cao).
+4. Các mục Bật/Tắt (Toggles - True/False)  
+
+
+Các tùy chọn này kiểm soát cách Worldbook tương tác với chính nó và các mục khác.
+* Non-recursable (Không đệ quy):
+   * Nếu Bật: Nội dung của mục này sẽ không được quét để tìm từ khóa kích hoạt các mục Worldbook khác.
+   * Ví dụ: Nếu trong mô tả đùi có từ "Váy", nó sẽ KHÔNG kích hoạt mục Worldbook về "Váy".
+* Delay until recursion: Chờ cho đến khi quá trình quét đệ quy hoàn tất mới chèn vào.
+* Prevent further recursion (Chặn đệ quy tiếp):
+   * Nếu Bật: Sau khi mục này được kích hoạt, hệ thống sẽ dừng quét, không tìm kiếm thêm Worldbook nào nữa từ nội dung này.
+   * Ví dụ áp dụng: Trong hình bạn đã tích mục này. Điều này tốt để tối ưu hiệu năng, ngăn AI bị "lú" nếu nội dung <Thighs_Core> chứa quá nhiều từ khóa kích hoạt lung tung.
+* Ignore budget: Bỏ qua giới hạn Token của Worldbook (luôn luôn chèn dù bộ nhớ đầy).
+Giải Thích Cụ Thể 
+* Recursion (Đệ quy) là gì? Bình thường, khi một mục (entry) World Info (A) được kích hoạt, hệ thống sẽ quét nội dung của mục (A) đó. Nếu trong nội dung của (A) có chứa từ khóa (keyword) của mục (B), thì mục (B) cũng sẽ được lôi ra. Đây gọi là "Recursion".
+Prevent further recursion: Khi bạn tích vào ô này cho mục (A), bạn ra lệnh cho hệ thống: "Nếu mục A này được kích hoạt, hãy ném nó vào ngữ cảnh, nhưng ĐỪNG QUÉT nội dung của nó để tìm từ khóa khác nữa."
+* Trong SillyTavern, "Non-recursable" (Không thể bị đệ quy) là tính năng hoạt động ngược lại hoàn toàn với "Prevent further recursion".
+Nếu "Prevent further recursion" là chặn chiều đi (không gọi người khác), thì "Non-recursable" là chặn chiều đến (không để mục khác gọi mình).
+Dưới đây là giải thích chi tiết:
+Prevent further recursion
+	Chặn đầu ra
+	Non-recursable
+	Chặn đầu vào
+	
+
+* Trong SillyTavern, "Ignore budget" (Bỏ qua ngân sách) là một tùy chọn "ưu tiên đặc biệt" dành cho các mục World Info quan trọng mà bạn muốn chắc chắn AI phải đọc được, bất chấp các giới hạn đã đặt ra.
+Dưới đây là giải thích chi tiết về cơ chế hoạt động của nó:
+a. "Budget" (Ngân sách) là gì?
+Trong phần cài đặt World Info của SillyTavern, người dùng thường đặt một giới hạn "World Info Budget" (ví dụ: 2048 tokens).
+* Điều này có nghĩa là: "Chỉ dành tối đa 2048 tokens cho các thông tin thế giới. Nếu kích hoạt quá nhiều mục vượt quá số này, hãy bỏ bớt những mục có độ ưu tiên thấp hơn để chừa chỗ cho bộ nhớ."
+b. Tác dụng của "Ignore budget"
+Khi bạn tích vào ô Ignore budget cho một mục cụ thể (ví dụ: Mục A), bạn đang nói với hệ thống rằng:
+"Mục A này cực kỳ quan trọng. Hãy nhét nó vào bộ nhớ gửi đi (context) ngay cả khi Ngân sách World Info (Budget) đã bị dùng hết sạch."
+c. Ví dụ minh họa dễ hiểu
+Hãy tưởng tượng "Ngân sách World Info" là một chiếc xe buýt chỉ chở được 3 người. Hiện tại đã có 3 người (Mục 1, Mục 2, Mục 3) đã lên xe và xe đã đầy chỗ.
+* Tình huống bình thường: Một người thứ 4 (Mục 4) muốn lên xe. Tài xế (Hệ thống) sẽ từ chối: "Hết chỗ rồi (Hết budget), bạn phải ở lại." -> Mục 4 không được gửi cho AI.
+* Tình huống có "Ignore budget": Mục 4 có thẻ bài "Ignore budget" (thẻ VIP). Tài xế sẽ nói: "Dù xe đã quy định chỉ chở 3 người, nhưng vì bạn là VIP nên tôi sẽ phá lệ cho bạn lên luôn." -> Xe bây giờ chở 4 người. Mục 4 được gửi cho AI.
+d. Khi nào nên dùng?
+Bạn nên tích chọn ô này cho những thông tin cốt lõi không thể thiếu, ví dụ:
+* Mục mô tả về chính bản thân người dùng (Persona) nếu bạn để trong World Info.
+* Một luật lệ tuyệt đối của thế giới (ví dụ: "Trong thế giới này ma thuật bị cấm hoàn toàn").
+* Mục mô tả địa điểm hiện tại mà nhân vật đang đứng (để tránh việc AI quên mất mình đang ở đâu).
+⚠ Lưu ý quan trọng
+Việc lạm dụng "Ignore budget" (tích cho quá nhiều mục) có thể gây ra tràn bộ nhớ tổng (Context Window).
+* "Ignore budget" chỉ bỏ qua giới hạn của World Info, nhưng nó không thể vượt qua giới hạn cứng của AI (ví dụ: giới hạn 8k hay 32k tokens của model).
+* Nếu bạn nhồi nhét quá nhiều mục "Ignore budget", chúng sẽ chiếm hết chỗ của Lịch sử chat, khiến AI bị "mất trí nhớ" về những gì hai người vừa nói chuyện với nhau.
+
+
+1. Cơ chế hoạt động
+Bình thường, World Info hoạt động theo chuỗi:
+Người dùng nhắc từ khóa A -> Kích hoạt Mục A -> Trong Mục A có từ khóa B -> Kích hoạt Mục B.
+Khi bạn tích Non-recursable cho Mục B:
+* Mục B sẽ từ chối bị kích hoạt bởi Mục A.
+* Mục B chỉ chịu xuất hiện khi chính Người dùng (User) hoặc AI nhắc trực tiếp đến từ khóa của nó trong đoạn chat mà thôi.
+2. So sánh dễ hiểu (Cực kỳ quan trọng)
+
+
+2. Tác dụng cụ thể trong 1 lượt hoạt động
+Khi AI chuẩn bị trả lời (trong 1 lượt), hệ thống sẽ xây dựng "Prompt" (những gì gửi đi cho AI). Quá trình này diễn ra như sau:
+Ví dụ:
+* Mục A (Thanh Kiếm): Nội dung mô tả là "Đây là vũ khí của Vua Arthur." (Từ khóa kích hoạt: Thanh Kiếm)
+* Mục B (Vua Arthur): Nội dung mô tả tiểu sử ông vua. (Từ khóa kích hoạt: Vua Arthur)
+Trường hợp KHÔNG tích chọn (Mặc định):
+1. Người dùng chat: "Tôi nhặt được Thanh Kiếm."
+2. Hệ thống kích hoạt Mục A.
+3. Hệ thống quét nội dung Mục A, thấy chữ "Vua Arthur".
+4. Hệ thống tiếp tục kích hoạt Mục B.
+5. Kết quả: Cả thông tin về Thanh Kiếm và Vua Arthur đều được gửi cho AI. (Tốn nhiều token hơn).
+Trường hợp CÓ tích chọn "Prevent further recursion" (tại Mục A):
+1. Người dùng chat: "Tôi nhặt được Thanh Kiếm."
+2. Hệ thống kích hoạt Mục A.
+3. Vì có "Prevent further recursion", hệ thống DỪNG LẠI, không quét nội dung Mục A nữa. Dù trong đó có chữ "Vua Arthur", Mục B vẫn nằm im.
+4. Kết quả: Chỉ thông tin về Thanh Kiếm được gửi cho AI.
+3. Tại sao/Khi nào nên dùng tính năng này?
+1. Tiết kiệm Token (Quan trọng nhất): Nếu bạn có một mục World Info chứa quá nhiều từ khóa phổ biến (ví dụ mục mô tả về "Thế giới" có chứa tên các "Quốc gia", "Chủng tộc"...), việc không chặn đệ quy có thể khiến hàng chục mục khác bị lôi ra cùng lúc, làm tràn bộ nhớ ngữ cảnh (Context Limit) hoặc khiến AI bị loạn.
+2. Ngăn chặn vòng lặp vô tận (Loop): Mục A nhắc đến B, Mục B nhắc đến A. Nếu không chặn, chúng sẽ gọi nhau mãi.
+3. Tăng tốc độ xử lý: Ít dữ liệu cần quét và nạp vào prompt hơn đồng nghĩa với việc phản hồi nhanh hơn một chút.
+5. Các chỉ số nâng cao (Bottom Fields)  
+
+
+Prioritize (Ưu tiên tuyệt đối)
+Công dụng: Nếu bộ nhớ (Context) bị đầy, các mục khác sẽ bị cắt bỏ, nhưng mục có dấu tích này sẽ được giữ lại bằng mọi giá.
+Áp dụng: Nên tích nếu đây là "Cốt lõi" (Core) không thể thiếu.
+Group Weight (Trọng số nhóm)
+Dùng để cân bằng xác suất xuất hiện nếu bạn dùng Random Worldbook (ít dùng trong viết truyện tuyến tính).
+Sticky (Độ dính)
+Khái niệm: Sau khi kích hoạt, mục này sẽ "dính" lại trong bộ nhớ thêm n lượt chat nữa dù không còn từ khóa.
+Ví dụ: Sticky: 5. Bạn nhắc đến "Đùi" -> Mục kích hoạt. 5 câu sau bạn nói chuyện về thời tiết, mục này vẫn nằm trong bộ nhớ để AI nhớ nhân vật vẫn đang lộ đùi.
+Cooldown (Thời gian hồi)
+Khái niệm: Sau khi hết hiệu lực (hết Sticky), mục này sẽ không thể kích hoạt lại trong n lượt.
+Ví dụ: Dùng cho các sự kiện ngẫu nhiên không muốn lặp lại liên tục.
+Delay (Độ trễ)
+Khái niệm: Sau khi thấy từ khóa, chờ n lượt rồi mới kích hoạt.
+MÔ PHỎNG HOẠT ĐỘNG THỰC TẾ: HỆ THỐNG WORLDBOOK ĐÙI  
+Tình huống giả định: Người dùng và AI đang nhập vai (Roleplay).
+Câu chat của người dùng: "Cô ấy e thẹn ngồi xuống ghế sofa, khép nép bắt chéo chân, tà váy lụa trượt nhẹ lên trên."
+1. Nhóm Định Hình (Size & Bối cảnh)
+Vị trí: Before Char (Nạp đầu tiên)
+* Hệ thống quét: Thấy tên nhân vật hoặc mặc định luôn kích hoạt vì nằm ở phần định nghĩa nhân vật.
+* Kích hoạt (Order 300+):<Size L - Đùi Mật Ong>
+Dữ liệu cơ thể: Đùi đầy đặn, săn chắc, có da thịt (fleshy), tỉ lệ mỡ/cơ cân đối. Da có độ đàn hồi cao.
+<Bối cảnh thị giác>
+Ánh sáng: Nhấn mạnh độ bóng của da dưới ánh sáng phòng.
+* Kết quả AI tư duy: "Nhân vật này KHÔNG PHẢI chân que củi (Size XS), cũng không quá khổ (Size 3XL). Khi mình miêu tả, mình phải dùng các tính từ như 'đầy đặn', 'mượt mà', 'bóng bẩy'."
+2. Nhóm Logic Nền Tảng (Vật lý & Giác quan)
+Vị trí: Depth 4 (Kiến thức nền, cách hiện tại 4 câu)
+   * Hệ thống quét: Thấy từ khóa "ngồi xuống", "váy lụa", "bắt chéo chân".
+   * Kích hoạt (Order 205 - 207):<Mô đun VẬT LÝ TRANG PHỤC & MA SÁT>
+Cơ chế: Váy lụa có ma sát thấp -> trượt dễ dàng. Khi ngồi, phần thịt đùi bị chèn ép sẽ phình ra (squish effect) tạo thành đường cong mềm mại.
+<Mô-Đun Giác quan>
+Xúc giác: Sự mát lạnh của lụa cọ vào da ấm nóng.
+   * Kết quả AI tư duy: "Mình phải miêu tả vật lý chính xác: Đùi cô ấy khi ngồi xuống ghế sẽ bị bè ra một chút do trọng lực (hiệu ứng Squish), và váy sẽ trượt đi chứ không bám dính."
+3. Nhóm Điều Hướng Cảm Xúc (NSFW & Tâm lý)
+Vị trí: Depth 1 (Cận kề tin nhắn mới)
+      * Hệ thống quét: Thấy ngữ cảnh có tính gợi cảm (e thẹn, váy trượt).
+      * Kích hoạt (Order 102):<NSFW>
+Trạng thái: Bật. Cho phép miêu tả chi tiết giải phẫu học và cảm xúc nhục dục nhẹ nhàng.
+<Tâm lý & Logic Va chạm>
+Thái độ: Nhân vật đang 'e thẹn' nhưng hành động 'bắt chéo chân' là một sự mời gọi ngầm.
+      * Kết quả AI tư duy: "Được phép viết 'nóng'. Tập trung vào sự tương phản giữa vẻ ngại ngùng và cơ thể quyến rũ."
+4. Nhóm Chỉ Huy Tối Cao (Cốt lõi & Luật cấm)
+Vị trí: Depth 0 (Ngay lập tức - Quan trọng nhất)
+         * Hệ thống quét: Quét toàn bộ ngữ cảnh hiện tại.
+         * Kích hoạt (Order 100 & 101):<Cốt lõi (Thighs_Core)> (Order 100)
+Yêu cầu bắt buộc: Phải tả "Khe hở đùi" (Thigh gap) và "Tuyệt đối lĩnh vực" (vùng da lộ ra giữa tất và váy). Nhấn mạnh độ trắng và độ nảy.
+<Quy tắc cấm> (Order 101 - Ghi đè lên tất cả)
+Cấm kỵ: Tuyệt đối không dùng từ "Béo", "Mỡ thừa". Thay bằng "Phồn thực", "Tròn trịa". Không được tả thô tục quá đà (như phim khiêu dâm rẻ tiền).
+         * Kết quả AI tư duy: "Đây là lệnh chốt hạ. Mình sẽ miêu tả đùi, độ nảy, khe hở. Nhưng mình phải cẩn thận từ ngữ, dùng từ hoa mỹ (Order 101) thay vì từ thô tục."
+5. KẾT QUẢ CUỐI CÙNG (AI TRẢ LỜI)
+Sau khi tổng hợp 4 bước trên, AI sẽ viết ra đoạn văn sau:
+"Cô ấy khẽ cắn môi, từ từ hạ người xuống ghế sofa. Trọng lượng cơ thể dồn xuống khiến cặp đùi mật ong đầy đặn (entry Size L) hơi bè ra, tạo nên một độ nảy mềm mại đầy mê hoặc (entry Vật lý/Core). Khi cô nhấc chân lên để bắt chéo, tà váy lụa trơn bóng không thể bám lại, tinh nghịch trượt xuống, để lộ ra vùng da trắng ngần (Core) và một thoáng khe hở đùi (Core) đầy khiêu khích. Cảm giác mát lạnh của vải lụa cọ sát vào làn da ấm nóng (Giác quan) khiến cô khẽ rùng mình, cố gắng che giấu sự xấu hổ nhưng ánh mắt lại ánh lên vẻ tự hào về vẻ đẹp phồn thực (Luật cấm: dùng từ phồn thực thay vì béo) của mình."

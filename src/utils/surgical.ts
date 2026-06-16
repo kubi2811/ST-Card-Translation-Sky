@@ -386,8 +386,8 @@ export function extractCJKTokens(
                         !/^['"]?\s*:\/\//.test(contextAfter);
 
     // 2. JS Dot Notation vs CSS Class
-    // JS dot notation usually follows a variable name (alphanumeric, _, $, or closing bracket)
-    const isJsDotNotation = /[a-zA-Z0-9_$\])}]\s*\.\s*$/.test(contextBefore);
+    // JS dot notation usually follows a variable name (alphanumeric, _, $, or closing bracket, optionally with ?. for optional chaining)
+    const isJsDotNotation = /[a-zA-Z0-9_$\])}]\s*\??\s*\.\s*$/.test(contextBefore);
 
     // CSS class usually follows whitespace, quotes, tag names, or structural combinators
     const isCssClass = !isJsDotNotation && /(?:^|['"\s,>+~{(])[a-zA-Z0-9-]*\.\s*$/.test(contextBefore);
@@ -437,36 +437,21 @@ export function reinsertTranslations(original: string, tokens: CJKToken[]): stri
         (charBefore === "'" && charAfter === "'") ||
         (charBefore === '"' && charAfter === '"');
 
-      if (token.isDotNotation) {
-        // Clean up any newlines and extra spaces from the translated token
-        let cleanTranslation = finalTranslation.replace(/\\n/g, ' ').replace(/[\r\n]+/g, ' ').trim();
-        // Remove spaces around dots if there are any
-        cleanTranslation = cleanTranslation.replace(/\s*\.\s*/g, '.');
-
-        if (cleanTranslation.includes(' ') || cleanTranslation.includes('.')) {
-          if (!alreadyQuoted) {
-            const dotIndex = original.lastIndexOf('.', replaceStart);
-            if (dotIndex !== -1 && !original.substring(dotIndex + 1, replaceStart).includes('\n')) {
+      if (token.isDotNotation && (finalTranslation.includes(' ') || /[À-ỹĐđ]/.test(finalTranslation))) {
+        // JS Dot notation: rewrite to bracket notation
+        if (!alreadyQuoted) {
+          const dotIndex = original.lastIndexOf('.', replaceStart);
+          if (dotIndex !== -1 && !original.substring(dotIndex + 1, replaceStart).includes('\n')) {
+            const isOptionalChain = dotIndex > 0 && original.charAt(dotIndex - 1) === '?';
+            if (isOptionalChain) {
+              // For optional chain obj?.prop, keep ?. and replace "prop" with "['prop']" to get obj?.['prop']
+              finalTranslation = `['${finalTranslation}']`;
+            } else {
+              // For normal dot notation obj.prop, replace ".prop" with "['prop']" to get obj['prop']
               replaceStart = dotIndex;
-              const isOptionalChaining = (dotIndex > 0 && original.charAt(dotIndex - 1) === '?');
-              
-              // Split by dot to handle nested properties
-              const segments = cleanTranslation.split('.').map((s: string) => s.trim()).filter(Boolean);
-              let bracketNotation = '';
-              for (const seg of segments) {
-                bracketNotation += `['${seg}']`;
-              }
-              
-              if (isOptionalChaining) {
-                finalTranslation = `.${bracketNotation}`;
-              } else {
-                finalTranslation = bracketNotation;
-              }
+              finalTranslation = `['${finalTranslation}']`;
             }
           }
-        } else {
-          // If no spaces or dots, keep the cleaned translation
-          finalTranslation = cleanTranslation;
         }
       } else if (token.isObjectKey && (finalTranslation.includes(' ') || /[À-ỹ]/.test(finalTranslation))) {
         // JS Object Key: wrap in quotes
@@ -1177,13 +1162,7 @@ CRITICAL RULES:
     const normalized    = normalizeFullwidthPunctuation(rawReinserted);
     // Pass the original `text` so CSS property names can be compared and restored
     const reinserted    = postValidateCSSProperties(text, normalized);
-
-    // Clean up _.get and bracket notation syntax errors for regex scripts
-    let finalResultText = reinserted;
-    if (isRegex) {
-      finalResultText = fixLodashGetAndBracketPaths(finalResultText);
-    }
-    const isValid       = verifySurgicalResult(text, finalResultText);
+    const isValid       = verifySurgicalResult(text, reinserted);
 
     const translatedCount = tokens.filter(t => t.translated !== t.text).length;
     const missedCount     = tokens.filter(t => t.translated === t.text).length;
@@ -1208,14 +1187,14 @@ CRITICAL RULES:
         console.warn(`[surgicalTranslate] ${missedCount} token(s) untranslated (sample):`, samples);
       }
       writeDebugLog('[surgicalTranslate] Verification PASSED.');
-      return { translated: finalResultText, success: true, fallbackTriggered: false };
+      return { translated: reinserted, success: true, fallbackTriggered: false };
     } else if (!strictVerification) {
       console.warn(
         `[surgicalTranslate] Verification FAILED but strictVerification=false` +
         ` — accepting with ${translatedCount} translations applied`
       );
       writeDebugLog('[surgicalTranslate] Verification FAILED (lenient). Accepting result.');
-      return { translated: finalResultText, success: true, fallbackTriggered: false };
+      return { translated: reinserted, success: true, fallbackTriggered: false };
     } else {
       console.warn('[surgicalTranslate] Verification FAILED (strict) — falling back to original text');
       writeDebugLog('[surgicalTranslate] Verification FAILED (strict). Returning original.');
@@ -1226,72 +1205,4 @@ CRITICAL RULES:
     writeDebugLog(`[surgicalTranslate] Fatal error: ${err.message ?? String(err)}`);
     return { translated: text, success: false, fallbackTriggered: true };
   }
-}
-
-/**
- * Fixes syntax and path errors in Lodash _.get calls and bracket property access
- * inside translated regex replacement strings.
- */
-function fixLodashGetAndBracketPaths(text: string): string {
-  if (!text || typeof text !== 'string') return text;
-
-  let result = text;
-
-  // 1. Fix _.get(obj, 'path') or _.get(obj, "path") or _.get(obj, `path`) with optional default value
-  // Matches: _.get(obj, 'path') or _.get(obj, '\n path ', defaultValue)
-  const lodashStrRegex = /\b_\.get\s*\(\s*([a-zA-Z0-9_$]+)\s*,\s*(['"`])([\s\S]*?)\2\s*(?:,\s*([^)]+))?\s*\)/g;
-  result = result.replace(lodashStrRegex, (match, obj, quote, path, defaultValue) => {
-    const cleanPath = path.replace(/\\n/g, ' ').replace(/[\r\n]+/g, ' ').trim();
-    if (!cleanPath) return match;
-
-    const segments = cleanPath.split('.').map((s: string) => s.trim()).filter(Boolean);
-    const arrayPath = '[' + segments.map((s: string) => `'${s}'`).join(', ') + ']';
-
-    if (defaultValue) {
-      return `_.get(${obj}, ${arrayPath}, ${defaultValue.trim()})`;
-    }
-    return `_.get(${obj}, ${arrayPath})`;
-  });
-
-  // 2. Fix _.get(obj, ['path1', 'path2']) with optional default value
-  const lodashArrRegex = /\b_\.get\s*\(\s*([a-zA-Z0-9_$]+)\s*,\s*\[([\s\S]*?)\]\s*(?:,\s*([^)]+))?\s*\)/g;
-  result = result.replace(lodashArrRegex, (match, obj, arrContent, defaultValue) => {
-    const elements = arrContent.split(',');
-    const segments = [];
-    for (const el of elements) {
-      const trimmed = el.trim();
-      const quoteMatch = trimmed.match(/^(['"`])([\s\S]*?)\1$/);
-      if (quoteMatch) {
-        const cleanSeg = quoteMatch[2].replace(/\\n/g, ' ').replace(/[\r\n]+/g, ' ').trim();
-        if (cleanSeg) segments.push(cleanSeg);
-      } else {
-        const cleanSeg = trimmed.replace(/\\n/g, ' ').replace(/[\r\n]+/g, ' ').trim();
-        if (cleanSeg) segments.push(cleanSeg);
-      }
-    }
-
-    if (segments.length === 0) return match;
-    const arrayPath = '[' + segments.map((s: string) => `'${s}'`).join(', ') + ']';
-
-    if (defaultValue) {
-      return `_.get(${obj}, ${arrayPath}, ${defaultValue.trim()})`;
-    }
-    return `_.get(${obj}, ${arrayPath})`;
-  });
-
-  // 3. Fix obj['path'] or obj['\n path '] or obj['path.subkey']
-  const bracketRegex = /([a-zA-Z0-9_$]+)\[\s*(['"`])([\s\S]*?)\2\s*\]/g;
-  result = result.replace(bracketRegex, (match, obj, quote, path) => {
-    const cleanPath = path.replace(/\\n/g, ' ').replace(/[\r\n]+/g, ' ').trim();
-    if (!cleanPath) return match;
-
-    const segments = cleanPath.split('.').map((s: string) => s.trim()).filter(Boolean);
-    let bracketNotation = obj;
-    for (const seg of segments) {
-      bracketNotation += `['${seg}']`;
-    }
-    return bracketNotation;
-  });
-
-  return result;
 }

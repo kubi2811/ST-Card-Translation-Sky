@@ -233,6 +233,14 @@ function buildTranslationMessages(
   /** MVU dictionary for variable sync */
   mvuDictionary?: Record<string, string>,
 ) {
+  let userPriorityPrompt = '';
+  if (customPrompt) {
+    const priorityMatch = customPrompt.match(/\[USER_PRIORITY_PROMPT_START\]\n([\s\S]*?)\n\[USER_PRIORITY_PROMPT_END\]/);
+    if (priorityMatch) {
+      userPriorityPrompt = priorityMatch[1];
+      customPrompt = customPrompt.replace(/\[USER_PRIORITY_PROMPT_START\]\n[\s\S]*?\n\[USER_PRIORITY_PROMPT_END\]\n?/, '');
+    }
+  }
   const isStandaloneMod = customPrompt?.includes('[CRITICAL: STANDALONE MODIFICATION & REWRITE MODE]');
 
   if (isStandaloneMod) {
@@ -260,6 +268,11 @@ CHUNK RULES:
 
     const userMsg = `Thực hiện chỉnh sửa nội dung (MOD) cho field "${fieldName}". Chỉ trả về nội dung đã chỉnh sửa, KHÔNG trả về giải thích hay markdown code blocks thừa. Bắt buộc xử lý TOÀN BỘ đoạn văn bản bên dưới, KHÔNG được bỏ sót dù câu/đoạn có vẻ chưa hoàn chỉnh do cắt chunk.${previousContextMsg}\n\n${text}`;
     
+    // Inject user's custom instructions at the absolute end of the system prompt to guarantee highest priority
+    if (userPriorityPrompt && userPriorityPrompt.trim()) {
+      systemPrompt += `\n\n[YÊU CẦU QUAN TRỌNG NHẤT TỪ NGƯỜI DÙNG — PHẢI TUÂN THỦ TẠI MỌI GIÁ]\n${userPriorityPrompt.trim()}\n`;
+    }
+
     return { system: systemPrompt, user: userMsg };
   }
 
@@ -377,6 +390,11 @@ Translate the following updated original text. Return ONLY the pure translated t
     userMsg = `Here is the entry content for context (use these terms consistently):\n"${contextHint}"\n\nBased on the terminology above, translate the following "${fieldName}" field${sourceHint} to ${targetLang}. Return ONLY comma-separated translated keywords. Keep them short and use the SAME terms that appear in the content:${previousContextMsg}\n\n${text}`;
   } else {
     userMsg = `Translate the following "${fieldName}" field${sourceHint} to ${targetLang}. Return ONLY the pure translated text, without including any of the original text.\nIMPORTANT: Translate EVERY word. Do NOT skip or drop any text, even if sentences appear incomplete at the beginning or end — they are part of a larger split text.${previousContextMsg}\n\n${text}`;
+  }
+
+  // Inject user's custom instructions at the absolute end of the system prompt to guarantee highest priority
+  if (userPriorityPrompt && userPriorityPrompt.trim()) {
+    systemPrompt += `\n\n[YÊU CẦU QUAN TRỌNG NHẤT TỪ NGƯỜI DÙNG — PHẢI TUÂN THỦ TẠI MỌI GIÁ]\n${userPriorityPrompt.trim()}\n`;
   }
 
   return {
@@ -2955,7 +2973,7 @@ export async function translateText(
       chunks[0], fieldName, targetLang, config.systemPromptPrefix,
       sourceLang, customPrompt, customSchema, contextHint, glossary, '',
       previousTranslationToUpdate,
-      fieldType, isExpert, mvuDictionary,
+      fieldType, isExpert, mvuDictionary
     );
     const result = await translateChunk(
       chunks[0], 0, 1, fieldName, config, targetLang, sourceLang, system, user, signal, isModMode
@@ -3065,7 +3083,7 @@ export async function translateText(
           sourceLang, customPrompt, customSchema, contextHint, glossary,
           prevContext,
           idx === 0 && !hasResume ? previousTranslationToUpdate : undefined,
-          fieldType, isExpert, mvuDictionary,
+          fieldType, isExpert, mvuDictionary
         );
 
         try {
@@ -3190,7 +3208,7 @@ export async function translateText(
         sourceLang, customPrompt, customSchema, contextHint, glossary,
         prevContext,
         idx === 0 && !hasResume ? previousTranslationToUpdate : undefined,
-        fieldType, isExpert, mvuDictionary,
+        fieldType, isExpert, mvuDictionary
       );
 
       try {
@@ -3382,6 +3400,15 @@ export async function translateBatch(
     ? `\n\nCARD SCHEMA / GLOSSARY:\n${customSchema}\n`
     : '';
 
+  let userPriorityPrompt = '';
+  if (customPrompt) {
+    const priorityMatch = customPrompt.match(/\[USER_PRIORITY_PROMPT_START\]\n([\s\S]*?)\n\[USER_PRIORITY_PROMPT_END\]/);
+    if (priorityMatch) {
+      userPriorityPrompt = priorityMatch[1];
+      customPrompt = customPrompt.replace(/\[USER_PRIORITY_PROMPT_START\]\n[\s\S]*?\n\[USER_PRIORITY_PROMPT_END\]\n?/, '');
+    }
+  }
+
   const basePrompt = customPrompt && customPrompt.trim()
     ? customPrompt
     : getDefaultTranslationPrompt(sourceLang, targetLang);
@@ -3401,7 +3428,7 @@ export async function translateBatch(
     .map((item, i) => `  ${DELIMITER}${i + 1}:${item.fieldName.replace(/^Lorebook:\s*/i, '').slice(0, 60)}${DELIMITER}`)
     .join('\n');
 
-  const system = `${systemPromptPrefix ? systemPromptPrefix + '\n\n' : ''}${basePrompt}
+  let system = `${systemPromptPrefix ? systemPromptPrefix + '\n\n' : ''}${basePrompt}
 
 BATCH FORMAT:
 - The input contains ${items.length} NAMED numbered sections. Each section starts with a delimiter in the format ${DELIMITER}N:EntryName${DELIMITER} (e.g., ${DELIMITER}1:Character Bio${DELIMITER}, ${DELIMITER}2:Location${DELIMITER}).
@@ -3412,6 +3439,10 @@ ${sectionList}
 - Each section's translation must ONLY contain translated content for THAT specific section. Do NOT mix content between sections.
 - CRITICAL: You MUST translate ALL Chinese/Japanese/Korean characters in EVERY section. Do NOT leave any CJK text untranslated. This includes section headers, YAML keys, annotations, labels, and text inside XML/HTML tags.
 - SELF-CHECK MANDATE: Before outputting EACH section, scan your translation for ANY remaining Chinese characters (Unicode \u4e00-\u9fff). If you find even ONE Chinese character that should be translated, fix it BEFORE outputting. Common mistake: leaving single CJK characters at word boundaries (e.g. "nhân际" should be "nhân tế", "关系" should be "quan hệ"). ZERO Chinese characters may remain in the output.${schemaInstructions}${glossaryBlock}`;
+
+  if (userPriorityPrompt && userPriorityPrompt.trim()) {
+    system += `\n\n[YÊU CẦU QUAN TRỌNG NHẤT TỪ NGƯỜI DÙNG — PHẢI TUÂN THỦ TẠI MỌI GIÁ]\n${userPriorityPrompt.trim()}\n`;
+  }
 
   const sourceHint = sourceLang && sourceLang !== 'auto' ? ` (from ${sourceLang})` : '';
   const user = `Translate these ${items.length} sections${sourceHint} to ${targetLang}. Keep the ${DELIMITER}N:EntryName${DELIMITER} delimiters EXACTLY as provided. Return ONLY translations. IMPORTANT: Translate ALL Chinese text in every section — ZERO Chinese characters should remain in the output. Before outputting each section, re-scan for any remaining CJK and translate them:\n\n${combinedText}`;

@@ -145,7 +145,9 @@ export function extractTranslatableFields(
   function addField(path: string, label: string, group: FieldGroup, text: unknown, entryType?: LorebookEntryType) {
     if (!enabledGroups.includes(group)) return;
     if (typeof text !== 'string' || text.trim() === '') return;
-    if (isCodeOnly(text)) return;
+    const isCommentField = path.endsWith('.comment');
+    const isLogicField = entryType === 'mvu_logic' || entryType === 'rules' || entryType === 'controller' || entryType === 'initvar';
+    if (!isCommentField && !isLogicField && isCodeOnly(text)) return;
     fields.push({
       path,
       label,

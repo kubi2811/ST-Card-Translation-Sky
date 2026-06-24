@@ -144,7 +144,7 @@ export interface TranslationField {
   /** Previous translation for updating/merging */
   previousTranslation?: string;
   /** MVU entry classification for per-type translation strategy */
-  entryType?: 'initvar' | 'mvu_logic' | 'rules' | 'narrative' | 'controller' | 'json_patch';
+  entryType?: 'initvar' | 'mvu_logic' | 'rules' | 'narrative' | 'controller' | 'json_patch' | 'replaceString';
   /** Surgical result state if field was processed using surgical translate */
   surgicalResult?: { type: 'success' | 'fallback'; info?: string };
   /** Chunk-level resume: successfully translated chunks from a previous attempt */

@@ -750,8 +750,7 @@ export async function surgicalTranslate(
   cssCjkHandling: 'preserve' | 'translate' = 'preserve',
   customSchema?: string,
   customPrompt?: string,
-  fieldLabel?: string,
-  surgicalUserPrompt?: string
+  fieldLabel?: string
 ): Promise<{ translated: string; success: boolean; fallbackTriggered: boolean }> {
   const { callProvider } = await import('./apiClient');
 
@@ -786,6 +785,15 @@ export async function surgicalTranslate(
         token.translated = match.target.trim();
         writeDebugLog(`[surgicalTranslate] Glossary: "${trimmed}" → "${token.translated}"`);
       }
+    }
+  }
+
+  let userPriorityPrompt = '';
+  if (customPrompt) {
+    const priorityMatch = customPrompt.match(/\[USER_PRIORITY_PROMPT_START\]\n([\s\S]*?)\n\[USER_PRIORITY_PROMPT_END\]/);
+    if (priorityMatch) {
+      userPriorityPrompt = priorityMatch[1];
+      customPrompt = customPrompt.replace(/\[USER_PRIORITY_PROMPT_START\]\n[\s\S]*?\n\[USER_PRIORITY_PROMPT_END\]\n?/, '');
     }
   }
 
@@ -875,10 +883,11 @@ CRITICAL RULES:
 7. Translate 无/無/没有 as the correct "none/nothing/empty" word in ${targetLang} (e.g. "Không" or "Không có" in Vietnamese). NEVER translate it as a date, month, or number.
 8. CSS property names (gap, flex, display, margin, padding, border, color, width, height, font, background, grid, position, opacity, overflow, transform, transition, cursor, etc.) MUST NEVER appear in your translations — they are code, not prose.
 9. [CRITICAL CONTEXT RULE]: The [context: ...] provides surrounding text ONLY for you to understand the situation. DO NOT translate the context! DO NOT output the context! Your output MUST strictly be the translation of the exact CJK text alone. If you output the context or any HTML tags, the system will crash!
-${langRules}${surgicalUserPrompt ? `\n\nUSER SURGICAL INSTRUCTIONS (HIGHEST PRIORITY — override any conflicting rules above):\n${surgicalUserPrompt}` : ''}${glossaryPrompt}${mvuPrompt}` +
+${langRules}${glossaryPrompt}${mvuPrompt}` +
     (customPrompt ? `\n\nUSER DIRECTIVES & RAG CONTEXT:\n${customPrompt}` : '') +
     (customSchema ? `\n\nSCHEMA CONTEXT:\n${customSchema}` : '') +
-    `\n\nORIGINAL CODE/REGEX CONTEXT (For Reference Only):\nBelow is the full original code/regex block you are currently translating. Use it to understand the full context of the variables and text snippets:\n\`\`\`\n${text.slice(0, 50000)}\n\`\`\``;
+    `\n\nORIGINAL CODE/REGEX CONTEXT (For Reference Only):\nBelow is the full original code/regex block you are currently translating. Use it to understand the full context of the variables and text snippets:\n\`\`\`\n${text.slice(0, 50000)}\n\`\`\`` +
+    (userPriorityPrompt ? `\n\n[YÊU CẦU QUAN TRỌNG NHẤT TỪ NGƯỜI DÙNG — PHẢI TUÂN THỦ TẠI MỌI GIÁ]\n${userPriorityPrompt}` : '');
 
   // ── Step 5: Batch configuration ────────────────────────────────────────────
   const MEGA_BATCH_MAX   = 1500;

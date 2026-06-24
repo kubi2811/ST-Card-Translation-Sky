@@ -258,7 +258,8 @@ function extractTranslatableFields(card: any, enabledGroups: string[]): any[] {
     if (typeof text !== 'string' || text.trim() === '') return;
     // B5 fix: comment fields are always human-readable — skip isCodeOnly check
     const isCommentField = path.endsWith('.comment');
-    if (!isCommentField && isCodeOnly(text)) return;
+    const isLogicField = entryType === 'mvu_logic' || entryType === 'rules' || entryType === 'controller' || entryType === 'initvar';
+    if (!isCommentField && !isLogicField && isCodeOnly(text)) return;
     fields.push({ path, label, group, original: text, translated: '', status: 'pending', retries: 0, entryType });
   }
 

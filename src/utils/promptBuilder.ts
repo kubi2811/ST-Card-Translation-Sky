@@ -41,6 +41,8 @@ ADDITIONAL RULES FOR HTML/REGEX CONTENT:
 18. BRACKET NOTATION: If translated keys contain spaces (e.g., "Hệ Thống"), use bracket notation: obj['Hệ Thống'] NOT obj.Hệ Thống. For nested: data['Key']['SubKey'].
 19. HTML id MUST BE ASCII-ONLY: No spaces or diacritics in id/data-target. Use camelCase: id="tab-NhaO" NOT id="tab-Nhà Ở". CSS selectors must match.
 20. EJS OBJECT KEY QUOTING: In EJS templates or JS code, if an object literal contains keys with Vietnamese diacritics, spaces, or special characters (such as passing an object to setvar()), you MUST wrap those keys in single quotes '' (e.g. 'Loại': 'Võ công', 'Mô Tả': '...'). Otherwise, EJS compiler throws an immediate syntax error.
+21. DO NOT TRANSLATE ENGLISH: Never translate CSS properties (like font-family, background, color), HTML tags, or JS. "font-family" must remain "font-family".
+22. NO EXTRA QUOTES: NEVER wrap your translation in extra double quotes (") or single quotes (') unless they exist in the original text. It breaks HTML.
 
 ██ QUY TẮC DỊCH VĂN BẢN TRONG REGEX — TUYỆT ĐỐI KHÔNG DỊCH WORD-BY-WORD ██
 Regex replaceString chứa HTML/CSS/JS xen lẫn VĂN BẢN (prose, thoại, mô tả). Khi dịch phần VĂN BẢN:
@@ -86,11 +88,14 @@ G. VĂN PHONG TỰ NHIÊN:
    - Nếu 1 câu Trung dài cần tách thành 2-3 câu Việt ngắn, hãy tách.
    - Nếu 3 câu Trung ngắn có thể gộp thành 1 câu Việt tự nhiên, hãy gộp.
 
-H. BẢO VỆ CSS — KHÔNG DỊCH KÝ TỰ HÁN/CJK TRONG CSS VALUES:
+H. BẢO VỆ CSS VÀ TIẾNG ANH — TUYỆT ĐỐI KHÔNG DỊCH TỪ KHÓA TIẾNG ANH:
+    - TUYỆT ĐỐI KHÔNG dịch các từ khóa tiếng Anh (như font-family, background, color, padding, div, span...). "font-family" phải GIỮ NGUYÊN là "font-family", KHÔNG BAO GIỜ dịch thành "font-gia tộc" hay tương tự.
     - TUYỆT ĐỐI KHÔNG dịch ký tự Hán/CJK đứng đơn lẻ bên trong CSS function calls (drop-shadow(), filter(), transform(), calc(), linear-gradient(), v.v.).
     - Ví dụ: filter: drop-shadow(商 10px 20px rgba(0,0,0,0.8)); → GIỮ NGUYÊN "商", KHÔNG dịch thành "Thương".
-    - Các ký tự này có thể là placeholder, lỗi encoding, hoặc ký tự đặc biệt của tác giả — dịch chúng sẽ LÀM HỎNG CSS.
-    - CHỈ dịch CJK khi chúng nằm trong HTML text content (<span>好感度</span>), HTML attributes hiển thị (title, alt, aria-label), hoặc JS string literals.
+    - CHỈ dịch văn bản hiển thị có chứa ký tự Hán/CJK.
+J. KHÔNG THÊM DẤU NGOẶC KÉP (QUOTES) THỪA:
+    - Khi dịch, TUYỆT ĐỐI KHÔNG tự ý bọc kết quả bằng dấu ngoặc kép (") hoặc ngoặc đơn (') nếu bản gốc không có.
+    - Việc thêm dấu ngoặc kép sẽ lập tức phá hỏng cấu trúc HTML (ví dụ: làm đứt gãy style="..." hoặc class="...").
 I. BẢO VỆ URL/LINK — TUYỆT ĐỐI KHÔNG DỊCH:
     - GIỮ NGUYÊN 100% mọi URL (http://, https://, ftp://, //) kể cả khi URL chứa ký tự CJK trong path, query string, hoặc fragment.
     - GIỮ NGUYÊN giá trị của các HTML attributes: src="...", href="...", action="...", data-src="...", poster="...", srcset="..."
@@ -148,7 +153,9 @@ ADDITIONAL RULES FOR JAVASCRIPT/TAVERNHELPER SCRIPT CONTENT:
     - Preserve .prefault(), .default(), .describe(), .optional() chains: safeString().prefault("X").describe("Y") is valid.
     - If the script already has a safeString or similar preprocess wrapper, do NOT duplicate it.
     - EJS OBJECT LITERAL KEY QUOTING: When translating EJS blocks or JS code, if an object literal contains keys with Vietnamese diacritics, spaces, or special characters (e.g. 'Loại', 'Mô Tả'), you MUST wrap those keys in single quotes '' (e.g. 'Loại': 'Võ công', 'Mô Tả': '...'). Without quotes, EJS compiler throws an immediate syntax error.
-26. URL/LINK PROTECTION: NEVER translate any part of URLs (http://, https://, ftp://, //). Keep ALL HTML attribute values for src, href, action, data-src, poster, srcset EXACTLY as-is. Keep CSS url() references intact. Keep import()/require() path arguments intact. Even if the URL contains CJK characters in the path (e.g., https://cdn.com/骰子系统/stable.js or import(\`https://cdn.com/\${version}/dist/骰子系统/stable.js\`)), do NOT translate them — they are file paths, not prose. Also preserve data URIs, email addresses, markdown link URLs, and relative file paths (./ or ../).`;
+26. URL/LINK PROTECTION: NEVER translate any part of URLs (http://, https://, ftp://, //). Keep ALL HTML attribute values for src, href, action, data-src, poster, srcset EXACTLY as-is. Keep CSS url() references intact. Keep import()/require() path arguments intact. Even if the URL contains CJK characters in the path (e.g., https://cdn.com/骰子系统/stable.js or import(\`https://cdn.com/\${version}/dist/骰子系统/stable.js\`)), do NOT translate them — they are file paths, not prose. Also preserve data URIs, email addresses, markdown link URLs, and relative file paths (./ or ../).
+27. DO NOT TRANSLATE ENGLISH: Never translate CSS properties (like font-family), HTML tags, or JS. "font-family" must remain "font-family".
+28. NO EXTRA QUOTES: NEVER wrap your translation in extra double quotes (") or single quotes (') unless they exist in the original text.`;
 
 
 /** Prompt bổ sung cho [initvar] entries (YAML variable initialization) */
@@ -576,6 +583,7 @@ const STRICT_CODE_PRESERVATION_PROMPT = `
 export interface PromptBuildOptions {
   // ─── Base config ───
   translationPrompt: string;
+  userPriorityPrompt?: string;
   enableJailbreak: boolean;
   enableObjectiveMode: boolean;
   enableMvuSync: boolean;
@@ -867,10 +875,8 @@ export function buildEffectivePrompt(options: PromptBuildOptions): PromptBuildRe
       }
     }
 
-    // Global custom prompt (if provided, it acts as general system context)
-    if (translationPrompt && translationPrompt.trim() !== '') {
-      modPrompt += `\n\n[GLOBAL CUSTOM PROMPT / NGỮ CẢNH HỆ THỐNG TOÀN CỤC]\n${translationPrompt.trim()}\n`;
-    }
+    // Global custom prompt (translationPrompt) is now handled via userPriorityPrompt in apiClient.ts
+    // to guarantee it is always placed at the absolute end.
 
     // Inject the user's Mod instructions & Preset instructions
     let modInstructionsBlock = '';
@@ -985,7 +991,7 @@ ${glossaryList}`;
   }
 
   // ═══ NORMAL TRANSLATION MODE ═══
-  let prompt = translationPrompt || '';
+  let prompt = '';
 
   // ─── 1. Jailbreak + Objective mode (always appended — masterPrompt.ts does NOT handle these) ───
   if (enableJailbreak) {
@@ -1103,6 +1109,10 @@ ${modInstructionsBlock}`;
   // ─── 6. Inject active preset prompts ───
   if (options.presetPromptContent) {
     prompt = (prompt || '') + `\n\n[PRESET PROMPT CHAIN — TỰ ĐỘNG TỪ PRESET ĐANG BẬT]\n${options.presetPromptContent}\n`;
+  }
+  // ─── 7. Absolute Priority User Prompts (Marker for apiClient extraction) ───
+  if (options.userPriorityPrompt?.trim()) {
+    prompt = (prompt || '') + `\n\n[USER_PRIORITY_PROMPT_START]\n${options.userPriorityPrompt.trim()}\n[USER_PRIORITY_PROMPT_END]\n`;
   }
 
   return {

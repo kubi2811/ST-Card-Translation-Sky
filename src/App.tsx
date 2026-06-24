@@ -15,7 +15,7 @@ import PresetImportPanel from './components/PresetImportPanel';
 const FieldEditor = lazy(() => import('./components/FieldEditor'));
 const ExportPanel = lazy(() => import('./components/ExportPanel'));
 const VerifyPanel = lazy(() => import('./components/VerifyPanel'));
-const CustomTranslatePanel = lazy(() => import('./components/CustomTranslatePanel'));
+
 const EjsCreatorPanel = lazy(() => import('./components/EjsCreatorPanel'));
 const RegexManagerPanel = lazy(() => import('./components/RegexManagerPanel'));
 const AiCompanionPanel = lazy(() => import('./components/AiCompanionPanel'));
@@ -253,9 +253,7 @@ export default function App() {
             <Suspense fallback={<LazyFallback />}>
               <ExportPanel />
             </Suspense>
-            <Suspense fallback={<LazyFallback />}>
-              <CustomTranslatePanel />
-            </Suspense>
+
           </div>
         )}
 

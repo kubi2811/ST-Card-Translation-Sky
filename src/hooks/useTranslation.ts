@@ -251,6 +251,16 @@ export function useTranslation() {
         }
       }
 
+      // ═══ Absolute Priority User Prompts ═══
+      const userPrompts: string[] = [];
+      if (store.translationConfig.translationPrompt?.trim()) {
+        userPrompts.push(store.translationConfig.translationPrompt.trim());
+      }
+      if (store.translationConfig.surgicalPrompt?.trim() && (field.group === 'regex' || field.group === 'tavern_helper')) {
+        userPrompts.push(store.translationConfig.surgicalPrompt.trim());
+      }
+      const userPriorityPrompt = userPrompts.length > 0 ? userPrompts.join('\n\n---\n\n') : undefined;
+
       // ═══ Centralized prompt building (single source of truth) ═══
       // Build entry name dictionary from already-translated lorebook name fields
       // IMPORTANT: Read fresh fields from store (not stale `fields` snapshot which only has pending/error)
@@ -331,8 +341,7 @@ export function useTranslation() {
           'preserve',
           store.translationConfig.customSchema,
           promptResult.effectivePrompt,
-          field.label,
-          store.translationConfig.surgicalPrompt || undefined
+          field.label
         );
         translated = sResult.translated;
         
@@ -402,7 +411,7 @@ export function useTranslation() {
             });
           },
           // cssCjkHandling
-          store.translationConfig.cssCjkHandling,
+          store.translationConfig.cssCjkHandling
         );
       }
 
@@ -825,6 +834,17 @@ export function useTranslation() {
       const items = batchFields.map(f => ({ text: f.original, fieldName: f.label }));
       
       
+      // ═══ Absolute Priority User Prompts ═══
+      const batchUserPrompts: string[] = [];
+      if (store.translationConfig.translationPrompt?.trim()) {
+        batchUserPrompts.push(store.translationConfig.translationPrompt.trim());
+      }
+      // If ANY field in the batch is a regex/tavern_helper field, include surgicalPrompt
+      if (store.translationConfig.surgicalPrompt?.trim() && batchFields.some(f => f.group === 'regex' || f.group === 'tavern_helper')) {
+        batchUserPrompts.push(store.translationConfig.surgicalPrompt.trim());
+      }
+      const batchUserPriorityPrompt = batchUserPrompts.length > 0 ? batchUserPrompts.join('\n\n---\n\n') : undefined;
+
       // ═══ Centralized prompt building (single source of truth) ═══
       // Build entry name dictionary from already-translated lorebook name fields
       // IMPORTANT: Read fresh fields from store (not stale closure) for covariance
@@ -1878,8 +1898,7 @@ export function useTranslation() {
                 'preserve',
                 store.translationConfig.customSchema,
                 regexPromptResult.effectivePrompt,
-                rf.label,
-                store.translationConfig.surgicalPrompt || undefined
+                rf.label
               );
               regexTranslated = sResult.translated;
 

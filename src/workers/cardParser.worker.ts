@@ -26,14 +26,14 @@ interface WorkerResponse {
   contentType?: 'card' | 'worldbook';
   originalWorldbook?: any;
   cardFileName?: string;
-  pngBlob?: Blob;
+  pngBuffer?: ArrayBuffer;
   error?: string;
   progress?: { stage: string; percent: number };
 }
 
 // ─── PNG Extraction (copied from pngHandler.ts to run in worker) ───
 
-function extractCharaFromBuffer(buffer: ArrayBuffer): { json: string; pngBlob: Blob } {
+function extractCharaFromBuffer(buffer: ArrayBuffer): { json: string } {
   const view = new DataView(buffer);
   const uint8 = new Uint8Array(buffer);
   const decoder = new TextDecoder('utf-8');
@@ -56,16 +56,15 @@ function extractCharaFromBuffer(buffer: ArrayBuffer): { json: string; pngBlob: B
 
     if (type === 'tEXt' || type === 'iTXt') {
       const dataBytes = uint8.slice(offset, offset + length);
-      let nullIdx = dataBytes.indexOf(0);
+      const nullIdx = dataBytes.indexOf(0);
       if (nullIdx !== -1) {
         const keyword = decoder.decode(dataBytes.slice(0, nullIdx));
         if (keyword === 'chara') {
           const textData = dataBytes.slice(nullIdx + 1);
-          const text = decoder.decode(textData);
-          // base64 decode to bytes, then utf-8 decode
-          const binStr = atob(text);
-          const bytes = new Uint8Array(binStr.length);
-          for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+          const b64 = decoder.decode(textData);
+          // Decode base64 → bytes → UTF-8 string
+          const binStr = atob(b64);
+          const bytes = Uint8Array.from({ length: binStr.length }, (_, i) => binStr.charCodeAt(i));
           foundJson = new TextDecoder('utf-8').decode(bytes);
           break;
         }
@@ -79,10 +78,8 @@ function extractCharaFromBuffer(buffer: ArrayBuffer): { json: string; pngBlob: B
     throw new Error("No SillyTavern 'chara' data found in PNG.");
   }
 
-  // Create Blob instead of data URL — zero-copy, O(1)
-  const pngBlob = new Blob([uint8], { type: 'image/png' });
-
-  return { json: foundJson, pngBlob };
+  // Do NOT create Blob here — pass the raw buffer back to main thread via transfer (zero-copy, avoids disk write)
+  return { json: foundJson };
 }
 
 // ─── Card Validation (copied from cardFields.ts) ───
@@ -561,22 +558,26 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
 
     // Progress: reading file
     self.postMessage({ type: 'progress', id, progress: { stage: 'reading', percent: 10 } } as WorkerResponse);
+    console.time('[WORKER] total');
+    console.time('[WORKER] png-parse');
 
     let text = '';
-    let pngBlob: Blob | undefined;
 
     if (isPng) {
       const extracted = extractCharaFromBuffer(buffer);
       text = extracted.json;
-      pngBlob = extracted.pngBlob;
+      console.timeEnd('[WORKER] png-parse');
     } else {
+      console.timeEnd('[WORKER] png-parse');
       text = new TextDecoder('utf-8').decode(buffer);
     }
 
     // Progress: parsing JSON
     self.postMessage({ type: 'progress', id, progress: { stage: 'parsing', percent: 40 } } as WorkerResponse);
-
+    console.time('[WORKER] json-parse');
     const json = JSON.parse(text);
+    console.timeEnd('[WORKER] json-parse');
+
     const validation = validateCard(json);
 
     if (!validation.valid) {
@@ -589,18 +590,29 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
 
         // Extract fields in worker
         self.postMessage({ type: 'progress', id, progress: { stage: 'fields', percent: 80 } } as WorkerResponse);
+        console.time('[WORKER] extract-fields');
         const fields = extractTranslatableFields(pseudoCard, enabledGroups);
+        console.timeEnd('[WORKER] extract-fields');
 
-        self.postMessage({
+        console.timeEnd('[WORKER] total');
+        console.time('[WORKER] postmessage-result');
+
+        const result: any = {
           type: 'result', id,
           card: pseudoCard,
           fields,
           contentType: 'worldbook',
           originalWorldbook: json,
           cardFileName: fileName,
-          pngBlob,
           toastMessage: `📖 Loaded Worldbook: ${wbSummary.name} (${wbSummary.entryCount} entries, ${wbSummary.withContent} with content)`,
-        } as any);
+        };
+        if (isPng) {
+          result.pngBuffer = buffer;
+          self.postMessage(result, [buffer]);
+        } else {
+          self.postMessage(result);
+        }
+        console.timeEnd('[WORKER] postmessage-result');
         return;
       }
 
@@ -616,20 +628,32 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
 
     // Extract fields in worker
     self.postMessage({ type: 'progress', id, progress: { stage: 'fields', percent: 80 } } as WorkerResponse);
+    console.time('[WORKER] extract-fields');
     const fields = extractTranslatableFields(card, enabledGroups);
+    console.timeEnd('[WORKER] extract-fields');
 
     self.postMessage({ type: 'progress', id, progress: { stage: 'done', percent: 100 } } as WorkerResponse);
 
-    self.postMessage({
+    console.timeEnd('[WORKER] total');
+    console.time('[WORKER] postmessage-result');
+
+    // Transfer buffer back zero-copy — avoids Chrome writing Blob to temp disk (which triggers AV scans on Windows)
+    const result: any = {
       type: 'result', id,
       card,
       fields,
       contentType: 'card',
       originalWorldbook: null,
       cardFileName: fileName,
-      pngBlob,
       toastMessage: `Loaded: ${summary.name} (${summary.lorebookCount} lorebook entries)`,
-    } as any);
+    };
+    if (isPng) {
+      result.pngBuffer = buffer;
+      self.postMessage(result, [buffer]);
+    } else {
+      self.postMessage(result);
+    }
+    console.timeEnd('[WORKER] postmessage-result');
 
   } catch (err) {
     self.postMessage({

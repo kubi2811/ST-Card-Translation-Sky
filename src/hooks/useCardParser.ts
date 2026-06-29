@@ -42,7 +42,9 @@ export function useCardParser() {
       setParseProgress({ stage: 'reading', percent: 0 });
 
       try {
+        console.time('[PARSER] file.arrayBuffer');
         const buffer = await file.arrayBuffer();
+        console.timeEnd('[PARSER] file.arrayBuffer');
         const worker = getWorker();
 
         // Get enabled groups for field extraction in worker
@@ -59,10 +61,14 @@ export function useCardParser() {
             if (data.id !== requestId) return;
 
             if (data.type === 'progress') {
+              if (data.progress?.stage === 'done') {
+                console.log('[PARSER] worker sent stage:done, waiting for result...');
+              }
               setParseProgress(data.progress);
               return;
             }
 
+            console.log('[PARSER] worker result received, fields:', data.fields?.length);
             cleanup();
             if (data.type === 'error') {
               reject(new Error(data.error));
@@ -100,26 +106,34 @@ export function useCardParser() {
           );
         });
 
-        // Convert Blob to Blob URL on main thread
+        // Build Blob URL on main thread from transferred ArrayBuffer (zero-copy from worker, no disk write)
         let blobUrl: string | null = null;
-        if (result.pngBlob) {
-          blobUrl = URL.createObjectURL(result.pngBlob);
+        if (result.pngBuffer) {
+          console.time('[PARSER] createObjectURL');
+          const pngBlob = new Blob([result.pngBuffer], { type: 'image/png' });
+          blobUrl = URL.createObjectURL(pngBlob);
+          console.timeEnd('[PARSER] createObjectURL');
         }
 
-        // Store the original ArrayBuffer reference for PNG export
-        if (isPng && result.pngBlob) {
-          useStore.getState()._pngArrayBuffer = await result.pngBlob.arrayBuffer();
+        // Store the ArrayBuffer directly — no extra .arrayBuffer() async call needed
+        if (isPng && result.pngBuffer) {
+          useStore.getState()._pngArrayBuffer = result.pngBuffer;
         } else {
           useStore.getState()._pngArrayBuffer = null;
         }
 
+        console.time('[PARSER] setCard');
         setCard(result.card, file.name, blobUrl, result.contentType, result.originalWorldbook);
+        console.timeEnd('[PARSER] setCard');
 
         // Set pre-extracted fields if available
         if (result.fields && result.fields.length > 0) {
+          console.time('[PARSER] setFields');
           useStore.getState().setFields(result.fields);
+          console.timeEnd('[PARSER] setFields');
         }
 
+        console.log('[PARSER] done ✓');
         addToast('success', result.toastMessage || `Loaded: ${file.name}`);
         return result.card;
 

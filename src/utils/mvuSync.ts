@@ -1514,9 +1514,17 @@ export function extractPotentialMvuKeys(card: CharacterCard): MvuKeyInfo[] {
   const scanBracketAccess = (text: string) => {
     if (!text || typeof text !== 'string') return;
     // Match: identifier['CJK key'] or identifier["CJK key"]
-    const bracketRegex = /\w+\s*\[\s*['"]([^'"]+)['"]\s*\]/g;
+    // NOTE: anchor on the bracket+quote (rare) and verify the leading identifier
+    // manually, instead of putting `\w+\s*` in the regex. A leading `\w+` causes
+    // catastrophic O(n\u00b2) backtracking on huge JS/HTML fields (e.g. a 328KB script \u2192
+    // 600ms+ freeze). The form below has no leading quantifier, so it stays linear.
+    const bracketRegex = /\[\s*['"]([^'"]+)['"]\s*\]/g;
     let match;
     while ((match = bracketRegex.exec(text)) !== null) {
+      // Require an identifier char immediately before the '[' (whitespace allowed)
+      let j = match.index - 1;
+      while (j >= 0 && (text[j] === ' ' || text[j] === '\t')) j--;
+      if (j < 0 || !/\w/.test(text[j])) continue;
       const val = match[1].trim();
       if (val && val.length > 1 && /[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff\uac00-\ud7af]/.test(val) && !isNoiseKey(val)) {
         trackKey(val, 'bracket');

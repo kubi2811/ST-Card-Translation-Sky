@@ -426,14 +426,20 @@ export default function MvuSyncPanel() {
   const emptyCount = dictEntries.length - filledCount;
 
   // ─── Enriched key info for source badges ───
+  // Only scan the card when there are dictionary entries to badge. On a fresh import
+  // the dictionary is empty, so running extractPotentialMvuKeys (which scans every
+  // script/lorebook entry — 700ms+ on large cards) would be pure wasted work that
+  // freezes the UI right after the card loads.
+  const hasDictEntries = dictEntries.length > 0;
   const keyInfoMap = useMemo(() => {
-    const infos = extractPotentialMvuKeys(card);
     const map = new Map<string, MvuKeyInfo>();
+    if (!hasDictEntries) return map;
+    const infos = extractPotentialMvuKeys(card);
     for (const ki of infos) {
       map.set(ki.key, ki);
     }
     return map;
-  }, [card]);
+  }, [card, hasDictEntries]);
 
   // ─── Filtered entries ───
   const filteredEntries = useMemo(() => {

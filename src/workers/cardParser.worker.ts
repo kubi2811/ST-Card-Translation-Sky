@@ -608,7 +608,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
         };
         if (isPng) {
           result.pngBuffer = buffer;
-          self.postMessage(result, [buffer]);
+          (self as any).postMessage(result, [buffer]);
         } else {
           self.postMessage(result);
         }
@@ -649,7 +649,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
     };
     if (isPng) {
       result.pngBuffer = buffer;
-      self.postMessage(result, [buffer]);
+      (self as any).postMessage(result, [buffer]);
     } else {
       self.postMessage(result);
     }

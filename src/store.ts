@@ -178,20 +178,14 @@ export const useStore = create<AppState>((set) => ({
     // Separate image from card data in IDB — avoids serializing huge base64/blob
     IDB.set('st-translator-card-data', { card, cardFileName: fileName, contentType, originalWorldbook });
     
-    // Also save the raw ArrayBuffer if we have it
-    const currentBuffer = useStore.getState()._pngArrayBuffer;
-    if (currentBuffer) {
-      IDB.set('st-translator-image-buffer', currentBuffer);
-    } else {
-      IDB.remove('st-translator-image-buffer');
-    }
+    // Never store the raw PNG ArrayBuffer in IDB — 3.6MB triggers AV disk scan on every startup.
+    // The buffer lives in memory only for the current session. Re-import PNG to export again.
+    IDB.remove('st-translator-image-buffer');
 
     if (originalImage && !originalImage.startsWith('blob:')) {
       // Only persist data URLs (Blob URLs are not persistable)
       IDB.set('st-translator-image-data', originalImage);
-    } else if (!currentBuffer) {
-      // If we don't have a buffer and it's a blob url, the image won't persist!
-      // But we always set currentBuffer if it's a blob URL from the parser.
+    } else {
       IDB.remove('st-translator-image-data');
     }
   },
@@ -243,24 +237,16 @@ export const useStore = create<AppState>((set) => ({
   loadStateFromIDB: async () => {
     const cardData = await IDB.get<{card: CharacterCard, cardFileName: string, contentType?: ContentType, originalWorldbook?: Worldbook | null} | null>('st-translator-card-data', null);
     if (cardData) {
-      // Load image separately
+      // PNG buffer is never persisted to IDB (would trigger AV scan on read).
+      // Only restore data URLs; blob URLs and ArrayBuffers are session-only.
       const savedImage = await IDB.get<string | null>('st-translator-image-data', null);
-      const savedBuffer = await IDB.get<ArrayBuffer | null>('st-translator-image-buffer', null);
-      
-      let loadedImage = savedImage;
-      let blobUrl = null;
-      if (savedBuffer) {
-        const blob = new Blob([savedBuffer], { type: 'image/png' });
-        blobUrl = URL.createObjectURL(blob);
-        loadedImage = blobUrl;
-      }
 
       set({
         card: cardData.card,
         cardFileName: cardData.cardFileName,
-        originalImage: loadedImage,
-        _pngArrayBuffer: savedBuffer || null,
-        _blobUrl: blobUrl,
+        originalImage: savedImage || null,
+        _pngArrayBuffer: null,
+        _blobUrl: null,
         contentType: cardData.contentType || 'card',
         originalWorldbook: cardData.originalWorldbook || null,
       });

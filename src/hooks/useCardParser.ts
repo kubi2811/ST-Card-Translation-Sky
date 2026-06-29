@@ -52,6 +52,7 @@ export function useCardParser() {
 
         const result = await new Promise<any>((resolve, reject) => {
           const requestId = crypto.randomUUID();
+          let settled = false;
 
           const handler = (e: MessageEvent) => {
             const data = e.data;
@@ -62,17 +63,35 @@ export function useCardParser() {
               return;
             }
 
-            worker.removeEventListener('message', handler);
-
+            cleanup();
             if (data.type === 'error') {
               reject(new Error(data.error));
               return;
             }
-
             resolve(data);
           };
 
+          const errorHandler = (e: ErrorEvent) => {
+            cleanup();
+            reject(new Error(e.message || 'Worker crashed unexpectedly'));
+          };
+
+          // Abort after 120 s to prevent infinite hang on very large/corrupt cards
+          const timer = setTimeout(() => {
+            cleanup();
+            reject(new Error('Card parsing timed out (>120s). The file may be too large or corrupt.'));
+          }, 120_000);
+
+          function cleanup() {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            worker.removeEventListener('message', handler);
+            worker.removeEventListener('error', errorHandler);
+          }
+
           worker.addEventListener('message', handler);
+          worker.addEventListener('error', errorHandler);
 
           // Transfer ArrayBuffer to worker (zero-copy)
           worker.postMessage(

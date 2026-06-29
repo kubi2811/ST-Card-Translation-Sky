@@ -173,32 +173,16 @@ export const useStore = create<AppState>((set) => ({
     LS.set('st-translator-mvu-dict', {});
     LS.set('st-translator-ejs-entry-dict', {});
     LS.set('st-translator-ejs-keyword-dict', {});
-    // Clear stale fields cache in IDB so it won't reload old card's fields
+    // Card data and fields are NOT persisted to IDB — writing large JSON with embedded JS code
+    // to IDB causes Chrome to write temp files that Windows Defender scans (15-25 min freeze).
+    // Clean up any stale data from older versions of the app.
+    IDB.remove('st-translator-card-data');
     IDB.remove('st-translator-fields-data');
-    // Separate image from card data in IDB — avoids serializing huge base64/blob
-    IDB.set('st-translator-card-data', { card, cardFileName: fileName, contentType, originalWorldbook });
-    
-    // Never store the raw PNG ArrayBuffer in IDB — 3.6MB triggers AV disk scan on every startup.
-    // The buffer lives in memory only for the current session. Re-import PNG to export again.
     IDB.remove('st-translator-image-buffer');
-
-    if (originalImage && !originalImage.startsWith('blob:')) {
-      // Only persist data URLs (Blob URLs are not persistable)
-      IDB.set('st-translator-image-data', originalImage);
-    } else {
-      IDB.remove('st-translator-image-data');
-    }
+    IDB.remove('st-translator-image-data');
   },
   updateCard: (card) => {
     set({ card });
-    // Persist updated card data to IDB (keep existing fileName, contentType, worldbook)
-    const s = useStore.getState();
-    IDB.set('st-translator-card-data', {
-      card,
-      cardFileName: s.cardFileName,
-      contentType: s.contentType,
-      originalWorldbook: s.originalWorldbook,
-    });
   },
   clearCard: () => {
     // Revoke Blob URL to free memory
@@ -235,26 +219,14 @@ export const useStore = create<AppState>((set) => ({
     IDB.remove('st-translator-image-buffer');
   },
   loadStateFromIDB: async () => {
-    const cardData = await IDB.get<{card: CharacterCard, cardFileName: string, contentType?: ContentType, originalWorldbook?: Worldbook | null} | null>('st-translator-card-data', null);
-    if (cardData) {
-      // PNG buffer is never persisted to IDB (would trigger AV scan on read).
-      // Only restore data URLs; blob URLs and ArrayBuffers are session-only.
-      const savedImage = await IDB.get<string | null>('st-translator-image-data', null);
-
-      set({
-        card: cardData.card,
-        cardFileName: cardData.cardFileName,
-        originalImage: savedImage || null,
-        _pngArrayBuffer: null,
-        _blobUrl: null,
-        contentType: cardData.contentType || 'card',
-        originalWorldbook: cardData.originalWorldbook || null,
-      });
-    }
-    const fieldsData = await IDB.get<{fields: TranslationField[], phase: TranslationPhase} | null>('st-translator-fields-data', null);
-    if (fieldsData) {
-      set({ fields: fieldsData.fields, phase: fieldsData.phase });
-    }
+    // Card/fields data is no longer persisted to IDB (embedded JS code triggered AV scan freeze).
+    // On first run after upgrade, purge any stale data from older app versions.
+    await Promise.all([
+      IDB.remove('st-translator-card-data'),
+      IDB.remove('st-translator-fields-data'),
+      IDB.remove('st-translator-image-buffer'),
+      IDB.remove('st-translator-image-data'),
+    ]);
   },
 
   // ─── Proxy ───
@@ -609,7 +581,6 @@ export const useStore = create<AppState>((set) => ({
           }
         }
 
-        IDB.set('st-translator-fields-data', { fields: updatedFields, phase: s.phase });
       }
 
       return {
@@ -738,7 +709,6 @@ export const useStore = create<AppState>((set) => ({
             updatedFields.push(ef);
           }
         }
-        IDB.set('st-translator-fields-data', { fields: updatedFields, phase: s.phase });
       }
 
       return {
@@ -752,25 +722,14 @@ export const useStore = create<AppState>((set) => ({
   fields: [],
   setFields: (fields) => {
     set({ fields });
-    set((s) => {
-      // Debounce IDB write — fields can be set rapidly during extraction
-      IDB.setDebounced('st-translator-fields-data', { fields: s.fields, phase: s.phase }, 2000);
-      return s;
-    });
   },
   updateField: (path, update) =>
     set((s) => {
       const nextFields = s.fields.map((f) => (f.path === path ? { ...f, ...update } : f));
-      // Debounce: during translation loop, updateField fires per-field (every ~1-3s).
-      // Coalesce into single IDB write every 3s instead of each call.
-      IDB.setDebounced('st-translator-fields-data', { fields: nextFields, phase: s.phase }, 3000);
       return { fields: nextFields };
     }),
   phase: 'idle',
-  setPhase: (p) => set((s) => {
-    IDB.set('st-translator-fields-data', { fields: s.fields, phase: p });
-    return { phase: p };
-  }),
+  setPhase: (p) => set(() => ({ phase: p })),
   currentFieldIndex: 0,
   setCurrentFieldIndex: (i) => set({ currentFieldIndex: i }),
   startTime: null,
@@ -842,29 +801,9 @@ export const useStore = create<AppState>((set) => ({
 
   // ─── Per-file Translation Cache ───
   saveTranslationCache: () => {
-    const s = useStore.getState();
-    if (!s.cardFileName || s.fields.length === 0) return;
-    const cacheKey = `st-cache-${s.cardFileName}`;
-    const cacheData = {
-      fields: s.fields,
-      phase: s.phase,
-      targetLang: s.translationConfig.targetLanguage,
-      savedAt: Date.now(),
-    };
-    IDB.set(cacheKey, cacheData);
+    // No-op: IDB writes with embedded JS code (TavernHelper scripts) trigger AV scan freeze
   },
-  loadTranslationCache: async (fileName: string): Promise<boolean> => {
-    const cacheKey = `st-cache-${fileName}`;
-    const cached = await IDB.get<{
-      fields: TranslationField[];
-      phase: TranslationPhase;
-      targetLang: string;
-      savedAt: number;
-    } | null>(cacheKey, null);
-    if (cached && cached.fields.length > 0) {
-      set({ fields: cached.fields, phase: cached.phase });
-      return true;
-    }
+  loadTranslationCache: async (_fileName: string): Promise<boolean> => {
     return false;
   },
   deleteCurrentCardCache: async () => {
@@ -911,11 +850,6 @@ export const useStore = create<AppState>((set) => ({
       // Clear memory RAG cache
       clearRAGCache();
 
-      if (resetFields.length > 0) {
-        IDB.set('st-translator-fields-data', { fields: resetFields, phase: 'idle' });
-      } else {
-        IDB.remove('st-translator-fields-data');
-      }
     }
   },
   deleteAllCaches: async () => {
@@ -960,10 +894,5 @@ export const useStore = create<AppState>((set) => ({
     // Clear memory RAG cache
     clearRAGCache();
 
-    if (resetFields.length > 0) {
-      IDB.set('st-translator-fields-data', { fields: resetFields, phase: 'idle' });
-    } else {
-      IDB.remove('st-translator-fields-data');
-    }
   },
 }));

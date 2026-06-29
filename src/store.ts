@@ -299,6 +299,7 @@ export const useStore = create<AppState>((set) => ({
     secondaryModel: LS.get('st-translator-advanced-settings', { secondaryModel: '' }).secondaryModel ?? '',
     secondaryModelRpm: LS.get('st-translator-advanced-settings', { secondaryModelRpm: 17 }).secondaryModelRpm ?? 17,
     enableSecondaryModel: LS.get('st-translator-advanced-settings', { enableSecondaryModel: false }).enableSecondaryModel ?? false,
+    secondaryModelThreshold: LS.get('st-translator-advanced-settings', { secondaryModelThreshold: 0 }).secondaryModelThreshold ?? 0,
   },
   setProxy: (partial) => {
     set((s) => {
@@ -331,6 +332,7 @@ export const useStore = create<AppState>((set) => ({
         secondaryModel: next.secondaryModel,
         secondaryModelRpm: next.secondaryModelRpm,
         enableSecondaryModel: next.enableSecondaryModel,
+        secondaryModelThreshold: next.secondaryModelThreshold,
       });
       return { proxy: next };
     });
@@ -363,6 +365,7 @@ export const useStore = create<AppState>((set) => ({
       secondaryModel: '',
       secondaryModelRpm: 17,
       enableSecondaryModel: false,
+      secondaryModelThreshold: 0,
     };
     LS.set('st-translator-provider', defaultProxy.provider);
     LS.set('st-translator-proxy-url', defaultProxy.proxyUrl);
@@ -391,6 +394,7 @@ export const useStore = create<AppState>((set) => ({
       secondaryModel: defaultProxy.secondaryModel,
       secondaryModelRpm: defaultProxy.secondaryModelRpm,
       enableSecondaryModel: defaultProxy.enableSecondaryModel,
+      secondaryModelThreshold: defaultProxy.secondaryModelThreshold,
     });
     set({ proxy: defaultProxy, connectionStatus: 'untested' });
   },

@@ -276,6 +276,8 @@ export interface ProxySettings {
   secondaryModelRpm: number;
   /** When true, auto-switch to secondaryModel when primary hits its RPM limit */
   enableSecondaryModel: boolean;
+  /** Character threshold: fields shorter than this are sent to secondaryModel directly (0 = disabled) */
+  secondaryModelThreshold: number;
 }
 
 export type ConnectionStatus = 'untested' | 'connected' | 'failed';

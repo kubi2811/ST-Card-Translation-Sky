@@ -2,7 +2,7 @@ import { useCallback, useRef } from 'react';
 import { useStore } from '../store';
 import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookEntries, ChunkError } from '../utils/apiClient';
 import { extractTranslatableFields, applyTranslationsToCard, autoTranslateLorebookTriggerKeys, injectNewLorebookEntries } from '../utils/cardFields';
-import { syncMvuVariables, postProcessRegexHtml, fixBrokenLodashPaths, fixDotNotationPaths, extractPotentialMvuKeyStrings, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, enforceInitvarCovariance, extractMappingFromTranslatedInitvar, enforceExactConsistency, enforceVariableCasing, fixZodSyntaxErrors, validateDictionaryConflicts, aiResolveMvuConflicts } from '../utils/mvuSync';
+import { syncMvuVariables, postProcessRegexHtml, normalizeSmartQuotesInCode, fixBrokenLodashPaths, fixDotNotationPaths, extractPotentialMvuKeyStrings, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, enforceInitvarCovariance, extractMappingFromTranslatedInitvar, enforceExactConsistency, enforceVariableCasing, fixZodSyntaxErrors, validateDictionaryConflicts, aiResolveMvuConflicts } from '../utils/mvuSync';
 import { shouldSkipTranslation, detectLanguage } from '../utils/langDetect';
 import { clearRAGCache } from '../utils/ragContext';
 import { storeTranslation, lookupTranslationMemory } from '../utils/translationMemory';
@@ -639,6 +639,13 @@ export function useTranslation() {
       if (field.group === 'tavern_helper' && translated && /<[a-z][^>]*>/i.test(translated)) {
         translated = postProcessRegexHtml(translated);
       }
+      // ─── SMART-QUOTE FIX for ALL code fields ───
+      // Fixes the "lỗi dấu": AI emits “ ” ‘ ’ ＂ ＇ inside JS/HTML/regex, breaking the script.
+      // Covers code paths that skip postProcessRegexHtml above (findRegex, scriptName,
+      // external custom code, pure-JS TavernHelper). Idempotent if already normalized.
+      if (translated && (field.group === 'regex' || field.group === 'tavern_helper')) {
+        translated = normalizeSmartQuotesInCode(translated);
+      }
 
       // ─── LODASH PATH FIX: Fix broken _.get/getvar paths for ALL code-containing fields ───
       // AI often breaks string paths by inserting newlines or using dot notation with spaced keys.
@@ -1164,6 +1171,10 @@ export function useTranslation() {
         }
         if (batchFields[j].group === 'tavern_helper' && translated && /<[a-z][^>]*>/i.test(translated)) {
           translated = postProcessRegexHtml(translated);
+        }
+        // Smart-quote fix for code fields not covered above (fixes "lỗi dấu" breaking regex/JS)
+        if (translated && (batchFields[j].group === 'regex' || batchFields[j].group === 'tavern_helper')) {
+          translated = normalizeSmartQuotesInCode(translated);
         }
 
         store.updateField(batchFields[j].path, { status: 'done', translated, retries: retryCount });
@@ -2580,6 +2591,11 @@ export function useTranslation() {
       // Post-process TavernHelper content that contains HTML
       if (field.group === 'tavern_helper' && translated && /<[a-z][^>]*>/i.test(translated)) {
         translated = postProcessRegexHtml(translated);
+      }
+      // Smart-quote fix for ALL code fields (regex Manager, external custom code, TavernHelper):
+      // turns “ ” ‘ ’ ＂ ＇ back into straight " ' so the translated regex/JS actually runs.
+      if (translated && (field.group === 'regex' || field.group === 'tavern_helper')) {
+        translated = normalizeSmartQuotesInCode(translated);
       }
 
       store.updateField(path, {

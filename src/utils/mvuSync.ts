@@ -2666,15 +2666,57 @@ export function fixBrokenOptionalChaining(text: string): string {
 }
 
 /**
+ * Chuẩn hoá dấu nháy "thông minh"/toàn rộng (smart / full-width quotes) về dấu nháy
+ * thẳng ASCII bên trong MÃ NGUỒN. Các model AI (nhất là model train nhiều tiếng Trung)
+ * hay xuất ra “ ” ‘ ’ ＂ ＇ thay cho " và ' — làm vỡ chuỗi JS, thuộc tính HTML và regex,
+ * khiến script regex không chạy được (đây chính là "lỗi dấu" mà người dùng phải ngồi sửa tay).
+ *
+ * Phạm vi xử lý thận trọng để KHÔNG đụng tới dấu nháy trong văn bản hiển thị:
+ * - Với nội dung HTML: chỉ chuẩn hoá bên trong khối <script>/<style> và bên trong thẻ
+ *   (attribute), giữ nguyên dấu nháy ở phần chữ hiển thị cho người đọc.
+ * - Với mã thuần (JS / regex / Zod schema, không có thẻ HTML): chuẩn hoá toàn bộ.
+ */
+export function normalizeSmartQuotesInCode(code: string): string {
+  if (!code || typeof code !== 'string') return code;
+
+  const swap = (s: string): string =>
+    s
+      // “ ” ‟ ″ 〃 ＂ → "
+      .replace(/[“”‟″〃＂]/g, '"')
+      // ‘ ’ ‛ ′ ＇ → '
+      .replace(/[‘’‛′＇]/g, "'");
+
+  const looksLikeHtml = /<[a-z!/][^>]*>/i.test(code);
+  if (!looksLikeHtml) {
+    // Mã thuần — an toàn chuẩn hoá toàn bộ.
+    return swap(code);
+  }
+
+  let result = code;
+  // 1. Khối <script>…</script> và <style>…</style> (JS/CSS bắt buộc dùng dấu nháy thẳng)
+  result = result.replace(
+    /(<(script|style)\b[^>]*>)([\s\S]*?)(<\/\2\s*>)/gi,
+    (_m, open: string, _tag: string, body: string, close: string) => swap(open) + swap(body) + close
+  );
+  // 2. Phần đánh dấu thẻ còn lại `<...>` (dấu nháy của attribute) — chừa lại chữ hiển thị
+  result = result.replace(/<[a-z!/][^>]*>/gi, (tag) => swap(tag));
+  return result;
+}
+
+/**
  * Hậu xử lý HTML trong regex replaceString sau khi dịch:
- * 1. Thay font chữ Trung/Nhật → font tương thích tiếng Việt
- * 2. Sửa đường dẫn _.get() bị ngắt dòng hoặc dùng dot notation sai cú pháp
- * 3. Sửa optional chaining bị lỗi bracket notation
+ * 1. Chuẩn hoá dấu nháy thông minh/toàn rộng → dấu nháy thẳng trong mã (tránh vỡ regex/JS)
+ * 2. Thay font chữ Trung/Nhật → font tương thích tiếng Việt
+ * 3. Sửa đường dẫn _.get() bị ngắt dòng hoặc dùng dot notation sai cú pháp
+ * 4. Sửa optional chaining bị lỗi bracket notation
  */
 export function postProcessRegexHtml(html: string): string {
   if (!html || typeof html !== 'string') return html;
 
   let result = html;
+
+  // Chuẩn hoá dấu nháy thông minh/toàn rộng → dấu nháy thẳng (sửa "lỗi dấu" làm hỏng regex)
+  result = normalizeSmartQuotesInCode(result);
 
   // Thay font Trung/Nhật → font Việt
   for (const [pattern, replacement] of CHINESE_FONT_MAP) {

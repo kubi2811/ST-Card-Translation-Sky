@@ -2330,8 +2330,13 @@ function quickStructuralCheck(original: string, translated: string): string | nu
   if (Math.abs(orig.backticks - trans.backticks) > 5) {
     issues.push(`backticks: ${orig.backticks}→${trans.backticks}`);
   }
-  if (Math.abs(orig.singleQ - trans.singleQ) > 10) {
-    issues.push(`single-quotes: ${orig.singleQ}→${trans.singleQ}`);
+  // Only flag a DROP in single-quotes (lost string delimiters = real corruption).
+  // An INCREASE is EXPECTED and harmless: translating data-access keys from dot- to
+  // bracket-notation (obj.姓名 → obj['Họ Tên'], required because Vietnamese keys have
+  // spaces) and target-language apostrophes both add quotes. Flagging increases caused
+  // false "structural drift" that triggered a wasteful 4× retry+verify on every code chunk.
+  if (orig.singleQ - trans.singleQ > 10) {
+    issues.push(`single-quotes dropped: ${orig.singleQ}→${trans.singleQ}`);
   }
   if (Math.abs(orig.parenOpen - trans.parenOpen) > 5) {
     issues.push(`parens(: ${orig.parenOpen}→${trans.parenOpen}`);

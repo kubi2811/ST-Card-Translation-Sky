@@ -492,6 +492,25 @@ export function reinsertTranslations(original: string, tokens: CJKToken[]): stri
         }
       }
 
+      // ANTI-DUPLICATE-QUOTE GUARD
+      // Large regex/replaceString fields embed JS/HTML where CJK keys/strings are
+      // already wrapped in quotes. If the source already has a quote right at the
+      // boundary AND the (possibly re-wrapped) translation also carries that same
+      // quote, inserting it would produce '' or "" — a stray/duplicated quote that
+      // breaks the embedded code. This is the "dư dấu" symptom users hit on big
+      // regex cards. Strip the duplicate at each boundary. Purely defensive: it
+      // only removes a quote that would immediately collide with an existing one.
+      {
+        const cb = result.charAt(replaceStart - 1);
+        const ca = result.charAt(replaceEnd);
+        if ((cb === "'" || cb === '"') && finalTranslation.charAt(0) === cb) {
+          finalTranslation = finalTranslation.slice(1);
+        }
+        if ((ca === "'" || ca === '"') && finalTranslation.charAt(finalTranslation.length - 1) === ca) {
+          finalTranslation = finalTranslation.slice(0, -1);
+        }
+      }
+
       result = result.slice(0, replaceStart) + finalTranslation + result.slice(replaceEnd);
     }
   }

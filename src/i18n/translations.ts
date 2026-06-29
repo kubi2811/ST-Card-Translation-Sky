@@ -4,7 +4,7 @@ export type TranslationKeys = typeof en;
 
 const en = {
   // App
-  appTitle: 'ST Card Translator',
+  appTitle: 'ST Card Translator Sky Fix',
   appSubtitle: 'SillyTavern Character Card',
   appFooter: 'Translate SillyTavern cards to any language',
   uiLanguage: 'UI Language',
@@ -345,7 +345,7 @@ const en = {
 
 const vi: TranslationKeys = {
   // App
-  appTitle: 'ST Card Translator',
+  appTitle: 'ST Card Translator Sky Fix',
   appSubtitle: 'Dịch thẻ nhân vật SillyTavern',
   appFooter: 'Dịch thẻ nhân vật SillyTavern sang mọi ngôn ngữ',
   uiLanguage: 'Ngôn ngữ giao diện',

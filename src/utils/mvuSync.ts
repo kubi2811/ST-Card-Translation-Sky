@@ -38,8 +38,15 @@ function parseJsonFromAi(responseText: string): any {
       text = text.substring(startIdx, endIdx + 1);
     }
   }
-  
-  return JSON.parse(text);
+
+  // Wrap with a clear error so a truncated/garbled AI response surfaces a
+  // readable message (and is caught by the caller's retry loop) instead of a
+  // bare "Unexpected end of JSON input".
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    throw new Error(`AI response is not valid JSON (${(e as Error).message}). Snippet: ${text.slice(0, 120)}…`);
+  }
 }
 
 /**
@@ -1447,8 +1454,12 @@ export function extractPotentialMvuKeys(card: CharacterCard): MvuKeyInfo[] {
   // ─── Scan Zod schema fields ───
   const scanZodFields = (text: string) => {
     if (!text || typeof text !== 'string') return;
-    // Handle both unquoted (word chars + unicode) and quoted keys
-    const zodFieldRegex = /(?:["']([^"']+)["']|([^\s:.,;()]+))\s*:\s*(?:z|Zod)\.\w+/g;
+    // Handle both unquoted (word chars + unicode) and quoted keys.
+    // NOTE: the unquoted branch is length-capped ({1,100}) to prevent catastrophic
+    // regex backtracking on huge HTML/CSS replaceString fields (e.g. 135KB cards with
+    // many ":" chars). A real Zod field key is always short, so this loses no matches
+    // while turning an O(n²) blow-up (30s+ freeze) into linear time.
+    const zodFieldRegex = /(?:["']([^"']+)["']|([^\s:.,;()]{1,100}))\s*:\s*(?:z|Zod)\.\w+/g;
     let match;
     while ((match = zodFieldRegex.exec(text)) !== null) {
       const key = match[1] || match[2];

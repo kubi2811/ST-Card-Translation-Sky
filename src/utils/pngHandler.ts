@@ -97,7 +97,11 @@ export const embedCharaToPNG = async (originalDataUrl: string | ArrayBuffer, new
     let uint8: Uint8Array;
     if (typeof originalDataUrl === 'string') {
         // 1. extract base64 from dataUrl
-        const b64 = originalDataUrl.split(',')[1];
+        const commaIdx = originalDataUrl.indexOf(',');
+        if (commaIdx === -1) {
+            throw new Error('Invalid PNG data URL: missing base64 payload (no comma separator)');
+        }
+        const b64 = originalDataUrl.slice(commaIdx + 1);
         const binStr = atob(b64);
         uint8 = new Uint8Array(binStr.length);
         for(let i=0; i<binStr.length; i++) uint8[i] = binStr.charCodeAt(i);

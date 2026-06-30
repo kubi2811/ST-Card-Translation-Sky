@@ -55,6 +55,9 @@ interface AppState {
   _blobUrl: string | null;
   setCard: (card: CharacterCard, fileName: string, originalImage?: string | null, contentType?: ContentType, originalWorldbook?: Worldbook | null) => void;
   updateCard: (card: CharacterCard) => void;
+  /** Rename the character (card.name + card.data.name) and/or the export file name.
+   *  charName = tên nhân vật hiển thị trong SillyTavern; fileName = tên file khi xuất. */
+  renameCard: (opts: { charName?: string; fileName?: string }) => void;
   clearCard: () => void;
   loadStateFromIDB: () => Promise<void>;
 
@@ -183,6 +186,43 @@ export const useStore = create<AppState>((set) => ({
   },
   updateCard: (card) => {
     set({ card });
+  },
+  renameCard: ({ charName, fileName }) => {
+    set((s) => {
+      if (!s.card) return {};
+      const next: Partial<AppState> = {};
+
+      // ─── File name (tên file khi xuất — KHÔNG phải tên nhân vật) ───
+      if (typeof fileName === 'string' && fileName.trim()) {
+        next.cardFileName = fileName.trim();
+      }
+
+      // ─── Character name (tên nhân vật trong SillyTavern) ───
+      const trimmedChar = typeof charName === 'string' ? charName.trim() : undefined;
+      if (trimmedChar) {
+        // Update BOTH V1 (card.name) and V2/V3 (card.data.name) so SillyTavern shows it
+        // consistently regardless of spec version.
+        const newCard: CharacterCard = {
+          ...s.card,
+          name: trimmedChar,
+          data: { ...(s.card.data || {}), name: trimmedChar },
+        } as CharacterCard;
+        next.card = newCard;
+
+        // The name is ALSO a translatable field ('name' / 'data.name'). If we don't update
+        // those fields, applyTranslationsToCard would overwrite our rename on export. So mark
+        // them done with the new value to keep export consistent.
+        if (s.fields.length > 0) {
+          next.fields = s.fields.map((f) =>
+            f.path === 'name' || f.path === 'data.name'
+              ? { ...f, translated: trimmedChar, status: 'done' as const, error: undefined }
+              : f
+          );
+        }
+      }
+
+      return next;
+    });
   },
   clearCard: () => {
     // Revoke Blob URL to free memory

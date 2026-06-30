@@ -5,6 +5,7 @@ import { useStore } from '../store';
 import { useT } from '../i18n/useLocale';
 import { getCardSummary } from '../utils/cardFields';
 import { getWorldbookSummary } from '../utils/worldbookParser';
+import CardRenamePanel from './CardRenamePanel';
 import {
   Upload,
   FileJson,
@@ -265,6 +266,8 @@ export default function FileUpload() {
                 </div>
               </div>
             </div>
+
+            {!isWorldbook && <CardRenamePanel />}
 
             {isWorldbook ? (
               /* Worldbook-specific stats */

@@ -564,6 +564,21 @@ RULE C8 — Preserve EXACT whitespace structure.
   - Preserve leading and trailing spaces.
   - Preserve indentation levels (spaces and tabs) inside code blocks.
 
+RULE C8.5 — PRESERVE STRUCTURAL & PUNCTUATION CHARACTERS EXACTLY (CRITICAL — DO NOT EAT CHARACTERS).
+  The most common silent corruption is dropping or swapping structural characters. Reproduce EVERY one of
+  these exactly as in the source, in the SAME positions. This applies to NARRATIVE / dialogue text too,
+  not just code:
+    - Angle-bracket tags / section markers: <章节信息> … </章节信息>, <world_info>, <palette_x>. Keep BOTH the
+      opening AND the matching CLOSING tag. NEVER drop the final closing tag at the very end of the text.
+    - Brackets & braces: ( ) [ ] { } — same opening and closing count out as in.
+    - Quotation marks: keep the EXACT same quote character. Use straight ASCII quotes " ' \` ONLY — NEVER
+      replace them with curly/smart/full-width variants (“ ” ‘ ’ ＂ ＇). Do not turn " into ' or \` (or vice-versa).
+    - Leading dialogue/list dashes: a line that starts with -, —, or • MUST still start with that same mark.
+    - Escapes & slashes: \\n, \\t, \\\\, /, </ — reproduce literally; never merge, split, or mangle them
+      (e.g. </ must never become n/ or / n).
+  Translate the WORDS between these characters; never delete, add, swap, or move the characters themselves.
+  Dropping or altering a single closing tag, bracket, or quote breaks the card in SillyTavern.
+
 RULE C9 — Completeness.
   Translate the ENTIRE text. Do NOT stop early. Do NOT summarize.
   Do NOT skip sections that look repetitive.

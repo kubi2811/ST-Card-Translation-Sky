@@ -2045,6 +2045,22 @@ export function repairUnclosedTags(original: string, translation: string): strin
   return translation.replace(/\s+$/, '') + sep + suffixParts.join('');
 }
 
+/**
+ * Fix quote-character confusion: if the SOURCE used straight ASCII quotes and had NO
+ * curly/full-width quotes, any curly/full-width quotes in the translation are AI corruption
+ * (common with CJK-trained models) → normalize them back to straight " and '. Leaves text
+ * untouched when the source itself uses curly quotes, so intentional typography is preserved.
+ */
+export function normalizeStrayCurlyQuotes(original: string, translation: string): string {
+  if (!translation) return translation;
+  const CURLY = /[“”‟″〃＂‘’‛′＇]/;
+  if (!CURLY.test(translation)) return translation; // nothing to fix
+  if (CURLY.test(original)) return translation;      // source intentionally uses curly quotes
+  return translation
+    .replace(/[“”‟″〃＂]/g, '"')
+    .replace(/[‘’‛′＇]/g, "'");
+}
+
 export function detectStructuralTruncation(original: string, translation: string): StructuralCheckResult {
   if (!original || !translation) {
     return { isTruncated: false, reason: '' };
@@ -3162,6 +3178,7 @@ export async function translateText(
 
     // Repair closing tags the AI dropped from the END (incl. CJK pseudo-tags like </章节信息>)
     cleaned = repairUnclosedTags(maskedText, cleaned);
+    cleaned = normalizeStrayCurlyQuotes(maskedText, cleaned);
 
     if (isCodeHeavy) {
       const structuralTrunc = detectStructuralTruncation(maskedText, cleaned);
@@ -3476,6 +3493,7 @@ export async function translateText(
 
   // Repair closing tags the AI dropped from the END (incl. CJK pseudo-tags like </章节信息>)
   cleaned = repairUnclosedTags(maskedText, cleaned);
+  cleaned = normalizeStrayCurlyQuotes(maskedText, cleaned);
 
   if (isCodeHeavy) {
     const structuralTrunc = detectStructuralTruncation(maskedText, cleaned);

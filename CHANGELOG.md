@@ -2,6 +2,10 @@
 
 > Cách cập nhật: mở thư mục cài đặt, chạy `git pull origin main`, rồi **tắt hẳn và chạy lại `start.bat`** (không chỉ F5).
 
+## v1.82.0 — Fix popup "tự bấm" + tự nạp bộ thuật ngữ Tu tiên
+- **Fix popup gợi ý cấu hình tự đóng ngay khi hiện:** double-click chọn file trong hộp thoại → cú click thứ 2 rơi xuống trang đúng lúc popup vừa mount, trúng nút giữa màn hình → popup "tự bấm rồi biến mất". Giờ popup khoá tương tác 450ms đầu (click trễ rơi vào khoảng trống vô hại).
+- **Bộ thuật ngữ Tu tiên/Võ hiệp tự nạp:** bấm Start, card có ≥8 thuật ngữ của bộ xuất hiện trong nội dung → tự nạp cả bộ vào Từ điển + log rõ (0 token). User khỏi phải nhớ bấm nút; đã chủ động xoá bớt (≥5 mục của bộ vẫn còn) thì không nạp lại; mục tự nhập luôn thắng; tắt chung công tắc "Tự xây bảng tên riêng".
+
 ## v1.81.0 — Fix quanh báo cáo "xuất PNG ra tiếng Trung dù dịch rồi" 🖼
 > Đã audit toàn đường xuất PNG bằng cách xuất file thật rồi mổ chunk: **khâu ghi đúng chuẩn** (strip sạch `chara`+`ccv3` cũ, ghi `chara` mới — không có chuyện ST đọc nhầm data Trung cũ) và **bản dịch vào file đầy đủ** (first_mes 0 ký tự Hán, 31/37 tên entry tiếng Việt, khớp 100% Field Editor). Phần tiếng Trung user thấy = các trường **chủ ý không dịch** ở chế độ ⚡ Dịch nhẹ.
 - **Ghi chú vàng trong khung Export**: khi đang Dịch nhẹ (hoặc có nhiều trường bỏ tick), hiện rõ ngay trên nút tải: *"ruột card giữ tiếng gốc CÓ CHỦ Ý — không phải lỗi, vào game AI vẫn trả lời tiếng Việt; muốn dịch hết chọn 📖 Dịch đầy đủ"* — chặn đúng nguồn báo nhầm.

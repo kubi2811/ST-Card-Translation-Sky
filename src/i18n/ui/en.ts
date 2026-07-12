@@ -277,7 +277,7 @@ const ui = {
   tcObjective: 'Objective Mode (Literal translation, no embellishments)',
   tcGlossary: 'Glossary',
   tcAutoGlossary: '📖 Auto name glossary (Phase 0)',
-  tcAutoGlossaryHint: 'Before translating: scan recurring character/place/term names in the card + lorebook keywords, translate the whole table in ONE AI call and add it to the glossary below. All parallel threads share it → names stay consistent across the card. Your manual entries always win.',
+  tcAutoGlossaryHint: 'Before translating: scan recurring character/place/term names in the card + lorebook keywords, translate the whole table in ONE AI call and add it to the glossary below. All parallel threads share it → names stay consistent across the card. Your manual entries always win. Cards rich in xianxia/wuxia terms auto-load the standard term pack too.',
   gpXianxia: 'Load Xianxia / Wuxia pack',
   gpXianxiaHint: 'Loads ~85 community-standard xianxia/wuxia terms (金丹→Kim Đan, 灵气→linh khí…) into the glossary. Your own entries always win. Only terms actually present in the text being translated are injected into prompts, so no token waste.',
   gpLoadedToast: '📚 Loaded {count} terms into the glossary.',

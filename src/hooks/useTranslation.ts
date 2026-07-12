@@ -4,6 +4,7 @@ import { useCallback, useRef } from 'react';
 import { useStore } from '../store';
 import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookEntries, ChunkError, ApiError, setExtraProviders, resetProviderPool, computePoolConcurrency, callProvider } from '../utils/apiClient';
 import { extractNameCandidates, buildNameGlossaryPrompt, parseNameGlossaryResponse, mergeGlossary } from '../utils/nameGlossary';
+import { GLOSSARY_PRESETS } from '../utils/glossaryPresets';
 import { extractTranslatableFields, applyTranslationsToCard, autoTranslateLorebookTriggerKeys, injectNewLorebookEntries } from '../utils/cardFields';
 import { syncMvuVariables, postProcessRegexHtml, normalizeSmartQuotesInCode, fixNestedQuoteBracketPaths, fixBrokenLodashPaths, fixDotNotationPaths, extractPotentialMvuKeyStrings, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, enforceInitvarCovariance, extractMappingFromTranslatedInitvar, enforceExactConsistency, enforceVariableCasing, fixZodSyntaxErrors, validateDictionaryConflicts, aiResolveMvuConflicts } from '../utils/mvuSync';
 import { shouldSkipTranslation, detectLanguage, detectResidualCjk } from '../utils/langDetect';
@@ -1548,6 +1549,28 @@ export function useTranslation() {
     // Continue/re-run: ứng viên đã có trong glossary bị lọc ra ⇒ đủ bảng thì 0 call, không tốn thêm.
     if (useStore.getState().translationConfig.autoNameGlossary) {
       try {
+        // ── Tự nạp bộ thuật ngữ có sẵn khi card khớp thể loại (user khỏi phải nhớ bấm nút) ──
+        // Đếm nhanh (0 token): ≥8 thuật ngữ của bộ xuất hiện trong card → nạp cả bộ.
+        // Đã có ≥5 mục của bộ trong Từ điển thì coi như nạp rồi (tôn trọng user đã xoá bớt).
+        {
+          const cfgPk = useStore.getState().translationConfig;
+          const corpus = fields
+            .filter(f => f.status === 'pending' || f.status === 'error')
+            .map(f => f.original).join('\n').slice(0, 200_000);
+          const have = new Set(cfgPk.glossary.map(g => g.source.trim()));
+          for (const pack of GLOSSARY_PRESETS) {
+            const alreadyLoaded = pack.entries.filter(e => have.has(e.source)).length >= 5;
+            if (alreadyLoaded) continue;
+            const hits = pack.entries.filter(e => corpus.includes(e.source)).length;
+            if (hits >= 8) {
+              const { merged, added } = mergeGlossary(cfgPk.glossary, pack.entries);
+              store.setTranslationConfig({ glossary: merged });
+              store.addLog('info', `📚 Card có ${hits} thuật ngữ tu tiên/võ hiệp → đã tự nạp bộ thuật ngữ chuẩn (+${added} mục vào Từ điển; mục bạn tự nhập luôn được giữ).`);
+              break;
+            }
+          }
+        }
+
         const cfgP0 = useStore.getState().translationConfig;
         const existingSources = new Set(cfgP0.glossary.map(g => g.source.trim()));
         const candidates = extractNameCandidates(fields).filter(c => !existingSources.has(c.term));

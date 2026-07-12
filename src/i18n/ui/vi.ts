@@ -285,7 +285,7 @@ const ui: UiKeys = {
   tcObjective: 'Objective Mode (Literal translation, no embellishments)',
   tcGlossary: 'Glossary',
   tcAutoGlossary: '📖 Tự xây bảng tên riêng (Pha 0)',
-  tcAutoGlossaryHint: 'Trước khi dịch: quét tên nhân vật/địa danh/thuật ngữ lặp lại trong card + keyword lorebook, dịch cả bảng bằng 1 lượt gọi AI rồi thêm vào từ điển bên dưới. Mọi luồng dịch song song dùng chung → tên nhất quán toàn card (hết cảnh 叶凡 chỗ là Diệp Phàm chỗ là Ye Fan). Mục bạn tự nhập luôn được ưu tiên.',
+  tcAutoGlossaryHint: 'Trước khi dịch: quét tên nhân vật/địa danh/thuật ngữ lặp lại trong card + keyword lorebook, dịch cả bảng bằng 1 lượt gọi AI rồi thêm vào từ điển bên dưới. Mọi luồng dịch song song dùng chung → tên nhất quán toàn card (hết cảnh 叶凡 chỗ là Diệp Phàm chỗ là Ye Fan). Mục bạn tự nhập luôn được ưu tiên. Card có nhiều thuật ngữ tu tiên/võ hiệp sẽ được TỰ nạp bộ thuật ngữ chuẩn kèm theo.',
   gpXianxia: 'Nạp bộ Tu tiên / Võ hiệp',
   gpXianxiaHint: 'Nạp ~85 thuật ngữ tu tiên/võ hiệp chuẩn cộng đồng convert (金丹→Kim Đan, 灵气→linh khí, 宗门→tông môn…) vào Từ điển. Mục bạn đã tự nhập luôn được giữ nguyên. Chỉ mục thật sự xuất hiện trong đoạn đang dịch mới được đưa vào prompt nên không tốn token.',
   gpLoadedToast: '📚 Đã nạp {count} thuật ngữ vào Từ điển.',

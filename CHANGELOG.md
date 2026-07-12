@@ -2,6 +2,17 @@
 
 > Cách cập nhật: mở thư mục cài đặt, chạy `git pull origin main`, rồi **tắt hẳn và chạy lại `start.bat`** (không chỉ F5).
 
+## v1.77.0 — 🩺 Kiểm tra tổng: nghiệm thu 1 nút trước khi xuất
+> Trước đây muốn nghiệm thu bản dịch phải tự đi 3 nơi: khối Sức khoẻ thẻ, panel Kiểm Tra Lỗi Dịch, panel So sánh card — người mới không biết mà bấm.
+- **1 nút "🩺 Kiểm tra tổng" ngay trong khung Export**, chạy cả 3 bộ kiểm (đều tại máy, **0 call AI**):
+  1. **Sức khoẻ thẻ** (đã chạy passive từ trước): trường lỗi/chưa xong, script vỡ cú pháp, chữ Hán trong code, thuật ngữ Từ điển chưa áp.
+  2. **Kiểm sâu từng field** (`verifyFields` — trước giờ nằm trong panel Kiểm Tra Lỗi Dịch): macro hỏng, lệch ngoặc/thẻ HTML/JSON, cắt cụt cấu trúc, tên hàm bị dịch, chèn code lạ… 15 loại.
+  3. **Đối chiếu card gốc** (`quickVerify`): macro/biến/Zod/EJS có trong card gốc mà MẤT trong card xuất.
+- **Kết quả gộp 1 chỗ:** phán quyết **ĐẠT / KHÔNG ĐẠT (N lỗi nặng)** + 1 danh sách xếp theo mức độ, mỗi dòng có badge nguồn (KIỂM SÂU / SO CARD GỐC), **bấm dòng nào nhảy thẳng tới field đó** trong Field Editor để sửa; kiểm sâu trùng mục CJK với sức khoẻ thẻ thì tự khử trùng lặp, không báo đúp.
+- **Báo cáo tải về (.md)** giờ gồm luôn kết quả kiểm sâu + đối chiếu (trước chỉ có phần sức khoẻ thẻ).
+- Panel Kiểm Tra Lỗi Dịch vẫn nguyên cho ai cần sửa bằng AI — Kiểm tra tổng dùng chung linh kiện, không nhân đôi logic.
+- Verify live bằng card Tuhu (cache dịch từ đời code cũ): 1 click ra "❌ còn 16 lỗi nặng — 23 vấn đề nội dung · 0 vấn đề macro/biến", danh sách chỉ đúng các script vỡ/macro hỏng đời cũ, nhảy field hoạt động.
+
 ## v1.76.0 — Đếm token THẬT (đọc từ usage của API) 🧮
 > Trước giờ chỉ có ETA ước lượng theo ký tự — dùng key chung không biết mình thật sự đốt bao nhiêu.
 - **Đọc usage thật từ chính response API** ở cả 3 loại provider, cả stream lẫn non-stream:

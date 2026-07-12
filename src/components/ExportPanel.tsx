@@ -8,7 +8,17 @@ import { embedCharaToPNG } from '../utils/pngHandler';
 import { cardToWorldbook } from '../utils/worldbookParser';
 import { setNestedValue } from '../utils/cardFields';
 import { scanFieldsHealth, buildTranslationReport, type HealthSeverity } from '../utils/cardHealth';
+import { verifyFields, quickVerify, type FieldIssue, type VerifyIssue } from '../utils/aiVerify';
 import type { ExportKeyMode } from '../types/card';
+
+/** 1 dòng vấn đề trong báo cáo GỘP của "🩺 Kiểm tra tổng" (3 nguồn về chung 1 shape). */
+interface MergedIssue {
+  severity: HealthSeverity;
+  label: string;
+  path: string;   // rỗng = không nhảy tới field được (vấn đề mức card)
+  detail: string;
+  src: 'health' | 'deep' | 'card';
+}
 
 /** Nhãn ở module scope nên chỉ giữ KEY, tra `ui` lúc render. `desc` là chữ Hán cố ý (nhãn kỹ thuật). */
 const KEY_MODE_OPTIONS: { value: ExportKeyMode; labelKey: 'epKeyModeMerge' | 'epKeyModeTranslated' | 'epKeyModeOriginal'; desc: string }[] = [
@@ -31,8 +41,65 @@ export default function ExportPanel() {
   const health = useMemo(() => scanFieldsHealth(fields, translationConfig.glossary), [fields, translationConfig.glossary]);
   const [showIssues, setShowIssues] = useState(false);
 
+  // ═══ 🩺 KIỂM TRA TỔNG (nghiệm thu 1 nút) ═══
+  // Sức khoẻ thẻ ở trên chạy passive (rẻ). Bấm nút thì chạy thêm 2 bộ kiểm NẶNG (đều local, 0 call AI):
+  //  1. verifyFields — kiểm sâu từng field: macro hỏng, lệch ngoặc/HTML/JSON, cắt cụt cấu trúc, CJK sót theo tỉ lệ…
+  //  2. quickVerify  — đối chiếu card gốc ↔ card xuất: macro/biến/Zod/EJS bị MẤT sau dịch.
+  // Cả 3 gộp về 1 báo cáo, 1 phán quyết đạt/không đạt.
+  const [deepCheck, setDeepCheck] = useState<{ fieldIssues: FieldIssue[]; cardIssues: VerifyIssue[]; at: number } | null>(null);
+  const [isChecking, setIsChecking] = useState(false);
+
+  const runTotalCheck = async () => {
+    setIsChecking(true);
+    await new Promise((r) => setTimeout(r, 30)); // cho UI vẽ trạng thái "đang kiểm" trước khi block main thread
+    try {
+      const fieldIssues = verifyFields(fields, translationConfig.mvuDictionary, translationConfig.sourceLanguage);
+      const exportCard = getExportCard();
+      const cardIssues = card && exportCard ? quickVerify(card, exportCard) : [];
+      setDeepCheck({ fieldIssues, cardIssues, at: Date.now() });
+      setShowIssues(true);
+    } finally {
+      setIsChecking(false);
+    }
+  };
+
+  // Gộp 3 nguồn vấn đề (sức khoẻ + kiểm sâu + đối chiếu card) thành 1 danh sách, nặng trước.
+  const allIssues = useMemo<MergedIssue[]>(() => {
+    const merged: MergedIssue[] = health.issues.map((i) => ({
+      severity: i.severity, label: i.label, path: i.path, detail: i.detail, src: 'health' as const,
+    }));
+    if (deepCheck) {
+      // Kiểm sâu trùng 1 phần với sức khoẻ thẻ (CJK sót) — bỏ mục trùng path+loại để không báo đúp.
+      const cjkPaths = new Set(health.issues.filter(i => i.kind.startsWith('residual_cjk')).map(i => i.path));
+      for (const fi of deepCheck.fieldIssues) {
+        if (fi.category === 'residual_source' && cjkPaths.has(fi.fieldPath)) continue;
+        merged.push({ severity: fi.severity, label: fi.category.replace(/_/g, ' '), path: fi.fieldPath, detail: fi.description, src: 'deep' });
+      }
+      for (const ci of deepCheck.cardIssues) {
+        merged.push({ severity: ci.severity, label: ci.location, path: '', detail: ci.description, src: 'card' });
+      }
+    }
+    const rank: Record<HealthSeverity, number> = { error: 0, warning: 1, info: 2 };
+    merged.sort((a, b) => rank[a.severity] - rank[b.severity]);
+    return merged;
+  }, [health, deepCheck]);
+
+  const errCount = allIssues.filter((i) => i.severity === 'error').length;
+  const checkOk = errCount === 0;
+
   const handleExportReport = () => {
-    const md = buildTranslationReport(fields, cardFileName || 'card', health);
+    let md = buildTranslationReport(fields, cardFileName || 'card', health);
+    if (deepCheck) {
+      const lines: string[] = ['', '## 🩺 Kiểm tra tổng (kiểm sâu nội dung + đối chiếu card gốc)'];
+      lines.push(`- Kiểm sâu nội dung: **${deepCheck.fieldIssues.length}** vấn đề · Đối chiếu macro/biến với card gốc: **${deepCheck.cardIssues.length}** vấn đề`);
+      for (const fi of deepCheck.fieldIssues.slice(0, 200)) {
+        lines.push(`- [${fi.severity}] **${fi.category}** \`${fi.fieldPath}\` — ${fi.description}`);
+      }
+      for (const ci of deepCheck.cardIssues.slice(0, 200)) {
+        lines.push(`- [${ci.severity}] **${ci.location}** — ${ci.description}`);
+      }
+      md += '\n' + lines.join('\n');
+    }
     const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const baseName = (cardFileName || 'card').replace(/\.(json|png)$/i, '');
@@ -334,25 +401,46 @@ export default function ExportPanel() {
         </span>
       </div>
 
-      {/* 🩺 Sức khoẻ thẻ — kiểm nội dung TRƯỚC khi xuất (script vỡ / chữ Hán sót / trường lỗi) */}
+      {/* 🩺 Kiểm tra tổng — sức khoẻ thẻ (passive) + nút chạy kiểm sâu + đối chiếu card gốc, gộp 1 báo cáo */}
       <div
         style={{
           padding: '10px 12px',
-          background: health.ok ? 'rgba(80, 200, 120, 0.06)' : 'rgba(240, 100, 100, 0.07)',
-          border: `1px solid ${health.ok ? 'rgba(80,200,120,0.25)' : 'rgba(240,100,100,0.3)'}`,
+          background: checkOk ? 'rgba(80, 200, 120, 0.06)' : 'rgba(240, 100, 100, 0.07)',
+          border: `1px solid ${checkOk ? 'rgba(80,200,120,0.25)' : 'rgba(240,100,100,0.3)'}`,
           borderRadius: 'var(--radius-md)',
           marginBottom: '12px',
           fontSize: '0.8rem',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: health.issues.length ? '8px' : 0 }}>
-          <Activity size={15} style={{ flexShrink: 0, color: health.ok ? 'var(--accent-success)' : 'var(--accent-danger)' }} />
-          <span style={{ fontWeight: 600, color: health.ok ? 'var(--accent-success)' : 'var(--accent-danger)' }}>
-            {health.ok
-              ? ui.epHealthOk
-              : fmt(ui.epHealthBad, { count: health.issues.filter(i => i.severity === 'error').length })}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: allIssues.length || !deepCheck ? '8px' : 0, flexWrap: 'wrap' }}>
+          <Activity size={15} style={{ flexShrink: 0, color: checkOk ? 'var(--accent-success)' : 'var(--accent-danger)' }} />
+          <span style={{ fontWeight: 600, color: checkOk ? 'var(--accent-success)' : 'var(--accent-danger)', flex: 1, minWidth: '180px' }}>
+            {deepCheck
+              ? (checkOk ? ui.epTotalPass : fmt(ui.epTotalFail, { count: errCount }))
+              : (checkOk ? ui.epHealthOk : fmt(ui.epHealthBad, { count: errCount }))}
           </span>
+          <button
+            onClick={runTotalCheck}
+            disabled={isChecking || fields.length === 0}
+            title={ui.epTotalHint}
+            style={{
+              padding: '4px 12px', fontSize: '0.72rem', fontWeight: 700, cursor: isChecking ? 'wait' : 'pointer',
+              color: '#fff', background: 'var(--accent-primary)', border: 'none',
+              borderRadius: 'var(--radius-sm)', opacity: isChecking || fields.length === 0 ? 0.6 : 1, flexShrink: 0,
+            }}
+          >
+            {isChecking ? ui.epTotalChecking : ui.epTotalBtn}
+          </button>
         </div>
+        {deepCheck && (
+          <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginBottom: '6px' }}>
+            {fmt(ui.epTotalDoneLine, {
+              deep: deepCheck.fieldIssues.length,
+              macro: deepCheck.cardIssues.length,
+              time: new Date(deepCheck.at).toLocaleTimeString(),
+            })}
+          </div>
+        )}
 
         {/* Chỉ số nhanh */}
         {(health.counts.error > 0 || health.counts.brokenScripts > 0 || health.counts.residualCjkCode > 0 || health.counts.residualCjkText > 0 || health.counts.pending > 0) && (
@@ -366,32 +454,39 @@ export default function ExportPanel() {
           </div>
         )}
 
-        {/* Danh sách chi tiết (thu gọn) */}
-        {health.issues.length > 0 && (
+        {/* Danh sách GỘP cả 3 nguồn (thu gọn) — bấm dòng có path để nhảy tới field trong Field Editor */}
+        {allIssues.length > 0 && (
           <>
             <button
               onClick={() => setShowIssues(v => !v)}
               style={{ marginTop: '8px', background: 'none', border: 'none', color: 'var(--accent-primary)', fontSize: '0.72rem', fontWeight: 600, cursor: 'pointer', padding: 0 }}
             >
-              {showIssues ? ui.epHideDetails : fmt(ui.epShowDetails, { count: health.issues.length })}
+              {showIssues ? ui.epHideDetails : fmt(ui.epShowDetails, { count: allIssues.length })}
             </button>
             {showIssues && (
-              <div style={{ marginTop: '6px', display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '220px', overflow: 'auto' }}>
-                {health.issues.slice(0, 60).map((iss, idx) => (
+              <div style={{ marginTop: '6px', display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '260px', overflow: 'auto' }}>
+                {allIssues.slice(0, 80).map((iss, idx) => (
                   <div
                     key={idx}
-                    onClick={() => setJumpToFieldPath(iss.path)}
-                    title={ui.epJumpTitle}
-                    style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', fontSize: '0.7rem', color: 'var(--text-secondary)', cursor: 'pointer', padding: '2px 4px', borderRadius: 'var(--radius-sm)' }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(124,106,240,0.08)')}
+                    onClick={() => iss.path && setJumpToFieldPath(iss.path)}
+                    title={iss.path ? ui.epJumpTitle : undefined}
+                    style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', fontSize: '0.7rem', color: 'var(--text-secondary)', cursor: iss.path ? 'pointer' : 'default', padding: '2px 4px', borderRadius: 'var(--radius-sm)' }}
+                    onMouseEnter={(e) => { if (iss.path) e.currentTarget.style.background = 'rgba(124,106,240,0.08)'; }}
                     onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                   >
                     <IssueIcon severity={iss.severity} />
-                    <span><b>{iss.label}</b> — {iss.detail} <span style={{ color: 'var(--text-muted)', fontSize: '0.64rem' }}>{iss.path}</span> <span style={{ color: 'var(--accent-primary)', fontSize: '0.64rem' }}>{ui.epJump}</span></span>
+                    <span>
+                      {iss.src !== 'health' && (
+                        <span style={{ fontSize: '0.58rem', fontWeight: 700, color: iss.src === 'deep' ? 'var(--accent-secondary)' : '#fbbf24', border: `1px solid ${iss.src === 'deep' ? 'rgba(56,189,248,0.4)' : 'rgba(251,191,36,0.4)'}`, borderRadius: '3px', padding: '0 4px', marginRight: '4px' }}>
+                          {iss.src === 'deep' ? ui.epSrcDeep : ui.epSrcCard}
+                        </span>
+                      )}
+                      <b>{iss.label}</b> — {iss.detail} <span style={{ color: 'var(--text-muted)', fontSize: '0.64rem' }}>{iss.path}</span> {iss.path && <span style={{ color: 'var(--accent-primary)', fontSize: '0.64rem' }}>{ui.epJump}</span>}
+                    </span>
                   </div>
                 ))}
-                {health.issues.length > 60 && (
-                  <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>{fmt(ui.epMoreIssues, { count: health.issues.length - 60 })}</span>
+                {allIssues.length > 80 && (
+                  <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>{fmt(ui.epMoreIssues, { count: allIssues.length - 80 })}</span>
                 )}
               </div>
             )}

@@ -57,29 +57,109 @@ export function substituteMacros(text: string, vars: { user: string; char: strin
  * lên tin nhắn — đúng thứ tự trong card. `{{match}}` trong replaceString = cả đoạn khớp ($&);
  * $1..$9 dùng cơ chế replace chuẩn của JS (khớp hành vi ST).
  */
+export interface AppliedRegexDetail {
+  /** Tên script regex đã áp */
+  name: string;
+  /** Index trong extensions.regex_scripts — để dựng field path nhảy tới */
+  index: number;
+  /** Đoạn "vân tay" ổn định để tìm lại vị trí replaceString trong văn bản cuối */
+  fingerprint: string;
+  /** Số dòng của replaceString (ước lượng phạm vi) */
+  lineCount: number;
+}
+
+/** Chọn 1 dòng "vân tay" đủ dài + không dính các tham chiếu sẽ bị rewrite (window.parent…). */
+function pickFingerprint(replaceString: string): string {
+  for (const line of replaceString.split('\n')) {
+    const t = line.trim();
+    if (t.length >= 30 && !/parent|\btop\b|\{\{|\$\d/.test(t)) return t.slice(0, 80);
+  }
+  return replaceString.trim().slice(0, 60);
+}
+
 export function applyDisplayRegex(
   text: string,
   scripts: StRegexScript[],
-): { text: string; applied: string[] } {
+): { text: string; applied: string[]; appliedDetails: AppliedRegexDetail[] } {
   let out = text;
   const applied: string[] = [];
-  for (const s of scripts) {
-    if (!s || s.disabled || s.promptOnly) continue;
-    if (!(s.placement || []).includes(2)) continue;
+  const appliedDetails: AppliedRegexDetail[] = [];
+  scripts.forEach((s, index) => {
+    if (!s || s.disabled || s.promptOnly) return;
+    if (!(s.placement || []).includes(2)) return;
     const re = parseFindRegex(s.findRegex || '');
-    if (!re) continue;
+    if (!re) return;
     // {{match}} → token '$&' của String.replace (cả đoạn khớp). '$$&' vì trong replacement
     // string, '$&' có nghĩa đặc biệt — phải escape $$ để chèn literal '$&' cho lượt replace sau.
     const replStr = (s.replaceString ?? '').replace(/\{\{match\}\}/gi, '$$&');
     try {
       const before = out;
       out = out.replace(re, replStr);
-      if (out !== before) applied.push(s.scriptName || '(không tên)');
+      if (out !== before) {
+        applied.push(s.scriptName || '(không tên)');
+        appliedDetails.push({
+          name: s.scriptName || '(không tên)',
+          index,
+          fingerprint: pickFingerprint(s.replaceString ?? ''),
+          lineCount: (s.replaceString ?? '').split('\n').length,
+        });
+      }
     } catch {
       /* script lỗi — bỏ qua, xử tiếp script sau */
     }
+  });
+  return { text: out, applied, appliedDetails };
+}
+
+export interface PreviewLineRange {
+  from: number; // dòng bắt đầu (1-based, trong srcdoc)
+  to: number;
+  label: string;      // ví dụ 「MVU Thanh Trạng Thái」
+  fieldPath?: string; // path field để nhảy tới trong Field Editor
+}
+
+/**
+ * Dựng BẢN ĐỒ dòng → nguồn cho srcdoc preview: lỗi script báo "dòng N" sẽ tra được là nằm
+ * trong regex script nào của card → dịch giả bấm 1 nút nhảy thẳng tới field đó để sửa.
+ */
+export function buildLineMap(
+  srcDoc: string,
+  appliedDetails: AppliedRegexDetail[],
+  messageLabel: string,
+  messageFieldPath?: string,
+): PreviewLineRange[] {
+  const map: PreviewLineRange[] = [];
+  const lineOf = (idx: number) => srcDoc.slice(0, idx).split('\n').length;
+  const bodyStart = srcDoc.indexOf('<div class="content">');
+  const bodyStartLine = bodyStart >= 0 ? lineOf(bodyStart) : 1;
+  const totalLines = srcDoc.split('\n').length;
+
+  for (const d of appliedDetails) {
+    if (!d.fingerprint) continue;
+    const at = srcDoc.indexOf(d.fingerprint);
+    if (at < 0) continue;
+    // fingerprint nằm đâu đó TRONG replaceString — nới biên mỗi phía bằng cả lineCount cho an toàn
+    const fpLine = lineOf(at);
+    map.push({
+      from: Math.max(bodyStartLine, fpLine - d.lineCount),
+      to: Math.min(totalLines, fpLine + d.lineCount),
+      label: `「${d.name}」 (regex #${d.index + 1})`,
+      fieldPath: `data.extensions.regex_scripts[${d.index}].replaceString`,
+    });
   }
-  return { text: out, applied };
+  // phần thân còn lại = chính tin nhắn
+  map.push({ from: bodyStartLine, to: totalLines, label: messageLabel, fieldPath: messageFieldPath });
+  // phần đầu = môi trường giả lập (lỗi ở đây là lỗi tool, không phải card)
+  map.push({ from: 1, to: bodyStartLine - 1, label: 'môi trường giả lập (không phải lỗi card)' });
+  return map;
+}
+
+/** Tra bản đồ: range hẹp khớp trước (regex cụ thể), rồi mới tới range rộng (tin nhắn). */
+export function resolveErrorSource(map: PreviewLineRange[], line: number): PreviewLineRange | null {
+  const hits = map.filter(r => line >= r.from && line <= r.to);
+  if (hits.length === 0) return null;
+  hits.sort((a, b) => (a.to - a.from) - (b.to - b.from));
+  return hits[0];
 }
 
 function escapeHtml(s: string): string {
@@ -117,15 +197,17 @@ const TH_FUNCTION_NAMES = 'RawCharacter,appendAudioList,appendInexistentScriptBu
  * semantics nhóm hiển thị, bơm data test = stat_data parse từ entry [initvar].
  * Lỗi script được postMessage ra modal — chính là công cụ soi "biến bị dịch vỡ".
  */
-function buildScriptShim(initvarText: string | null, charName: string): string {
+function buildScriptShim(initvarText: string | null, charName: string, sideLabel = ''): string {
   // Chặn chuỗi </script> trong initvar phá vỡ thẻ script
   const rawInitvar = JSON.stringify(initvarText || '').replace(/<\//g, '<\\/');
   const charJson = JSON.stringify(charName).replace(/<\//g, '<\\/');
+  const sideJson = JSON.stringify(sideLabel);
   return `<script>
 (function () {
   var noop = function () {};
-  var reportErr = function (e) {
-    try { parent.postMessage({ __stPreviewError: String(e && e.message || e).slice(0, 300) }, '*'); } catch (_e) {}
+  var SIDE = ${sideJson};
+  var reportErr = function (e, line) {
+    try { parent.postMessage({ __stPreviewError: String(e && e.message || e).slice(0, 300), line: line || 0, side: SIDE }, '*'); } catch (_e) {}
   };
 
   // ── localStorage/sessionStorage: sandbox (không same-origin) chặn → polyfill in-memory ──
@@ -239,12 +321,14 @@ function buildScriptShim(initvarText: string | null, charName: string): string {
   // zod: template thật merge window.z từ parent — CDN UMD expose Zod
   if (!window.z && window.Zod) { window.z = window.Zod.z || window.Zod; }
 
-  // ── Báo lỗi script ra modal (bắt biến bị dịch vỡ) ──
-  window.onerror = function (msg, _src, line) {
-    try { parent.postMessage({ __stPreviewError: String(msg) + (line ? ' (dòng ' + line + ')' : '') }, '*'); } catch (e) {}
+  // ── Báo lỗi script ra modal (bắt biến bị dịch vỡ) — kèm line để tra ra field nguồn ──
+  window.onerror = function (msg, src, line, _col, _err) {
+    var isCdn = src && src.indexOf('http') === 0;
+    var text = String(msg) + (isCdn ? ' [' + src.split('/').pop() + ']' : '');
+    reportErr(text, isCdn ? 0 : (line || 0));
   };
   window.addEventListener('unhandledrejection', function (ev) {
-    try { parent.postMessage({ __stPreviewError: 'Promise: ' + String(ev.reason).slice(0, 300) }, '*'); } catch (e) {}
+    reportErr('Promise: ' + String(ev.reason).slice(0, 300), 0);
   });
 })();
 <\/script>`;
@@ -255,6 +339,8 @@ export interface PreviewHtmlOptions {
   runScripts?: boolean;
   /** Nội dung entry [initvar] (YAML/JSON) làm stat_data test */
   initvarText?: string | null;
+  /** Nhãn bên (Gốc/Đã dịch) đính vào lỗi script — cho chế độ so 2 bản */
+  sideLabel?: string;
 }
 
 /**
@@ -306,7 +392,7 @@ export function buildPreviewHtml(message: string, charName: string, opts: Previe
 <script crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/js-yaml@4/dist/js-yaml.min.js"><\/script>
 <script crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/showdown@2/dist/showdown.min.js"><\/script>
 <script crossorigin="anonymous" src="https://cdn.jsdelivr.net/npm/zod@3/lib/index.umd.js"><\/script>
-${buildScriptShim(opts.initvarText ?? null, charName)}`
+${buildScriptShim(opts.initvarText ?? null, charName, opts.sideLabel || '')}`
     : '';
 
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>

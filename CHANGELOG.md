@@ -2,6 +2,12 @@
 
 > Cách cập nhật: mở thư mục cài đặt, chạy `git pull origin main`, rồi **tắt hẳn và chạy lại `start.bat`** (không chỉ F5).
 
+## v1.84.0 — Cho dịch giả: lỗi script chỉ đúng field + So 2 bản cạnh nhau
+> Mục tiêu tool là giúp NGƯỜI DỊCH: thấy lỗi thôi chưa đủ — phải biết lỗi nằm ở entry/regex nào và bấm phát là tới chỗ sửa.
+- **Lỗi script tự tra ra nguồn:** preview 🧪 giờ dựng bản đồ dòng → nguồn (regex nào của card / lời mở đầu / môi trường giả lập). Lỗi hiện kèm *"→ 「MVU Thanh Trạng Thái」 (regex #17)"* + nút **"↪ tới field"** — bấm là đóng modal, nhảy thẳng tới đúng field trong Field Editor để sửa bản dịch. Lỗi thuộc môi trường giả lập được ghi rõ "không phải lỗi card".
+- **⇄ So 2 bản:** Gốc và Đã dịch chạy **cạnh nhau cùng lúc** (2 iframe cách ly riêng) — nhìn ngay khung nào mất data/vỡ giao diện sau dịch. Lỗi script hiện riêng từng bên `[Gốc]`/`[Đã dịch]`: **cả 2 bên cùng lỗi = lỗi có sẵn của card gốc; chỉ bên Đã dịch lỗi = lỗi DO DỊCH** — hết đoán mò.
+- Verify live bằng card Tuhu: lỗi `reading 'object'` được tra đúng về "Lời mở đầu (first_mes)" + nút nhảy field hoạt động; So 2 bản cho thấy cả 2 bên cùng lỗi → kết luận lỗi có sẵn ở card gốc (script cần server ngoài), không phải do dịch.
+
 ## v1.83.0 — 🧪 Chạy script + data test: giả lập môi trường SillyTavern trong preview
 > Nghiên cứu 3 extension user ST hay cài (JS-Slash-Runner/酒馆助手, ST-Prompt-template, st-memory-enhancement). Kết luận: **không thể import nguyên xi** — chúng bám ruột SillyTavern (đọc chat/characters qua window.parent của ST thật). Cách chuẩn khả thi: **dùng chính source của JS-Slash-Runner làm chuẩn tham chiếu** để giả lập đúng.
 - **Toggle "🧪 Chạy script + data test" trong modal Xem như SillyTavern:**

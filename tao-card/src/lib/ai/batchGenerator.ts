@@ -465,15 +465,59 @@ export function tryExtractJsonArray(text: string): AIGeneratedEntry[] | null {
     if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
       const parsed = JSON.parse(t.substring(firstBrace, lastBrace + 1));
       if (parsed && typeof parsed === 'object') {
-        const possibleArrays = Object.values(parsed).filter(Array.isArray);
-        if (possibleArrays.length > 0) {
-          return validateEntries(possibleArrays[0]);
+        // Chỉ return khi validate ĐƯỢC — nếu không (vd bắt nhầm object entry đơn mà `keys`
+        // là mảng), để rơi xuống bước cứu vớt bên dưới thay vì trả null sớm.
+        for (const arr of Object.values(parsed).filter(Array.isArray)) {
+          const v = validateEntries(arr as unknown[]);
+          if (v) return v;
         }
       }
     }
   } catch { /* continue */ }
 
+  // (Fix bug #6) CỨU VỚT KHI JSON BỊ CẮT CỤT: model chạm giới hạn token giữa mảng → mảng
+  // không đóng `]`, mọi cách parse trên đều fail → trước đây trả null → log "không trả về
+  // JSON" → retry hoài (giống treo). Ở đây quét từng object `{...}` cân bằng ngoặc (tôn trọng
+  // chuỗi/escape) và parse riêng, thu lại các entry hoàn chỉnh. Chỉ 1 entry cuối bị cụt là bỏ,
+  // phần trước vẫn dùng được → không còn "trả về không phải JSON".
+  const salvaged = salvageObjects(t);
+  if (salvaged.length > 0) {
+    const v = validateEntries(salvaged);
+    if (v) return v;
+  }
+
   return null;
+}
+
+/**
+ * Quét các object JSON `{...}` cân bằng ngoặc trong 1 chuỗi (bỏ qua ngoặc nằm trong chuỗi
+ * "..." và escape). Object nào parse được thì thu lại — dùng để cứu mảng JSON bị cắt cụt.
+ */
+function salvageObjects(text: string): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  let i = 0;
+  const n = text.length;
+  while (i < n) {
+    if (text[i] !== '{') { i++; continue; }
+    // Tìm `}` khớp với `{` tại i
+    let depth = 0, inStr = false, esc = false, end = -1;
+    for (let j = i; j < n; j++) {
+      const c = text[j];
+      if (esc) { esc = false; continue; }
+      if (c === '\\') { if (inStr) esc = true; continue; }
+      if (c === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (c === '{') depth++;
+      else if (c === '}') { depth--; if (depth === 0) { end = j; break; } }
+    }
+    if (end === -1) break; // object cuối bị cụt — dừng
+    try {
+      const obj = JSON.parse(text.substring(i, end + 1));
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) out.push(obj as Record<string, unknown>);
+    } catch { /* object hỏng — bỏ qua */ }
+    i = end + 1;
+  }
+  return out;
 }
 
 function validateEntries(arr: unknown[]): AIGeneratedEntry[] | null {

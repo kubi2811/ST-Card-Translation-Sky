@@ -52,4 +52,14 @@ describe('CallMonitor token stats', () => {
     expect(t.output).toBe(10);
     expect(t.lanes[0].providerId).toBe('default');
   });
+
+  it('cộng dồn cached tokens theo lane + tổng (bằng chứng prompt caching)', () => {
+    CallMonitor.recordTokens({ providerId: 'default', model: 'pro', input: 1000, output: 50, cached: 800, estimated: false });
+    CallMonitor.recordTokens({ providerId: 'default', model: 'pro', input: 1000, output: 60, cached: 900, estimated: false });
+    CallMonitor.recordTokens({ providerId: 'p2', model: 'flash', input: 500, output: 20, estimated: false }); // không có cached
+    const t = CallMonitor.getTokenTotals();
+    expect(t.cached).toBe(1700);
+    expect(t.lanes.find(l => l.model === 'pro')?.cached).toBe(1700);
+    expect(t.lanes.find(l => l.model === 'flash')?.cached).toBe(0);
+  });
 });

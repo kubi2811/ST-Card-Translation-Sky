@@ -106,6 +106,11 @@ export default function ActiveCallsPanel() {
               style={{ display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 700, color: 'var(--text-secondary)' }}
             >
               🧮 {tokApprox}{kFmt(tok.input)} vào · {tokApprox}{kFmt(tok.output)} ra
+              {tok.cached > 0 && (
+                <span style={{ color: 'var(--accent-success)', fontWeight: 700 }} title={`${tok.cached.toLocaleString()} token input trúng CACHE của provider (prefix prompt ổn định) — phần này rẻ + nhanh hơn hẳn.`}>
+                  ⚡{kFmt(tok.cached)} cache
+                </span>
+              )}
             </span>
           )}
         </div>

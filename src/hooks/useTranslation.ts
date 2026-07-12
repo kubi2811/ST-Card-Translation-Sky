@@ -2446,9 +2446,12 @@ export function useTranslation() {
         const perLane = tok.lanes
           .filter(l => l.calls > 0)
           .sort((a, b) => (b.input + b.output) - (a.input + a.output))
-          .map(l => `${l.model}: ${k(l.input)} vào / ${k(l.output)} ra (${l.calls} call)`)
+          .map(l => `${l.model}: ${k(l.input)} vào / ${k(l.output)} ra (${l.calls} call${l.cached > 0 ? `, ⚡${k(l.cached)} cache` : ''})`)
           .join(' · ');
-        store.addLog('info', `🧮 Token cả lượt dịch: ${approx}${k(tok.input)} vào / ${approx}${k(tok.output)} ra, ${tok.calls} call${tok.estimatedCalls > 0 ? ` (${tok.estimatedCalls} call API không trả usage — phần đó là ước lượng)` : ''}. ${perLane}`);
+        const cachedNote = tok.cached > 0
+          ? ` — trong đó ⚡${k(tok.cached)} token vào TRÚNG CACHE provider (${Math.round((tok.cached / Math.max(1, tok.input)) * 100)}%, rẻ + nhanh hơn)`
+          : '';
+        store.addLog('info', `🧮 Token cả lượt dịch: ${approx}${k(tok.input)} vào / ${approx}${k(tok.output)} ra, ${tok.calls} call${cachedNote}${tok.estimatedCalls > 0 ? ` (${tok.estimatedCalls} call API không trả usage — phần đó là ước lượng)` : ''}. ${perLane}`);
       }
     }
 

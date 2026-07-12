@@ -907,6 +907,9 @@ export async function surgicalTranslate(
       userPriorityPrompt = priorityMatch[1];
       customPrompt = customPrompt.replace(/\[USER_PRIORITY_PROMPT_START\]\n[\s\S]*?\n\[USER_PRIORITY_PROMPT_END\]\n?/, '');
     }
+    // (Prompt caching) Surgical ghép customPrompt vào CUỐI prompt của nó sẵn rồi — chỉ cần lột
+    // marker [DYNAMIC_CONTEXT_*] (giữ nguyên nội dung RAG bên trong) để không lộ marker vào prompt.
+    customPrompt = customPrompt.replace(/\[DYNAMIC_CONTEXT_(START|END)\]\n?/g, '');
   }
 
   const pendingTokens = tokens.filter(t => !t.translated);

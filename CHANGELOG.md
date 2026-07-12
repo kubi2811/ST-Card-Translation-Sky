@@ -2,6 +2,14 @@
 
 > Cách cập nhật: mở thư mục cài đặt, chạy `git pull origin main`, rồi **tắt hẳn và chạy lại `start.bat`** (không chỉ F5).
 
+## v1.79.0 — ⚡ Prompt caching: prefix ổn định + đo cache thật
+> Số liệu v1.76 lộ ra: input gấp ~13 lần output vì system prompt khổng lồ lặp lại mỗi call. Implicit caching của Gemini/OpenAI giảm được phần này — NHƯNG chỉ trúng khi phần đầu prompt giống hệt giữa các call. Khối RAG (tham chiếu field đã dịch, đổi theo TỪNG field) đang nằm GIỮA system prompt → phá prefix ở mọi call.
+- **Dời khối RAG xuống CUỐI system prompt** (mọi đường: dịch thường, batch, chunk song song, surgical, expert/legacy, mod): promptBuilder bọc RAG trong marker `[DYNAMIC_CONTEXT_*]`, điểm ghép prompt tách ra nối lại ở cuối — đúng pattern `USER_PRIORITY` sẵn có. **Nội dung prompt không đổi, chỉ đổi vị trí** một khối.
+- **Đo cache thật** (nối vào bộ đếm token v1.76): Gemini `cachedContentTokenCount` · OpenAI `prompt_tokens_details.cached_tokens` · Claude `cache_read_input_tokens` → panel hiện chip **⚡X cache** xanh, log cuối run ghi *"trong đó ⚡X token vào TRÚNG CACHE (Y%)"* + số cache theo từng lane.
+- **Trung thực:** proxy chung hiện tại không trả số cached qua đường OpenAI-compat nên hiện 0 — con số sẽ hiện khi dùng API Gemini/OpenAI/Claude chính chủ; việc dời RAG là ĐIỀU KIỆN CẦN để cache trúng, không gây hại gì khi không trúng.
+- Verify live full run card AI帝国1.1 sau khi dời: **29/29 field, 0 lỗi**, token y hệt trước (199.4K vào — xác nhận chỉ đổi vị trí), quét toàn bộ bản dịch **0 marker lọt**.
+- +1 test (192 tổng).
+
 ## v1.78.0 — 📚 Bộ thuật ngữ Tu tiên / Võ hiệp có sẵn
 - **1 nút trong mục Từ điển** nạp **92 thuật ngữ chuẩn cộng đồng convert**: tu luyện/linh khí/đan điền, đủ thang cảnh giới (Luyện Khí → Trúc Cơ → Kim Đan → Nguyên Anh → … → Độ Kiếp), công pháp/pháp bảo/đan dược, danh xưng (sư tôn/đạo hữu/tiền bối), tông môn/giang hồ, võ học (nội công/khinh công/kiếm pháp…).
 - Nguyên tắc chọn: chỉ thuật ngữ **một nghĩa rõ ràng** (bỏ mục mơ hồ kiểu 炼器/炼气 trùng âm); cảnh giới viết Hoa, danh từ chung viết thường.

@@ -13,7 +13,7 @@ import { extractCJKTokens, reinsertTranslations, surgicalTranslate } from './sur
 import { CallMonitor, estimateTokens } from './callMonitor';
 
 /** Hứng usage token từ response API — hàm call đổ vào, callProvider đọc ra ghi thống kê. */
-interface TokenUsageSink { input?: number; output?: number }
+interface TokenUsageSink { input?: number; output?: number; cached?: number }
 // chunkText tách sang ./chunking (Đợt tách monolith). Import để dùng nội bộ + RE-EXPORT
 // để các file khác vẫn `import { chunkText } from './apiClient'` như cũ (không phải sửa importer).
 import { chunkText } from './chunking';
@@ -307,6 +307,20 @@ function buildTranslationMessages(
       customPrompt = customPrompt.replace(/\[USER_PRIORITY_PROMPT_START\]\n[\s\S]*?\n\[USER_PRIORITY_PROMPT_END\]\n?/, '');
     }
   }
+
+  // ─── (Prompt caching) Tách khối RAG BIẾN THEO TỪNG FIELD ra khỏi prefix ───
+  // promptBuilder bọc RAG trong [DYNAMIC_CONTEXT_*]. Tách ra đưa XUỐNG CUỐI system prompt để
+  // phần đầu (jailbreak + rules + basePrompt) GIỐNG HỆT giữa các call cùng loại field → prefix
+  // ổn định, Gemini/OpenAI implicit caching ăn được (giảm cost + latency). Nội dung prompt
+  // không đổi — chỉ đổi VỊ TRÍ khối RAG.
+  let dynamicCtx = '';
+  if (customPrompt) {
+    const dynMatch = customPrompt.match(/\[DYNAMIC_CONTEXT_START\]([\s\S]*?)\n\[DYNAMIC_CONTEXT_END\]\n?/);
+    if (dynMatch) {
+      dynamicCtx = dynMatch[1];
+      customPrompt = customPrompt.replace(/\n?\[DYNAMIC_CONTEXT_START\][\s\S]*?\n\[DYNAMIC_CONTEXT_END\]\n?/, '\n');
+    }
+  }
   const isStandaloneMod = customPrompt?.includes('[CRITICAL: STANDALONE MODIFICATION & REWRITE MODE]');
 
   if (isStandaloneMod) {
@@ -319,6 +333,7 @@ function buildTranslationMessages(
     if (customSchema && !systemPrompt.includes('CARD SCHEMA / VARIABLE DEFINITIONS')) {
       systemPrompt += `\n\n[USER PROVIDED ZOD/JSON SCHEMA — STRICT COMPLIANCE REQUIRED]\n${customSchema}`;
     }
+    if (dynamicCtx) systemPrompt += '\n' + dynamicCtx; // RAG tách marker — nối lại ở cuối
 
     let previousContextMsg = '';
     if (previousTranslationContext) {
@@ -363,6 +378,10 @@ CHUNK RULES:
       } else {
         promptSuffix = customPrompt;
       }
+    }
+    // RAG đã tách marker ở trên → nối vào Layer 8 (cuối master prompt)
+    if (dynamicCtx) {
+      ragBlock = (ragBlock ? ragBlock + '\n' : '') + dynamicCtx;
     }
 
     systemPrompt = buildMasterSystemPrompt({
@@ -422,7 +441,8 @@ CHUNK RULES:
 - IMPORTANT: Nếu có CSS hoặc thẻ HTML thay đổi font chữ (font-family) chứa tên font tiếng Trung (như SimSun, KaiTi, v.v.), BẮT BUỘC thay thế bằng font chữ tiếng Việt tương ứng (ví dụ: 'Be Vietnam Pro', 'Inter', 'Arial', sans-serif).`;
     }
 
-    systemPrompt = `${systemPromptPrefix ? systemPromptPrefix + '\n\n' : ''}${basePrompt}${safetyRule}${regexInstruction}${schemaInstructions}${glossaryInstructions}`;
+    // RAG (biến theo field) đặt CUỐI — mọi thứ trước nó ổn định giữa các call cùng loại field.
+    systemPrompt = `${systemPromptPrefix ? systemPromptPrefix + '\n\n' : ''}${basePrompt}${safetyRule}${regexInstruction}${schemaInstructions}${glossaryInstructions}${dynamicCtx ? '\n' + dynamicCtx : ''}`;
   }
 
   const sourceHint = sourceLang && sourceLang !== 'auto' ? ` (from ${sourceLang})` : '';
@@ -735,6 +755,8 @@ async function callOpenAICompatible(
     if (!u || !usageSink) return;
     if (typeof u.prompt_tokens === 'number') usageSink.input = u.prompt_tokens;
     if (typeof u.completion_tokens === 'number') usageSink.output = u.completion_tokens;
+    // Phần input đọc từ cache (prefix ổn định trúng implicit caching) — bằng chứng caching chạy
+    if (typeof u.prompt_tokens_details?.cached_tokens === 'number') usageSink.cached = u.prompt_tokens_details.cached_tokens;
   };
 
   if (!useStream) {
@@ -885,8 +907,10 @@ async function callAnthropic(
     if (!usageSink || !parsed) return;
     const inTok = parsed.message?.usage?.input_tokens ?? parsed.usage?.input_tokens;
     const outTok = parsed.usage?.output_tokens ?? parsed.message?.usage?.output_tokens;
+    const cachedTok = parsed.message?.usage?.cache_read_input_tokens ?? parsed.usage?.cache_read_input_tokens;
     if (typeof inTok === 'number') usageSink.input = inTok;
     if (typeof outTok === 'number') usageSink.output = outTok;
+    if (typeof cachedTok === 'number') usageSink.cached = cachedTok;
   };
 
   if (!useStream) {
@@ -1039,6 +1063,8 @@ async function callGemini(
     if (typeof meta.candidatesTokenCount === 'number') {
       usageSink.output = meta.candidatesTokenCount + (meta.thoughtsTokenCount || 0);
     }
+    // Implicit caching của Gemini: phần prefix trúng cache (đã tính trong promptTokenCount)
+    if (typeof meta.cachedContentTokenCount === 'number') usageSink.cached = meta.cachedContentTokenCount;
   };
 
   if (!useStream) {
@@ -1409,6 +1435,7 @@ export async function callProvider(
       model: lane.model,
       input: usageSink.input ?? estimateTokens(system) + estimateTokens(user),
       output: usageSink.output ?? estimateTokens(result),
+      cached: usageSink.cached ?? 0,
       estimated,
     });
     return result;
@@ -3446,6 +3473,16 @@ export async function translateBatch(
     }
   }
 
+  // (Prompt caching) Tách RAG biến-theo-batch ra, đưa xuống cuối system prompt (như translateText).
+  let dynamicCtx = '';
+  if (customPrompt) {
+    const dynMatch = customPrompt.match(/\[DYNAMIC_CONTEXT_START\]([\s\S]*?)\n\[DYNAMIC_CONTEXT_END\]\n?/);
+    if (dynMatch) {
+      dynamicCtx = dynMatch[1];
+      customPrompt = customPrompt.replace(/\n?\[DYNAMIC_CONTEXT_START\][\s\S]*?\n\[DYNAMIC_CONTEXT_END\]\n?/, '\n');
+    }
+  }
+
   const basePrompt = customPrompt && customPrompt.trim()
     ? customPrompt
     : getDefaultTranslationPrompt(sourceLang, targetLang);
@@ -3475,7 +3512,7 @@ ${sectionList}
 - CRITICAL: Do NOT merge, skip, reorder, or swap any sections. Section N's translation MUST correspond to section N's original text.
 - Each section's translation must ONLY contain translated content for THAT specific section. Do NOT mix content between sections.
 - CRITICAL: You MUST translate ALL Chinese/Japanese/Korean characters in EVERY section. Do NOT leave any CJK text untranslated. This includes section headers, YAML keys, annotations, labels, and text inside XML/HTML tags.
-- SELF-CHECK MANDATE: Before outputting EACH section, scan your translation for ANY remaining Chinese characters (Unicode \u4e00-\u9fff). If you find even ONE Chinese character that should be translated, fix it BEFORE outputting. Common mistake: leaving single CJK characters at word boundaries (e.g. "nhân际" should be "nhân tế", "关系" should be "quan hệ"). ZERO Chinese characters may remain in the output.${schemaInstructions}${glossaryBlock}`;
+- SELF-CHECK MANDATE: Before outputting EACH section, scan your translation for ANY remaining Chinese characters (Unicode \u4e00-\u9fff). If you find even ONE Chinese character that should be translated, fix it BEFORE outputting. Common mistake: leaving single CJK characters at word boundaries (e.g. "nhân际" should be "nhân tế", "关系" should be "quan hệ"). ZERO Chinese characters may remain in the output.${schemaInstructions}${glossaryBlock}${dynamicCtx ? '\n' + dynamicCtx : ''}`;
 
   if (userPriorityPrompt && userPriorityPrompt.trim()) {
     system += `\n\n[YÊU CẦU QUAN TRỌNG NHẤT TỪ NGƯỜI DÙNG — PHẢI TUÂN THỦ TẠI MỌI GIÁ]\n${userPriorityPrompt.trim()}\n`;

@@ -49,6 +49,8 @@ export interface LaneTokenStats {
   calls: number;
   input: number;
   output: number;
+  /** Token input ĐỌC TỪ CACHE của provider (đã tính trong `input`) — rẻ + nhanh hơn hẳn. */
+  cached: number;
   /** Số call phải ƯỚC LƯỢNG token từ ký tự (API không trả usage). */
   estimatedCalls: number;
 }
@@ -57,12 +59,13 @@ export interface TokenTotals {
   calls: number;
   input: number;
   output: number;
+  cached: number;
   estimatedCalls: number;
   lanes: LaneTokenStats[];
 }
 
 const _tokenLanes = new Map<string, LaneTokenStats>();
-let _tokenSnapshot: TokenTotals = { calls: 0, input: 0, output: 0, estimatedCalls: 0, lanes: [] };
+let _tokenSnapshot: TokenTotals = { calls: 0, input: 0, output: 0, cached: 0, estimatedCalls: 0, lanes: [] };
 
 function _rebuildTokenSnapshot() {
   const lanes = Array.from(_tokenLanes.values());
@@ -70,6 +73,7 @@ function _rebuildTokenSnapshot() {
     calls: lanes.reduce((s, l) => s + l.calls, 0),
     input: lanes.reduce((s, l) => s + l.input, 0),
     output: lanes.reduce((s, l) => s + l.output, 0),
+    cached: lanes.reduce((s, l) => s + l.cached, 0),
     estimatedCalls: lanes.reduce((s, l) => s + l.estimatedCalls, 0),
     lanes,
   };
@@ -97,16 +101,17 @@ export const CallMonitor = {
     }
   },
   /** Ghi token cho 1 call thành công (callProvider gọi sau khi có kết quả). */
-  recordTokens(rec: { providerId?: string; model: string; input: number; output: number; estimated: boolean }) {
+  recordTokens(rec: { providerId?: string; model: string; input: number; output: number; cached?: number; estimated: boolean }) {
     const key = `${rec.providerId || 'default'}|${rec.model}`;
     let lane = _tokenLanes.get(key);
     if (!lane) {
-      lane = { providerId: rec.providerId || 'default', model: rec.model, calls: 0, input: 0, output: 0, estimatedCalls: 0 };
+      lane = { providerId: rec.providerId || 'default', model: rec.model, calls: 0, input: 0, output: 0, cached: 0, estimatedCalls: 0 };
       _tokenLanes.set(key, lane);
     }
     lane.calls++;
     lane.input += Math.max(0, rec.input | 0);
     lane.output += Math.max(0, rec.output | 0);
+    lane.cached += Math.max(0, (rec.cached || 0) | 0);
     if (rec.estimated) lane.estimatedCalls++;
     _rebuildTokenSnapshot();
     _emit();

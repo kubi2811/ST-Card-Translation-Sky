@@ -1382,7 +1382,10 @@ ${modInstructionsBlock}`;
       translationMemory: options.translationMemoryHits,
     });
     if (ragCtx) {
-      prompt = (prompt || '') + ragCtx;
+      // (Prompt caching) Bọc RAG trong marker: đây là khối BIẾN THEO TỪNG FIELD duy nhất nằm giữa
+      // system prompt — apiClient sẽ tách ra và đưa XUỐNG CUỐI để phần đầu (jailbreak + rules +
+      // basePrompt) thành prefix ổn định → Gemini/OpenAI implicit caching ăn được, giảm cost/latency.
+      prompt = (prompt || '') + `\n[DYNAMIC_CONTEXT_START]${ragCtx}\n[DYNAMIC_CONTEXT_END]\n`;
       // Schema + Glossary are already in the unified block — don't double-inject via apiClient
       schemaForApi = undefined;
       glossaryForApi = [];

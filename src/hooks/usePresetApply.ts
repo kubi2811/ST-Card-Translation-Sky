@@ -2,6 +2,7 @@ import { useStore } from '../store';
 import { useUi } from '../i18n/useLocale';
 import type { FieldGroupConfig } from '../types/card';
 import type { RecommendedPreset } from '../utils/presetRecommend';
+import { isMvuUpdateField } from '../utils/cardFields';
 
 /**
  * Áp 1 trong 3 preset dịch (⚡ nhẹ / 📖 đầy đủ / 🚀 siêu tốc) — logic DUY NHẤT dùng chung cho
@@ -28,10 +29,12 @@ export function usePresetApply() {
         surgicalMode: true, // bảo vệ regex/code
       });
       const isNameOrComment = (p: string) => /(^|\.)name$/.test(p) || /\.comment$/.test(p);
+      // (Fix bug #13) entry [mvu update] cũng được TICK dịch ở Dịch Nhẹ — đồng bộ với pipeline
+      // (useTranslation lightSkipContent) qua cùng 1 helper isMvuUpdateField.
       if (fields.length > 0) {
         setFields(fields.map(f => {
           if (f.group !== 'core' && f.group !== 'lorebook') return f;
-          if (isNameOrComment(f.path)) {
+          if (isNameOrComment(f.path) || isMvuUpdateField(f)) {
             return f.status === 'ignored' ? { ...f, status: 'pending' as const } : f;
           }
           return f.status === 'done' ? f : { ...f, status: 'ignored' as const };

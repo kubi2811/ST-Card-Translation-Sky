@@ -134,6 +134,17 @@ function classifyLorebookEntry(entry: { name?: string; comment?: string; content
   return 'narrative';
 }
 
+/**
+ * (Bug #13, PhatSiz) Field có thuộc entry "[mvu update]" không — entry quy tắc CẬP NHẬT biến MVU.
+ * Ở chế độ "Dịch Nhẹ" (giữ nguyên content tiếng gốc) các entry này VẪN được dịch, vì người dùng
+ * cần quy tắc cập nhật ra tiếng đích. Nhận diện 2 kiểu như bug mô tả ("chứa hoặc có tên"):
+ *   - comment/tên khớp mvu_update/update_mvu/controller ⇒ classifyLorebookEntry gán entryType 'controller';
+ *   - marker [mvu update]/[mvu_update] nằm ngay trong nội dung entry.
+ */
+export function isMvuUpdateField(f: Pick<TranslationField, 'entryType' | 'original'>): boolean {
+  return f.entryType === 'controller' || /\[mvu[\s_]?update\]/i.test(f.original || '');
+}
+
 /* ─── Extract translatable fields from a card ─── */
 export function extractTranslatableFields(
   card: CharacterCard,

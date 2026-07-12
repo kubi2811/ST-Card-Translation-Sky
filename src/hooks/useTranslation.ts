@@ -5,7 +5,7 @@ import { useStore } from '../store';
 import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookEntries, ChunkError, ApiError, setExtraProviders, resetProviderPool, computePoolConcurrency, callProvider } from '../utils/apiClient';
 import { extractNameCandidates, buildNameGlossaryPrompt, parseNameGlossaryResponse, mergeGlossary } from '../utils/nameGlossary';
 import { GLOSSARY_PRESETS } from '../utils/glossaryPresets';
-import { extractTranslatableFields, applyTranslationsToCard, autoTranslateLorebookTriggerKeys, injectNewLorebookEntries } from '../utils/cardFields';
+import { extractTranslatableFields, applyTranslationsToCard, autoTranslateLorebookTriggerKeys, injectNewLorebookEntries, isMvuUpdateField } from '../utils/cardFields';
 import { syncMvuVariables, postProcessRegexHtml, normalizeSmartQuotesInCode, fixNestedQuoteBracketPaths, fixBrokenLodashPaths, fixDotNotationPaths, extractPotentialMvuKeyStrings, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, enforceInitvarCovariance, extractMappingFromTranslatedInitvar, enforceExactConsistency, enforceVariableCasing, fixZodSyntaxErrors, validateDictionaryConflicts, aiResolveMvuConflicts } from '../utils/mvuSync';
 import { shouldSkipTranslation, detectLanguage, detectResidualCjk } from '../utils/langDetect';
 import { clearRAGCache } from '../utils/ragContext';
@@ -190,8 +190,10 @@ export function useTranslation() {
     // Làm ở đây (khi Start, field luôn đã trích đủ) nên không phụ thuộc timing của nút.
     if (store.translationConfig.lightSkipContent) {
       const isNameOrComment = (p: string) => /(^|\.)name$/.test(p) || /\.comment$/.test(p);
+      // (Fix bug #13, PhatSiz) Ở Dịch Nhẹ, entry [mvu update] vẫn ĐƯỢC DỊCH (không skip): đây là entry
+      // "quy tắc cập nhật biến" MVU mà user muốn ra tiếng đích. Xem isMvuUpdateField.
       for (const f of mergedFields) {
-        if ((f.group === 'core' || f.group === 'lorebook') && !isNameOrComment(f.path) && f.status !== 'done') {
+        if ((f.group === 'core' || f.group === 'lorebook') && !isNameOrComment(f.path) && !isMvuUpdateField(f) && f.status !== 'done') {
           f.status = 'ignored';
         }
       }

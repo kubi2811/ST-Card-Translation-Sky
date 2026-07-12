@@ -23,7 +23,7 @@ interface ScriptErr {
  * - ⇄ So 2 bản: Gốc | Đã dịch cạnh nhau — nhìn ngay khung nào mất data/vỡ giao diện sau dịch.
  */
 export default function StPreviewModal({ onClose }: { onClose: () => void }) {
-  const { card, setJumpToFieldPath } = useStore();
+  const { card, proxy, setJumpToFieldPath, addToast } = useStore();
   const { getExportCard } = useTranslation();
   const ui = useUi() as Record<string, string>;
 
@@ -32,6 +32,8 @@ export default function StPreviewModal({ onClose }: { onClose: () => void }) {
   const [msgIdx, setMsgIdx] = useState(0); // 0 = first_mes, 1.. = alternate_greetings[i-1]
   const [runScripts, setRunScripts] = useState(false);
   const [scriptErrors, setScriptErrors] = useState<ScriptErr[]>([]);
+  const [aiTestData, setAiTestData] = useState<string | null>(null); // 🎲 stat_data do AI tạo
+  const [genLoading, setGenLoading] = useState(false);
 
   const exportCard = useMemo(() => {
     try { return getExportCard(); } catch { return null; }
@@ -55,9 +57,10 @@ export default function StPreviewModal({ onClose }: { onClose: () => void }) {
     const withMacros = substituteMacros(current.text, { user: 'User', char: charName });
     const { text: rendered, applied, appliedDetails } = applyDisplayRegex(withMacros, scripts);
     const sideLabel = which === 'translated' ? ui.spTranslated : ui.spOriginal;
+    // Data test: ưu tiên bản AI tạo (nếu có), không thì lấy [initvar] của card.
     const srcDoc = buildPreviewHtml(rendered, charName, {
       runScripts,
-      initvarText: runScripts ? extractInitvarText(activeCard) : null,
+      initvarText: runScripts ? (aiTestData ?? extractInitvarText(activeCard)) : null,
       sideLabel,
     });
     const lineMap = buildLineMap(srcDoc, appliedDetails, current.label, current.fieldPath);
@@ -66,10 +69,30 @@ export default function StPreviewModal({ onClose }: { onClose: () => void }) {
 
   const translatedSide = useMemo(buildSide.bind(null, 'translated'),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [msgIdx, runScripts, card, exportCard]);
+    [msgIdx, runScripts, card, exportCard, aiTestData]);
   const originalSide = useMemo(buildSide.bind(null, 'original'),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [msgIdx, runScripts, card]);
+    [msgIdx, runScripts, card, aiTestData]);
+
+  const genTestData = async () => {
+    if (!card) return;
+    setGenLoading(true);
+    try {
+      const { generateTestVariables } = await import('../utils/testDataGen');
+      const res = await generateTestVariables(card as any, proxy);
+      if (res) {
+        setAiTestData(res.json);
+        if (!runScripts) setRunScripts(true);
+        addToast('success', ui.spGenOk);
+      } else {
+        addToast('info', ui.spGenNone);
+      }
+    } catch (e: any) {
+      addToast('error', (ui.spGenErr || 'Lỗi tạo data test') + ': ' + (e?.message || e));
+    } finally {
+      setGenLoading(false);
+    }
+  };
 
   // Nhận lỗi script từ iframe → tra bản đồ dòng ra field nguồn
   useEffect(() => {
@@ -140,6 +163,19 @@ export default function StPreviewModal({ onClose }: { onClose: () => void }) {
             <input type="checkbox" checked={runScripts} onChange={(e) => setRunScripts(e.target.checked)} style={{ margin: 0 }} />
             {ui.spRunScripts}
           </label>
+          <button
+            onClick={genTestData}
+            disabled={genLoading}
+            title={ui.spGenHint}
+            style={{
+              padding: '3px 10px', fontSize: '0.7rem', fontWeight: 600, cursor: genLoading ? 'wait' : 'pointer',
+              borderRadius: 'var(--radius-sm)', border: `1px solid ${aiTestData ? 'rgba(56,189,248,0.6)' : 'var(--border-subtle)'}`,
+              color: aiTestData ? 'var(--accent-secondary)' : 'var(--text-muted)',
+              background: aiTestData ? 'rgba(56,189,248,0.08)' : 'transparent', opacity: genLoading ? 0.6 : 1,
+            }}
+          >
+            {genLoading ? ui.spGenLoading : (aiTestData ? `🎲 ${ui.spGenDone}` : ui.spGenBtn)}
+          </button>
           <button style={tabBtn(split)} title={ui.spSplitHint} onClick={() => setSplit(v => !v)}>
             <Columns2 size={11} style={{ verticalAlign: '-2px' }} /> {ui.spSplit}
           </button>

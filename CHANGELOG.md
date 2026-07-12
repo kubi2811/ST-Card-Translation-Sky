@@ -2,6 +2,13 @@
 
 > Cách cập nhật: mở thư mục cài đặt, chạy `git pull origin main`, rồi **tắt hẳn và chạy lại `start.bat`** (không chỉ F5).
 
+## v1.86.0 — Preview: fix UI vỡ + 🎲 AI tạo data test
+- **Fix UI vỡ với card "app toàn màn hình"** (wizard tạo nhân vật, game UI dùng `position:fixed`/`100vh`): trước đây khung "bong bóng chat" (rộng 860px, căn giữa) **bóp** cái app full-screen vào cột hẹp → nhìn như vỡ. Nay card lớn được render **thẳng vào `<body>` iframe giống hệt SillyTavern thật** (bong bóng chỉ dùng cho tin nhắn văn bản thường). Greeting kiểu wizard giờ hiện đúng full-width.
+- **MỚI — 🎲 AI tạo data test:** trả lời câu "card khác / chưa chơi thì lấy biến ở đâu". Bấm nút → gọi AI (dùng chính API đã cấu hình để dịch) điền **giá trị mẫu THỰC TẾ** cho biến trạng thái như một nhân vật đang chơi giữa chừng (tên cụ thể, cảnh giới, chỉ số, vật phẩm, quan hệ). Thanh trạng thái/game UI script-driven giờ hiện **số thật** thay vì toàn "Chưa Biết"/0.
+  - Dùng được cho **card chưa chơi** (initvar toàn mặc định) LẪN **card KHÔNG có `[initvar]`** — tự suy cấu trúc biến từ các tham chiếu `stat_data.X`/`getMvuVariable` trong script.
+  - AN TOÀN: AI chỉ đổi GIÁ TRỊ, **giữ nguyên 100% tên biến** (không đụng logic). Kết quả chỉ dùng cho preview, không ghi vào card. Tự bật chế độ 🧪.
+- Verify live bằng card Đạo Uyên: Greeting 1 (wizard) render full-width đúng; bấm 🎲 → thanh trạng thái Greeting 2 hiện "Năm thứ 3, Tháng 8…" + chỉ số thực tế thay cho "Chưa Biết".
+
 ## v1.85.0 — Fix đúng gốc: popup gợi ý cấu hình tự tắt sau khi import
 > Bản 1.82 tưởng lỗi do double-click xuyên nút (click-through) và thêm khoá 450ms — nhưng popup VẪN tự tắt. Mổ lại mới ra thủ phạm thật.
 - **Nguyên nhân thật:** tính năng *tái dùng bản dịch giữa phiên bản* (v1.75) chạy **async** sau khi import — nếu tìm thấy field trùng nội dung với cache card cũ, nó đánh dấu field `done`. Popup gợi ý lúc đó tự suy từ trạng thái field ("có field done = user đang dở việc → đừng quấy rầy") nên **tự đóng ngay sau khi hiện**.

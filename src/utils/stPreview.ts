@@ -395,18 +395,34 @@ export function buildPreviewHtml(message: string, charName: string, opts: Previe
 ${buildScriptShim(opts.initvarText ?? null, charName, opts.sideLabel || '')}`
     : '';
 
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>
+  // ── Card "app toàn màn hình" (wizard tạo NV, game UI có position:fixed/100vh, HTML lớn) vs
+  //    tin nhắn thường ──
+  // ST thật render nội dung tin nhắn TRỰC TIẾP vào <body> iframe (không có bong bóng chat —
+  // bong bóng nằm NGOÀI iframe). Bong bóng .msg (rộng 860px, căn giữa) của mình BÓP app
+  // full-screen vào cột hẹp → nhìn như vỡ. Nên: app lớn → render thẳng body giống ST; chỉ
+  // văn bản/UI nhỏ mới bọc bong bóng cho đẹp.
+  const isFullApp = looksHtml && (
+    /<html[\s>]/i.test(body) || /<body[\s>]/i.test(body) ||
+    /position\s*:\s*fixed/i.test(body) || /\d+vh\b/i.test(body) || body.length > 6000
+  );
+
+  const head = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>
   html,body{margin:0;padding:0;background:#1e1e2e;color:#d4d4d8;font-family:'Segoe UI',system-ui,sans-serif;font-size:14px;line-height:1.55}
-  .wrap{max-width:860px;margin:0 auto;padding:16px}
-  .msg{background:#26263a;border:1px solid #38384f;border-radius:10px;padding:12px 14px}
-  .name{font-weight:700;color:#a78bfa;margin-bottom:8px;font-size:0.95em}
   img{max-width:100%} table{border-collapse:collapse} td,th{border:1px solid #444;padding:2px 6px}
-  </style>${scriptEnv}</head><body><div class="wrap"><div class="msg"><div class="name">${escapeHtml(charName)}</div><div class="content">${body}</div></div></div>
-<style>
-/* (Fix kẹt scroll) Card game UI hay dùng position:fixed + 100vh + overflow:hidden chiếm cả khung.
-   Đặt CUỐI body để thắng cascade: mở lại scroll; transform biến .msg thành containing block
-   → phần tử position:fixed của card bị "nhốt" trong khung tin nhắn thay vì phủ kín viewport. */
-html,body{overflow:auto !important;height:auto !important;max-height:none !important}
-.msg{transform:translate(0)}
-</style></body></html>`;
+  </style>${scriptEnv}</head>`;
+
+  if (isFullApp) {
+    // Render THẲNG như ST: body = nội dung card. Không bong bóng, không containing-block hack
+    // (để position:fixed của card phủ đúng khung iframe như trong ST thật). Vẫn cho cuộn.
+    return `${head}<body>${body}
+<style>html,body{overflow:auto !important}</style></body></html>`;
+  }
+
+  // Tin nhắn thường / UI nhỏ → bong bóng chat cho dễ nhìn.
+  return `${head}<body><div style="max-width:860px;margin:0 auto;padding:16px">
+  <div style="background:#26263a;border:1px solid #38384f;border-radius:10px;padding:12px 14px">
+    <div style="font-weight:700;color:#a78bfa;margin-bottom:8px;font-size:0.95em">${escapeHtml(charName)}</div>
+    <div>${body}</div>
+  </div></div>
+<style>html,body{overflow:auto !important;height:auto !important;max-height:none !important}</style></body></html>`;
 }

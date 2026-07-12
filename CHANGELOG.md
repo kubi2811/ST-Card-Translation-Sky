@@ -2,6 +2,13 @@
 
 > Cách cập nhật: mở thư mục cài đặt, chạy `git pull origin main`, rồi **tắt hẳn và chạy lại `start.bat`** (không chỉ F5).
 
+## v1.78.0 — 📚 Bộ thuật ngữ Tu tiên / Võ hiệp có sẵn
+- **1 nút trong mục Từ điển** nạp **92 thuật ngữ chuẩn cộng đồng convert**: tu luyện/linh khí/đan điền, đủ thang cảnh giới (Luyện Khí → Trúc Cơ → Kim Đan → Nguyên Anh → … → Độ Kiếp), công pháp/pháp bảo/đan dược, danh xưng (sư tôn/đạo hữu/tiền bối), tông môn/giang hồ, võ học (nội công/khinh công/kiếm pháp…).
+- Nguyên tắc chọn: chỉ thuật ngữ **một nghĩa rõ ràng** (bỏ mục mơ hồ kiểu 炼器/炼气 trùng âm); cảnh giới viết Hoa, danh từ chung viết thường.
+- **Mục bạn tự nhập luôn thắng** (merge qua cùng cơ chế với Pha 0); nút hiện số mục còn thiếu `(92)`, nạp đủ thì thành `✓` và tự khoá.
+- Không tốn token: từ điển to nhưng mỗi prompt chỉ nhận mục **thật sự xuất hiện** trong đoạn đang dịch (cơ chế lọc từ v1.74).
+- +2 test (191 tổng, có test khoá chất lượng bộ: source thuần Hán không trùng, target sạch không còn Hán).
+
 ## v1.77.0 — 🩺 Kiểm tra tổng: nghiệm thu 1 nút trước khi xuất
 > Trước đây muốn nghiệm thu bản dịch phải tự đi 3 nơi: khối Sức khoẻ thẻ, panel Kiểm Tra Lỗi Dịch, panel So sánh card — người mới không biết mà bấm.
 - **1 nút "🩺 Kiểm tra tổng" ngay trong khung Export**, chạy cả 3 bộ kiểm (đều tại máy, **0 call AI**):

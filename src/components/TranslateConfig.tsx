@@ -9,6 +9,8 @@ import { aiExtractGlossaryTerms } from '../utils/mvuSync';
 import type { LorebookStrategy, FieldGroupConfig, FieldGroup, GlossaryEntry } from '../types/card';
 import { Languages, FileJson, BookOpen, Plus, Trash2, Download, Upload, Bot, Loader2, Save, RotateCcw, CheckCircle, Zap } from 'lucide-react';
 import { recommendPreset } from '../utils/presetRecommend';
+import { GLOSSARY_PRESETS } from '../utils/glossaryPresets';
+import { mergeGlossary } from '../utils/nameGlossary';
 import { usePresetApply } from '../hooks/usePresetApply';
 import MvuSyncPanel from './MvuSyncPanel';
 import EjsSyncPanel from './EjsSyncPanel';
@@ -564,6 +566,35 @@ export default function TranslateConfig() {
                 <><Bot size={12} /> {ui.tcExtractTerms}</>
               )}
             </button>
+          </div>
+          {/* Bộ thuật ngữ có sẵn (tu tiên/võ hiệp) — nạp 1 nút, mục user đã có luôn thắng */}
+          <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
+            {GLOSSARY_PRESETS.map((preset) => {
+              const have = new Set(translationConfig.glossary.map(g => g.source.trim()));
+              const remaining = preset.entries.filter(e => !have.has(e.source)).length;
+              return (
+                <button
+                  key={preset.id}
+                  onClick={() => {
+                    const { merged, added } = mergeGlossary(translationConfig.glossary, preset.entries);
+                    setTranslationConfig({ glossary: merged });
+                    addToast('success', fmt(ui.gpLoadedToast, { count: added }));
+                  }}
+                  disabled={remaining === 0}
+                  title={ui.gpXianxiaHint}
+                  style={{
+                    flex: 1, padding: '5px',
+                    border: '1px dashed rgba(56,189,248,0.5)', borderRadius: 'var(--radius-sm)',
+                    background: 'rgba(56,189,248,0.06)', cursor: remaining === 0 ? 'default' : 'pointer',
+                    color: 'var(--accent-secondary)', fontSize: '0.7rem', fontWeight: 600,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px',
+                    opacity: remaining === 0 ? 0.5 : 1,
+                  }}
+                >
+                  📚 {ui[preset.nameKey]}{remaining === 0 ? ` ✓` : ` (${remaining})`}
+                </button>
+              );
+            })}
           </div>
         </div>
 

@@ -15,10 +15,10 @@ const REASON_KEY = { mvu: 'tcRecMvu', script: 'tcRecScript', big: 'tcRecBig', sm
  * Chỉ hiện 1 lần cho mỗi lần nạp card MỚI (card khôi phục từ cache có tiến trình → không hiện).
  */
 export default function PresetRecommendModal() {
-  const { card, cardFileName, fields, translationConfig } = useStore();
+  const { card, cardFileName, presetRecommendCard, presetRecommendSeed, translationConfig } = useStore();
   const ui = useUi() as Record<string, string>;
   const applyPreset = usePresetApply();
-  const [dismissedFor, setDismissedFor] = useState<string>('');
+  const [dismissed, setDismissed] = useState(false);
 
   // (Fix click-through) Popup mount NGAY trong change-handler của file input. Nếu user
   // DOUBLE-CLICK chọn file trong hộp thoại, cú click thứ 2 rơi xuống trang ngay đúng lúc
@@ -28,22 +28,24 @@ export default function PresetRecommendModal() {
 
   const rec = useMemo(() => (card ? recommendPreset(card) : null), [card]);
 
-  // Card khôi phục từ cache (đã có field done) → user đang dở việc, đừng quấy rầy.
-  const hasProgress = fields.some(f => f.status === 'done' || f.status === 'error');
-
-  // Đổi card mới → cho phép popup hiện lại + khoá tương tác lại từ đầu.
+  // Mỗi lần IMPORT mới (seed bump từ FileUpload) → cho phép popup hiện lại + khoá tương tác lại
+  // từ đầu. Popup KHÔNG còn tự suy từ trạng thái field nữa (tái dùng bản dịch phiên bản v1.75
+  // đánh dấu field 'done' làm bản cũ tưởng "đang dở việc" → tự tắt). Giờ chỉ hiện/tắt theo trigger.
   useEffect(() => {
-    setDismissedFor('');
+    if (!presetRecommendSeed) return;
+    setDismissed(false);
     setArmed(false);
     const t = setTimeout(() => setArmed(true), 450);
     return () => clearTimeout(t);
-  }, [cardFileName]);
+  }, [presetRecommendSeed]);
 
-  if (!card || !rec || hasProgress || dismissedFor === cardFileName || translationConfig.enableModMode) return null;
+  // Chỉ hiện cho ĐÚNG card mà FileUpload đã trigger (phòng khi card đổi mà chưa import lại).
+  const show = !!presetRecommendCard && presetRecommendCard === cardFileName && !dismissed;
+  if (!card || !rec || !show || translationConfig.enableModMode) return null;
 
   const presetName = ui[PRESET_LABEL_KEY[rec.preset]];
   const reason = ui[REASON_KEY[rec.reason]];
-  const close = () => setDismissedFor(cardFileName);
+  const close = () => setDismissed(true);
 
   return (
     <div style={{

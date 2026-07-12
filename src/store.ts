@@ -165,6 +165,12 @@ interface AppState {
   /** Preset dich dang chon ('light'|'full'|'turbo'|'') — highlight nut + popup goi y dung chung. */
   activePresetId: string;
   setActivePresetId: (id: string) => void;
+  /** Kích hoạt popup GỢI Ý CẤU HÌNH cho 1 card vừa IMPORT MỚI (không phải khôi phục tiến trình).
+   *  Tách khỏi trạng thái field: tái dùng bản dịch giữa phiên bản (v1.75) đánh dấu field 'done'
+   *  làm popup cũ tưởng "đang dở việc" mà tự tắt. `seed` bump mỗi lần để tái-import cùng tên vẫn hiện. */
+  presetRecommendCard: string;
+  presetRecommendSeed: number;
+  triggerPresetRecommend: (cardFileName: string) => void;
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
 
@@ -928,6 +934,10 @@ export const useStore = create<AppState>((set) => ({
   setActiveTab: (t) => set({ activeTab: t }),
   activePresetId: LS.get('st-preset-active-id', ''),
   setActivePresetId: (id) => { LS.set('st-preset-active-id', id); set({ activePresetId: id }); },
+  presetRecommendCard: '',
+  presetRecommendSeed: 0,
+  triggerPresetRecommend: (cardFileName) =>
+    set((s) => ({ presetRecommendCard: cardFileName, presetRecommendSeed: s.presetRecommendSeed + 1 })),
   sidebarCollapsed: false,
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
 

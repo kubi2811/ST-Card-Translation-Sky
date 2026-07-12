@@ -2,6 +2,12 @@
 
 > Cách cập nhật: mở thư mục cài đặt, chạy `git pull origin main`, rồi **tắt hẳn và chạy lại `start.bat`** (không chỉ F5).
 
+## v1.85.0 — Fix đúng gốc: popup gợi ý cấu hình tự tắt sau khi import
+> Bản 1.82 tưởng lỗi do double-click xuyên nút (click-through) và thêm khoá 450ms — nhưng popup VẪN tự tắt. Mổ lại mới ra thủ phạm thật.
+- **Nguyên nhân thật:** tính năng *tái dùng bản dịch giữa phiên bản* (v1.75) chạy **async** sau khi import — nếu tìm thấy field trùng nội dung với cache card cũ, nó đánh dấu field `done`. Popup gợi ý lúc đó tự suy từ trạng thái field ("có field done = user đang dở việc → đừng quấy rầy") nên **tự đóng ngay sau khi hiện**.
+- **Fix:** popup giờ được **kích hoạt tường minh** ngay khi FileUpload import 1 card MỚI (tách hẳn khỏi trạng thái field). Chỉ KHÔNG hiện khi thật sự khôi phục tiến trình dịch cũ của **chính card đó** (cache trùng tên) — đúng ý "đang dở việc thì đừng quấy". Giữ cả khoá tương tác 450ms của 1.82 để chống double-click.
+- Verify live bằng card Đạo Uyên (có version-reuse chạy sau import): popup hiện lúc 2s và **vẫn còn nguyên lúc 8s** (trước đây đã biến mất); 2 nút Dùng/Giữ hoạt động đúng.
+
 ## v1.84.0 — Cho dịch giả: lỗi script chỉ đúng field + So 2 bản cạnh nhau
 > Mục tiêu tool là giúp NGƯỜI DỊCH: thấy lỗi thôi chưa đủ — phải biết lỗi nằm ở entry/regex nào và bấm phát là tới chỗ sửa.
 - **Lỗi script tự tra ra nguồn:** preview 🧪 giờ dựng bản đồ dòng → nguồn (regex nào của card / lời mở đầu / môi trường giả lập). Lỗi hiện kèm *"→ 「MVU Thanh Trạng Thái」 (regex #17)"* + nút **"↪ tới field"** — bấm là đóng modal, nhảy thẳng tới đúng field trong Field Editor để sửa bản dịch. Lỗi thuộc môi trường giả lập được ghi rõ "không phải lỗi card".

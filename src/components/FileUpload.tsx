@@ -41,13 +41,14 @@ function normalizeCardUrl(raw: string): { url: string; rewritten: boolean } {
 
 export default function FileUpload() {
   const { parseCardFile, updateCardFromOriginal, clearCard, isParsing, parseProgress } = useCardParser();
-  const { card, cardFileName, contentType, originalWorldbook, loadTranslationCache, reuseFromVersionCache, addLog } = useStore();
+  const { card, cardFileName, contentType, originalWorldbook, loadTranslationCache, reuseFromVersionCache, triggerPresetRecommend, addLog } = useStore();
 
   // Sau khi parse xong: khôi phục cache trùng tên; không có thì thử TÁI DÙNG bản dịch từ
   // cache các card cũ (update phiên bản — field nội dung không đổi bê thẳng bản dịch sang).
   const restoreOrReuse = useCallback(async (fileName: string) => {
     const restored = await loadTranslationCache(fileName);
     if (restored) {
+      // Khôi phục tiến trình cũ = user đang dở việc → KHÔNG bật popup gợi ý (không quấy rầy).
       addLog('info', `♻️ Restored cached translation progress for "${fileName}"`);
       return;
     }
@@ -57,7 +58,11 @@ export default function FileUpload() {
         count: String(reuse.reused), source: reuse.source, total: String(reuse.total),
       }));
     }
-  }, [loadTranslationCache, reuseFromVersionCache, addLog]);
+    // Import MỚI (kể cả có tái dùng bản dịch phiên bản) → bật popup gợi ý cấu hình. Kích hoạt
+    // TƯỜNG MINH ở đây thay vì để popup tự suy từ trạng thái field — tránh việc tái dùng đánh
+    // dấu field 'done' làm popup tưởng đang dở việc mà tự tắt.
+    triggerPresetRecommend(fileName);
+  }, [loadTranslationCache, reuseFromVersionCache, triggerPresetRecommend, addLog]);
   const t = useT();
   const ui = useUi();
 

@@ -218,6 +218,7 @@ const ui: UiKeys = {
   epTotalDoneLine: '深度检查于 {time}：内容问题 {deep} 个 · 与原卡对比宏/变量问题 {macro} 个。',
   epSrcDeep: '深检',
   epSrcCard: '对比原卡',
+  epLightExportNote: '⚡ 注意：卡片内部的一部分（内容/脚本/变量）被有意保留原文（轻量翻译模式/你取消勾选的字段）。导出的卡片这些部分仍是中文 — 这不是 bug：游戏中 AI 能正常读取并用目标语言回复。想全部翻译：选择 📖 完整翻译后重新翻译。',
   epHealthOk: '卡片健康度：可以安全导出',
   epHealthBad: '卡片健康度：还有 {count} 个严重问题，建议导出前修复',
   epCntError: '❌ {count} 个字段出错',

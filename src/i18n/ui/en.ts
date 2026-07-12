@@ -220,6 +220,7 @@ const ui = {
   epTotalDoneLine: 'Deep-checked at {time}: {deep} content issue(s) · {macro} macro/variable issue(s) vs original card.',
   epSrcDeep: 'DEEP',
   epSrcCard: 'VS ORIGINAL',
+  epLightExportNote: '⚡ Note: part of the card INTERNALS (content/scripts/variables) is INTENTIONALLY kept in the source language (Light mode / fields you unticked). The exported card will still contain Chinese there — NOT a bug: in-game the AI reads it fine and replies in your language. Want everything translated: pick 📖 Full mode and re-translate.',
   epHealthOk: 'Card health: safe to export',
   epHealthBad: 'Card health: {count} serious issue(s) to fix before export',
   epCntError: '❌ {count} fields with errors',

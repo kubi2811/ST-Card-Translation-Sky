@@ -2,6 +2,12 @@
 
 > Cách cập nhật: mở thư mục cài đặt, chạy `git pull origin main`, rồi **tắt hẳn và chạy lại `start.bat`** (không chỉ F5).
 
+## v1.81.0 — Fix quanh báo cáo "xuất PNG ra tiếng Trung dù dịch rồi" 🖼
+> Đã audit toàn đường xuất PNG bằng cách xuất file thật rồi mổ chunk: **khâu ghi đúng chuẩn** (strip sạch `chara`+`ccv3` cũ, ghi `chara` mới — không có chuyện ST đọc nhầm data Trung cũ) và **bản dịch vào file đầy đủ** (first_mes 0 ký tự Hán, 31/37 tên entry tiếng Việt, khớp 100% Field Editor). Phần tiếng Trung user thấy = các trường **chủ ý không dịch** ở chế độ ⚡ Dịch nhẹ.
+- **Ghi chú vàng trong khung Export**: khi đang Dịch nhẹ (hoặc có nhiều trường bỏ tick), hiện rõ ngay trên nút tải: *"ruột card giữ tiếng gốc CÓ CHỦ Ý — không phải lỗi, vào game AI vẫn trả lời tiếng Việt; muốn dịch hết chọn 📖 Dịch đầy đủ"* — chặn đúng nguồn báo nhầm.
+- **Đọc PNG ưu tiên `ccv3` (V3) rồi mới fallback `chara` (V2) — giống hệt SillyTavern** (cả đường main-thread lẫn worker). Trước đây chỉ đọc `chara`: card nào bị tool khác đóng gói lệch 2 chunk (chỉ update ccv3) là app dịch nhầm bản cũ → kết quả "hơi kì". Quét hết chunk (không dừng sớm), chunk hỏng thì thử chunk còn lại.
+- Verify live: dựng PNG 2 chunk LỆCH nhau (chara = bản cũ, ccv3 = bản đúng) → app đọc đúng bản ccv3; ghi chú vàng hiện đúng khi Dịch nhẹ bật.
+
 ## v1.80.0 — 👁 Xem như SillyTavern (render tĩnh)
 - **Nút "👁 Xem như SillyTavern" trong Card Preview** mở modal mô phỏng đúng đường hiển thị của ST:
   1. Thay macro `{{user}}`/`{{char}}`.

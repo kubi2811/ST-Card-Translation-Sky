@@ -45,7 +45,16 @@ function extractCharaFromBuffer(buffer: ArrayBuffer): { json: string } {
   }
 
   let offset = 8;
-  let foundJson: string | null = null;
+  // Đọc GIỐNG SillyTavern: ưu tiên `ccv3` (V3), fallback `chara` (V2) — một số tool chỉ update
+  // ccv3, chỉ đọc chara sẽ dịch nhầm bản cũ. Quét hết chunk, không break sớm.
+  let charaJson: string | null = null;
+  let ccv3Json: string | null = null;
+  const decodeChunkJson = (dataBytes: Uint8Array, nullIdx: number): string => {
+    const b64 = decoder.decode(dataBytes.slice(nullIdx + 1));
+    const binStr = atob(b64);
+    const bytes = Uint8Array.from({ length: binStr.length }, (_, i) => binStr.charCodeAt(i));
+    return new TextDecoder('utf-8').decode(bytes);
+  };
 
   while (offset < uint8.length) {
     const length = view.getUint32(offset);
@@ -59,21 +68,20 @@ function extractCharaFromBuffer(buffer: ArrayBuffer): { json: string } {
       const nullIdx = dataBytes.indexOf(0);
       if (nullIdx !== -1) {
         const keyword = decoder.decode(dataBytes.slice(0, nullIdx));
-        if (keyword === 'chara') {
-          const textData = dataBytes.slice(nullIdx + 1);
-          const b64 = decoder.decode(textData);
-          // Decode base64 → bytes → UTF-8 string
-          const binStr = atob(b64);
-          const bytes = Uint8Array.from({ length: binStr.length }, (_, i) => binStr.charCodeAt(i));
-          foundJson = new TextDecoder('utf-8').decode(bytes);
-          break;
-        }
+        try {
+          if (keyword === 'ccv3' && !ccv3Json) {
+            ccv3Json = decodeChunkJson(dataBytes, nullIdx);
+          } else if (keyword === 'chara' && !charaJson) {
+            charaJson = decodeChunkJson(dataBytes, nullIdx);
+          }
+        } catch { /* chunk hỏng — thử chunk còn lại */ }
       }
     }
     offset += length;
     offset += 4; // Skip CRC
   }
 
+  const foundJson = ccv3Json ?? charaJson;
   if (!foundJson) {
     throw new Error("No SillyTavern 'chara' data found in PNG.");
   }

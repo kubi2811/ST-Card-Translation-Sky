@@ -40,37 +40,47 @@ export const extractCharaFromPNG = async (file: File): Promise<{json: string, da
             
             let offset = 8;
             const decoder = new TextDecoder('utf-8');
-            let foundJson: string | null = null;
-            
+            // Đọc GIỐNG SillyTavern: ưu tiên chunk `ccv3` (spec V3), fallback `chara` (V2).
+            // Một số tool đóng gói card chỉ CẬP NHẬT ccv3 mà bỏ quên chara — nếu mình chỉ đọc
+            // chara sẽ dịch nhầm bản CŨ. Phải quét HẾT chunk (không break sớm) vì ccv3 có thể
+            // nằm sau chara.
+            let charaJson: string | null = null;
+            let ccv3Json: string | null = null;
+            const decodeChunkJson = (dataBytes: Uint8Array, nullIdx: number): string => {
+                const text = decoder.decode(dataBytes.slice(nullIdx + 1));
+                const binStr = atob(text);
+                const bytes = new Uint8Array(binStr.length);
+                for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+                return new TextDecoder('utf-8').decode(bytes);
+            };
+
             while (offset < uint8.length) {
                 const length = view.getUint32(offset);
                 offset += 4;
                 const typeBytes = uint8.slice(offset, offset + 4);
                 const type = decoder.decode(typeBytes);
                 offset += 4;
-                
+
                 if (type === 'tEXt' || type === 'iTXt') {
                     const dataBytes = uint8.slice(offset, offset + length);
                     // tEXt format: keyword + \0 + text
                     let nullIdx = dataBytes.indexOf(0);
                     if (nullIdx !== -1) {
                         const keyword = decoder.decode(dataBytes.slice(0, nullIdx));
-                        if (keyword === 'chara') {
-                            const textData = dataBytes.slice(nullIdx + 1);
-                            const text = decoder.decode(textData);
-                            // base64 decode to bytes, then utf-8 decode
-                            const binStr = atob(text);
-                            const bytes = new Uint8Array(binStr.length);
-                            for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
-                            foundJson = new TextDecoder('utf-8').decode(bytes);
-                            break;
-                        }
+                        try {
+                            if (keyword === 'ccv3' && !ccv3Json) {
+                                ccv3Json = decodeChunkJson(dataBytes, nullIdx);
+                            } else if (keyword === 'chara' && !charaJson) {
+                                charaJson = decodeChunkJson(dataBytes, nullIdx);
+                            }
+                        } catch { /* chunk hỏng — thử chunk còn lại */ }
                     }
                 }
                 offset += length;
                 offset += 4; // Skip CRC
             }
 
+            const foundJson = ccv3Json ?? charaJson;
             if (!foundJson) {
                 return reject(new Error("No SillyTavern 'chara' data found in PNG."));
             }

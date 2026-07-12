@@ -225,6 +225,7 @@ const ui: UiKeys = {
   epTotalDoneLine: 'Đã kiểm sâu lúc {time}: {deep} vấn đề nội dung · {macro} vấn đề macro/biến so với card gốc.',
   epSrcDeep: 'KIỂM SÂU',
   epSrcCard: 'SO CARD GỐC',
+  epLightExportNote: '⚡ Lưu ý: một phần RUỘT card (content/script/biến) được GIỮ NGUYÊN tiếng gốc CÓ CHỦ Ý (chế độ Dịch nhẹ / trường bạn bỏ tick). Card xuất ra sẽ còn tiếng Trung ở các phần đó — KHÔNG phải lỗi: vào game AI vẫn đọc hiểu và trả lời tiếng Việt. Muốn dịch toàn bộ: chọn 📖 Dịch đầy đủ rồi bấm dịch lại.',
   epHealthOk: 'Card health: safe to export',
   epHealthBad: 'Card health: {count} serious issue(s) to fix before export',
   // Các chuỗi dưới đây vốn HARDCODE tiếng Việt → giữ nguyên tiếng Việt.

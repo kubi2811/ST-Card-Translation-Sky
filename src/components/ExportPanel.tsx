@@ -35,6 +35,7 @@ export default function ExportPanel() {
   const isWorldbook = contentType === 'worldbook';
 
   const doneCount = fields.filter((f) => f.status === 'done').length;
+  const ignoredCount = fields.filter((f) => f.status === 'ignored').length;
   const hasLorebookKeys = fields.some(f => f.group === 'lorebook_keys');
 
   // 🩺 Sức khoẻ thẻ — quét nội dung bản dịch (script vỡ / chữ Hán sót / thuật ngữ chưa áp) chứ không chỉ trạng thái trường.
@@ -547,6 +548,18 @@ export default function ExportPanel() {
                 : ui.epKeyModeDescOriginal
             }
           </div>
+        </div>
+      )}
+
+      {/* ⚡ Dịch nhẹ / nhiều field bỏ qua: nói TRƯỚC cho user biết ruột card giữ tiếng gốc là
+          CHỦ Ý — chặn báo nhầm "xuất ra tiếng Trung dù dịch rồi". */}
+      {(translationConfig.lightSkipContent || ignoredCount >= 5) && (
+        <div style={{
+          padding: '8px 10px', marginBottom: '10px', fontSize: '0.7rem', lineHeight: 1.55,
+          background: 'rgba(251,191,36,0.07)', border: '1px solid rgba(251,191,36,0.35)',
+          borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)',
+        }}>
+          {ui.epLightExportNote}
         </div>
       )}
 

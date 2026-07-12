@@ -252,7 +252,12 @@ async function runAIAnalysis(
   }
 
   const totalBatches = batches.length;
-  const concurrency = Math.max(1, Math.min(computePoolConcurrency(ctx.profile), totalBatches));   // #11: theo tổng RPM pool
+  // (Fix bug #9-1) TÔN TRỌNG "số batch song song" user chỉnh (config.concurrentBatches). Trước đây
+  // bị đổi thành computePoolConcurrency (Σ key×RPM) nên luôn = RPM (vd 5) bất kể user chỉnh. Nay
+  // lấy giá trị user, chỉ chặn TRẦN bằng pool RPM (tránh 429) và tổng số batch.
+  const poolCap = Math.max(1, computePoolConcurrency(ctx.profile));
+  const userConcurrency = Math.max(1, config.concurrentBatches || 2);
+  const concurrency = Math.max(1, Math.min(userConcurrency, poolCap, totalBatches));
   const profile = config.modelOverride
     ? { ...ctx.profile, selectedModel: config.modelOverride }
     : ctx.profile;
@@ -291,6 +296,9 @@ async function runAIAnalysis(
 
       for (let attempt = 0; attempt <= 2; attempt++) {
         if (ctx.stopped) return [];
+        // (Fix bug #9-2) Tạm dừng có tác dụng NGAY trong lúc chạy: giữ ở đây trước mỗi lượt gọi.
+        while (ctx.paused && !ctx.stopped) await sleep(300);
+        if (ctx.stopped) return [];
         try {
           ctx.log(`📡 Batch ${task.batchIndex + 1}/${totalBatches} — gọi AI${attempt > 0 ? ` (thử lại ${attempt})` : ''}...`);
           const raw = await callAI({ profile, params: ctx.generationParams, messages: task.messages, signal: ctx.signal });
@@ -309,6 +317,8 @@ async function runAIAnalysis(
           ctx.log(`✅ Batch ${task.batchIndex + 1} — ${actions.length} actions`);
           return actions;
         } catch (err) {
+          // Người dùng bấm "Dừng hẳn" → abort: thoát NGAY, không log lỗi oan, không thử lại.
+          if (ctx.stopped || (err instanceof DOMException && err.name === 'AbortError')) return [];
           ctx.log(`⚠️ Batch ${task.batchIndex + 1} — lỗi: ${err instanceof Error ? err.message : String(err)}`);
         }
       }

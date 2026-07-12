@@ -58,6 +58,9 @@ const SEVERITY_CONFIG = {
   suggestion: { color: 'text-blue-400', bg: 'bg-blue-500/10 border-blue-500/20', icon: Info, label: ui.lrSevSuggestion },
 } as const;
 
+/** localStorage key cho tiến trình Refiner (fix bug #9-3: chống mất khi thoát/đổi tab). */
+const REFINER_LS_KEY = 'taocard-refiner-state';
+
 // ═══════════════════════════════════════════════════════════════════════════
 // MAIN COMPONENT
 // ═══════════════════════════════════════════════════════════════════════════
@@ -91,6 +94,35 @@ export function LorebookRefinerPanel() {
   const [expandedActionId, setExpandedActionId] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<'severity' | 'type'>('severity');
   const [filterType, setFilterType] = useState<RefinerActionType | 'all'>('all');
+
+  // ─── (Fix bug #9-3) Lưu/khôi phục qua localStorage ──────────────────
+  // Chuyển tab (panel bị unmount) hay refresh trước đây làm MẤT SẠCH cấu hình + bản xem trước
+  // (actions do AI tạo, tốn thời gian/API). Nay lưu lại; preset xem trước gắn "chữ ký card" để
+  // không nạp nhầm cho card khác.
+  const cardSig = card.data.name || 'card';
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    try {
+      const raw = localStorage.getItem(REFINER_LS_KEY);
+      if (!raw) return;
+      const s = JSON.parse(raw) as { config?: Partial<RefinerConfig>; cardSig?: string; actions?: RefinerAction[]; report?: RefinerReport | null };
+      if (s.config) setConfig(c => ({ ...c, ...s.config }));
+      if (s.cardSig === cardSig && Array.isArray(s.actions) && s.actions.length > 0) {
+        setActions(s.actions);
+        if (s.report) setReport(s.report);
+        setProgress({ phase: 'preview', currentBatch: 0, totalBatches: 0, actionsFound: s.actions.length, actionsApplied: 0, message: '' });
+        setLogs(l => [...l, '♻️ Đã khôi phục bản xem trước từ lần trước (chưa áp dụng).']);
+      }
+    } catch { /* ignore */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem(REFINER_LS_KEY, JSON.stringify({ config, cardSig, actions, report }));
+    } catch { /* quota — bỏ qua */ }
+  }, [config, actions, report, cardSig]);
 
   // Auto-scroll log
   useEffect(() => {

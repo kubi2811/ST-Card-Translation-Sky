@@ -186,6 +186,23 @@ export default function TranslateConfig() {
   const [showAdvanced, setShowAdvanced] = useState<boolean>(() => {
     try { return localStorage.getItem('st-tc-show-advanced') === '1'; } catch { return false; }
   });
+  // Preset đang chọn (nhẹ/đầy đủ/siêu tốc) — highlight để user biết mình đang ở chế độ nào.
+  const [activePreset, setActivePreset] = useState<string>(() => {
+    try { return localStorage.getItem('st-preset-active') || ''; } catch { return ''; }
+  });
+  const markPreset = (id: string) => {
+    setActivePreset(id);
+    try { localStorage.setItem('st-preset-active', id); } catch { /* quota */ }
+  };
+  const presetBtnStyle = (id: string): React.CSSProperties => activePreset === id
+    ? {
+        border: '2px solid var(--accent-primary)',
+        background: 'rgba(124,106,240,0.18)',
+        color: 'var(--text-primary)',
+        fontWeight: 700,
+        boxShadow: '0 0 8px rgba(124,106,240,0.35)',
+      }
+    : { border: '1px solid var(--border-default)' };
 
   return (
     <div className="section">
@@ -212,6 +229,7 @@ export default function TranslateConfig() {
               <button
                 type="button"
                 className="btn btn-sm"
+                style={presetBtnStyle('light')}
                 title={ui.tcPresetLightHint}
                 onClick={() => {
                   // Bật keys + regex + messages (opening/first_mes) + core + lorebook để LẤY
@@ -243,6 +261,7 @@ export default function TranslateConfig() {
                       return f.status === 'done' ? f : { ...f, status: 'ignored' as const };
                     }));
                   }
+                  markPreset('light');
                   addToast('success', ui.tcPresetLightDone);
                 }}
               >
@@ -251,6 +270,7 @@ export default function TranslateConfig() {
               <button
                 type="button"
                 className="btn btn-sm"
+                style={presetBtnStyle('full')}
                 onClick={() => {
                   setTranslationConfig({
                     fieldGroups: translationConfig.fieldGroups.map((g: FieldGroupConfig) => ({ ...g, enabled: true })),
@@ -259,6 +279,7 @@ export default function TranslateConfig() {
                   });
                   // Gỡ ignore mà "Dịch nhẹ" đã đặt cho content, để dịch lại đầy đủ.
                   setFields(fields.map(f => f.status === 'ignored' ? { ...f, status: 'pending' as const } : f));
+                  markPreset('full');
                   addToast('success', ui.tcPresetFullDone);
                 }}
               >
@@ -267,6 +288,7 @@ export default function TranslateConfig() {
               <button
                 type="button"
                 className="btn btn-sm"
+                style={presetBtnStyle('turbo')}
                 title={ui.tcPresetTurboHint}
                 onClick={() => {
                   // 🚀 Dịch siêu tốc: dịch ĐẦY ĐỦ nhưng gom call thông minh —
@@ -281,6 +303,7 @@ export default function TranslateConfig() {
                     exportKeyMode: 'merge',
                   });
                   setFields(fields.map(f => f.status === 'ignored' ? { ...f, status: 'pending' as const } : f));
+                  markPreset('turbo');
                   addToast('success', ui.tcPresetTurboDone);
                 }}
               >

@@ -643,7 +643,7 @@ input[type="range"]::-webkit-slider-thumb {
 /* ─── Layout ─── */
 .app-layout {
   display: grid;
-  grid-template-columns: 360px 1fr;
+  grid-template-columns: 400px 1fr; /* (feedback) sidebar rong hon cho de doc */
   /* Trừ header Hub để không dư 54px (gây thanh cuộn thừa). */
   min-height: calc(100vh - var(--hub-header-h));
 }

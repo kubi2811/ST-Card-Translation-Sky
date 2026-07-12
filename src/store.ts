@@ -343,7 +343,7 @@ export const useStore = create<AppState>((set) => ({
     secondaryModel: LS.get('st-translator-advanced-settings', { secondaryModel: '' }).secondaryModel ?? '',
     secondaryModelRpm: LS.get('st-translator-advanced-settings', { secondaryModelRpm: 17 }).secondaryModelRpm ?? 17,
     enableSecondaryModel: LS.get('st-translator-advanced-settings', { enableSecondaryModel: false }).enableSecondaryModel ?? false,
-    secondaryModelThreshold: LS.get('st-translator-advanced-settings', { secondaryModelThreshold: 0 }).secondaryModelThreshold ?? 0,
+    secondaryModelThreshold: LS.get('st-translator-advanced-settings', { secondaryModelThreshold: 10000 }).secondaryModelThreshold ?? 10000,
   },
   setProxy: (partial) => {
     set((s) => {
@@ -409,7 +409,7 @@ export const useStore = create<AppState>((set) => ({
       secondaryModel: '',
       secondaryModelRpm: 17,
       enableSecondaryModel: false,
-      secondaryModelThreshold: 0,
+      secondaryModelThreshold: 10000,
     };
     LS.set('st-translator-provider', defaultProxy.provider);
     LS.set('st-translator-proxy-url', defaultProxy.proxyUrl);
@@ -461,7 +461,7 @@ export const useStore = create<AppState>((set) => ({
         enableSecondaryModel: false,
         secondaryModel: '',
         secondaryModelRpm: 17,
-        secondaryModelThreshold: 0,
+        secondaryModelThreshold: 10000,
       };
       const providers = [...s.providers, np];
       LS.set('st-translator-providers', providers);
@@ -523,7 +523,9 @@ export const useStore = create<AppState>((set) => ({
     enableJailbreak: LS.get('st-translator-jailbreak', true),
     enableGomorrahNsfwRules: LS.get('st-translator-gomorrah-nsfw-rules', true),
     enableObjectiveMode: LS.get('st-translator-objective-mode', true),
-    surgicalMode: LS.get('st-translator-surgical-mode', false),
+    // (Audit) Mac dinh BAT: dich 'phau thuat' chi trich chuoi CJK trong code/regex — an toan hon han
+    // cho nguoi moi (truoc day OFF va la nguon vo regex pho bien). User da tung chinh thi LS giu nguyen.
+    surgicalMode: LS.get('st-translator-surgical-mode', true),
     surgicalPrompt: LS.get('st-translator-surgical-prompt', ''),
     enableModMode: LS.get('st-translator-mod-mode', false),
     modInstructions: LS.get('st-translator-mod-instructions', ''),
@@ -751,7 +753,7 @@ export const useStore = create<AppState>((set) => ({
       enableJailbreak: true,
       enableGomorrahNsfwRules: true,
       enableObjectiveMode: true,
-      surgicalMode: false,
+      surgicalMode: true,
       surgicalPrompt: '',
       enableModMode: false,
       modInstructions: '',

@@ -833,6 +833,7 @@ const ui = {
   tcPresetTurboHint: 'Smart bin-packing: SHORT entries are bundled into one API call each (routed to the fast secondary model), LONG entries go solo (primary model). Far fewer API calls, still fully parallel.',
   tcPresetTurboDone: 'Turbo preset applied: every group on + batch mode + smart packing (short entries bundled → secondary model, long entries solo → primary model).',
   tcAdvancedToggle: 'Advanced settings',
+  pcMainProviderTitle: 'Provider #1 (main)',
 };
 
 export default ui;

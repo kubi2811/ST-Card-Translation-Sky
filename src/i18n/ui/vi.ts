@@ -845,6 +845,7 @@ const ui: UiKeys = {
   tcPresetTurboHint: 'Gom thông minh (bin-packing): entry NGẮN dồn chung 1 call (đi model phụ nhanh), entry DÀI để riêng (đi model chính). Giảm mạnh số call API, vẫn chạy đa luồng.',
   tcPresetTurboDone: 'Đã áp dụng Dịch siêu tốc: bật mọi nhóm + chế độ hàng loạt + gom thông minh (entry ngắn gộp → model phụ, entry dài để riêng → model chính).',
   tcAdvancedToggle: 'Cài đặt nâng cao',
+  pcMainProviderTitle: 'Provider #1 (chính)',
 };
 
 export default ui;

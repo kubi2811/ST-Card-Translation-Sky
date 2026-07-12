@@ -4,6 +4,7 @@ import { useT, useUi } from '../i18n/useLocale';
 import { fmt } from '../i18n';
 import { testConnection, getModelSuggestions, getDefaultProxyUrl, fetchModelsFromProxy } from '../utils/apiClient';
 import ProviderPoolConfig from './ProviderPoolConfig';
+import KeysTextarea from './KeysTextarea';
 import type { AIProvider } from '../types/card';
 import {
   Settings,
@@ -35,8 +36,6 @@ export default function ProxyConfig() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testMessage, setTestMessage] = useState('');
-  const [showSuggestions, setShowSuggestions] = useState(false);
-  const [showSecondarySuggestions, setShowSecondarySuggestions] = useState(false);
   const [scanning, setScanning] = useState(false);
 
   const suggestions = [
@@ -103,214 +102,143 @@ export default function ProxyConfig() {
         {statusBadge()}
       </div>
       <div className="section-body" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        {/* Provider */}
-        <div>
-          <label className="label">{t.aiProvider}</label>
-          <select
-            className="input"
-            value={proxy.provider}
-            onChange={(e) => handleProviderChange(e.target.value as AIProvider)}
-          >
-            {PROVIDERS.map((p) => (
-              <option key={p.value} value={p.value}>{p.label}</option>
-            ))}
-          </select>
-        </div>
+        {/* ═══ PROVIDER #1 (CHÍNH) — card teal ĐỒNG BỘ giao diện với "Provider bổ sung" bên dưới.
+            Về lý thuyết provider chính và provider phụ hoàn toàn ngang hàng (engine gộp chung pool)
+            nên giao diện phải giống nhau, không ưu tiên mục nào (feedback user). ═══ */}
+        <div style={{ border: '1px solid var(--accent-secondary)', borderRadius: 'var(--radius-sm)', padding: 10, display: 'flex', flexDirection: 'column', gap: 8, background: 'rgba(56,189,248,0.04)' }}>
+          {/* Header */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Layers size={14} style={{ color: 'var(--accent-secondary)', flexShrink: 0 }} />
+            <span style={{ fontWeight: 700, fontSize: '0.8rem', color: 'var(--text-primary)' }}>{ui.pcMainProviderTitle}</span>
+          </div>
 
-        {/* Proxy URL */}
-        <div>
-          <label className="label">{t.apiBaseUrl}</label>
-          <input
-            className="input input-mono"
-            value={proxy.proxyUrl}
-            onChange={(e) => setProxy({ proxyUrl: e.target.value })}
-            placeholder="http://localhost:8080/v1"
-          />
-        </div>
-
-        {/* API Key — 1 ô đa key (mỗi dòng hoặc dấu phẩy 1 key), tự xoay vòng như provider. Gộp
-            "API Key" + "API Key Rotation" cũ làm một cho gọn. Map về data model: key đầu = apiKey,
-            còn lại = apiKeys[]; engine (getUniqueKeys) gộp lại + nhân RPM theo tổng số key. */}
-        {(() => {
-          const allKeys = [proxy.apiKey, ...(proxy.apiKeys || [])].filter(Boolean);
-          const keyCount = allKeys.filter(k => k.trim()).length;
-          return (
+          {/* Loại + Base URL (2 cột — như provider phụ) */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
             <div>
-              <label className="label" style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                <span>{t.apiKey}</span>
-                {keyCount > 0 && (
-                  <span style={{ fontSize: '0.65rem', padding: '1px 6px', background: 'rgba(124,106,240,0.1)', borderRadius: 'var(--radius-sm)', color: 'var(--accent-primary)', fontWeight: 600 }}>
-                    {keyCount} key
-                  </span>
-                )}
-                <span style={{ fontSize: '0.62rem', color: 'var(--text-muted)', fontWeight: 400 }}>
-                  {ui.pcKeyHint}
-                </span>
-              </label>
-              <textarea
+              <label style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginBottom: 2, display: 'block', fontWeight: 600 }}>{ui.ppKind}</label>
+              <select
+                className="input"
+                value={proxy.provider}
+                onChange={(e) => handleProviderChange(e.target.value as AIProvider)}
+                style={{ fontSize: '0.78rem', padding: '6px 9px', cursor: 'pointer' }}
+              >
+                {PROVIDERS.map((p) => (
+                  <option key={p.value} value={p.value}>{p.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginBottom: 2, display: 'block', fontWeight: 600 }}>Base URL</label>
+              <input
                 className="input input-mono"
-                rows={2}
-                value={allKeys.join('\n')}
-                onChange={(e) => {
-                  const keys = e.target.value.split(/[\n,]+/).map(k => k.trim()).filter(Boolean);
-                  setProxy({ apiKey: keys[0] || '', apiKeys: keys.slice(1) });
-                }}
-                placeholder={ui.pcKeyPh}
-                style={{ fontSize: '0.75rem', resize: 'vertical' }}
+                value={proxy.proxyUrl}
+                onChange={(e) => setProxy({ proxyUrl: e.target.value })}
+                placeholder="http://localhost:8080/v1"
+                style={{ fontSize: '0.78rem', padding: '6px 9px' }}
               />
             </div>
-          );
-        })()}
+          </div>
 
-        {/* Model */}
-        <div style={{ position: 'relative' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-            <label className="label" style={{ marginBottom: 0 }}>{t.model}</label>
+          {/* API Key — nhiều key, mỗi dòng 1 key (KeysTextarea fix bug Enter không xuống dòng) */}
+          {(() => {
+            const allKeys = [proxy.apiKey, ...(proxy.apiKeys || [])].filter(Boolean);
+            const keyCount = allKeys.filter(k => k.trim()).length;
+            return (
+              <div>
+                <label style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginBottom: 2, display: 'block', fontWeight: 600 }}>
+                  {t.apiKey}{' '}
+                  {keyCount > 0 && <span style={{ color: 'var(--accent-secondary)' }}>{keyCount} key</span>}{' '}
+                  <span style={{ fontWeight: 400 }}>{ui.pcKeyHint}</span>
+                </label>
+                <KeysTextarea
+                  className="input input-mono"
+                  keys={allKeys}
+                  onKeys={(keys) => setProxy({ apiKey: keys[0] || '', apiKeys: keys.slice(1) })}
+                  rows={2}
+                  placeholder={ui.pcKeyPh}
+                  style={{ fontSize: '0.72rem', resize: 'vertical', width: '100%' }}
+                />
+              </div>
+            );
+          })()}
+
+          {/* Nút Load model (như provider phụ) */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <button
-              type="button"
-              className="btn btn-ghost btn-xs"
               onClick={handleScanModels}
               disabled={scanning || !proxy.proxyUrl}
-              style={{
-                fontSize: '0.7rem',
-                padding: '2px 6px',
-                color: 'var(--accent-primary)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-                height: 'auto',
-                minHeight: 'auto',
-              }}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 10px', fontSize: '0.72rem', fontWeight: 600, cursor: scanning ? 'default' : 'pointer', background: 'var(--bg-elevated)', color: 'var(--accent-secondary)', border: '1px solid var(--accent-secondary)', borderRadius: 'var(--radius-sm)' }}
             >
-              {scanning ? (
-                <Loader2 size={11} className="animate-spin" />
-              ) : (
-                <RefreshCw size={11} />
-              )}
-              {scanning ? t.scanningModels : t.scanModels}
+              {scanning ? <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} /> : <RefreshCw size={12} />} Load model
             </button>
+            {scannedModels.length > 0 && (
+              <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>{scannedModels.length} model</span>
+            )}
           </div>
-          <input
-            className="input input-mono"
-            value={proxy.model}
-            onChange={(e) => setProxy({ model: e.target.value })}
-            onFocus={() => setShowSuggestions(true)}
-            onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
-            placeholder="gpt-4o"
-          />
-          {showSuggestions && suggestions.length > 0 && (
-            <div
-              style={{
-                position: 'absolute',
-                top: '100%',
-                left: 0,
-                right: 0,
-                zIndex: 50,
-                background: 'var(--bg-elevated)',
-                border: '1px solid var(--border-default)',
-                borderRadius: 'var(--radius-sm)',
-                marginTop: '4px',
-                maxHeight: '180px',
-                overflowY: 'auto',
-                boxShadow: 'var(--shadow-md)',
-              }}
-            >
-              {suggestions.map((s) => (
-                <div
-                  key={s}
-                  style={{
-                    padding: '6px 12px',
-                    fontSize: '0.8rem',
-                    fontFamily: 'var(--font-mono)',
-                    cursor: 'pointer',
-                    transition: 'background 0.1s',
-                  }}
-                  onMouseDown={() => {
-                    setProxy({ model: s });
-                    setShowSuggestions(false);
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-                >
-                  {s}
-                </div>
-              ))}
+          <datalist id="models-main">
+            {suggestions.map((m) => <option key={m} value={m} />)}
+          </datalist>
+
+          {/* Model chính + RPM chính (2 cột — như provider phụ) */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px', gap: 8 }}>
+            <div>
+              <label style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginBottom: 2, display: 'block', fontWeight: 600 }}>{ui.ppPrimaryModel}</label>
+              <input
+                className="input input-mono"
+                value={proxy.model}
+                onChange={(e) => setProxy({ model: e.target.value })}
+                list="models-main"
+                placeholder="gpt-4o"
+                style={{ fontSize: '0.78rem', padding: '6px 9px' }}
+              />
             </div>
-          )}
-        </div>
-
-        {/* ─── RPM model chính + Model phụ (gọn như provider) ─── */}
-        <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {/* RPM model chính */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Layers size={13} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
-            <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', flex: 1 }}>
-              {ui.pcPrimaryRpm} <span style={{ fontSize: '0.62rem', color: 'var(--text-muted)', fontWeight: 400 }}>{ui.pcPrimaryRpmHint}</span>
-            </span>
-            <input
-              className="input" type="number" min={1} max={1000}
-              value={proxy.primaryModelRpm ?? 5}
-              onChange={(e) => setProxy({ primaryModelRpm: Math.max(1, parseInt(e.target.value) || 5) })}
-              style={{ width: '72px', padding: '3px 6px', fontSize: '0.8rem', textAlign: 'center' }}
-              title={ui.pcPrimaryRpmTitle}
-            />
+            <div>
+              <label style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginBottom: 2, display: 'block', fontWeight: 600 }} title={ui.pcPrimaryRpmTitle}>{ui.ppPrimaryRpm}</label>
+              <input
+                className="input" type="number" min={1} max={1000}
+                value={proxy.primaryModelRpm ?? 5}
+                onChange={(e) => setProxy({ primaryModelRpm: Math.max(1, parseInt(e.target.value) || 5) })}
+                style={{ padding: '6px 6px', fontSize: '0.8rem', textAlign: 'center' }}
+              />
+            </div>
           </div>
 
-          {/* Toggle model phụ (checkbox gọn như provider) */}
-          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '0.76rem', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+          {/* Model phụ (như provider phụ) */}
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.72rem', color: 'var(--text-secondary)', cursor: 'pointer' }}>
             <input type="checkbox" checked={!!proxy.enableSecondaryModel} onChange={(e) => setProxy({ enableSecondaryModel: e.target.checked })} />
             <span style={{ fontWeight: 600 }}>{ui.pcSecondary}</span>
             <span style={{ fontSize: '0.62rem', color: 'var(--text-muted)' }}>{ui.pcSecondaryHint}</span>
           </label>
-
-          {/* Model phụ + RPM phụ + Ngưỡng — 1 hàng grid như provider */}
           {proxy.enableSecondaryModel && (
-            <div className="fade-in" style={{ display: 'grid', gridTemplateColumns: '1fr 74px 90px', gap: '8px', alignItems: 'end' }}>
-              <div style={{ position: 'relative' }}>
-                <label style={{ fontSize: '0.62rem', color: 'var(--text-muted)', display: 'block', marginBottom: 2 }}>{ui.pcSecondaryModel}</label>
+            <div className="fade-in" style={{ display: 'grid', gridTemplateColumns: '1fr 80px 90px', gap: 8 }}>
+              <div>
+                <label style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginBottom: 2, display: 'block', fontWeight: 600 }}>{ui.ppSecondaryModel}</label>
                 <input
                   className="input input-mono"
                   value={proxy.secondaryModel ?? ''}
                   onChange={(e) => setProxy({ secondaryModel: e.target.value })}
-                  onFocus={() => setShowSecondarySuggestions(true)}
-                  onBlur={() => setTimeout(() => setShowSecondarySuggestions(false), 200)}
+                  list="models-main"
                   placeholder="flash…"
-                  style={{ fontSize: '0.76rem' }}
+                  style={{ fontSize: '0.76rem', padding: '6px 9px' }}
                 />
-                {showSecondarySuggestions && suggestions.length > 0 && (
-                  <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: 'var(--bg-elevated)', border: '1px solid var(--border-default)', borderRadius: 'var(--radius-sm)', marginTop: '4px', maxHeight: '140px', overflowY: 'auto', boxShadow: 'var(--shadow-md)' }}>
-                    {suggestions.map((s) => (
-                      <div
-                        key={s}
-                        style={{ padding: '5px 10px', fontSize: '0.75rem', fontFamily: 'var(--font-mono)', cursor: 'pointer' }}
-                        onMouseDown={() => { setProxy({ secondaryModel: s }); setShowSecondarySuggestions(false); }}
-                        onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
-                        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-                      >
-                        {s}
-                      </div>
-                    ))}
-                  </div>
-                )}
               </div>
               <div>
-                <label style={{ fontSize: '0.62rem', color: 'var(--text-muted)', display: 'block', marginBottom: 2 }}>{ui.pcSecondaryRpm}</label>
+                <label style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginBottom: 2, display: 'block', fontWeight: 600 }} title={ui.pcSecondaryRpmTitle}>{ui.ppSecondaryRpm}</label>
                 <input
                   className="input" type="number" min={1} max={1000}
                   value={proxy.secondaryModelRpm ?? 17}
                   onChange={(e) => setProxy({ secondaryModelRpm: Math.max(1, parseInt(e.target.value) || 17) })}
-                  style={{ padding: '3px 6px', fontSize: '0.8rem', textAlign: 'center' }}
-                  title={ui.pcSecondaryRpmTitle}
+                  style={{ padding: '6px 6px', fontSize: '0.8rem', textAlign: 'center' }}
                 />
               </div>
               <div>
-                <label style={{ fontSize: '0.62rem', color: 'var(--text-muted)', display: 'block', marginBottom: 2 }} title={ui.pcThresholdTitle}>{ui.pcThreshold}</label>
+                <label style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginBottom: 2, display: 'block', fontWeight: 600 }} title={ui.pcThresholdTitle}>{ui.ppThreshold}</label>
                 <input
                   className="input" type="number" min={0} max={100000}
                   value={proxy.secondaryModelThreshold ?? 0}
                   onChange={(e) => setProxy({ secondaryModelThreshold: Math.max(0, parseInt(e.target.value) || 0) })}
-                  style={{ padding: '3px 6px', fontSize: '0.8rem', textAlign: 'center' }}
-                  placeholder="0"
+                  style={{ padding: '6px 6px', fontSize: '0.8rem', textAlign: 'center' }}
+                  placeholder="10000"
                 />
               </div>
             </div>

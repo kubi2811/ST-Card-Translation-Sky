@@ -828,6 +828,7 @@ const ui: UiKeys = {
   tcPresetTurboHint: '智能装箱（bin-packing）：短条目合并为一次 API 调用（走快速副模型），长条目单独处理（走主模型）。大幅减少调用次数，仍然多线程并行。',
   tcPresetTurboDone: '已应用「极速翻译」：所有分组开启 + 批量模式 + 智能装箱（短条目合并→副模型，长条目单独→主模型）。',
   tcAdvancedToggle: '高级设置',
+  pcMainProviderTitle: '主 Provider #1',
 };
 
 export default ui;

@@ -2,6 +2,15 @@
 
 > Cách cập nhật: mở thư mục cài đặt, chạy `git pull origin main`, rồi **tắt hẳn và chạy lại `start.bat`** (không chỉ F5).
 
+## v1.70.0 — Audit đợt 4: thân thiện người mới 🤝
+- **Fix ô API Key không Enter được:** trước đây bấm Enter để nhập key thứ 2 là dấu xuống dòng bị "nuốt" ngay (ô bị chuẩn hoá sau mỗi phím gõ). Giờ gõ tự nhiên, mỗi dòng 1 key — áp dụng cho cả ô key của Provider bổ sung.
+- **Khối API chính = card "Provider #1 (chính)"** viền xanh **đồng bộ giao diện** với Provider bổ sung bên dưới (Loại + Base URL 2 cột → API Key → Load model → Model chính + RPM → Model phụ + RPM + Ngưỡng). Hai mục ngang hàng về logic thì nhìn cũng phải ngang hàng.
+- **3 nút preset sáng viền nút đang chọn** (⚡ Dịch nhẹ / 📖 Dịch đầy đủ / 🚀 Dịch siêu tốc) — nhìn phát biết đang ở chế độ nào, nhớ qua reload.
+- **Bố cục:** sidebar rộng hơn (360→400px); khung nội dung chính **kéo sát cạnh phải** màn hình (bỏ trần 1200px, hết dư khoảng trống).
+- **Mặc định tốt hơn cho người mới** (ai đã tự chỉnh thì giữ nguyên):
+  - **Dịch phẫu thuật BẬT sẵn** — chỉ trích chuỗi CJK trong code/regex để dịch, giữ 100% cấu trúc; trước đây tắt mặc định là nguồn vỡ regex phổ biến nhất.
+  - **Ngưỡng ký tự = 10.000** — khi có model phụ, entry ngắn tự đi model phụ cho nhanh (0 = tắt như cũ).
+
 ## v1.69.0 — Audit đợt 3: khử code trùng lặp 🧬
 > Dọn nợ kỹ thuật — **không đổi hành vi dịch**, để về sau sửa 1 chỗ là mọi nơi hưởng, không còn cảnh "fix nơi này quên nơi kia".
 - **Gom hàm đếm/lọc CJK về 1 file** (`utils/cjk.ts`): trước đây `stripUrlsForCjkCheck` (bỏ URL trước khi đếm chữ Hán sót) bị **đúp 3 nơi** và regex đếm CJK đúp 2 nơi. Tiện thể bắt được **typo ở 1 bản đúp** khiến không bỏ được đường dẫn tương đối `./x` — đúng minh chứng vì sao code đúp nguy hiểm.

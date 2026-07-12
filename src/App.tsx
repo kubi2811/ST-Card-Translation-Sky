@@ -286,7 +286,7 @@ export default function App() {
             </div>
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '1200px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: 'none' /* (feedback) khung keo het canh phai, khong du khoang trong */ }}>
             <CardPreview />
             <TranslationProgress />
             <Suspense fallback={<LazyFallback />}>

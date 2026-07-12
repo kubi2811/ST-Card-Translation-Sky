@@ -3,6 +3,7 @@ import { fetchModelsFromProxy } from '../utils/apiClient';
 import type { AIProvider, ProviderConfig, ProxySettings } from '../types/card';
 import { Plus, Trash2, Server, ChevronDown, ChevronRight, RefreshCw, Loader2 } from 'lucide-react';
 import { useState } from 'react';
+import KeysTextarea from './KeysTextarea';
 import { useUi } from '../i18n/useLocale';
 import { fmt } from '../i18n';
 
@@ -117,9 +118,9 @@ function ProviderCard({ p, index, onChange, onRemove }: { p: ProviderConfig; ind
       {/* API keys */}
       <div>
         <label style={lbl}>{ui.ppApiKey} {keyCount > 0 && <span style={{ color: 'var(--accent-secondary)' }}>{fmt(ui.ppKeyCount, { count: keyCount })}</span>} {ui.ppKeyHint}</label>
-        <textarea
-          value={[p.apiKey, ...(p.apiKeys || [])].filter(Boolean).join('\n')}
-          onChange={(e) => { const keys = e.target.value.split('\n').map((k) => k.trim()).filter(Boolean); onChange({ apiKey: keys[0] || '', apiKeys: keys.slice(1) }); }}
+        <KeysTextarea
+          keys={[p.apiKey, ...(p.apiKeys || [])].filter(Boolean)}
+          onKeys={(keys) => onChange({ apiKey: keys[0] || '', apiKeys: keys.slice(1) })}
           rows={2} placeholder="sk-...&#10;sk-..." style={{ ...inputStyle, resize: 'vertical', fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }} />
       </div>
 

@@ -316,6 +316,12 @@ export type ExportKeyMode = 'merge' | 'translated_only' | 'original_only';
 export interface GlossaryEntry {
   source: string;
   target: string;
+  /**
+   * (Fix bug #10) true = mục do CÔNG CỤ tự sinh cho card hiện tại (Pha 0 bảng tên riêng, tự nạp
+   * bộ thuật ngữ theo card…) — sẽ bị DỌN khi gỡ card / xoá cache để card mới không dính tên card
+   * cũ. Mục user tự gõ / import / bấm nạp preset KHÔNG có cờ này ⇒ giữ nguyên qua các card.
+   */
+  auto?: boolean;
 }
 
 export type ModPreset = 'none' | 'ntr_to_ntl';

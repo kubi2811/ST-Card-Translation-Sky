@@ -126,7 +126,9 @@ export default function TranslateConfig() {
   };
 
   const exportGlossary = () => {
-    const json = JSON.stringify(translationConfig.glossary.filter(g => g.source.trim() || g.target.trim()), null, 2);
+    const json = JSON.stringify(
+      translationConfig.glossary.filter(g => g.source.trim() || g.target.trim()).map(({ source, target }) => ({ source, target })),
+      null, 2);
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -168,7 +170,8 @@ export default function TranslateConfig() {
       
       for (const [source, target] of Object.entries(extracted)) {
         if (source.trim() && !existingSources.has(source.trim().toLowerCase())) {
-          newEntries.push({ source: source.trim(), target: target.trim() });
+          // (Fix bug #10) trích từ card hiện tại → đánh dấu auto để dọn khi gỡ card/xoá cache.
+          newEntries.push({ source: source.trim(), target: target.trim(), auto: true });
           added++;
         }
       }

@@ -209,34 +209,37 @@ export async function packageCard(
   }
 
   // ─── Step 3: Inject Tavern Helper Scripts ─────────────────────────────
-  if (options.injectScripts && schema) {
-    const existingScripts = exportCard.data.extensions.tavern_helper?.scripts ?? [];
+  // (Fix bug #11) build*Script nay tra ve TavernHelperScript DAY DU field (type/id/info/button/data).
+  // Thay-hoac-them CA HAI script (MVU + Schema): neu card da co script cu (co the do ban export loi
+  // truoc do, thieu id/type) thi GHI DE bang ban dung + GIU nguyen id cu → khong tao trung, khong
+  // vo TavernHelper khi load vao SillyTavern.
+  if (options.injectScripts && schema && schema.fields?.length) {
+    const newScripts = [...(exportCard.data.extensions.tavern_helper?.scripts ?? [])];
+
+    const mvuIdx = newScripts.findIndex(s => s.name === 'MVU');
     const mvuImport = buildMVUImportScript();
-    const schemaScript = buildSchemaScript(schema, exportCard.data.name);
-
-    // Dedup by name
-    const scriptNames = new Set(existingScripts.map(s => s.name));
-    const newScripts = [...existingScripts];
-
-    if (!scriptNames.has(mvuImport.name)) {
-      newScripts.push(mvuImport as unknown as typeof newScripts[number]);
+    if (mvuIdx >= 0) {
+      newScripts[mvuIdx] = { ...mvuImport, id: newScripts[mvuIdx].id };
+      injections.push('Script: MVU Import script updated');
+    } else {
+      newScripts.push(mvuImport);
       injections.push('Script: MVU Import script injected');
     }
 
-    // Replace or add schema script
+    const schemaScript = buildSchemaScript(schema, exportCard.data.name);
     const schemaIdx = newScripts.findIndex(s => s.name.startsWith('Cấu trúc biến'));
     if (schemaIdx >= 0) {
-      newScripts[schemaIdx] = schemaScript as unknown as typeof newScripts[number];
+      newScripts[schemaIdx] = { ...schemaScript, id: newScripts[schemaIdx].id };
       injections.push('Script: Schema script updated');
     } else {
-      newScripts.push(schemaScript as unknown as typeof newScripts[number]);
+      newScripts.push(schemaScript);
       injections.push('Script: Schema script injected');
     }
 
-    if (!exportCard.data.extensions.tavern_helper) {
-      exportCard.data.extensions.tavern_helper = { scripts: [], variables: {} };
-    }
-    exportCard.data.extensions.tavern_helper.scripts = newScripts;
+    exportCard.data.extensions.tavern_helper = {
+      scripts: newScripts,
+      variables: exportCard.data.extensions.tavern_helper?.variables ?? {},
+    };
   }
 
   // ─── Step 4: Sync Mirror Fields ───────────────────────────────────────

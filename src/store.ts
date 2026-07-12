@@ -315,6 +315,8 @@ export const useStore = create<AppState>((set) => ({
         mvuDictionary: {},
         ejsEntryNameDict: {},
         ejsKeywordDict: {},
+        // (Fix bug #10) dọn mục glossary TỰ SINH cho card cũ (Pha 0/tự nạp/tự trích); giữ mục user tự gõ.
+        glossary: s.translationConfig.glossary.filter(g => !g.auto),
       },
       mvuKeyMetadata: {},
       mvuDictionaryHistory: [],
@@ -322,6 +324,7 @@ export const useStore = create<AppState>((set) => ({
     LS.set('st-translator-mvu-dict', {});
     LS.set('st-translator-ejs-entry-dict', {});
     LS.set('st-translator-ejs-keyword-dict', {});
+    LS.set('st-translator-glossary', useStore.getState().translationConfig.glossary);
     // IDB is not used — opening it causes Windows Defender to scan old LevelDB files (freeze).
   },
   loadStateFromIDB: async () => {
@@ -1095,6 +1098,8 @@ export const useStore = create<AppState>((set) => ({
           mvuDictionary: {},
           ejsEntryNameDict: {},
           ejsKeywordDict: {},
+          // (Fix bug #10) dọn mục glossary TỰ SINH cho card này; giữ mục user tự gõ.
+          glossary: state.translationConfig.glossary.filter(g => !g.auto),
         },
       }));
 
@@ -1102,6 +1107,7 @@ export const useStore = create<AppState>((set) => ({
       LS.set('st-translator-mvu-dict', {});
       LS.set('st-translator-ejs-entry-dict', {});
       LS.set('st-translator-ejs-keyword-dict', {});
+      LS.set('st-translator-glossary', useStore.getState().translationConfig.glossary);
 
       // Clear memory RAG cache
       clearRAGCache();
@@ -1142,6 +1148,8 @@ export const useStore = create<AppState>((set) => ({
         mvuDictionary: {},
         ejsEntryNameDict: {},
         ejsKeywordDict: {},
+        // (Fix bug #10) dọn mục glossary TỰ SINH; giữ mục user tự gõ.
+        glossary: state.translationConfig.glossary.filter(g => !g.auto),
       },
     }));
 
@@ -1149,6 +1157,7 @@ export const useStore = create<AppState>((set) => ({
     LS.set('st-translator-mvu-dict', {});
     LS.set('st-translator-ejs-entry-dict', {});
     LS.set('st-translator-ejs-keyword-dict', {});
+    LS.set('st-translator-glossary', useStore.getState().translationConfig.glossary);
 
     // Clear memory RAG cache
     clearRAGCache();

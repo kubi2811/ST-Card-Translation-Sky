@@ -1563,7 +1563,8 @@ export function useTranslation() {
             if (alreadyLoaded) continue;
             const hits = pack.entries.filter(e => corpus.includes(e.source)).length;
             if (hits >= 8) {
-              const { merged, added } = mergeGlossary(cfgPk.glossary, pack.entries);
+              // (Fix bug #10) đánh dấu auto: bộ nạp theo card → dọn khi gỡ card/xoá cache.
+              const { merged, added } = mergeGlossary(cfgPk.glossary, pack.entries.map(e => ({ ...e, auto: true })));
               store.setTranslationConfig({ glossary: merged });
               store.addLog('info', `📚 Card có ${hits} thuật ngữ tu tiên/võ hiệp → đã tự nạp bộ thuật ngữ chuẩn (+${added} mục vào Từ điển; mục bạn tự nhập luôn được giữ).`);
               break;
@@ -1581,7 +1582,8 @@ export function useTranslation() {
             { label: '📖 Bảng tên riêng (Pha 0)', charCount: user.length });
           const nameEntries = parseNameGlossaryResponse(rawNames, candidates);
           if (nameEntries.length > 0) {
-            const { merged, added } = mergeGlossary(useStore.getState().translationConfig.glossary, nameEntries);
+            // (Fix bug #10) đánh dấu auto: tên riêng của card hiện tại → dọn khi gỡ card/xoá cache.
+            const { merged, added } = mergeGlossary(useStore.getState().translationConfig.glossary, nameEntries.map(e => ({ ...e, auto: true })));
             store.setTranslationConfig({ glossary: merged });
             const sample = nameEntries.slice(0, 3).map(e => `${e.source}→${e.target}`).join(', ');
             store.addLog('success', `📖 Pha 0 xong: +${added} mục vào bảng tên (${sample}${nameEntries.length > 3 ? ', …' : ''}) — mọi luồng dịch dùng chung, tên nhất quán.`);
@@ -1608,11 +1610,29 @@ export function useTranslation() {
     const batchSize = 1;
     const lorebookGroups: FieldGroup[] = ['lorebook', 'lorebook_keys'];
 
+    // ═══ (Fix bug #12) Card THƯỜNG (không MVU/không EJS) → KHÔNG chạy đồng bộ biến / "tự chế key" ═══
+    // Trước đây Chiến lược B (Sync MVU) mặc định BẬT, nên kể cả card thường vẫn dò biến + gọi AI
+    // dịch tên biến ("chế key"). Tệ hơn: từ điển MVU/EJS của card CŨ còn dính trong config (tái dùng
+    // phiên bản hoặc LS) khiến card thường bị ép key cũ. Nay chỉ card THẬT SỰ là MVU/EJS (bộ dò
+    // getMvuCardSummary/detectEjsCard) mới xử lý; card thường thì dọn sạch từ điển dây dính.
+    // Nới ngưỡng: coi là MVU nếu có BẤT KỲ tín hiệu (isMvu score≥3, HOẶC 1 [initvar]/Zod/biến bất kỳ)
+    // → không bỏ sót card MVU nhẹ; chỉ card hoàn toàn KHÔNG tín hiệu (card thường) mới bị skip.
+    const mvuSummary = store.card ? getMvuCardSummary(store.card) : null;
+    const cardIsMvu = !!mvuSummary && (mvuSummary.isMvu || mvuSummary.initvarCount > 0 || mvuSummary.hasZodSchema || mvuSummary.variableCount > 0);
+    const cardIsEjs = store.card ? (() => { try { return detectEjsCard(store.card!).isEjs; } catch { return false; } })() : false;
+    if (!cardIsMvu && Object.keys(useStore.getState().translationConfig.mvuDictionary).length > 0) {
+      store.setTranslationConfig({ mvuDictionary: {} });
+      store.addLog('info', 'ℹ️ Card thường (không phát hiện biến MVU) → bỏ qua Chiến lược B, không tự chế key. Đã dọn từ điển MVU dây từ card trước.');
+    }
+    if (!cardIsEjs && (Object.keys(useStore.getState().translationConfig.ejsEntryNameDict).length > 0 || Object.keys(useStore.getState().translationConfig.ejsKeywordDict).length > 0)) {
+      store.setTranslationConfig({ ejsEntryNameDict: {}, ejsKeywordDict: {} });
+    }
+
     // ═══ Strategy B: Build MVU Dictionary BEFORE starting loop ═══
     // In continueMode, skip if dictionary already populated (avoid re-calling AI)
     const existingMvuDictForCheck = useStore.getState().translationConfig.mvuDictionary;
     const skipMvuBuild = continueMode && Object.keys(existingMvuDictForCheck).length > 0;
-    if (store.translationConfig.enableMvuSync && store.card && !skipMvuBuild) {
+    if (store.translationConfig.enableMvuSync && cardIsMvu && store.card && !skipMvuBuild) {
       try {
         store.addLog('info', '🔧 Chiến lược B (đồng bộ biến MVU): đang dò biến MVU/Zod…');
         const extractedKeys = extractPotentialMvuKeyStrings(store.card);

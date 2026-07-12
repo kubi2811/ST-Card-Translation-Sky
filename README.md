@@ -79,67 +79,72 @@ Rồi chạy lại `start.bat`. Cách này **luôn được**, và **không làm
 
 ---
 
-## 📖 Dịch một thẻ — 5 bước
+## 📖 Dịch một thẻ
 
 ### 1️⃣ Nhập API Key
-Cột trái, mục **API Configuration**:
-- Chọn nhà cung cấp: **Gemini / OpenAI / Claude / DeepSeek / Qwen**, hoặc proxy riêng của bạn.
-- Dán **API Key**. Dán được **nhiều key** (mỗi key một dòng) → chạy nhanh hơn nhiều.
-- Chọn **Model** → bấm **Test Connection** → thấy báo xanh là ngon.
+Cột trái, mục **Cấu hình API** — khung **Provider #1 (chính)**:
+- Chọn **Loại** (OpenAI Compatible / Anthropic / Google Gemini / Custom) và dán **Base URL**.
+- Dán **API Key** — mỗi dòng (hoặc dấu phẩy) một key; càng nhiều key càng nhanh, key tự xoay vòng khi bị 429.
+- Bấm **Load model** → chọn **Model chính**; bật **Model phụ** để entry ngắn đi model nhanh. Thêm **Provider bổ sung** để chạy song song nhiều nhà cung cấp.
 
-> 💡 Càng nhiều key + nhiều nhà cung cấp → càng nhiều luồng chạy song song → dịch càng nhanh. App **tự canh đúng giới hạn RPM**, không lo bị khoá.
+> 💡 Số luồng chạy song song = Σ(số key × RPM) của **mọi** provider. App **tự canh đúng RPM**, không lo bị khoá.
 
-### 2️⃣ Nạp thẻ
-Mục **Character Card**: **kéo–thả** file `.json` hoặc `.png` vào ô, hoặc **dán link** thẻ rồi bấm **Tải**.
+### 2️⃣ Nạp thẻ → app tự gợi ý cấu hình
+Kéo–thả `.json`/`.png` vào **Card Preview**, hoặc dán link rồi bấm Tải. Nạp xong, app **tự phân tích thẻ** và hiện **popup gợi ý**:
+- Thẻ có **khung biến MVU** / script giao diện nặng → khuyên **⚡ Dịch nhẹ**; thẻ **lớn** → **🚀 Siêu tốc**; thẻ **gọn** → **📖 Đầy đủ**.
+- Bấm **"✅ Dùng cấu hình gợi ý"** (áp 1 chạm) hoặc **"Giữ cấu hình hiện tại"**.
 
-### 3️⃣ Chọn phần muốn dịch
-Tích các nhóm: Cốt lõi, Lời mở đầu, Lorebook, Từ khoá, Regex, Script… (để mặc định bật hết là ổn).
+> Thẻ bạn đang dịch dở (mở lại) sẽ **tự khôi phục tiến trình** thay vì hỏi lại.
+
+### 3️⃣ Chọn chế độ dịch (3 preset — sao ★ là chế độ khuyên cho thẻ này)
+
+| Nút | Dịch gì | Khi nào |
+|---|---|---|
+| **⚡ Dịch nhẹ** | Chỉ phần người chơi **thấy** (từ khoá, lời mở đầu, tên card / tên mục Lorebook, regex hiển thị). Ruột thẻ + biến MVU giữ tiếng gốc | Thẻ có khung MVU / game UI nặng — nhanh gấp nhiều lần; AI vẫn đọc hiểu & trả lời tiếng Việt |
+| **📖 Dịch đầy đủ** | Dịch trọn mọi phần | Thẻ thường, muốn Việt hoá 100% |
+| **🚀 Dịch siêu tốc** | Đầy đủ + gom nhiều entry ngắn vào 1 lần gọi | Thẻ lớn / nhiều entry, muốn nhanh nhất |
 
 ### 4️⃣ Bấm **Dịch**
-- Xem tiến trình chạy trực tiếp. **Tạm dừng** hoặc **Dừng** bất cứ lúc nào.
-- Tiến trình **tự lưu** — lỡ đóng tab, mở lại vẫn còn.
+Trước khi dịch, app tự lo (không cần bạn làm gì):
+- **📖 Bảng tên riêng (Pha 0):** quét tên nhân vật / thuật ngữ lặp lại, dịch **1 lượt** → mọi luồng dùng chung (hết cảnh 1 nhân vật mỗi chỗ một tên). Thẻ nhiều thuật ngữ tu tiên/võ hiệp còn được **tự nạp bộ thuật ngữ chuẩn**.
+- **♻ Tái dùng bản dịch cũ:** nếu bạn từng dịch bản trước của thẻ, phần **nội dung không đổi** được bê thẳng bản dịch cũ sang (gắn nhãn ♻), chỉ dịch phần mới.
 
-### 5️⃣ Kiểm tra & Xuất
-- Bấm **Kiểm Tra Lỗi Dịch** → app tự rà: chỗ chưa dịch, HTML/JSON hỏng, macro bị mất, biến MVU lệch… Có nút **Sửa nhanh** (tức thì, không tốn API) và **AI Sửa** (cho lỗi khó).
-- Bấm **Xuất** → tải về `.json` hoặc `.png` (nhúng lại đúng ảnh thẻ gốc) → bỏ thẳng vào SillyTavern là dùng được.
+Trong lúc chạy: xem **panel luồng** (model nào đang dịch entry nào, RPM, **🧮 token thật vào/ra** từng model + tổng). **Tạm dừng / Dừng** bất cứ lúc nào; tiến trình **tự lưu**, đóng tab mở lại vẫn còn.
+
+### 5️⃣ Nghiệm thu & Xuất
+- **🩺 Kiểm Tra Tổng** (trong khung Export): 1 nút chạy **3 bộ kiểm** (sức khoẻ thẻ + kiểm sâu macro/ngoặc/HTML/JSON + đối chiếu card gốc) → phán quyết **ĐẠT / KHÔNG ĐẠT**; bấm dòng lỗi là **nhảy thẳng tới field** để sửa.
+- **👁 Xem như SillyTavern** (nút trong Card Preview): xem lời mở đầu / greeting sau dịch **y như trong ST** — xem mục ✨ bên dưới.
+- **Xuất** `.json` / `.png` (nhúng lại đúng ảnh thẻ gốc) → bỏ vào SillyTavern là chạy.
+
+> ### ✅ Quy trình gợi ý cho dịch giả
+> **Dịch xong → 🩺 Kiểm Tra Tổng (bắt lỗi tĩnh) → 👁 Xem như SillyTavern + 🧪 + ⇄ So 2 bản (bắt lỗi runtime) → sửa field lỗi → Xuất.**
 
 ---
 
 ## ✨ Những thứ đáng giá cho dịch giả
 
 ### 🔪 Dịch "phẫu thuật" — không làm vỡ thẻ
-App **chỉ dịch phần chữ**, giữ nguyên tuyệt đối HTML/CSS/JS, regex, đường link, biến, và macro `{{char}}` `{{user}}`. Đây chính là thứ hay làm hỏng thẻ nhất khi dịch tay hoặc dùng AI thường.
+App **chỉ dịch phần chữ**, giữ nguyên tuyệt đối HTML/CSS/JS, regex, đường link, biến, và macro `{{char}}` `{{user}}` — thứ hay hỏng nhất khi dịch tay hoặc dùng AI thường. Có **guard tự sửa** khi phát hiện code bị chèn ký tự lạ.
 
-### ⚡ Đa luồng — nhanh hơn nhiều lần
-Nhiều key × nhiều nhà cung cấp = nhiều luồng chạy cùng lúc. Luồng nào xong là **nhận mục mới chạy tiếp ngay**, không phải ngồi chờ mục chậm. Vẫn **đúng giới hạn RPM**, không bị lỗi 429.
+### 👁 Xem như SillyTavern — thấy giao diện y như đang chơi ⭐
+Nút **👁 Xem như SillyTavern** trong **Card Preview**. Render lời mở đầu / từng greeting sau khi áp macro + regex hiển thị của thẻ, trong iframe **cách ly an toàn** (mặc định script không chạy):
+- **🧪 Chạy script + data test:** giả lập môi trường TavernHelper / MVU đúng như extension thật (JS-Slash-Runner) → **thanh trạng thái / game UI script-driven tự đổ số**, thấy giao diện đúng như trong ST mà không cần import. **Lỗi script hiện ngay + tra ra đúng regex/field của thẻ + nút ↪ nhảy tới field** để sửa bản dịch.
+- **🎲 AI tạo data test:** thẻ chưa chơi (biến toàn "Chưa Biết") hoặc **không có `[initvar]`** → gọi AI điền **giá trị mẫu thực tế** cho biến (AI chỉ đổi giá trị, giữ nguyên tên biến) → thanh trạng thái hiện số thật.
+- **⇄ So 2 bản:** Gốc | Đã dịch chạy **cạnh nhau** — cả 2 cùng lỗi = lỗi **có sẵn của thẻ**; chỉ bản Đã dịch lỗi = lỗi **do dịch**.
 
-### 🔀 So Sánh Card + Gộp thông minh ⭐ *(rất đáng dùng)*
+### ⚡ Đa luồng + 🧮 đếm token thật
+Nhiều key × nhiều provider = nhiều luồng cùng lúc; luồng nào xong nhận mục mới ngay, vẫn **đúng RPM** (không lỗi 429). Panel + log cuối run hiện **token thật vào/ra** đọc từ chính API — biết chính xác đốt bao nhiêu (rất quý khi dùng key chung).
 
-**Tình huống:** bạn dịch xong một thẻ, rồi **tác giả update bản gốc**. Trước đây phải dịch lại cả thẻ từ đầu.
-
-Bây giờ bấm **"🔀 So Sánh Card"** (nút ngay trên mục Character Card) → nạp 3 file:
-
-| Ô | Là gì |
-|---|---|
-| **Card Raw** | Bản gốc **cũ** |
-| **Card Đã Dịch** | Bản **đã dịch** trước đây |
-| **Card Final** | Bản gốc **mới** (tác giả vừa update) |
-
-Bấm **"Gộp thông minh"** → app tự so từng mục:
-- Mục **không đổi** → **lấy lại bản dịch cũ** (regex/code giữ nguyên → **không đẻ lỗi**).
-- Mục **mới hoặc bị sửa** → chừa lại để dịch.
-
-Xem trước ngay trên màn hình (♻ xanh = tái dùng, ✏️ vàng = cần dịch) kèm bộ đếm **"Tái dùng 100 · Cần dịch 10"**. Rồi bấm **"Đưa sang Dịch Card"** → chỉ dịch đúng 10 mục mới. **Tiết kiệm cực nhiều thời gian.**
-
-> Ngoài ra, màn So Sánh còn cho bạn xem 3 phiên bản cạnh nhau theo từng mục, **sửa & lưu trực tiếp**, và lọc **"chỉ hiện chỗ khác nhau"**.
-
-### 📖 Dịch nhẹ vs Dịch đầy đủ
-Trong **Cấu hình dịch** có 2 nút preset: **"📖 Dịch đầy đủ"** (dịch trọn) và **"⚡ Dịch nhẹ"** — chỉ dịch **từ khoá + regex + lời mở đầu + tên card / tên mục Lorebook + tên biến MVU**, giữ phần nội dung lớn ở tiếng gốc (AI vẫn đọc hiểu và trả lời đúng ngôn ngữ đích). Với thẻ MVU nặng, Dịch nhẹ **nhanh gấp nhiều lần**.
+### ♻ Dịch bản update của thẻ — chỉ dịch phần thay đổi ⭐
+Tác giả update bản gốc? Không phải dịch lại từ đầu. **Hai cách:**
+- **Tự động:** nạp thẻ phiên bản mới, app tự quét cache các thẻ cũ, phần **nội dung không đổi** bê thẳng bản dịch cũ (nhãn ♻), chỉ còn phần mới cần dịch.
+- **Thủ công — 🔀 So Sánh Card** (nút trên Card Preview): nạp 3 file **Card Raw** (gốc cũ), **Card Đã Dịch** (bản dịch cũ), **Card Final** (gốc mới) → **Gộp thông minh** → xem trước (♻ xanh = tái dùng, ✏️ vàng = cần dịch) → **Đưa sang Dịch Card** chỉ dịch phần mới. Còn xem được 3 phiên bản cạnh nhau, sửa trực tiếp, lọc "chỉ hiện chỗ khác nhau".
 
 ### 🧠 Nhớ & nhất quán
-- **Từ điển riêng (Glossary)** — ép AI dịch tên riêng, thuật ngữ đúng ý bạn.
-- **Bộ nhớ dịch** — câu giống nhau thì dịch giống nhau.
-- **Đồng bộ biến MVU / EJS** — tên biến trong code và trong lorebook luôn khớp nhau.
+- **📖 Bảng tên riêng tự động** + **📚 bộ thuật ngữ Tu tiên/Võ hiệp** có sẵn (92 mục, tự nạp khi thẻ khớp) — tên & thuật ngữ nhất quán toàn thẻ.
+- **Từ điển riêng (Glossary)** — ép AI dịch tên riêng, thuật ngữ đúng ý bạn (mục bạn nhập luôn thắng).
+- **Bộ nhớ dịch** — câu giống nhau dịch giống nhau.
+- **Đồng bộ biến MVU / EJS** — tên biến trong code và trong lorebook luôn khớp.
 
 ---
 

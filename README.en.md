@@ -79,65 +79,70 @@ Then run `start.bat` again. This **always works**, and it **will not delete** th
 
 ---
 
-## 📖 Translating a card — 5 steps
+## 📖 Translating a card
 
 ### 1️⃣ Enter your API key
-Left column, **API Configuration**:
-- Pick a provider: **Gemini / OpenAI / Claude / DeepSeek / Qwen**, or your own proxy.
-- Paste your **API Key**. You can paste **multiple keys** (one per line) → much faster.
-- Choose a **Model** → click **Test Connection** → a green message means you're good.
+Left column, **API Configuration** — the **Provider #1 (main)** box:
+- Pick a **Type** (OpenAI Compatible / Anthropic / Google Gemini / Custom) and paste the **Base URL**.
+- Paste your **API Key** — one per line (or comma-separated); more keys = faster, and keys auto-rotate on 429.
+- Click **Load model** → pick the **main Model**; enable a **secondary Model** so short entries go to a faster model. Add **extra Providers** to run several vendors in parallel.
 
-> 💡 More keys + more providers = more parallel lanes = faster translation. The app **respects your RPM limits automatically**, so you won't get rate-limited.
+> 💡 Parallel lanes = Σ(keys × RPM) across **all** providers. The app **respects your RPM limits automatically** — no rate-limiting.
 
-### 2️⃣ Load the card
-Under **Character Card**: **drag & drop** a `.json` or `.png` file, or **paste a link** and click **Tải** (Load).
+### 2️⃣ Load the card → the app suggests a config
+Drag & drop a `.json`/`.png` into **Card Preview**, or paste a link and load. On load, the app **analyzes the card** and shows a **suggestion popup**:
+- Card has an **MVU variable framework** / heavy UI script → suggests **⚡ Light**; **big** card → **🚀 Turbo**; **small** card → **📖 Full**.
+- Click **"✅ Use suggested config"** (one-tap apply) or **"Keep current settings"**.
 
-### 3️⃣ Choose what to translate
-Tick the groups: Core, Greetings, Lorebook, Keys, Regex, Scripts… (leaving them all on is fine).
+> A card you were mid-translating (reopened) **restores its progress** instead of asking again.
 
-### 4️⃣ Click **Dịch** (Translate)
-- Watch progress live. **Pause** or **Stop** at any time.
-- Progress **auto-saves** — close the tab by accident and it's still there.
+### 3️⃣ Choose a translate mode (3 presets — the ★ is the one recommended for this card)
 
-### 5️⃣ Check & export
-- Click **Kiểm Tra Lỗi Dịch** (Check Translation Errors) → the app scans for untranslated text, broken HTML/JSON, missing macros, mismatched MVU variables, and more. There's a **Sửa nhanh** (Quick Fix — instant, no API cost) button and an **AI Sửa** (AI Fix) button for the hard ones.
-- Click **Xuất** (Export) → download a `.json` or a `.png` (re-embedded into the original card image) → drop it straight into SillyTavern.
+| Button | Translates | When |
+|---|---|---|
+| **⚡ Light** | Only what the player **sees** (keywords, greeting, card / Lorebook entry names, display regex). Card internals + MVU vars stay in source | Cards with heavy MVU / game UI — much faster; the AI still reads & replies in your language |
+| **📖 Full** | Everything | Normal cards, full localization |
+| **🚀 Turbo** | Full + bundles many short entries into one call | Big / many-entry cards, maximum speed |
+
+### 4️⃣ Click **Translate**
+Before translating, the app handles automatically:
+- **📖 Auto name glossary (Phase 0):** scans recurring character / term names, translates them in **one call** → shared by all lanes (no more one character with different names). Cards rich in xianxia/wuxia terms also **auto-load a standard term pack**.
+- **♻ Reuse old translations:** if you translated an earlier version of the card, **unchanged content** is carried straight over (♻ badge); only new parts get translated.
+
+While running: watch the **lane panel** (which model translates which entry, RPM, **🧮 real in/out tokens** per model + total). **Pause / Stop** anytime; progress **auto-saves** and survives closing the tab.
+
+### 5️⃣ Acceptance & export
+- **🩺 Full Check** (in the Export box): one button runs **3 checkers** (card health + deep macro/bracket/HTML/JSON check + diff against the original card) → a **PASS / FAIL** verdict; click any issue to **jump straight to its field**.
+- **👁 View as SillyTavern** (button in Card Preview): preview the greeting after translation **exactly like in ST** — see ✨ below.
+- **Export** `.json` / `.png` (re-embedded into the original card image) → drop it straight into SillyTavern.
+
+> ### ✅ Suggested workflow for translators
+> **Translate → 🩺 Full Check (catch static issues) → 👁 View as SillyTavern + 🧪 + ⇄ Compare (catch runtime issues) → fix the failing field → Export.**
 
 ---
 
 ## ✨ What makes this good for translators
 
 ### 🔪 "Surgical" translation — your card doesn't break
-The app **only translates the prose**, leaving HTML/CSS/JS, regex, URLs, variables and macros like `{{char}}` `{{user}}` completely untouched. That's exactly what usually breaks cards when translating by hand or with a plain AI.
+The app **only translates the prose**, leaving HTML/CSS/JS, regex, URLs, variables and macros like `{{char}}` `{{user}}` completely untouched — exactly what usually breaks cards when translating by hand or with a plain AI. A **repair guard** auto-fixes code if stray characters get injected.
 
-### ⚡ Many lanes at once — several times faster
-Multiple keys × multiple providers = many requests in parallel. The moment a lane finishes, it **immediately picks up the next entry** instead of waiting on a slow one. Still within your **RPM limits** — no 429 errors.
+### 👁 View as SillyTavern — see the UI exactly like playing ⭐
+The **👁 View as SillyTavern** button in **Card Preview**. Renders the greeting after applying the card's macros + display regex, inside a **safe isolated iframe** (scripts off by default):
+- **🧪 Run scripts + test data:** emulates the real TavernHelper / MVU environment (like the actual JS-Slash-Runner extension) → **script-driven status bars / game UIs fill in**, so you see the UI exactly like in ST without importing. **Script errors show instantly + trace back to the exact regex/field + a ↪ jump-to-field button** to fix the translation.
+- **🎲 AI test data:** for unplayed cards (all-default vars) or cards with **no `[initvar]`** → call AI to fill **realistic sample values** (AI only changes values, keeps variable names) → status bars show real numbers.
+- **⇄ Compare:** Original | Translated run **side by side** — both erroring = a **pre-existing card bug**; only Translated erroring = a bug **caused by translation**.
 
-### 🔀 Compare Cards + Smart Merge ⭐ *(the big one)*
+### ⚡ Many lanes + 🧮 real token counting
+Multiple keys × multiple providers = many requests in parallel; a finished lane grabs the next entry immediately, still within your **RPM limits** (no 429). The panel + end-of-run log show **real in/out tokens** read from the API — you know exactly how much you burned (great with shared keys).
 
-**The situation:** you finished translating a card, then **the author updated the original**. Previously you'd have to re-translate the whole thing.
-
-Now click **"🔀 So Sánh Card"** (Compare Cards — the button right above *Character Card*) and load 3 files:
-
-| Slot | What it is |
-|---|---|
-| **Card Raw** | The **old** original |
-| **Card Đã Dịch** | Your **previous translation** |
-| **Card Final** | The **new** original (the author's update) |
-
-Click **"Gộp thông minh"** (Smart Merge) and the app compares every entry:
-- Entry **unchanged** → **reuse your old translation** (regex/code stays byte-identical → **nothing breaks**).
-- Entry **new or edited** → left untranslated, ready to translate.
-
-You get a live preview (♻ green = reused, ✏️ amber = needs translating) plus a counter: **"Reused 100 · To translate 10"**. Then click **"Đưa sang Dịch Card"** (Send to Translate Card) → only those 10 new entries get translated. **A huge time saver.**
-
-> The Compare screen also lets you view all 3 versions side by side per entry, **edit and save in place**, and filter to **"only show differences"**.
-
-### 📖 Light vs Full translate
-The **translate config** has two presets: **"📖 Full translate"** and **"⚡ Light translate"** — the latter only translates **keywords + regex + the opening message + card / Lorebook entry names + MVU variable names**, leaving the bulk content in the source language (the AI still reads it and replies in your target language). On heavy MVU cards, Light translate is **several times faster**.
+### ♻ Translating a card update — only the changes ⭐
+Author updated the original? No full re-translate. **Two ways:**
+- **Automatic:** load the new version; the app scans your old caches, carries over **unchanged content** (♻ badge), leaving only the new parts.
+- **Manual — 🔀 Compare Cards** (button above Card Preview): load 3 files **Card Raw** (old original), **Card Translated** (your old translation), **Card Final** (new original) → **Smart Merge** → preview (♻ green = reused, ✏️ amber = to translate) → **Send to Translate Card** to translate only the new parts. You can also view all 3 versions side by side, edit in place, and filter to "only show differences".
 
 ### 🧠 Consistency
-- **Glossary** — force names and terms to be translated exactly how you want.
+- **📖 Auto name glossary** + a **📚 built-in xianxia/wuxia term pack** (92 terms, auto-loaded when the card matches) — names & terms consistent across the whole card.
+- **Glossary** — force names/terms to be translated exactly how you want (your entries always win).
 - **Translation memory** — identical sentences get identical translations.
 - **MVU / EJS sync** — variable names in code and in the lorebook always stay in sync.
 

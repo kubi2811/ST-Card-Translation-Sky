@@ -2,6 +2,19 @@
 
 > Cách cập nhật: mở thư mục cài đặt, chạy `git pull origin main`, rồi **tắt hẳn và chạy lại `start.bat`** (không chỉ F5).
 
+## v1.76.0 — Đếm token THẬT (đọc từ usage của API) 🧮
+> Trước giờ chỉ có ETA ước lượng theo ký tự — dùng key chung không biết mình thật sự đốt bao nhiêu.
+- **Đọc usage thật từ chính response API** ở cả 3 loại provider, cả stream lẫn non-stream:
+  - OpenAI-compatible: `usage.prompt_tokens/completion_tokens` (chunk SSE cuối hoặc body).
+  - Gemini: `usageMetadata` (tích lũy theo chunk — lấy bản cuối; token "suy nghĩ" tính vào ra).
+  - Claude: `message_start.usage.input_tokens` + `message_delta.usage.output_tokens`.
+- **Hiển thị:**
+  - Panel "Luồng đang chạy": chip **🧮 tổng vào · ra** realtime ở header + ô token riêng từng lane (provider+model) cạnh RPM.
+  - Dịch xong: log **"🧮 Token cả lượt dịch: X vào / Y ra, N call"** kèm chi tiết từng model — biết ngay model nào ăn nhiều (và thấy luôn system prompt chiếm bao nhiêu).
+- **Trung thực với số liệu:** API/proxy nào strip mất usage thì call đó ước lượng từ ký tự (CJK ≈ 1 token/ký tự, Latin ≈ 4 ký tự/token) và toàn bộ số hiện kèm dấu **"~"** + ghi rõ bao nhiêu call là ước — không trộn số đo với số đoán mà không nói.
+- Không hiện tiền: user chủ yếu dùng proxy/key chung, bảng giá thật không có — hiện số tiền đoán mò còn hại hơn không hiện.
+- +4 test (189 tổng). Verify live full run card AI帝国1.1: 16 call đều trả usage thật (không có "~"), tổng 199.4K vào / 15.6K ra, panel + log khớp nhau.
+
 ## v1.75.0 — Dịch bản update của card: chỉ dịch phần thay đổi ♻
 > Card Trung update liên tục (V2.2 → V2.3) mà cache tiến trình key theo đúng tên file — đổi tên là mất sạch, phải dịch lại từ đầu dù bản update chỉ đổi 10-20% nội dung. Từ nay hết.
 - **Nạp card mới không có cache trùng tên → app tự quét cache tiến trình của các card CŨ** (20 cache gần nhất), field nào **nội dung gốc không đổi** thì bê thẳng bản dịch cũ sang (đánh dấu done): chỉ còn phần mới/đã sửa cần dịch.

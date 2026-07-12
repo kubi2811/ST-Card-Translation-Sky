@@ -64,6 +64,13 @@ export default function ActiveCallsPanel() {
   addLanes('default', 'Provider #1', proxy);
   enabledProviders.forEach((p, i) => addLanes(p.id, p.name || `Provider #${i + 2}`, p));
 
+  // ─── Token THẬT của run (usage từ API; call nào API không trả thì là ước lượng "~") ───
+  const tok = CallMonitor.getTokenTotals();
+  const kFmt = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(2)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n);
+  const tokApprox = tok.estimatedCalls > 0 ? '~' : '';
+  const tokByLane: Record<string, { input: number; output: number }> = {};
+  for (const l of tok.lanes) tokByLane[l.providerId + '|' + l.model] = { input: l.input, output: l.output };
+
   return (
     <div
       style={{
@@ -93,6 +100,14 @@ export default function ActiveCallsPanel() {
             <Activity size={11} /> {fmt(ui.acPeak, { count: CallMonitor.getPeakConcurrency() })}
           </span>
           <span>{fmt(ui.acCompleted, { count: CallMonitor.getCompleted() })}</span>
+          {tok.calls > 0 && (
+            <span
+              title={`Token thật cả lượt dịch (đọc từ usage của API): ${tok.input.toLocaleString()} vào / ${tok.output.toLocaleString()} ra, ${tok.calls} call.${tok.estimatedCalls > 0 ? ` ${tok.estimatedCalls} call API không trả usage — phần đó ước lượng từ ký tự (dấu ~).` : ''}`}
+              style={{ display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 700, color: 'var(--text-secondary)' }}
+            >
+              🧮 {tokApprox}{kFmt(tok.input)} vào · {tokApprox}{kFmt(tok.output)} ra
+            </span>
+          )}
         </div>
       </div>
 
@@ -138,6 +153,14 @@ export default function ActiveCallsPanel() {
                   >
                     <Gauge size={10} /> {lane.used}/{lane.limit}
                   </span>
+                  {tokByLane[lane.providerId + '|' + lane.model] && (
+                    <span
+                      title="Token lane này đã dùng trong lượt dịch (vào / ra)"
+                      style={{ color: 'var(--text-muted)', fontSize: '0.58rem', fontFamily: 'monospace' }}
+                    >
+                      🧮 {kFmt(tokByLane[lane.providerId + '|' + lane.model].input)}/{kFmt(tokByLane[lane.providerId + '|' + lane.model].output)}
+                    </span>
+                  )}
                 </span>
               </div>
               <div className="progress-track" style={{ height: '4px' }}>

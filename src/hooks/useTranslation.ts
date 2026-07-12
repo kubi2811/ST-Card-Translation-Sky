@@ -2437,6 +2437,21 @@ export function useTranslation() {
     store.addLog('info', `🎉 Dịch xong: ${doneCount} thành công, ${failCount} lỗi`);
     store.addToast('success', `Translation complete! ${doneCount}/${fields.length} fields translated`);
 
+    // ═══ Tổng kết token THẬT của cả run (đọc từ usage/usageMetadata; thiếu thì ước lượng ~) ═══
+    {
+      const tok = CallMonitor.getTokenTotals();
+      if (tok.calls > 0) {
+        const k = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(2)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n);
+        const approx = tok.estimatedCalls > 0 ? '~' : '';
+        const perLane = tok.lanes
+          .filter(l => l.calls > 0)
+          .sort((a, b) => (b.input + b.output) - (a.input + a.output))
+          .map(l => `${l.model}: ${k(l.input)} vào / ${k(l.output)} ra (${l.calls} call)`)
+          .join(' · ');
+        store.addLog('info', `🧮 Token cả lượt dịch: ${approx}${k(tok.input)} vào / ${approx}${k(tok.output)} ra, ${tok.calls} call${tok.estimatedCalls > 0 ? ` (${tok.estimatedCalls} call API không trả usage — phần đó là ước lượng)` : ''}. ${perLane}`);
+      }
+    }
+
     store.setLogPhase('verify'); // gom log giai đoạn Kiểm tra (hậu kiểm MVU/EJS)
 
     // ═══ Post-Translation MVU-ZOD Sync Verification Report ═══

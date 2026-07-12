@@ -38,6 +38,53 @@ function _emit() {
   _listeners.forEach((l) => l());
 }
 
+/* ─── Token thật (đọc từ usage/usageMetadata của response) ───
+ * Gom theo lane (providerId|model) cho panel + tổng cho log cuối run. Provider nào không
+ * trả usage (proxy strip mất) thì callProvider ước lượng từ ký tự và đánh dấu estimated —
+ * số hiển thị kèm "~" để user biết là ước chứ không phải đo. */
+
+export interface LaneTokenStats {
+  providerId: string;
+  model: string;
+  calls: number;
+  input: number;
+  output: number;
+  /** Số call phải ƯỚC LƯỢNG token từ ký tự (API không trả usage). */
+  estimatedCalls: number;
+}
+
+export interface TokenTotals {
+  calls: number;
+  input: number;
+  output: number;
+  estimatedCalls: number;
+  lanes: LaneTokenStats[];
+}
+
+const _tokenLanes = new Map<string, LaneTokenStats>();
+let _tokenSnapshot: TokenTotals = { calls: 0, input: 0, output: 0, estimatedCalls: 0, lanes: [] };
+
+function _rebuildTokenSnapshot() {
+  const lanes = Array.from(_tokenLanes.values());
+  _tokenSnapshot = {
+    calls: lanes.reduce((s, l) => s + l.calls, 0),
+    input: lanes.reduce((s, l) => s + l.input, 0),
+    output: lanes.reduce((s, l) => s + l.output, 0),
+    estimatedCalls: lanes.reduce((s, l) => s + l.estimatedCalls, 0),
+    lanes,
+  };
+}
+
+/**
+ * Ước lượng token khi API không trả usage: CJK ≈ 1 token/ký tự, còn lại ≈ 4 ký tự/token.
+ * Thô nhưng đủ để tổng không "thủng lỗ" — luôn đánh dấu estimated khi dùng.
+ */
+export function estimateTokens(text: string): number {
+  if (!text) return 0;
+  const cjk = (text.match(/[㐀-鿿豈-﫿぀-ヿ가-힯]/g) || []).length;
+  return cjk + Math.ceil((text.length - cjk) / 4);
+}
+
 export const CallMonitor = {
   start(call: ActiveCall) {
     _active.set(call.id, call);
@@ -49,10 +96,30 @@ export const CallMonitor = {
       _emit();
     }
   },
+  /** Ghi token cho 1 call thành công (callProvider gọi sau khi có kết quả). */
+  recordTokens(rec: { providerId?: string; model: string; input: number; output: number; estimated: boolean }) {
+    const key = `${rec.providerId || 'default'}|${rec.model}`;
+    let lane = _tokenLanes.get(key);
+    if (!lane) {
+      lane = { providerId: rec.providerId || 'default', model: rec.model, calls: 0, input: 0, output: 0, estimatedCalls: 0 };
+      _tokenLanes.set(key, lane);
+    }
+    lane.calls++;
+    lane.input += Math.max(0, rec.input | 0);
+    lane.output += Math.max(0, rec.output | 0);
+    if (rec.estimated) lane.estimatedCalls++;
+    _rebuildTokenSnapshot();
+    _emit();
+  },
+  getTokenTotals(): TokenTotals {
+    return _tokenSnapshot;
+  },
   /** Reset counters at the start of a translation run (active calls are left intact). */
   reset() {
     _completed = 0;
     _peakConcurrency = _active.size;
+    _tokenLanes.clear();
+    _rebuildTokenSnapshot();
     _emit();
   },
   subscribe(listener: Listener): () => void {

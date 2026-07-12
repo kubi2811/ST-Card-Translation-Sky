@@ -10,7 +10,10 @@ import {
 } from './masterPrompt';
 import { LOREBOOK_GENERATION_PROMPT } from './promptBuilder';
 import { extractCJKTokens, reinsertTranslations, surgicalTranslate } from './surgical';
-import { CallMonitor } from './callMonitor';
+import { CallMonitor, estimateTokens } from './callMonitor';
+
+/** Hứng usage token từ response API — hàm call đổ vào, callProvider đọc ra ghi thống kê. */
+interface TokenUsageSink { input?: number; output?: number }
 // chunkText tách sang ./chunking (Đợt tách monolith). Import để dùng nội bộ + RE-EXPORT
 // để các file khác vẫn `import { chunkText } from './apiClient'` như cũ (không phải sửa importer).
 import { chunkText } from './chunking';
@@ -658,7 +661,8 @@ async function callOpenAICompatible(
   system: string,
   user: string,
   signal?: AbortSignal,
-  images?: string[]
+  images?: string[],
+  usageSink?: TokenUsageSink
 ): Promise<string> {
   const useStream = config.useStream !== false;
   const rawUrl = config.proxyUrl.replace(/\/+$/, '') + '/chat/completions';
@@ -725,8 +729,17 @@ async function callOpenAICompatible(
 
   if (!res.body) throw new ApiError('No response body from API');
 
+  // Nhiều server OpenAI-compatible gửi `usage` ở chunk SSE cuối (hoặc body non-stream) —
+  // hứng được thì token là số ĐO thật; không có thì callProvider tự ước lượng.
+  const captureUsage = (u: any) => {
+    if (!u || !usageSink) return;
+    if (typeof u.prompt_tokens === 'number') usageSink.input = u.prompt_tokens;
+    if (typeof u.completion_tokens === 'number') usageSink.output = u.completion_tokens;
+  };
+
   if (!useStream) {
     const json = await res.json();
+    captureUsage(json.usage);
     const text = json.choices?.[0]?.message?.content || json.choices?.[0]?.text;
     if (!text) throw new ApiError(`Empty response from API`, undefined, true);
     return text.trim();
@@ -736,7 +749,7 @@ async function callOpenAICompatible(
   const decoder = new TextDecoder('utf-8');
   let fullContent = '';
   let buffer = '';
-  
+
   try {
     while (true) {
       const { done, value } = await readChunkOrAbort(reader, _to.signal);
@@ -747,6 +760,7 @@ async function callOpenAICompatible(
           if (line.startsWith('data: ') && line !== 'data: [DONE]') {
             try {
               const parsed = JSON.parse(line.slice(6));
+              captureUsage(parsed.usage);
               const text = parsed.choices?.[0]?.delta?.content;
               if (text) fullContent += text;
             } catch (e) {}
@@ -754,16 +768,17 @@ async function callOpenAICompatible(
         }
         break;
       }
-      
+
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() || ''; // Keep the last incomplete line in the buffer
-      
+
       for (const line of lines) {
         const trimmedLine = line.trim();
         if (trimmedLine.startsWith('data: ') && trimmedLine !== 'data: [DONE]') {
           try {
             const parsed = JSON.parse(trimmedLine.slice(6));
+            captureUsage(parsed.usage);
             const text = parsed.choices?.[0]?.delta?.content;
             if (text) fullContent += text;
           } catch (e) {}
@@ -790,7 +805,8 @@ async function callAnthropic(
   system: string,
   user: string,
   signal?: AbortSignal,
-  images?: string[]
+  images?: string[],
+  usageSink?: TokenUsageSink
 ): Promise<string> {
   const useStream = config.useStream !== false;
   const rawUrl = config.proxyUrl.replace(/\/+$/, '') + '/messages';
@@ -864,8 +880,18 @@ async function callAnthropic(
 
   if (!res.body) throw new ApiError('No response body from Anthropic API');
 
+  // Anthropic: input_tokens nằm trong event message_start, output_tokens trong message_delta.
+  const captureUsage = (parsed: any) => {
+    if (!usageSink || !parsed) return;
+    const inTok = parsed.message?.usage?.input_tokens ?? parsed.usage?.input_tokens;
+    const outTok = parsed.usage?.output_tokens ?? parsed.message?.usage?.output_tokens;
+    if (typeof inTok === 'number') usageSink.input = inTok;
+    if (typeof outTok === 'number') usageSink.output = outTok;
+  };
+
   if (!useStream) {
     const json = await res.json();
+    captureUsage(json);
     const text = json.content?.[0]?.text;
     if (!text) throw new ApiError(`Empty response from Anthropic API`, undefined, true);
     return text.trim();
@@ -875,7 +901,7 @@ async function callAnthropic(
   const decoder = new TextDecoder('utf-8');
   let fullContent = '';
   let buffer = '';
-  
+
   try {
     while (true) {
       const { done, value } = await readChunkOrAbort(reader, _to.signal);
@@ -885,6 +911,7 @@ async function callAnthropic(
           if (line.startsWith('data: ')) {
             try {
               const parsed = JSON.parse(line.slice(6));
+              captureUsage(parsed);
               if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
                 fullContent += parsed.delta.text;
               }
@@ -893,16 +920,17 @@ async function callAnthropic(
         }
         break;
       }
-      
+
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
-      
+
       for (const line of lines) {
         const trimmedLine = line.trim();
         if (trimmedLine.startsWith('data: ')) {
           try {
             const parsed = JSON.parse(trimmedLine.slice(6));
+            captureUsage(parsed);
             if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
               fullContent += parsed.delta.text;
             }
@@ -930,7 +958,8 @@ async function callGemini(
   system: string,
   user: string,
   signal?: AbortSignal,
-  images?: string[]
+  images?: string[],
+  usageSink?: TokenUsageSink
 ): Promise<string> {
   const useStream = config.useStream !== false;
   const baseUrl = config.proxyUrl.replace(/\/+$/, '');
@@ -1002,8 +1031,19 @@ async function callGemini(
 
   if (!res.body) throw new ApiError('No response body from Gemini API');
 
+  // Gemini trả usageMetadata TÍCH LŨY theo chunk — lấy giá trị cuối cùng là tổng cả call.
+  // Token "suy nghĩ" (thoughtsTokenCount) tính vào output vì cũng bị trừ quota như output.
+  const captureUsage = (meta: any) => {
+    if (!meta || !usageSink) return;
+    if (typeof meta.promptTokenCount === 'number') usageSink.input = meta.promptTokenCount;
+    if (typeof meta.candidatesTokenCount === 'number') {
+      usageSink.output = meta.candidatesTokenCount + (meta.thoughtsTokenCount || 0);
+    }
+  };
+
   if (!useStream) {
     const json = await res.json();
+    captureUsage(json.usageMetadata);
     // Check for prompt-level block (entire prompt rejected)
     if (json.promptFeedback?.blockReason) {
       throw new ApiError(`Gemini blocked the prompt (${json.promptFeedback.blockReason}). Try enabling Jailbreak mode or use a different model.`, 400);
@@ -1028,6 +1068,7 @@ async function callGemini(
     if (!jsonStr) return;
     try {
       const parsed = JSON.parse(jsonStr);
+      captureUsage(parsed.usageMetadata);
       if (parsed.promptFeedback?.blockReason) {
         promptBlockReason = parsed.promptFeedback.blockReason;
       }
@@ -1344,22 +1385,32 @@ export async function callProvider(
   });
 
   const laneRlKey = _rlKey(lane.providerId, lane.model);
+  // Hứng token thật từ response (usage/usageMetadata); API/proxy nào strip mất thì ước lượng.
+  const usageSink: TokenUsageSink = {};
   try {
     let result: string;
     switch (rotatedConfig.provider) {
       case 'anthropic':
-        result = await callAnthropic(rotatedConfig, system, user, signal, images);
+        result = await callAnthropic(rotatedConfig, system, user, signal, images, usageSink);
         break;
       case 'google':
-        result = await callGemini(rotatedConfig, system, user, signal, images);
+        result = await callGemini(rotatedConfig, system, user, signal, images, usageSink);
         break;
       case 'openai':
       case 'custom':
       default:
-        result = await callOpenAICompatible(rotatedConfig, system, user, signal, images);
+        result = await callOpenAICompatible(rotatedConfig, system, user, signal, images, usageSink);
         break;
     }
     recordLaneSuccess(laneRlKey); // lane khoẻ lại → xoá đếm fail + hết nghỉ
+    const estimated = usageSink.input == null || usageSink.output == null;
+    CallMonitor.recordTokens({
+      providerId: lane.providerId,
+      model: lane.model,
+      input: usageSink.input ?? estimateTokens(system) + estimateTokens(user),
+      output: usageSink.output ?? estimateTokens(result),
+      estimated,
+    });
     return result;
   } catch (err) {
     // On rate limit, advance to next key for THIS provider on retry

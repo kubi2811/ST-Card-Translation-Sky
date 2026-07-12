@@ -1,7 +1,8 @@
 import { useStore } from '../store';
-import { useT } from '../i18n/useLocale';
+import { useT, useUi } from '../i18n/useLocale';
 import { Eye, ChevronDown, ChevronRight, Languages, BookOpen } from 'lucide-react';
 import { useState, useMemo } from 'react';
+import StPreviewModal from './StPreviewModal';
 
 /* ─── Map field paths to translated values ─── */
 function useTranslatedFields(): Map<string, string> {
@@ -20,7 +21,9 @@ function useTranslatedFields(): Map<string, string> {
 export default function CardPreview() {
   const { card, contentType } = useStore();
   const t = useT();
+  const ui = useUi() as Record<string, string>;
   const translated = useTranslatedFields();
+  const [showStPreview, setShowStPreview] = useState(false);
   if (!card) return null;
 
   const isWorldbook = contentType === 'worldbook';
@@ -50,17 +53,35 @@ export default function CardPreview() {
           )}
           {isWorldbook ? t.worldbookMode : t.cardPreview}
         </h3>
-        {hasTranslations && (
-          <span style={{
-            display: 'flex', alignItems: 'center', gap: '4px',
-            fontSize: '0.65rem', padding: '2px 8px',
-            background: 'rgba(124,106,240,0.1)', borderRadius: 'var(--radius-sm)',
-            color: 'var(--accent-primary)', fontWeight: 600,
-          }}>
-            <Languages size={10} /> Translated
-          </span>
-        )}
+        <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {!isWorldbook && (
+            <button
+              onClick={() => setShowStPreview(true)}
+              title={ui.spBtnHint}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '4px',
+                fontSize: '0.68rem', fontWeight: 600, padding: '3px 10px', cursor: 'pointer',
+                background: 'rgba(56,189,248,0.08)', border: '1px solid rgba(56,189,248,0.4)',
+                borderRadius: 'var(--radius-sm)', color: 'var(--accent-secondary)',
+              }}
+            >
+              <Eye size={11} /> {ui.spBtn}
+            </button>
+          )}
+          {hasTranslations && (
+            <span style={{
+              display: 'flex', alignItems: 'center', gap: '4px',
+              fontSize: '0.65rem', padding: '2px 8px',
+              background: 'rgba(124,106,240,0.1)', borderRadius: 'var(--radius-sm)',
+              color: 'var(--accent-primary)', fontWeight: 600,
+            }}>
+              <Languages size={10} /> Translated
+            </span>
+          )}
+        </span>
       </div>
+
+      {showStPreview && <StPreviewModal onClose={() => setShowStPreview(false)} />}
 
       {isWorldbook ? (
         <WorldbookPreview card={card} translated={translated} />

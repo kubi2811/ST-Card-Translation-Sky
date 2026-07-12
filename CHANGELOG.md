@@ -2,6 +2,15 @@
 
 > Cách cập nhật: mở thư mục cài đặt, chạy `git pull origin main`, rồi **tắt hẳn và chạy lại `start.bat`** (không chỉ F5).
 
+## v1.80.0 — 👁 Xem như SillyTavern (render tĩnh)
+- **Nút "👁 Xem như SillyTavern" trong Card Preview** mở modal mô phỏng đúng đường hiển thị của ST:
+  1. Thay macro `{{user}}`/`{{char}}`.
+  2. Áp các **regex script HIỂN THỊ** của card (placement 2 = AI output, bỏ disabled/promptOnly — đúng chuẩn ST, kể cả `{{match}}`/`$1`, regex hỏng thì bỏ qua script đó không chết preview).
+  3. Render trong **iframe sandbox** (script trong card KHÔNG chạy — an toàn tuyệt đối; thẻ HTML/CSS hiện đủ, có mở ```fence bao ngoài, văn bản thuần thì escape + đậm/nghiêng cơ bản).
+- **Toggle Gốc / Đã dịch** (bản dịch lấy qua đúng bộ dựng card xuất) + dropdown chọn first_mes/từng greeting + dòng liệt kê regex đã áp.
+- Ghi rõ giới hạn ngay trong modal: đây là render TĨNH — giao diện động (MVU/TavernHelper) vẫn cần vào ST thật; cái preview trả lời là "khung HTML/CSS + regex sau dịch có vỡ không".
+- +8 test cho bộ mô phỏng (200 tổng). Verify live bằng card Tuhu: modal áp đúng 2 regex hiển thị ("Huyền Tưởng Hương Duyên Khởi Mở Đầu"…), bản Đã dịch hiện tiếng Việt, toggle Gốc đổi về tiếng Trung.
+
 ## v1.79.0 — ⚡ Prompt caching: prefix ổn định + đo cache thật
 > Số liệu v1.76 lộ ra: input gấp ~13 lần output vì system prompt khổng lồ lặp lại mỗi call. Implicit caching của Gemini/OpenAI giảm được phần này — NHƯNG chỉ trúng khi phần đầu prompt giống hệt giữa các call. Khối RAG (tham chiếu field đã dịch, đổi theo TỪNG field) đang nằm GIỮA system prompt → phá prefix ở mọi call.
 - **Dời khối RAG xuống CUỐI system prompt** (mọi đường: dịch thường, batch, chunk song song, surgical, expert/legacy, mod): promptBuilder bọc RAG trong marker `[DYNAMIC_CONTEXT_*]`, điểm ghép prompt tách ra nối lại ở cuối — đúng pattern `USER_PRIORITY` sẵn có. **Nội dung prompt không đổi, chỉ đổi vị trí** một khối.

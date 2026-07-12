@@ -273,11 +273,27 @@ async function callOpenAICompatible(
   if (!choice) {
     throw new Error(`API returned 200 OK but with no content choices. Response: ${JSON.stringify(json)}`);
   }
-  if (choice.finish_reason && !['stop', 'stop_sequence', 'length'].includes(choice.finish_reason)) {
-    throw new Error(`API dừng thế sinh vì lý do: ${choice.finish_reason}. Nội dung có thể đã bị chặn hoặc lọc bởi bộ lọc an toàn.`);
+  // (Fix bug #8) 'tool_calls' / 'function_call' = model muốn gọi hàm — HOÀN TOÀN BÌNH THƯỜNG,
+  // KHÔNG phải bị bộ lọc an toàn chặn. Trước đây gộp chung mọi finish_reason lạ vào "bị chặn" nên
+  // Copilot (dùng tool calling) kiểu gì cũng báo lỗi. Chỉ 'content_filter' mới thật sự là bị chặn.
+  let text = choice.message?.content ?? '';
+  // Model đặt kết quả trong tool_call.arguments thay vì content → lấy ra làm text để parser xử lý tiếp.
+  if (!text.trim() && Array.isArray(choice.message?.tool_calls) && choice.message.tool_calls.length > 0) {
+    text = choice.message.tool_calls
+      .map((tc: { function?: { arguments?: string } }) => tc?.function?.arguments || '')
+      .filter(Boolean)
+      .join('\n');
+  }
+  const benignReasons = ['stop', 'stop_sequence', 'length', 'tool_calls', 'function_call', 'end_turn', 'eos'];
+  // Chỉ ném lỗi khi finish_reason bất thường VÀ không có nội dung nào để dùng (tránh báo "bị chặn" oan).
+  if (choice.finish_reason && !benignReasons.includes(choice.finish_reason) && !text.trim()) {
+    if (choice.finish_reason === 'content_filter') {
+      throw new Error('Nội dung bị BỘ LỌC AN TOÀN của API chặn (content_filter). Thử đổi model/API khác, hoặc chỉnh lại yêu cầu cho bớt nhạy cảm.');
+    }
+    throw new Error(`API dừng thế sinh vì lý do: ${choice.finish_reason} (không có nội dung trả về). Thử lại hoặc đổi API khác.`);
   }
   return {
-    text: choice.message?.content ?? '',
+    text,
     model: json.model ?? profile.selectedModel,
     usage: json.usage,
     finishReason: choice.finish_reason,
@@ -443,10 +459,12 @@ async function callGemini(
   if (!candidate) {
     throw new Error(`Gemini API returned no content candidates. Response: ${JSON.stringify(json)}`);
   }
-  if (candidate.finishReason && !['STOP', 'MAX_TOKENS'].includes(candidate.finishReason)) {
+  // (Fix bug #8) Lấy text TRƯỚC — nếu model có trả nội dung thì dùng luôn, đừng ném lỗi "bị chặn"
+  // oan khi finishReason lạ nhưng vẫn có text (vd tool-call/partial). Chỉ chặn khi RỖNG.
+  const text = candidate.content?.parts?.map((p: { text?: string }) => p.text ?? '').join('') ?? '';
+  if (candidate.finishReason && !['STOP', 'MAX_TOKENS'].includes(candidate.finishReason) && !text.trim()) {
     throw new Error(`Gemini API dừng thế sinh vì lý do: ${candidate.finishReason}. Nội dung hoặc Prompt có thể đã bị chặn bởi bộ lọc an toàn hoặc Recitation check. Phản hồi đầy đủ: ${JSON.stringify(candidate)}`);
   }
-  const text = candidate.content?.parts?.map((p: { text?: string }) => p.text ?? '').join('') ?? '';
   if (!text.trim() && candidate.finishReason === 'MAX_TOKENS') {
     throw new Error(`Gemini API dừng sinh ngay lập tức (MAX_TOKENS) mà không trả nội dung nào. Nguyên nhân: prompt đầu vào quá lớn (${json.usageMetadata?.promptTokenCount ?? '?'} tokens) chiếm hết context, không còn chỗ cho output. Thử: giảm số entries lorebook, hoặc tăng maxOutputTokens trong Settings.`);
   }

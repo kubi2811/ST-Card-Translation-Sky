@@ -65,6 +65,7 @@ const ui: UiKeys = {
 
   // ─── FileUpload ───
   fuDiscordNormalised: '🔧 Đã chuẩn hoá link Discord về ảnh gốc (cdn, bỏ webp/resize) để giữ dữ liệu thẻ',
+  fuVersionReuse: '♻️ Tái dùng {count}/{total} bản dịch từ "{source}" (nội dung không đổi giữa 2 phiên bản) — chỉ còn phần mới/đã sửa cần dịch.',
   fuUrlError: '❌ Lỗi tải link: {msg} (có thể do CORS)',
   fuUrlPlaceholder: 'Nhập link card (JSON/PNG)...',
   fuLoad: 'Tải',

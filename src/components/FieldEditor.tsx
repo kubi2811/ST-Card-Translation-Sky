@@ -180,6 +180,21 @@ function SurgicalResultBadge({ result }: { result?: { type: 'success' | 'fallbac
   );
 }
 
+/** Badge ♻ cho field được bê bản dịch từ cache phiên bản card cũ (nội dung không đổi). */
+function ReusedBadge({ source }: { source?: string }) {
+  if (!source) return null;
+  return (
+    <span style={{
+      fontSize: '0.55rem', padding: '1px 4px',
+      background: 'rgba(56,189,248,0.12)', color: 'var(--accent-secondary, #38bdf8)',
+      borderRadius: '3px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '2px',
+      border: '1px solid rgba(56,189,248,0.3)',
+    }} title={`Tái dùng bản dịch từ "${source}" — nội dung gốc không đổi giữa 2 phiên bản`}>
+      ♻ {source.replace(/\.(png|json)$/i, '')}
+    </span>
+  );
+}
+
 function ChunkStatusAndResume({
   field,
   retranslateField,
@@ -854,6 +869,7 @@ const VirtualFieldTableRow = memo(({
               )}
               <StatusBadge status={field.status} t={t} />
               {field.surgicalResult && <SurgicalResultBadge result={field.surgicalResult} />}
+              {field.reusedFrom && <ReusedBadge source={field.reusedFrom} />}
               <CharRatio original={field.original} translated={field.translated} />
             </div>
             {field.error && (

@@ -2,6 +2,16 @@
 
 > Cách cập nhật: mở thư mục cài đặt, chạy `git pull origin main`, rồi **tắt hẳn và chạy lại `start.bat`** (không chỉ F5).
 
+## v1.75.0 — Dịch bản update của card: chỉ dịch phần thay đổi ♻
+> Card Trung update liên tục (V2.2 → V2.3) mà cache tiến trình key theo đúng tên file — đổi tên là mất sạch, phải dịch lại từ đầu dù bản update chỉ đổi 10-20% nội dung. Từ nay hết.
+- **Nạp card mới không có cache trùng tên → app tự quét cache tiến trình của các card CŨ** (20 cache gần nhất), field nào **nội dung gốc không đổi** thì bê thẳng bản dịch cũ sang (đánh dấu done): chỉ còn phần mới/đã sửa cần dịch.
+- **Match theo NỘI DUNG, không phải vị trí** — bản update hay chèn/đảo entry lorebook làm path xô lệch, match nội dung + nhóm + loại entry thì vẫn khớp (an toàn tuyệt đối như cơ chế "Bộ nhớ dịch" trong-run: trùng hệt mới bê, không thể sai ngữ cảnh). Hai cache cùng có 1 nội dung → bản MỚI hơn thắng.
+- **Kèm từ điển:** nguồn khớp nhiều nhất (≥3 field) chính là phiên bản cũ của card → merge từ điển biến MVU/EJS của nó để **tên biến 2 phiên bản khớp nhau** (Chiến lược B không dịch lại biến đã có).
+- **Field Editor gắn badge ♻ (tên card nguồn)** cho từng field tái dùng — biết ngay bản dịch bê từ đâu, không ưng thì bấm dịch lại field đó.
+- Dùng chung công tắc **Bộ nhớ dịch** (đang bật sẵn) — tắt là tắt cả tái dùng phiên bản.
+- **Fix kèm:** khôi phục cache tiến trình giờ **đợi parse xong hẳn** mới chạy — trước đây chờ cứng 500ms, card lớn parse qua worker lâu hơn là trượt khôi phục (race có thật từ trước).
+- +7 test (185 tổng). Verify live: nạp lại chính card Tuhu dưới tên "Tuhu_V2.3.png" → log "♻ Tái dùng 81/123 bản dịch từ Tuhu_V2.2.png", progress nhảy thẳng 66%, first message hiện tiếng Việt, 6 biến MVU merge về, badge ♻ hiện trong Field Editor.
+
 ## v1.74.0 — Pha 0: Bảng tên riêng tự động 📖
 > Điểm yếu cố hữu của dịch đa luồng: 2 entry do 2 luồng khác nhau dịch, cùng nhân vật `叶凡` chỗ ra "Diệp Phàm", chỗ ra "Ye Fan". Từ nay hết.
 - **Bấm Start là app tự xây bảng tên trước khi dịch:**

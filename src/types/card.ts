@@ -147,6 +147,8 @@ export interface TranslationField {
   entryType?: 'initvar' | 'mvu_logic' | 'rules' | 'narrative' | 'controller' | 'json_patch' | 'replaceString';
   /** Surgical result state if field was processed using surgical translate */
   surgicalResult?: { type: 'success' | 'fallback'; info?: string };
+  /** Bản dịch bê từ cache phiên bản card cũ (tên file cache nguồn, ví dụ "Tuhu_V2.2.png") */
+  reusedFrom?: string;
   /** Chunk-level resume: successfully translated chunks from a previous attempt */
   completedChunks?: string[];
   /** Chunk-level resume: raw chunks for this field (unmasked) */

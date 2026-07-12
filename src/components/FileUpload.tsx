@@ -41,7 +41,23 @@ function normalizeCardUrl(raw: string): { url: string; rewritten: boolean } {
 
 export default function FileUpload() {
   const { parseCardFile, updateCardFromOriginal, clearCard, isParsing, parseProgress } = useCardParser();
-  const { card, cardFileName, contentType, originalWorldbook, loadTranslationCache, addLog } = useStore();
+  const { card, cardFileName, contentType, originalWorldbook, loadTranslationCache, reuseFromVersionCache, addLog } = useStore();
+
+  // Sau khi parse xong: khôi phục cache trùng tên; không có thì thử TÁI DÙNG bản dịch từ
+  // cache các card cũ (update phiên bản — field nội dung không đổi bê thẳng bản dịch sang).
+  const restoreOrReuse = useCallback(async (fileName: string) => {
+    const restored = await loadTranslationCache(fileName);
+    if (restored) {
+      addLog('info', `♻️ Restored cached translation progress for "${fileName}"`);
+      return;
+    }
+    const reuse = await reuseFromVersionCache();
+    if (reuse) {
+      addLog('success', fmt(ui.fuVersionReuse, {
+        count: String(reuse.reused), source: reuse.source, total: String(reuse.total),
+      }));
+    }
+  }, [loadTranslationCache, reuseFromVersionCache, addLog]);
   const t = useT();
   const ui = useUi();
 
@@ -74,13 +90,11 @@ export default function FileUpload() {
       }
 
       const file = new File([blob], fileName, { type: blob.type });
-      parseCardFile(file);
-      
-      setTimeout(async () => {
-        const restored = await loadTranslationCache(file.name);
-        if (restored) addLog('info', `♻️ Restored cached translation progress for "${file.name}"`);
-      }, 500);
-      
+      // await parse xong mới restore/reuse — setTimeout 500ms cũ là race với card lớn (parse
+      // qua worker có thể lâu hơn 500ms → khôi phục cache trượt).
+      const parsed = await parseCardFile(file);
+      if (parsed) await restoreOrReuse(file.name);
+
       setUrlInput('');
     } catch (err: any) {
       addLog('error', fmt(ui.fuUrlError, { msg: err.message || String(err) }));
@@ -93,18 +107,11 @@ export default function FileUpload() {
     async (acceptedFiles: File[]) => {
       if (acceptedFiles.length > 0) {
         const file = acceptedFiles[0];
-        parseCardFile(file);
-
-        // Try to restore cached translation progress for this file
-        setTimeout(async () => {
-          const restored = await loadTranslationCache(file.name);
-          if (restored) {
-            addLog('info', `♻️ Restored cached translation progress for "${file.name}"`);
-          }
-        }, 500); // Small delay to let parseCardFile complete
+        const parsed = await parseCardFile(file);
+        if (parsed) await restoreOrReuse(file.name);
       }
     },
-    [parseCardFile, loadTranslationCache, addLog]
+    [parseCardFile, restoreOrReuse]
   );
 
   const onUpdateDrop = useCallback(

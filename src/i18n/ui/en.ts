@@ -63,6 +63,7 @@ const ui = {
 
   // ─── FileUpload ───
   fuDiscordNormalised: '🔧 Normalised the Discord link back to the original image (cdn, dropped webp/resize) so the card data survives',
+  fuVersionReuse: '♻️ Reused {count}/{total} translations from "{source}" (unchanged content between versions) — only new/modified parts need translating.',
   fuUrlError: '❌ Link load failed: {msg} (possibly CORS)',
   fuUrlPlaceholder: 'Paste a card link (JSON/PNG)…',
   fuLoad: 'Load',

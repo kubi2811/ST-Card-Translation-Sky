@@ -61,6 +61,7 @@ const ui: UiKeys = {
 
   // ─── FileUpload ───
   fuDiscordNormalised: '🔧 已把 Discord 链接还原为原图（cdn，去掉 webp/resize），以保住卡片数据',
+  fuVersionReuse: '♻️ 已从 "{source}" 复用 {count}/{total} 条译文（两个版本间内容未变）— 只需翻译新增/修改的部分。',
   fuUrlError: '❌ 链接加载失败：{msg}（可能是 CORS）',
   fuUrlPlaceholder: '粘贴角色卡链接（JSON/PNG）……',
   fuLoad: '加载',

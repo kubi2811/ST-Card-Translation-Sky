@@ -22,6 +22,7 @@ import type { Worldbook } from './utils/worldbookParser';
 import { DEFAULT_FIELD_GROUPS, extractTranslatableFields } from './utils/cardFields';
 import { IDB } from './utils/idb';
 import { FsCache } from './utils/fsCache';
+import { applyVersionReuse, type VersionSnapshot } from './utils/versionReuse';
 import { clearRAGCache } from './utils/ragContext';
 import { clearTranslationMemory } from './utils/translationMemory';
 import type { MvuKeyMetadata } from './utils/mvuSync';
@@ -195,6 +196,9 @@ interface AppState {
   // Per-file translation cache
   saveTranslationCache: () => void;
   loadTranslationCache: (fileName: string) => Promise<boolean>;
+  /** Card mới không có cache trùng tên → quét cache các card CŨ, bê bản dịch của field
+   *  trùng hệt nội dung sang (update phiên bản chỉ cần dịch phần thay đổi). */
+  reuseFromVersionCache: () => Promise<{ reused: number; source: string; total: number } | null>;
   deleteCurrentCardCache: () => Promise<void>;
   deleteAllCaches: () => Promise<void>;
 }
@@ -994,6 +998,59 @@ export const useStore = create<AppState>((set) => ({
       },
     }));
     return true;
+  },
+  reuseFromVersionCache: async (): Promise<{ reused: number; source: string; total: number } | null> => {
+    const s = useStore.getState() as AppState;
+    if (!s.card || !s.cardFileName) return null;
+    // Dùng chung công tắc "Bộ nhớ dịch" — tắt TM là tắt luôn tái dùng giữa phiên bản.
+    if (!s.translationConfig.enableTranslationMemory) return null;
+    try {
+      // Card nhỏ parse trên main thread chưa trích field → tự trích đủ mọi nhóm.
+      let fields = s.fields;
+      if (fields.length === 0) {
+        fields = extractTranslatableFields(s.card, DEFAULT_FIELD_GROUPS.map(g => g.id));
+      }
+      if (fields.length === 0) return null;
+
+      const list = await FsCache.list();
+      const others = list
+        .filter(e => e.key !== s.cardFileName)
+        .sort((a, b) => b.savedAt - a.savedAt)
+        .slice(0, 20); // trần 20 cache gần nhất — đủ cho mọi ca thực tế, không đọc cả kho
+      if (others.length === 0) return null;
+
+      const snapshots: VersionSnapshot[] = [];
+      for (const e of others) {
+        const entry = await FsCache.load<any>(e.key);
+        const snap = entry?.data;
+        if (snap && Array.isArray(snap.fields) && snap.fields.length > 0) {
+          snapshots.push({ key: e.key, savedAt: e.savedAt, fields: snap.fields, dicts: snap.dicts });
+        }
+      }
+      if (snapshots.length === 0) return null;
+
+      const result = applyVersionReuse(fields, snapshots);
+      if (result.reused === 0) return null;
+
+      set({ fields: result.fields });
+      // Ghi luôn tiến trình đã prefill xuống đĩa để F5 không mất phần tái dùng.
+      useStore.getState().saveTranslationCache();
+
+      // Nguồn khớp nhiều nhất gần như chắc chắn là phiên bản cũ của card này → merge từ điển
+      // MVU/EJS của nó (tên biến 2 phiên bản khớp nhau). Mục đang có trong config thắng.
+      const top = result.topSource;
+      if (top?.dicts && (result.bySource[top.key] || 0) >= 3) {
+        const cur = useStore.getState().translationConfig;
+        useStore.getState().setTranslationConfig({
+          mvuDictionary: { ...(top.dicts.mvuDictionary || {}), ...cur.mvuDictionary },
+          ejsEntryNameDict: { ...(top.dicts.ejsEntryNameDict || {}), ...cur.ejsEntryNameDict },
+          ejsKeywordDict: { ...(top.dicts.ejsKeywordDict || {}), ...cur.ejsKeywordDict },
+        });
+      }
+      return { reused: result.reused, source: top?.key || '', total: fields.length };
+    } catch {
+      return null; // tái dùng chỉ là tối ưu — lỗi thì im lặng, import vẫn diễn ra bình thường
+    }
   },
   deleteCurrentCardCache: async () => {
     const s = useStore.getState();

@@ -71,6 +71,7 @@ const en = {
 
   // Cài đặt
   settingsTitle: '⚙️ LLM & Proxy Configuration',
+  settingsAutosave: 'Auto-saved — every change is stored in your browser instantly; refresh / reopen keeps it (no Save button needed).',
   cfgProvider: '1. Provider',
   cfgBaseUrl: '2. Proxy Base URL',
   cfgBaseUrlPhOpenai: 'e.g. https://api.openrouter.ai/v1 or https://api.openai.com/v1',

@@ -61,9 +61,9 @@ export default function ModRulesManager({ rules, onChange }: ModRulesManagerProp
   };
 
   return (
-    <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
+    <div className="bg-neutral-900 p-4 rounded-lg shadow-sm border border-neutral-800">
       <div className="flex justify-between items-center mb-4">
-        <h2 className="text-xl font-extrabold text-gray-950">Mod Rules</h2>
+        <h2 className="text-xl font-extrabold text-neutral-100">Mod Rules</h2>
         <button 
           onClick={addRule}
           className="bg-blue-600 text-white px-3 py-1.5 rounded font-bold text-sm hover:bg-blue-700"
@@ -73,12 +73,12 @@ export default function ModRulesManager({ rules, onChange }: ModRulesManagerProp
       </div>
 
       {rules.length === 0 && !isEditing && (
-        <p className="text-gray-800 font-semibold text-sm">{t.mrEmpty}</p>
+        <p className="text-neutral-200 font-semibold text-sm">{t.mrEmpty}</p>
       )}
 
       <ul className="space-y-3 mb-4">
         {rules.map(rule => (
-          <li key={rule.id} className="p-3 border rounded-md flex justify-between items-start bg-gray-50">
+          <li key={rule.id} className="p-3 border rounded-md flex justify-between items-start bg-neutral-900">
             <div>
               <div className="flex items-center gap-2">
                 <input 
@@ -87,10 +87,10 @@ export default function ModRulesManager({ rules, onChange }: ModRulesManagerProp
                   onChange={() => toggleRule(rule.id)}
                   className="w-4 h-4 text-blue-600"
                 />
-                <span className="font-bold text-gray-950">{rule.name || rule.id}</span>
-                <span className="text-xs bg-gray-300 px-2 py-0.5 rounded text-gray-900 font-bold">{rule.type}</span>
+                <span className="font-bold text-neutral-100">{rule.name || rule.id}</span>
+                <span className="text-xs bg-gray-300 px-2 py-0.5 rounded text-neutral-100 font-bold">{rule.type}</span>
               </div>
-              <p className="text-xs text-gray-800 font-medium mt-1 line-clamp-2">{rule.details}</p>
+              <p className="text-xs text-neutral-200 font-medium mt-1 line-clamp-2">{rule.details}</p>
             </div>
             <div className="flex gap-2">
               <button 
@@ -111,61 +111,61 @@ export default function ModRulesManager({ rules, onChange }: ModRulesManagerProp
       </ul>
 
       {isEditing && currentRule && (
-        <div className="mt-4 p-4 border rounded-md bg-blue-50/50">
-          <h3 className="font-bold text-gray-950 mb-3">{t.mrEditTitle}</h3>
+        <div className="mt-4 p-4 border rounded-md bg-blue-950/40/50">
+          <h3 className="font-bold text-neutral-100 mb-3">{t.mrEditTitle}</h3>
           <div className="space-y-3">
             <div>
-              <label className="block text-xs font-bold text-gray-950">{t.mrName}</label>
+              <label className="block text-xs font-bold text-neutral-100">{t.mrName}</label>
               <input 
                 type="text" 
                 value={currentRule.name}
                 onChange={e => setCurrentRule({...currentRule, name: e.target.value})}
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border font-medium text-gray-900"
+                className="mt-1 block w-full rounded-md border-neutral-700 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border font-medium text-neutral-100"
                 placeholder={t.mrNamePh}
               />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-bold text-gray-950">{t.mrOldTheme}</label>
+                <label className="block text-xs font-bold text-neutral-100">{t.mrOldTheme}</label>
                 <input 
                   type="text" 
                   value={currentRule.oldTheme}
                   onChange={e => setCurrentRule({...currentRule, oldTheme: e.target.value})}
-                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border font-medium text-gray-900"
+                  className="mt-1 block w-full rounded-md border-neutral-700 shadow-sm sm:text-sm p-2 border font-medium text-neutral-100"
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-gray-950">{t.mrNewTheme}</label>
+                <label className="block text-xs font-bold text-neutral-100">{t.mrNewTheme}</label>
                 <input 
                   type="text" 
                   value={currentRule.newTheme}
                   onChange={e => setCurrentRule({...currentRule, newTheme: e.target.value})}
-                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border font-medium text-gray-900"
+                  className="mt-1 block w-full rounded-md border-neutral-700 shadow-sm sm:text-sm p-2 border font-medium text-neutral-100"
                 />
               </div>
             </div>
             <div>
-              <label className="block text-xs font-bold text-gray-950">{t.mrKeywords}</label>
+              <label className="block text-xs font-bold text-neutral-100">{t.mrKeywords}</label>
               <input 
                 type="text" 
                 value={currentRule.keywords}
                 onChange={e => setCurrentRule({...currentRule, keywords: e.target.value})}
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border font-medium text-gray-900"
+                className="mt-1 block w-full rounded-md border-neutral-700 shadow-sm sm:text-sm p-2 border font-medium text-neutral-100"
               />
             </div>
             <div>
-              <label className="block text-xs font-bold text-gray-950">{t.mrDetails}</label>
+              <label className="block text-xs font-bold text-neutral-100">{t.mrDetails}</label>
               <textarea 
                 value={currentRule.details}
                 onChange={e => setCurrentRule({...currentRule, details: e.target.value})}
                 rows={3}
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm sm:text-sm p-2 border font-medium text-gray-900"
+                className="mt-1 block w-full rounded-md border-neutral-700 shadow-sm sm:text-sm p-2 border font-medium text-neutral-100"
               />
             </div>
             <div className="flex justify-end gap-2 mt-4">
               <button 
                 onClick={() => setIsEditing(false)}
-                className="px-3 py-1 border border-gray-300 rounded text-sm bg-white"
+                className="px-3 py-1 border border-neutral-700 rounded text-sm bg-neutral-900"
               >
                 {t.mrCancel}
               </button>

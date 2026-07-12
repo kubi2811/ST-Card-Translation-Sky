@@ -65,6 +65,7 @@ const zh: ModUiKeys = {
 
   // 设置
   settingsTitle: '⚙️ LLM 与代理配置',
+  settingsAutosave: '自动保存 — 所有更改即时存入浏览器，刷新／重新打开都不会丢失（无需保存按钮）。',
   cfgProvider: '1. 供应商（Provider）',
   cfgBaseUrl: '2. 代理地址（Proxy Base URL）',
   cfgBaseUrlPhOpenai: '例如：https://api.openrouter.ai/v1 或 https://api.openai.com/v1',

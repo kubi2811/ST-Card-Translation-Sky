@@ -67,6 +67,7 @@ const vi: ModUiKeys = {
 
   // Cài đặt
   settingsTitle: '⚙️ Cài Đặt Cấu Hình LLM & Proxy',
+  settingsAutosave: 'Tự động lưu — mọi thay đổi lưu ngay vào trình duyệt, F5 / mở lại KHÔNG mất (không cần nút Lưu).',
   cfgProvider: '1. Nhà Cung Cấp (Provider)',
   cfgBaseUrl: '2. Đường Dẫn Proxy (Proxy Base URL)',
   cfgBaseUrlPhOpenai: 'VD: https://api.openrouter.ai/v1 hoặc https://api.openai.com/v1',

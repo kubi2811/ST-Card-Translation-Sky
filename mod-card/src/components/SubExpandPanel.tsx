@@ -47,25 +47,25 @@ export default function SubExpandPanel({ card, llmConfig, extraProviders = [], o
   };
 
   return (
-    <div className="bg-white p-4 rounded-lg shadow-sm border border-amber-300">
-      <h2 className="text-lg font-extrabold text-gray-950 mb-1">{t.seTitle}</h2>
-      <p className="text-xs text-gray-700 font-semibold mb-2">
+    <div className="bg-neutral-900 p-4 rounded-lg shadow-sm border border-amber-700">
+      <h2 className="text-lg font-extrabold text-neutral-100 mb-1">{t.seTitle}</h2>
+      <p className="text-xs text-neutral-300 font-semibold mb-2">
         {t.seDesc}
       </p>
 
-      <label className="block text-xs font-bold text-gray-800 mb-1">{t.seSelectSection}</label>
+      <label className="block text-xs font-bold text-neutral-200 mb-1">{t.seSelectSection}</label>
       <select value={sectionId} onChange={e => { setSectionId(e.target.value); setResult(''); }}
-        className="w-full text-sm border-2 border-gray-300 rounded p-1.5 bg-gray-50 text-gray-950 font-medium mb-2">
+        className="w-full text-sm border-2 border-neutral-700 rounded p-1.5 bg-neutral-900 text-neutral-100 font-medium mb-2">
         {sections.map(s => <option key={s.section_id} value={s.section_id}>{s.label}</option>)}
       </select>
 
       <input value={subMarker} onChange={e => setSubMarker(e.target.value)}
         placeholder={t.seMarkerPh}
-        className="w-full text-sm border-2 border-gray-300 rounded p-1.5 bg-gray-50 text-gray-950 mb-2" />
+        className="w-full text-sm border-2 border-neutral-700 rounded p-1.5 bg-neutral-900 text-neutral-100 mb-2" />
 
       <textarea value={instruction} onChange={e => setInstruction(e.target.value)} rows={2}
         placeholder={t.seRequestPh}
-        className="w-full text-sm border-2 border-gray-300 rounded p-1.5 bg-gray-50 text-gray-950 mb-2" />
+        className="w-full text-sm border-2 border-neutral-700 rounded p-1.5 bg-neutral-900 text-neutral-100 mb-2" />
 
       <div className="flex items-center gap-2">
         <button onClick={expand} disabled={loading}
@@ -83,9 +83,9 @@ export default function SubExpandPanel({ card, llmConfig, extraProviders = [], o
 
       {result && (
         <div className="mt-2">
-          <div className="text-xs font-bold text-gray-700 mb-1">{t.sePreview}</div>
+          <div className="text-xs font-bold text-neutral-300 mb-1">{t.sePreview}</div>
           <textarea value={result} onChange={e => setResult(e.target.value)} rows={8}
-            className="w-full text-xs border border-gray-300 rounded p-2 bg-gray-50 text-gray-900 font-mono" />
+            className="w-full text-xs border border-neutral-700 rounded p-2 bg-neutral-900 text-neutral-100 font-mono" />
         </div>
       )}
     </div>

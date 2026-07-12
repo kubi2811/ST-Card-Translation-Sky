@@ -53,16 +53,16 @@ export default function VarRemapPanel({ card, llmConfig, extraProviders = [], on
   const setRow = (i: number, patch: Partial<Row>) => setRows(rs => rs.map((r, idx) => idx === i ? { ...r, ...patch } : r));
 
   return (
-    <div className="bg-white p-4 rounded-lg shadow-sm border border-purple-300">
-      <h2 className="text-lg font-extrabold text-gray-950 mb-1">{t.vrTitle}</h2>
-      <p className="text-xs text-gray-700 font-semibold mb-2">
+    <div className="bg-neutral-900 p-4 rounded-lg shadow-sm border border-purple-700">
+      <h2 className="text-lg font-extrabold text-neutral-100 mb-1">{t.vrTitle}</h2>
+      <p className="text-xs text-neutral-300 font-semibold mb-2">
         {fmt(t.vrDesc, { count: varCount })}
       </p>
 
       <textarea
         value={request} onChange={e => setRequest(e.target.value)} rows={3}
         placeholder={t.vrPh}
-        className="w-full text-sm rounded-md border-2 border-gray-400 p-2 bg-gray-50 focus:bg-white focus:ring-indigo-500 focus:border-indigo-500 placeholder-gray-700 text-gray-950 font-medium"
+        className="w-full text-sm rounded-md border-2 border-neutral-700 p-2 bg-neutral-900 focus:bg-neutral-800 focus:ring-indigo-500 focus:border-indigo-500 placeholder-neutral-500 text-neutral-100 font-medium"
       />
 
       <div className="flex items-center gap-2 mt-2">
@@ -76,15 +76,15 @@ export default function VarRemapPanel({ card, llmConfig, extraProviders = [], on
             {fmt(t.vrApply, { count: rows.filter(r => r.include).length })}
           </button>
         )}
-        {applied && <span className="text-xs text-green-700 font-bold">{t.vrApplied}</span>}
+        {applied && <span className="text-xs text-green-300 font-bold">{t.vrApplied}</span>}
       </div>
 
       {error && <p className="text-xs text-red-600 font-semibold mt-2">{error}</p>}
 
       {rows.length > 0 && (
-        <div className="mt-3 max-h-72 overflow-y-auto border border-gray-200 rounded">
+        <div className="mt-3 max-h-72 overflow-y-auto border border-neutral-800 rounded">
           <table className="w-full text-xs">
-            <thead className="bg-gray-100 text-gray-800 sticky top-0">
+            <thead className="bg-neutral-800 text-neutral-200 sticky top-0">
               <tr>
                 <th className="p-1.5 w-8"></th>
                 <th className="p-1.5 text-left">{t.vrColOld}</th>
@@ -94,19 +94,19 @@ export default function VarRemapPanel({ card, llmConfig, extraProviders = [], on
             </thead>
             <tbody>
               {rows.map((r, i) => (
-                <tr key={i} className={r.include ? 'bg-white' : 'bg-gray-50 opacity-60'}>
+                <tr key={i} className={r.include ? 'bg-neutral-900' : 'bg-neutral-900 opacity-60'}>
                   <td className="p-1.5 text-center">
                     <input type="checkbox" checked={r.include} onChange={e => setRow(i, { include: e.target.checked })} />
                   </td>
-                  <td className="p-1.5 font-mono text-gray-700">{r.oldKey}</td>
+                  <td className="p-1.5 font-mono text-neutral-300">{r.oldKey}</td>
                   <td className="p-1.5">
                     <input value={r.newKey || ''} onChange={e => setRow(i, { newKey: e.target.value })}
-                      className="w-full font-mono px-1 py-0.5 border border-gray-300 rounded text-indigo-900 font-bold" />
+                      className="w-full font-mono px-1 py-0.5 border border-neutral-700 rounded text-indigo-200 font-bold" />
                   </td>
                   <td className="p-1.5">
                     <input value={r.newDescribe || ''} onChange={e => setRow(i, { newDescribe: e.target.value })}
                       placeholder={t.vrKeepPh}
-                      className="w-full px-1 py-0.5 border border-gray-300 rounded text-gray-800" />
+                      className="w-full px-1 py-0.5 border border-neutral-700 rounded text-neutral-200" />
                   </td>
                 </tr>
               ))}

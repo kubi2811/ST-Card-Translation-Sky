@@ -304,18 +304,18 @@ export default function ModCardApp() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6 font-sans">
+    <div className="min-h-screen bg-neutral-950 p-6 font-sans">
       <header className="max-w-6xl mx-auto mb-8">
         <div className="flex justify-between items-end">
           <div>
-            <h1 className="text-3xl font-bold text-gray-950 tracking-tight">
+            <h1 className="text-3xl font-bold text-neutral-100 tracking-tight">
               SillyTavern Card Mod AI IDE
             </h1>
-            <p className="text-gray-700 mt-1 font-medium">{t.appSubtitle}</p>
+            <p className="text-neutral-300 mt-1 font-medium">{t.appSubtitle}</p>
           </div>
           <button 
             onClick={() => setActiveTab('settings')}
-            className="text-sm font-bold text-gray-800 hover:text-indigo-700 flex items-center gap-1"
+            className="text-sm font-bold text-neutral-200 hover:text-indigo-300 flex items-center gap-1"
           >
             {t.settingsBtn}
           </button>
@@ -326,25 +326,25 @@ export default function ModCardApp() {
         
         {/* Cột trái: Quản lý File & Rules */}
         <div className="space-y-6">
-          <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
-            <h2 className="text-lg font-extrabold text-gray-950 mb-3">{t.fileSection}</h2>
+          <div className="bg-neutral-900 p-4 rounded-lg shadow-sm border border-neutral-800">
+            <h2 className="text-lg font-extrabold text-neutral-100 mb-3">{t.fileSection}</h2>
             {!card ? (
               <FileUploader onCardLoaded={handleCardLoaded} />
             ) : (
-              <div className="p-3 bg-green-50 border border-green-300 rounded text-sm">
-                <p className="font-bold text-green-950">{t.fileLoadedPrefix} {card.data?.name || t.fileUnnamed}</p>
+              <div className="p-3 bg-green-950/40 border border-green-700 rounded text-sm">
+                <p className="font-bold text-green-200">{t.fileLoadedPrefix} {card.data?.name || t.fileUnnamed}</p>
                 {isLorebookOnly && (
-                  <span className="inline-block mt-1 mr-1 px-2 py-0.5 bg-amber-100 text-amber-950 border border-amber-400 rounded text-xs font-black">
+                  <span className="inline-block mt-1 mr-1 px-2 py-0.5 bg-amber-900/40 text-amber-200 border border-amber-700 rounded text-xs font-black">
                     {fmt(t.fileLorebookMode, { count: card.data?.character_book?.entries?.length || 0 })}
                   </span>
                 )}
                 {isMvuCard && (
-                  <span className="inline-block mt-1 px-2 py-0.5 bg-purple-100 text-purple-950 border border-purple-300 rounded text-xs font-black animate-pulse">
+                  <span className="inline-block mt-1 px-2 py-0.5 bg-purple-900/40 text-purple-200 border border-purple-700 rounded text-xs font-black animate-pulse">
                     {t.fileMvuZod}
                   </span>
                 )}
                 {!isLorebookOnly && (
-                  <p className="text-green-900 text-xs mt-1 font-semibold truncate">
+                  <p className="text-green-200 text-xs mt-1 font-semibold truncate">
                     {card.data?.description?.substring(0, 80)}...
                   </p>
                 )}
@@ -359,14 +359,14 @@ export default function ModCardApp() {
           </div>
 
           {isMvuCard && mvuVariables.length > 0 && (
-            <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
-              <h2 className="text-lg font-extrabold text-gray-950 mb-1">{t.zodSection}</h2>
-              <p className="text-xs text-gray-700 font-semibold mb-2">
+            <div className="bg-neutral-900 p-4 rounded-lg shadow-sm border border-neutral-800">
+              <h2 className="text-lg font-extrabold text-neutral-100 mb-1">{t.zodSection}</h2>
+              <p className="text-xs text-neutral-300 font-semibold mb-2">
                 {t.zodDesc}
               </p>
-              <div className="max-h-40 overflow-y-auto border border-gray-200 rounded p-2 bg-gray-50 flex flex-wrap gap-1">
+              <div className="max-h-40 overflow-y-auto border border-neutral-800 rounded p-2 bg-neutral-900 flex flex-wrap gap-1">
                 {mvuVariables.map((v, i) => (
-                  <span key={i} className="text-xs px-1.5 py-0.5 bg-indigo-50 border border-indigo-200 text-indigo-950 font-bold rounded">
+                  <span key={i} className="text-xs px-1.5 py-0.5 bg-indigo-950/40 border border-indigo-800 text-indigo-200 font-bold rounded">
                     {v}
                   </span>
                 ))}
@@ -387,14 +387,14 @@ export default function ModCardApp() {
             />
           )}
 
-          <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
-            <h2 className="text-lg font-extrabold text-gray-950 mb-3">{t.modSection}</h2>
+          <div className="bg-neutral-900 p-4 rounded-lg shadow-sm border border-neutral-800">
+            <h2 className="text-lg font-extrabold text-neutral-100 mb-3">{t.modSection}</h2>
             <textarea
               value={customPrompt}
               onChange={e => setCustomPrompt(e.target.value)}
               placeholder={t.modPlaceholder}
               rows={4}
-              className="w-full text-sm rounded-md border-gray-400 shadow-sm border-2 p-2 bg-gray-50 focus:bg-white focus:ring-indigo-500 focus:border-indigo-500 transition-colors placeholder-gray-800 text-gray-950 font-medium"
+              className="w-full text-sm rounded-md border-neutral-700 shadow-sm border-2 p-2 bg-neutral-900 focus:bg-neutral-800 focus:ring-indigo-500 focus:border-indigo-500 transition-colors placeholder-neutral-500 text-neutral-100 font-medium"
             />
           </div>
 
@@ -413,23 +413,23 @@ export default function ModCardApp() {
             />
           )}
 
-          <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
-            <h3 className="font-extrabold text-gray-950 mb-2">{t.orchSection}</h3>
+          <div className="bg-neutral-900 p-4 rounded-lg shadow-sm border border-neutral-800">
+            <h3 className="font-extrabold text-neutral-100 mb-2">{t.orchSection}</h3>
 
             {/* Chế độ Mở rộng / đào sâu */}
-            <div className="mb-3 p-2.5 rounded-md border border-amber-300 bg-amber-50">
+            <div className="mb-3 p-2.5 rounded-md border border-amber-700 bg-amber-950/40">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" checked={expandMode} onChange={e => setExpandMode(e.target.checked)} />
-                <span className="text-sm font-bold text-amber-950">{t.expandMode}</span>
+                <span className="text-sm font-bold text-amber-200">{t.expandMode}</span>
               </label>
-              <p className="text-[11px] text-amber-900 mt-1 leading-snug">
+              <p className="text-[11px] text-amber-200 mt-1 leading-snug">
                 {t.expandModeDesc}
               </p>
               {expandMode && (
                 <div className="mt-2 flex items-center gap-2">
-                  <span className="text-xs font-semibold text-amber-950">{t.expandIntensityLabel}</span>
+                  <span className="text-xs font-semibold text-amber-200">{t.expandIntensityLabel}</span>
                   <select value={expandIntensity} onChange={e => setExpandIntensity(e.target.value)}
-                    className="text-xs border border-amber-400 rounded px-2 py-1 bg-white text-amber-950 font-bold">
+                    className="text-xs border border-amber-700 rounded px-2 py-1 bg-neutral-900 text-amber-200 font-bold">
                     <option value="nhẹ">{t.intensityLight}</option>
                     <option value="vừa">{t.intensityMedium}</option>
                     <option value="sâu">{t.intensityDeep}</option>
@@ -456,17 +456,17 @@ export default function ModCardApp() {
             )}
 
             {isProcessing && (
-              <div className="mt-3 p-2 bg-blue-50 text-blue-800 text-xs rounded border border-blue-200 animate-pulse">
+              <div className="mt-3 p-2 bg-blue-950/40 text-blue-300 text-xs rounded border border-blue-800 animate-pulse">
                 ⏳ {processStatus}
               </div>
             )}
             {!isProcessing && processStatus && (
-              <div className="mt-3 p-2 bg-gray-100 text-gray-700 text-xs rounded border border-gray-200">
+              <div className="mt-3 p-2 bg-neutral-800 text-neutral-300 text-xs rounded border border-neutral-800">
                 ℹ️ {processStatus}
               </div>
             )}
             {scriptWarnings.length > 0 && (
-              <div className="mt-3 p-2 bg-red-50 text-red-800 text-xs rounded border border-red-300">
+              <div className="mt-3 p-2 bg-red-950/40 text-red-300 text-xs rounded border border-red-700">
                 ⚠️ <b>{fmt(t.scriptWarnBold, { count: scriptWarnings.length })}</b> {t.scriptWarnRest}
                 <ul className="list-disc ml-4 mt-1">
                   {scriptWarnings.map((n, i) => <li key={i}>{n}</li>)}
@@ -478,53 +478,53 @@ export default function ModCardApp() {
 
         {/* Cột phải: Workspace & Diff Viewer */}
         <div className="lg:col-span-2">
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 h-full flex flex-col">
+          <div className="bg-neutral-900 rounded-lg shadow-sm border border-neutral-800 h-full flex flex-col">
             <div className="border-b px-4 py-3 flex gap-4 text-sm font-medium">
               <button 
                 onClick={() => setActiveTab('workspace')}
-                className={`pb-1 border-b-2 ${activeTab === 'workspace' ? 'border-indigo-600 text-indigo-700 font-bold' : 'border-transparent text-gray-700 hover:text-gray-950 font-semibold'}`}
+                className={`pb-1 border-b-2 ${activeTab === 'workspace' ? 'border-indigo-600 text-indigo-300 font-bold' : 'border-transparent text-neutral-300 hover:text-neutral-100 font-semibold'}`}
               >
                 {t.tabWorkspace}
               </button>
               <button 
                 onClick={() => setActiveTab('diff')}
-                className={`pb-1 border-b-2 ${activeTab === 'diff' ? 'border-indigo-600 text-indigo-700 font-bold' : 'border-transparent text-gray-700 hover:text-gray-950 font-semibold'}`}
+                className={`pb-1 border-b-2 ${activeTab === 'diff' ? 'border-indigo-600 text-indigo-300 font-bold' : 'border-transparent text-neutral-300 hover:text-neutral-100 font-semibold'}`}
               >
                 {t.tabDiff}
               </button>
               <button 
                 onClick={() => setActiveTab('settings')}
-                className={`pb-1 border-b-2 ${activeTab === 'settings' ? 'border-indigo-600 text-indigo-700 font-bold' : 'border-transparent text-gray-700 hover:text-gray-950 font-semibold'}`}
+                className={`pb-1 border-b-2 ${activeTab === 'settings' ? 'border-indigo-600 text-indigo-300 font-bold' : 'border-transparent text-neutral-300 hover:text-neutral-100 font-semibold'}`}
               >
                 {t.tabSettings}
               </button>
             </div>
             
-            <div className="p-4 flex-1 bg-gray-50 overflow-auto min-h-[500px]">
+            <div className="p-4 flex-1 bg-neutral-900 overflow-auto min-h-[500px]">
               {activeTab === 'upload' && !card && (
-                <div className="h-full flex items-center justify-center text-gray-700 font-semibold">
+                <div className="h-full flex items-center justify-center text-neutral-300 font-semibold">
                   {t.needCardHint}
                 </div>
               )}
               
               {activeTab === 'workspace' && (
                 <div>
-                  <h3 className="font-bold text-gray-950 text-lg mb-3">{t.analysisTitle}</h3>
+                  <h3 className="font-bold text-neutral-100 text-lg mb-3">{t.analysisTitle}</h3>
                   {!analysisResult ? (
-                    <div className="text-gray-700 font-medium text-sm">{t.analysisEmpty}</div>
+                    <div className="text-neutral-300 font-medium text-sm">{t.analysisEmpty}</div>
                   ) : (
                     <div className="space-y-3">
                       {analysisResult.map((res: AnalysisItem, idx: number) => (
-                        <div key={idx} className={`p-3 rounded border ${res.status === 'NEEDS_MOD' ? 'bg-orange-50 border-orange-300' : 'bg-gray-100 border-gray-300'}`}>
+                        <div key={idx} className={`p-3 rounded border ${res.status === 'NEEDS_MOD' ? 'bg-orange-950/40 border-orange-700' : 'bg-neutral-800 border-neutral-700'}`}>
                           <div className="flex justify-between items-center mb-2">
-                            <span className="font-bold text-gray-950">{String(res.label || res.section_id)}</span>
-                            <span className={`px-2 py-0.5 rounded text-xs font-black ${res.status === 'NEEDS_MOD' ? 'bg-orange-200 text-orange-950' : 'bg-gray-300 text-gray-900'}`}>
+                            <span className="font-bold text-neutral-100">{String(res.label || res.section_id)}</span>
+                            <span className={`px-2 py-0.5 rounded text-xs font-black ${res.status === 'NEEDS_MOD' ? 'bg-orange-200 text-orange-200' : 'bg-gray-300 text-neutral-100'}`}>
                               {String(res.status)}
                             </span>
                           </div>
-                          <p className="text-sm text-gray-900 mb-1"><strong>{t.analysisReason}</strong> {String(res.reason)}</p>
+                          <p className="text-sm text-neutral-100 mb-1"><strong>{t.analysisReason}</strong> {String(res.reason)}</p>
                           {res.status === 'NEEDS_MOD' && (
-                            <p className="text-sm text-gray-900"><strong>{t.analysisPreview}</strong> {String(res.preview_change)}</p>
+                            <p className="text-sm text-neutral-100"><strong>{t.analysisPreview}</strong> {String(res.preview_change)}</p>
                           )}
                         </div>
                       ))}
@@ -535,25 +535,25 @@ export default function ModCardApp() {
 
               {activeTab === 'diff' && (
                 <div className="h-full">
-                  <h3 className="font-bold text-gray-950 text-lg mb-3">{t.resultTitle}</h3>
+                  <h3 className="font-bold text-neutral-100 text-lg mb-3">{t.resultTitle}</h3>
                   {!moddedCard ? (
-                    <div className="flex items-center justify-center text-gray-700 font-semibold h-64">
+                    <div className="flex items-center justify-center text-neutral-300 font-semibold h-64">
                       {t.resultEmpty}
                     </div>
                   ) : (
                     <div className="space-y-4">
                       {auditResult && (
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div className={`p-4 rounded-lg border ${auditResult.consistency_score >= 80 ? 'bg-green-50 border-green-300' : 'bg-red-50 border-red-300'}`}>
+                          <div className={`p-4 rounded-lg border ${auditResult.consistency_score >= 80 ? 'bg-green-950/40 border-green-700' : 'bg-red-950/40 border-red-700'}`}>
                             <div className="flex items-center justify-between">
-                              <h4 className="font-black text-gray-950">{t.auditTitle}</h4>
-                              <span className="text-xl font-black text-gray-950">{auditResult.consistency_score}/100</span>
+                              <h4 className="font-black text-neutral-100">{t.auditTitle}</h4>
+                              <span className="text-xl font-black text-neutral-100">{auditResult.consistency_score}/100</span>
                             </div>
-                            <p className="text-sm mt-1 text-gray-900 font-medium">{auditResult.summary}</p>
+                            <p className="text-sm mt-1 text-neutral-100 font-medium">{auditResult.summary}</p>
                             {auditResult.inconsistencies?.length > 0 && (
                               <ul className="mt-3 text-xs space-y-1">
                                 {auditResult.inconsistencies.map((inc: { severity: string; dimension: string; description: string }, i: number) => (
-                                  <li key={i} className="text-red-950 bg-red-100 p-2 rounded border border-red-200 font-medium">
+                                  <li key={i} className="text-red-200 bg-red-900/40 p-2 rounded border border-red-800 font-medium">
                                     <strong>[{inc.severity}] {inc.dimension}:</strong> {inc.description}
                                   </li>
                                 ))}
@@ -562,20 +562,20 @@ export default function ModCardApp() {
                           </div>
 
                           {validationResult && (
-                            <div className={`p-4 rounded-lg border ${validationResult.status === 'PASS' ? 'bg-green-50 border-green-300' : 'bg-orange-50 border-orange-300'}`}>
+                            <div className={`p-4 rounded-lg border ${validationResult.status === 'PASS' ? 'bg-green-950/40 border-green-700' : 'bg-orange-950/40 border-orange-700'}`}>
                               <div className="flex items-center justify-between">
-                                <h4 className="font-black text-gray-950">{t.validationTitle}</h4>
-                                <span className={`text-sm px-2 py-0.5 rounded font-black ${validationResult.status === 'PASS' ? 'bg-green-200 text-green-950' : 'bg-orange-200 text-orange-950'}`}>
+                                <h4 className="font-black text-neutral-100">{t.validationTitle}</h4>
+                                <span className={`text-sm px-2 py-0.5 rounded font-black ${validationResult.status === 'PASS' ? 'bg-green-200 text-green-200' : 'bg-orange-200 text-orange-200'}`}>
                                   {validationResult.status}
                                 </span>
                               </div>
-                              <p className="text-xs mt-1 text-gray-900 font-semibold">
+                              <p className="text-xs mt-1 text-neutral-100 font-semibold">
                                 {fmt(t.validationVerified, { count: validationResult.stats?.protected_fields_verified || 0 })}
                               </p>
                               {validationResult.issues && validationResult.issues.length > 0 && (
                                 <ul className="mt-3 text-xs space-y-1">
                                   {validationResult.issues.map((issue: { severity: string; category: string; description: string; fix: string }, i: number) => (
-                                    <li key={i} className="text-orange-950 bg-orange-100 p-2 rounded border border-orange-200 font-medium">
+                                    <li key={i} className="text-orange-200 bg-orange-900/40 p-2 rounded border border-orange-800 font-medium">
                                       <strong>[{issue.severity}] {issue.category}:</strong> {issue.description} ({t.suggestLabel}: {issue.fix})
                                     </li>
                                   ))}
@@ -597,8 +597,8 @@ export default function ModCardApp() {
 
                       <div className="grid grid-cols-2 gap-4">
                         <div className="border rounded-md overflow-hidden flex flex-col">
-                          <div className="bg-red-100 p-2 font-semibold text-red-800 border-b border-red-200 text-sm">{t.jsonBefore}</div>
-                          <pre className="p-3 bg-white text-xs overflow-auto flex-1 max-h-[500px]">
+                          <div className="bg-red-900/40 p-2 font-semibold text-red-300 border-b border-red-800 text-sm">{t.jsonBefore}</div>
+                          <pre className="p-3 bg-neutral-900 text-xs overflow-auto flex-1 max-h-[500px]">
                             {JSON.stringify({
                               description: card?.data?.description,
                               personality: card?.data?.personality,
@@ -608,8 +608,8 @@ export default function ModCardApp() {
                           </pre>
                         </div>
                         <div className="border rounded-md overflow-hidden flex flex-col">
-                          <div className="bg-green-100 p-2 font-semibold text-green-800 border-b border-green-200 text-sm">{t.jsonAfter}</div>
-                          <pre className="p-3 bg-white text-xs overflow-auto flex-1 max-h-[500px]">
+                          <div className="bg-green-900/40 p-2 font-semibold text-green-300 border-b border-green-800 text-sm">{t.jsonAfter}</div>
+                          <pre className="p-3 bg-neutral-900 text-xs overflow-auto flex-1 max-h-[500px]">
                             {JSON.stringify({
                               description: moddedCard?.data?.description,
                               personality: moddedCard?.data?.personality,
@@ -625,16 +625,20 @@ export default function ModCardApp() {
               )}
 
               {activeTab === 'settings' && (
-                <div className="max-w-xl bg-gray-50 p-6 rounded-xl border-2 border-gray-300 shadow-inner">
-                  <h3 className="font-black text-2xl text-gray-950 mb-6 border-b-2 border-gray-300 pb-2">{t.settingsTitle}</h3>
+                <div className="max-w-xl bg-neutral-900 p-6 rounded-xl border-2 border-neutral-700 shadow-inner">
+                  <h3 className="font-black text-2xl text-neutral-100 mb-2 border-b-2 border-neutral-700 pb-2">{t.settingsTitle}</h3>
+                  {/* (Bug #14) Trấn an user: không cần nút Lưu — mọi thay đổi tự lưu vào trình duyệt, F5 không mất. */}
+                  <p className="text-xs text-emerald-300 font-semibold mb-5 flex items-center gap-1.5">
+                    <span>💾</span> {t.settingsAutosave}
+                  </p>
                   <div className="space-y-5">
                     {/* Provider */}
                     <div>
-                      <label className="block text-sm font-black text-gray-950">{t.cfgProvider}</label>
+                      <label className="block text-sm font-black text-neutral-100">{t.cfgProvider}</label>
                       <select 
                         value={llmConfig.provider} 
                         onChange={e => handleProviderChange(e.target.value as 'gemini' | 'anthropic' | 'openai')}
-                        className="mt-1 block w-full rounded-md border-2 border-gray-400 shadow-sm p-2 text-gray-950 font-bold bg-white focus:border-indigo-600"
+                        className="mt-1 block w-full rounded-md border-2 border-neutral-700 shadow-sm p-2 text-neutral-100 font-bold bg-neutral-900 focus:border-indigo-600"
                       >
                         <option value="gemini">Google Gemini</option>
                         <option value="anthropic">Anthropic Claude</option>
@@ -644,7 +648,7 @@ export default function ModCardApp() {
 
                     {/* Custom Proxy URL (Link Proxy) */}
                     <div>
-                      <label className="block text-sm font-black text-gray-950">{t.cfgBaseUrl}</label>
+                      <label className="block text-sm font-black text-neutral-100">{t.cfgBaseUrl}</label>
                       <input 
                         type="text" 
                         value={llmConfig.customUrl || ''} 
@@ -654,22 +658,22 @@ export default function ModCardApp() {
                           llmConfig.provider === 'gemini' ? t.cfgBaseUrlPhGemini :
                           t.cfgBaseUrlPhAnthropic
                         }
-                        className="mt-1 block w-full rounded-md border-2 border-gray-400 shadow-sm p-2 text-gray-950 font-bold bg-white placeholder-gray-600 focus:border-indigo-600"
+                        className="mt-1 block w-full rounded-md border-2 border-neutral-700 shadow-sm p-2 text-neutral-100 font-bold bg-neutral-900 placeholder-neutral-500 focus:border-indigo-600"
                       />
-                      <p className="text-xs text-gray-800 font-semibold mt-1">{t.cfgBaseUrlHint}</p>
+                      <p className="text-xs text-neutral-200 font-semibold mt-1">{t.cfgBaseUrlHint}</p>
                     </div>
 
                     {/* API Key / Password (Mật khẩu Proxy) */}
                     <div>
-                      <label className="block text-sm font-black text-gray-950">{t.cfgApiKey}</label>
+                      <label className="block text-sm font-black text-neutral-100">{t.cfgApiKey}</label>
                       <input 
                         type="password" 
                         value={llmConfig.apiKey} 
                         onChange={e => setLlmConfig({...llmConfig, apiKey: e.target.value})}
                         placeholder={t.cfgApiKeyPh}
-                        className="mt-1 block w-full rounded-md border-2 border-gray-400 shadow-sm p-2 text-gray-950 font-bold bg-white placeholder-gray-600 focus:border-indigo-600"
+                        className="mt-1 block w-full rounded-md border-2 border-neutral-700 shadow-sm p-2 text-neutral-100 font-bold bg-neutral-900 placeholder-neutral-500 focus:border-indigo-600"
                       />
-                      <p className="text-xs text-gray-900 font-bold mt-1">
+                      <p className="text-xs text-neutral-100 font-bold mt-1">
                         {t.cfgApiKeyNote}
                       </p>
                     </div>
@@ -687,11 +691,11 @@ export default function ModCardApp() {
                     {/* Model */}
                     <div>
                       <div className="flex justify-between items-center">
-                        <label className="block text-sm font-black text-gray-950">{t.cfgModel}</label>
+                        <label className="block text-sm font-black text-neutral-100">{t.cfgModel}</label>
                         <button
                           type="button"
                           onClick={() => setManualModelInput(!manualModelInput)}
-                          className="text-xs text-indigo-700 hover:text-indigo-900 font-black underline"
+                          className="text-xs text-indigo-300 hover:text-indigo-200 font-black underline"
                         >
                           {manualModelInput ? t.cfgPickFromList : t.cfgTypeManually}
                         </button>
@@ -703,13 +707,13 @@ export default function ModCardApp() {
                           value={llmConfig.model} 
                           onChange={e => setLlmConfig({...llmConfig, model: e.target.value})}
                           placeholder={t.cfgModelPh}
-                          className="mt-1 block w-full rounded-md border-2 border-gray-400 shadow-sm p-2 text-gray-950 font-bold bg-white placeholder-gray-600 focus:border-indigo-600"
+                          className="mt-1 block w-full rounded-md border-2 border-neutral-700 shadow-sm p-2 text-neutral-100 font-bold bg-neutral-900 placeholder-neutral-500 focus:border-indigo-600"
                         />
                       ) : (
                         <select
                           value={llmConfig.model}
                           onChange={e => setLlmConfig({...llmConfig, model: e.target.value})}
-                          className="mt-1 block w-full rounded-md border-2 border-gray-400 shadow-sm p-2 text-gray-950 font-bold bg-white focus:border-indigo-600 font-extrabold"
+                          className="mt-1 block w-full rounded-md border-2 border-neutral-700 shadow-sm p-2 text-neutral-100 font-bold bg-neutral-900 focus:border-indigo-600 font-extrabold"
                         >
                           {scannedModels.length > 0 ? (
                             scannedModels.map(m => (
@@ -741,23 +745,23 @@ export default function ModCardApp() {
                       )}
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4 border-t-2 border-gray-300 pt-4">
+                    <div className="grid grid-cols-2 gap-4 border-t-2 border-neutral-700 pt-4">
                       {/* Max Output Tokens */}
                       <div>
-                        <label className="block text-xs font-black text-gray-950">{t.cfgMaxTokens}</label>
+                        <label className="block text-xs font-black text-neutral-100">{t.cfgMaxTokens}</label>
                         <input 
                           type="number" 
                           min={256}
                           max={16384}
                           value={llmConfig.maxOutputTokens || 4096}
                           onChange={e => setLlmConfig({...llmConfig, maxOutputTokens: parseInt(e.target.value) || 4096})}
-                          className="mt-1 block w-full rounded-md border-2 border-gray-400 shadow-sm p-2 text-gray-950 font-bold bg-white focus:border-indigo-600"
+                          className="mt-1 block w-full rounded-md border-2 border-neutral-700 shadow-sm p-2 text-neutral-100 font-bold bg-neutral-900 focus:border-indigo-600"
                         />
                       </div>
 
                       {/* Temperature */}
                       <div>
-                        <label className="block text-xs font-black text-gray-950">{t.cfgTemperature}</label>
+                        <label className="block text-xs font-black text-neutral-100">{t.cfgTemperature}</label>
                         <input 
                           type="number" 
                           min={0.0}
@@ -765,7 +769,7 @@ export default function ModCardApp() {
                           step={0.1}
                           value={llmConfig.temperature !== undefined ? llmConfig.temperature : 0.2}
                           onChange={e => setLlmConfig({...llmConfig, temperature: parseFloat(e.target.value) || 0.2})}
-                          className="mt-1 block w-full rounded-md border-2 border-gray-400 shadow-sm p-2 text-gray-950 font-bold bg-white focus:border-indigo-600"
+                          className="mt-1 block w-full rounded-md border-2 border-neutral-700 shadow-sm p-2 text-neutral-100 font-bold bg-neutral-900 focus:border-indigo-600"
                         />
                       </div>
                     </div>

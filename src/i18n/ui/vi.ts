@@ -844,6 +844,11 @@ const ui: UiKeys = {
   tcPresetTurbo: '🚀 Dịch siêu tốc',
   tcPresetTurboHint: 'Gom thông minh (bin-packing): entry NGẮN dồn chung 1 call (đi model phụ nhanh), entry DÀI để riêng (đi model chính). Giảm mạnh số call API, vẫn chạy đa luồng.',
   tcPresetTurboDone: 'Đã áp dụng Dịch siêu tốc: bật mọi nhóm + chế độ hàng loạt + gom thông minh (entry ngắn gộp → model phụ, entry dài để riêng → model chính).',
+  tcRecBadge: 'Gợi ý cho card này',
+  tcRecMvu: '🔍 Card này có KHUNG BIẾN MVU/trạng thái → khuyên dùng ⚡ Dịch nhẹ (★): logic/biến giữ nguyên 100%, dịch phần người chơi thấy, AI tự đọc tiếng gốc. Muốn bảng trạng thái trong game cũng tiếng Việt thì dùng 📖 Dịch đầy đủ (lâu hơn).',
+  tcRecScript: '🔍 Card này có SCRIPT giao diện nặng → khuyên dùng ⚡ Dịch nhẹ (★) để không đụng script (an toàn logic). Muốn UI trong game tiếng Việt hết → 📖 Dịch đầy đủ.',
+  tcRecBig: '🔍 Card LỚN / nhiều entry → khuyên dùng 🚀 Dịch siêu tốc (★): gom entry ngắn chung call, nhanh hơn nhiều mà vẫn dịch đầy đủ.',
+  tcRecSmall: '🔍 Card gọn nhẹ → khuyên dùng 📖 Dịch đầy đủ (★): dịch trọn vẹn mọi thứ, không tốn bao nhiêu lượt gọi.',
   tcAdvancedToggle: 'Cài đặt nâng cao',
   pcMainProviderTitle: 'Provider #1 (chính)',
 };

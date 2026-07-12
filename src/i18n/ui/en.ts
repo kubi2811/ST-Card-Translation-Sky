@@ -832,6 +832,11 @@ const ui = {
   tcPresetTurbo: '🚀 Turbo translate',
   tcPresetTurboHint: 'Smart bin-packing: SHORT entries are bundled into one API call each (routed to the fast secondary model), LONG entries go solo (primary model). Far fewer API calls, still fully parallel.',
   tcPresetTurboDone: 'Turbo preset applied: every group on + batch mode + smart packing (short entries bundled → secondary model, long entries solo → primary model).',
+  tcRecBadge: 'Suggested for this card',
+  tcRecMvu: '🔍 This card has an MVU/state variable framework → suggested: ⚡ Light translate (★): logic/variables stay 100% intact, only player-visible parts are translated. Want the in-game status UI in your language too? Use 📖 Full translate (slower).',
+  tcRecScript: '🔍 This card has heavy UI scripts → suggested: ⚡ Light translate (★) to leave scripts untouched (logic-safe). Want the in-game UI fully translated → 📖 Full translate.',
+  tcRecBig: '🔍 Large card / many entries → suggested: 🚀 Turbo translate (★): bundles short entries per call — much faster, still complete.',
+  tcRecSmall: '🔍 Compact card → suggested: 📖 Full translate (★): translate everything properly, costs very little.',
   tcAdvancedToggle: 'Advanced settings',
   pcMainProviderTitle: 'Provider #1 (main)',
 };

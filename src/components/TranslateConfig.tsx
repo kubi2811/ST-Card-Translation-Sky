@@ -8,6 +8,7 @@ import { getDefaultTranslationPrompt, getModelSuggestions } from '../utils/apiCl
 import { aiExtractGlossaryTerms } from '../utils/mvuSync';
 import type { LorebookStrategy, FieldGroupConfig, FieldGroup, GlossaryEntry } from '../types/card';
 import { Languages, FileJson, BookOpen, Plus, Trash2, Download, Upload, Bot, Loader2, Save, RotateCcw, CheckCircle, Zap } from 'lucide-react';
+import { recommendPreset } from '../utils/presetRecommend';
 import MvuSyncPanel from './MvuSyncPanel';
 import EjsSyncPanel from './EjsSyncPanel';
 
@@ -186,6 +187,15 @@ export default function TranslateConfig() {
   const [showAdvanced, setShowAdvanced] = useState<boolean>(() => {
     try { return localStorage.getItem('st-tc-show-advanced') === '1'; } catch { return false; }
   });
+  // 🔍 Phân tích card khi import → gợi ý preset phù hợp (MVU/script nặng → nhẹ; to → siêu tốc; gọn → đầy đủ).
+  const recommendation = useMemo(() => (card ? recommendPreset(card) : null), [card]);
+  const recStar = (id: string) => recommendation?.preset === id
+    ? <span title={ui.tcRecBadge} style={{ marginLeft: 4, color: '#facc15', fontWeight: 800 }}>★</span>
+    : null;
+  const recMsgKey = recommendation
+    ? ({ mvu: 'tcRecMvu', script: 'tcRecScript', big: 'tcRecBig', small: 'tcRecSmall' } as const)[recommendation.reason]
+    : null;
+
   // Preset đang chọn (nhẹ/đầy đủ/siêu tốc) — highlight để user biết mình đang ở chế độ nào.
   const [activePreset, setActivePreset] = useState<string>(() => {
     try { return localStorage.getItem('st-preset-active') || ''; } catch { return ''; }
@@ -270,7 +280,7 @@ export default function TranslateConfig() {
                   addToast('success', ui.tcPresetLightDone);
                 }}
               >
-                {ui.tcPresetLight}
+                {ui.tcPresetLight}{recStar('light')}
               </button>
               <button
                 type="button"
@@ -288,7 +298,7 @@ export default function TranslateConfig() {
                   addToast('success', ui.tcPresetFullDone);
                 }}
               >
-                {ui.tcPresetFull}
+                {ui.tcPresetFull}{recStar('full')}
               </button>
               <button
                 type="button"
@@ -312,9 +322,14 @@ export default function TranslateConfig() {
                   addToast('success', ui.tcPresetTurboDone);
                 }}
               >
-                {ui.tcPresetTurbo}
+                {ui.tcPresetTurbo}{recStar('turbo')}
               </button>
             </div>
+            {recommendation && recMsgKey && (
+              <div style={{ marginTop: 8, fontSize: '0.68rem', color: 'var(--text-secondary)', lineHeight: 1.5, borderTop: '1px dashed var(--border-subtle)', paddingTop: 6 }}>
+                {ui[recMsgKey]}
+              </div>
+            )}
           </div>
         )}
 

@@ -827,6 +827,11 @@ const ui: UiKeys = {
   tcPresetTurbo: '🚀 极速翻译',
   tcPresetTurboHint: '智能装箱（bin-packing）：短条目合并为一次 API 调用（走快速副模型），长条目单独处理（走主模型）。大幅减少调用次数，仍然多线程并行。',
   tcPresetTurboDone: '已应用「极速翻译」：所有分组开启 + 批量模式 + 智能装箱（短条目合并→副模型，长条目单独→主模型）。',
+  tcRecBadge: '本卡建议',
+  tcRecMvu: '🔍 本卡带有 MVU/状态变量框架 → 建议 ⚡ 轻量翻译（★）：逻辑/变量 100% 保持原样，只翻玩家看得到的部分。想让游戏内状态栏也翻译 → 用 📖 完整翻译（较慢）。',
+  tcRecScript: '🔍 本卡有较重的界面脚本 → 建议 ⚡ 轻量翻译（★），不碰脚本（逻辑安全）。想全部翻译界面 → 📖 完整翻译。',
+  tcRecBig: '🔍 大卡 / 条目多 → 建议 🚀 极速翻译（★）：短条目合并调用，快很多且照样翻全。',
+  tcRecSmall: '🔍 小巧卡片 → 建议 📖 完整翻译（★）：全部翻好，花不了多少调用。',
   tcAdvancedToggle: '高级设置',
   pcMainProviderTitle: '主 Provider #1',
 };

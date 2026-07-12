@@ -2,6 +2,14 @@
 
 > Cách cập nhật: mở thư mục cài đặt, chạy `git pull origin main`, rồi **tắt hẳn và chạy lại `start.bat`** (không chỉ F5).
 
+## v1.72.0 — Tự phân tích card khi import → gợi ý chế độ dịch 🔍★
+- **Nạp card xong, app tự quét và khuyên nên dịch kiểu gì** — người mới không cần biết gì cũng chọn đúng:
+  - Card có **khung biến MVU** (`[initvar]`/`[mvu_update]`/stat_data/registerMvuSchema) hoặc **script giao diện nặng** → khuyên **⚡ Dịch nhẹ** (an toàn logic tuyệt đối — bài học từ bug #4).
+  - Card **lớn / nhiều entry** → khuyên **🚀 Dịch siêu tốc** (gom call, nhanh mà vẫn đủ).
+  - Card **gọn nhẹ** → khuyên **📖 Dịch đầy đủ** (dịch trọn, không tốn bao nhiêu).
+- Hiển thị: **sao ★ vàng** trên nút preset được khuyên + **dòng giải thích vì sao** ngay dưới hàng preset (kèm hướng dẫn khi nào nên chọn chế độ khác). Có i18n VI/EN/中文.
+- +6 test cho bộ phân tích (165 test tổng). Đã verify live bằng chính card AI帝国1.1: nhận diện đúng MVU → gợi ý ⚡ Dịch nhẹ.
+
 ## v1.71.0 — Sửa bug #4: Dịch nhẹ làm vỡ MVU ("card không hỗ trợ 额外模型解析") 🧩
 > Từ báo lỗi #4: card `AI帝国1.1` dịch bằng **⚡ Dịch nhẹ** xong, vào SillyTavern chơi thì popup MVU lỗi lặp: *"当前角色卡不支持额外模型解析"*.
 - **Gốc rễ (đã mổ xẻ diff 2 card):** Chiến lược B dịch **tên biến MVU** ra tiếng Việt **có dấu cách** (`叙事` → `Tự Sự`) rồi áp từ điển lên **cả card** — kể cả script Zod schema không nằm trong diện dịch. Trong JavaScript, key tiếng Trung không quote (`叙事:`) là hợp lệ, nhưng **key có dấu cách (`Tự Sự:`) là lỗi cú pháp** → script schema chết ngay khi nạp → `registerMvuSchema` không chạy → framework MVU kết luận "card không hỗ trợ".

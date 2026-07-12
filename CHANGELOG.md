@@ -2,6 +2,17 @@
 
 > Cách cập nhật: mở thư mục cài đặt, chạy `git pull origin main`, rồi **tắt hẳn và chạy lại `start.bat`** (không chỉ F5).
 
+## v1.83.0 — 🧪 Chạy script + data test: giả lập môi trường SillyTavern trong preview
+> Nghiên cứu 3 extension user ST hay cài (JS-Slash-Runner/酒馆助手, ST-Prompt-template, st-memory-enhancement). Kết luận: **không thể import nguyên xi** — chúng bám ruột SillyTavern (đọc chat/characters qua window.parent của ST thật). Cách chuẩn khả thi: **dùng chính source của JS-Slash-Runner làm chuẩn tham chiếu** để giả lập đúng.
+- **Toggle "🧪 Chạy script + data test" trong modal Xem như SillyTavern:**
+  - Giả lập đúng template iframe của TavernHelper: bơm cùng bộ thư viện (jQuery, jQuery-UI, Vue, lodash, YAML, showdown, zod, FontAwesome) + **phủ kín 178 API TavernHelper** (danh sách trích từ bundle dist thật) + `Mvu` + `errorCatched` đúng semantics + polyfill localStorage.
+  - **DATA TEST từ chính entry `[initvar]`** của card (parse YAML/JSON) → script card tự đổ số vào thanh trạng thái/game UI **y như đang chơi trong ST** — đúng yêu cầu "tạo data test xem UI ổn chưa" mà không cần import vào ST hay gọi AI.
+  - Script chạy trong **iframe cách ly tuyệt đối** (không same-origin — không đụng được app/localStorage thật); tham chiếu `window.parent/top` của card được rewrite về chính iframe.
+  - **Lỗi script hiện ngay trong modal** — công cụ soi "biến/hàm bị dịch vỡ" khi so bản Gốc ↔ Đã dịch.
+- **Fix kẹt scroll** (cả chế độ tĩnh): card dùng `position:fixed` + `100vh` + `overflow:hidden` chiếm cả khung → override cuối body + transform-containment, giờ cuộn được.
+- Verify live bằng card 《Đạo Uyên》v5.2 (ERA, status bar 282KB script): UI render đầy đủ — Phàm Nhân (DC:0), Sinh Mệnh/Tinh Huyết/Linh Lực 100/100, tab Tổng quan/Công Pháp…, vị trí Huyền Thiên Giới — **0 lỗi script**.
+- ST-Prompt-template (EJS prompt-side) + st-memory-enhancement (bảng nhớ): không cần cho preview — không nhúng.
+
 ## v1.82.0 — Fix popup "tự bấm" + tự nạp bộ thuật ngữ Tu tiên
 - **Fix popup gợi ý cấu hình tự đóng ngay khi hiện:** double-click chọn file trong hộp thoại → cú click thứ 2 rơi xuống trang đúng lúc popup vừa mount, trúng nút giữa màn hình → popup "tự bấm rồi biến mất". Giờ popup khoá tương tác 450ms đầu (click trễ rơi vào khoảng trống vô hại).
 - **Bộ thuật ngữ Tu tiên/Võ hiệp tự nạp:** bấm Start, card có ≥8 thuật ngữ của bộ xuất hiện trong nội dung → tự nạp cả bộ vào Từ điển + log rõ (0 token). User khỏi phải nhớ bấm nút; đã chủ động xoá bớt (≥5 mục của bộ vẫn còn) thì không nạp lại; mục tự nhập luôn thắng; tắt chung công tắc "Tự xây bảng tên riêng".

@@ -20,9 +20,8 @@ import { BatchGeneratorPanel } from '../components/lorebook/BatchGeneratorPanel'
 import { DocExtractPanel } from '../components/lorebook/DocExtractPanel';
 import { WikiScraperPanel } from '../components/lorebook/WikiScraperPanel';
 import { RAGDebugPanel } from '../components/lorebook/RAGDebugPanel';
-import { WorldbookHealthPanel } from '../components/lorebook/WorldbookHealthPanel';
 import { LorebookCategorizationPanel } from '../components/lorebook/LorebookCategorizationPanel';
-import { QualityCheckPanel } from '../components/lorebook/QualityCheckPanel';
+import { QualityHubPanel } from '../components/lorebook/QualityHubPanel';
 import { LorebookRefinerPanel } from '../components/lorebook/LorebookRefinerPanel';
 import { TokenBudgetWizard } from '../components/tokenBudget/TokenBudgetWizard';
 import {
@@ -94,7 +93,7 @@ export function LorebookPage() {
       {activeTab === 'doc' && <div className="flex-1 overflow-y-auto scrollbar-thin"><DocExtractPanel /></div>}
       {activeTab === 'wiki' && <div className="flex-1 overflow-y-auto scrollbar-thin"><WikiScraperPanel /></div>}
       {activeTab === 'analysis' && <div className="flex-1 overflow-y-auto scrollbar-thin"><LorebookCategorizationPanel /></div>}
-      {activeTab === 'quality' && <div className="flex-1 overflow-y-auto scrollbar-thin p-4"><QualityCheckPanel /></div>}
+      {activeTab === 'quality' && <div className="flex-1 overflow-y-auto scrollbar-thin"><QualityHubPanel /></div>}
       {activeTab === 'tctrl' && <div className="flex-1 overflow-hidden"><TokenBudgetWizard /></div>}
     </div>
   );
@@ -367,9 +366,8 @@ function EntriesTab() {
           )}
         </div>
 
-        {/* Health Check + RAG Debug */}
+        {/* RAG Debug (Sức khoẻ config đã gộp vào tab "Phân tích & Chất lượng" — bug #7) */}
         <div className="shrink-0 px-4 pb-3 space-y-2">
-          <WorldbookHealthPanel />
           <RAGDebugPanel />
         </div>
       </div>

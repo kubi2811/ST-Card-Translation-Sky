@@ -241,7 +241,12 @@ export default function TranslateConfig() {
                     fieldGroups: translationConfig.fieldGroups.map((g: FieldGroupConfig) => ({
                       ...g, enabled: lightOn.has(g.id),
                     })),
-                    enableMvuSync: true,
+                    // (Fix bug #4 — card AI1.1) Dịch nhẹ KHÔNG đổi tên biến MVU nữa: Strategy B
+                    // từng áp từ điển tên biến lên CẢ CARD (kể cả script Zod không được dịch) →
+                    // tên VI có dấu cách làm object key không quote vỡ syntax (`Tự Sự:`) → schema
+                    // chết → framework báo "card không hỗ trợ". Đúng định nghĩa Dịch nhẹ: RUỘT
+                    // (content/script/biến) giữ 100% tiếng Trung — AI tự đọc và trả lời tiếng Việt.
+                    enableMvuSync: false,
                     exportKeyMode: 'merge',
                     lorebookStrategy: 'batch', // đa luồng + gộp call (nhất quán mọi preset)
                     lightSkipContent: true,

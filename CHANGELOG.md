@@ -2,6 +2,13 @@
 
 > Cách cập nhật: mở thư mục cài đặt, chạy `git pull origin main`, rồi **tắt hẳn và chạy lại `start.bat`** (không chỉ F5).
 
+## v1.71.0 — Sửa bug #4: Dịch nhẹ làm vỡ MVU ("card không hỗ trợ 额外模型解析") 🧩
+> Từ báo lỗi #4: card `AI帝国1.1` dịch bằng **⚡ Dịch nhẹ** xong, vào SillyTavern chơi thì popup MVU lỗi lặp: *"当前角色卡不支持额外模型解析"*.
+- **Gốc rễ (đã mổ xẻ diff 2 card):** Chiến lược B dịch **tên biến MVU** ra tiếng Việt **có dấu cách** (`叙事` → `Tự Sự`) rồi áp từ điển lên **cả card** — kể cả script Zod schema không nằm trong diện dịch. Trong JavaScript, key tiếng Trung không quote (`叙事:`) là hợp lệ, nhưng **key có dấu cách (`Tự Sự:`) là lỗi cú pháp** → script schema chết ngay khi nạp → `registerMvuSchema` không chạy → framework MVU kết luận "card không hỗ trợ".
+- **Fix 1 — Dịch nhẹ đúng nghĩa:** preset ⚡ Dịch nhẹ giờ **không đổi tên biến MVU nữa**. Chỉ dịch phần **người chơi nhìn thấy** (keyword để gõ tiếng Việt vẫn kích hoạt entry, lời mở đầu, tên card, tên/comment entry, regex hiển thị); **ruột card — content, script, tên biến — giữ nguyên 100%** tiếng gốc. AI tự đọc tiếng Trung và trả lời tiếng Việt; logic/MVU không bao giờ bị đụng.
+- **Fix 2 — guard cho MỌI chế độ (kể cả Dịch đầy đủ):** tên biến MVU dịch ra **tự thay dấu cách bằng `_`** (`Tự_Sự`, `Độ_Hảo_Cảm`) khi tên gốc là identifier; enum value có dấu cách trong nguyên bản (luôn nằm trong nháy) giữ nguyên. Prompt dịch tên biến cũng được dạy đặt tên nối `_` ngay từ đầu.
+- +5 test hồi quy lấy fixture từ chính schema card lỗi (159 test tổng).
+
 ## v1.70.0 — Audit đợt 4: thân thiện người mới 🤝
 - **Fix ô API Key không Enter được:** trước đây bấm Enter để nhập key thứ 2 là dấu xuống dòng bị "nuốt" ngay (ô bị chuẩn hoá sau mỗi phím gõ). Giờ gõ tự nhiên, mỗi dòng 1 key — áp dụng cho cả ô key của Provider bổ sung.
 - **Khối API chính = card "Provider #1 (chính)"** viền xanh **đồng bộ giao diện** với Provider bổ sung bên dưới (Loại + Base URL 2 cột → API Key → Load model → Model chính + RPM → Model phụ + RPM + Ngưỡng). Hai mục ngang hàng về logic thì nhìn cũng phải ngang hàng.

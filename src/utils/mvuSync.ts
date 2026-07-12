@@ -1858,6 +1858,20 @@ export function restoreVariablePrefixes(dict: Record<string, string>): void {
   }
 }
 
+/**
+ * (Fix bug #4 — card AI1.1) Tên biến MVU dịch ra KHÔNG ĐƯỢC chứa khoảng trắng khi tên gốc
+ * không có: tên biến xuất hiện ở vị trí OBJECT KEY KHÔNG QUOTE trong script Zod/JS
+ * (`叙事:` hợp lệ vì CJK là identifier, nhưng `Tự Sự:` là SyntaxError) → schema chết →
+ * framework MVU báo "card không hỗ trợ". Thay whitespace bằng '_' (chữ có dấu tiếng Việt
+ * vẫn là identifier hợp lệ: `Tự_Sự:` OK). Tên gốc CÓ space (enum value như "阶段 1_静谧"
+ * luôn nằm trong quotes) thì giữ nguyên bản dịch.
+ */
+export function sanitizeMvuVarName(originalKey: string, translated: string): string {
+  const t = translated.trim();
+  if (/\s/.test(originalKey)) return t; // gốc có space ⇒ giá trị trong quotes ⇒ giữ nguyên
+  return t.replace(/\s+/g, '_');
+}
+
 export async function aiTranslateMvuKeys(
   keys: string[],
   targetLang: string,
@@ -1903,7 +1917,7 @@ You are a variable name translator for SillyTavern character cards.
 Your job: translate variable names from the source language to ${targetLang}.
 
 STRICT RULES:
-1. Use natural, readable formatting with diacritics (e.g. Vietnamese: Độ Hảo Cảm, Sức Tấn Công). CONSISTENCY is the only formatting rule — same variable = identical string everywhere.
+1. Variable names MUST NOT contain spaces — join words with underscore '_' (e.g. Vietnamese: Độ_Hảo_Cảm, Sức_Tấn_Công). Names are used as UNQUOTED object keys in JavaScript/Zod schemas; a space breaks the script. Keep diacritics. CONSISTENCY: same variable = identical string everywhere. EXCEPTION: if the SOURCE key itself contains spaces (compound enum values), mirror its spacing.
 2. Keep the names SHORT but meaningful (2-4 words max).
 3. Be CONSISTENT: similar concepts MUST have similar naming patterns.
    - All emotion/feeling variables should follow the same pattern (e.g. Mức X, Độ X)
@@ -1915,11 +1929,11 @@ STRICT RULES:
    Follow user custom rules if provided (custom prompt overrides these defaults).
 8. Keep numeric suffixes and prefixes intact (e.g. \"攻击力2\" → \"Sức Tấn Công 2\").
 9. For Vietnamese specifically:
-   - Use Title Case with diacritics: Hảo Cảm, Thể Lực, Trí Tuệ
+   - Use Title Case with diacritics, words joined by '_': Hảo_Cảm, Thể_Lực, Trí_Tuệ
    - Each word should be properly capitalized
    - Translate based on MEANING, not character-by-character. Examples:
-     武力 = Võ Lực (martial force), 魅力 = Sức Hút (charm/charisma), 体力 = Thể Lực (stamina)
-     描述 = Mô Tả (description), 说明 = Giải Thích (explanation)
+     武力 = Võ_Lực (martial force), 魅力 = Sức_Hút (charm/charisma), 体力 = Thể_Lực (stamina)
+     描述 = Mô_Tả (description), 说明 = Giải_Thích (explanation)
 10. The translated names must be covariant with the Zod Schema — matching the field structure and semantics.
 11. COMPOUND ENUM VALUES: Some keys are compound enum values with structure like "Phase N_Name" (e.g. "阶段 1_静谧", "阶段 2_心动"). Translate the ENTIRE compound value as one unit: "阶段 1_静谧" → "Giai đoạn 1_Tĩnh lặng". Keep the separator character (underscore) and numbering intact. These values appear in z.enum([...]), .prefault('...'), .default('...'), and YAML values — they MUST all be the same translated string.
 12. ██ UNIQUE TRANSLATIONS — ABSOLUTELY CRITICAL ██
@@ -1931,7 +1945,7 @@ STRICT RULES:
    A variable name may start with "_" (readonly: AI sees but cannot update) or "$" (hidden: AI does not see).
    These single leading characters are FUNCTIONAL markers, not part of the name. If a key starts with one,
    KEEP that exact character at the front of your translation and translate only the rest.
-   Examples: "_类型" → "_Loại" (NOT "Loại"), "$开局类型" → "$Loại Mở Đầu". Never add a "_"/"$" that wasn't there.${modBlock}${customPromptBlock}
+   Examples: "_类型" → "_Loại" (NOT "Loại"), "$开局类型" → "$Loại_Mở_Đầu". Never add a "_"/"$" that wasn't there.${modBlock}${customPromptBlock}
 
 RESPOND in EXACT JSON format (no markdown): {"translations": {"original_key": "Translated Key", ...}}`;
 
@@ -2041,8 +2055,8 @@ ${currentVarList}${retryHint}`;
             // This key still has CJK — track it for retry
             cjkFailedKeys.push(k);
           } else {
-            // Good translation — accept immediately
-            result[k] = v.trim();
+            // Good translation — accept immediately (sanitize: khong space trong ten bien)
+            result[k] = sanitizeMvuVarName(k, v);
           }
         }
 
@@ -2061,7 +2075,7 @@ ${currentVarList}${retryHint}`;
             for (const k of cjkFailedKeys) {
               const v = translations[k];
               if (typeof v === 'string' && v.trim()) {
-                result[k] = v.trim();
+                result[k] = sanitizeMvuVarName(k, v);
               }
             }
             break;
@@ -2180,12 +2194,12 @@ IMPORTANT: Do NOT repeat the same translation for different keys. If unsure, use
         const trimmed = v.trim();
         if (!newValues.has(trimmed)) {
           newValues.add(trimmed);
-          result[k] = trimmed;
+          result[k] = sanitizeMvuVarName(k, trimmed);
           fixedCount++;
         } else {
           // Still a duplicate — append source key hint to force uniqueness
           const disambiguated = `${trimmed} (${k})`;
-          result[k] = disambiguated;
+          result[k] = sanitizeMvuVarName(k, disambiguated);
           fixedCount++;
           console.warn(`[MVU Sync] Still duplicate "${trimmed}" for "${k}" — appending hint: "${disambiguated}"`);
         }

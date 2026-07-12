@@ -837,6 +837,9 @@ const ui = {
   tcRecScript: '🔍 This card has heavy UI scripts → suggested: ⚡ Light translate (★) to leave scripts untouched (logic-safe). Want the in-game UI fully translated → 📖 Full translate.',
   tcRecBig: '🔍 Large card / many entries → suggested: 🚀 Turbo translate (★): bundles short entries per call — much faster, still complete.',
   tcRecSmall: '🔍 Compact card → suggested: 📖 Full translate (★): translate everything properly, costs very little.',
+  prmTitle: 'Suggested setup for this card',
+  prmUse: 'Use suggested setup',
+  prmKeep: 'Keep current settings',
   tcAdvancedToggle: 'Advanced settings',
   pcMainProviderTitle: 'Provider #1 (main)',
 };

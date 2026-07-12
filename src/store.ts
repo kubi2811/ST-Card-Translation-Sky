@@ -161,6 +161,9 @@ interface AppState {
   locale: Locale;
   activeTab: string;
   setActiveTab: (t: string) => void;
+  /** Preset dich dang chon ('light'|'full'|'turbo'|'') — highlight nut + popup goi y dung chung. */
+  activePresetId: string;
+  setActivePresetId: (id: string) => void;
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
 
@@ -911,6 +914,8 @@ export const useStore = create<AppState>((set) => ({
   locale: resolveLocale(getUiLang()),
   activeTab: 'core',
   setActiveTab: (t) => set({ activeTab: t }),
+  activePresetId: LS.get('st-preset-active-id', ''),
+  setActivePresetId: (id) => { LS.set('st-preset-active-id', id); set({ activePresetId: id }); },
   sidebarCollapsed: false,
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
 

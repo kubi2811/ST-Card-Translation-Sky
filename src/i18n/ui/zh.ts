@@ -832,6 +832,9 @@ const ui: UiKeys = {
   tcRecScript: '🔍 本卡有较重的界面脚本 → 建议 ⚡ 轻量翻译（★），不碰脚本（逻辑安全）。想全部翻译界面 → 📖 完整翻译。',
   tcRecBig: '🔍 大卡 / 条目多 → 建议 🚀 极速翻译（★）：短条目合并调用，快很多且照样翻全。',
   tcRecSmall: '🔍 小巧卡片 → 建议 📖 完整翻译（★）：全部翻好，花不了多少调用。',
+  prmTitle: '本卡建议配置',
+  prmUse: '使用建议配置',
+  prmKeep: '保留当前设置',
   tcAdvancedToggle: '高级设置',
   pcMainProviderTitle: '主 Provider #1',
 };

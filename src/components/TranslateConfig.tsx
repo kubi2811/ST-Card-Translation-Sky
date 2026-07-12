@@ -9,6 +9,7 @@ import { aiExtractGlossaryTerms } from '../utils/mvuSync';
 import type { LorebookStrategy, FieldGroupConfig, FieldGroup, GlossaryEntry } from '../types/card';
 import { Languages, FileJson, BookOpen, Plus, Trash2, Download, Upload, Bot, Loader2, Save, RotateCcw, CheckCircle, Zap } from 'lucide-react';
 import { recommendPreset } from '../utils/presetRecommend';
+import { usePresetApply } from '../hooks/usePresetApply';
 import MvuSyncPanel from './MvuSyncPanel';
 import EjsSyncPanel from './EjsSyncPanel';
 
@@ -35,7 +36,7 @@ const getFieldBaseKey = (path: string) => {
 };
 
 export default function TranslateConfig() {
-  const { translationConfig, setTranslationConfig, toggleFieldGroup, card, proxy, addToast, fields, setFields, deleteCurrentCardCache, deleteAllCaches, scannedModels, resetTranslationConfig } = useStore();
+  const { translationConfig, setTranslationConfig, toggleFieldGroup, card, proxy, addToast, fields, setFields, deleteCurrentCardCache, deleteAllCaches, scannedModels, resetTranslationConfig, activePresetId } = useStore();
   const ui = useUi();
 
   const allAvailableFields = useMemo(() => {
@@ -196,15 +197,9 @@ export default function TranslateConfig() {
     ? ({ mvu: 'tcRecMvu', script: 'tcRecScript', big: 'tcRecBig', small: 'tcRecSmall' } as const)[recommendation.reason]
     : null;
 
-  // Preset đang chọn (nhẹ/đầy đủ/siêu tốc) — highlight để user biết mình đang ở chế độ nào.
-  const [activePreset, setActivePreset] = useState<string>(() => {
-    try { return localStorage.getItem('st-preset-active') || ''; } catch { return ''; }
-  });
-  const markPreset = (id: string) => {
-    setActivePreset(id);
-    try { localStorage.setItem('st-preset-active', id); } catch { /* quota */ }
-  };
-  const presetBtnStyle = (id: string): React.CSSProperties => activePreset === id
+  // Preset đang chọn — nằm trong store (LS) để nút preset + popup gợi ý đồng bộ highlight.
+  const applyPreset = usePresetApply();
+  const presetBtnStyle = (id: string): React.CSSProperties => activePresetId === id
     ? {
         border: '2px solid var(--accent-primary)',
         background: 'rgba(124,106,240,0.18)',
@@ -224,7 +219,8 @@ export default function TranslateConfig() {
       </div>
       <div className="section-body" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
 
-        {/* ═══ (Audit đợt 2) PRESET NHANH — đưa LÊN ĐẦU: thứ user cần nhất, bấm 1 nút là đủ config ═══ */}
+        {/* ═══ PRESET NHANH — 3 nút dùng chung logic usePresetApply với popup gợi ý sau import.
+            Sao ★ = preset được bộ phân tích card khuyên dùng; viền sáng = preset đang chọn. ═══ */}
         {card && !isModMode && (
           <div style={{
             padding: '10px 12px',
@@ -236,92 +232,16 @@ export default function TranslateConfig() {
               {ui.tcPresetLabel}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                className="btn btn-sm"
-                style={presetBtnStyle('light')}
-                title={ui.tcPresetLightHint}
-                onClick={() => {
-                  // Bật keys + regex + messages (opening/first_mes) + core + lorebook để LẤY
-                  // tên card + tên/comment lorebook. Cờ lightSkipContent để prepareFields (lúc
-                  // Start) bỏ content TO trong core/lorebook — declarative, không lệ thuộc timing
-                  // của nút. Chiến lược B đồng bộ tên biến MVU toàn thẻ nên content gốc vẫn khớp.
-                  const lightOn = new Set(['lorebook_keys', 'regex', 'messages', 'core', 'lorebook']);
-                  setTranslationConfig({
-                    fieldGroups: translationConfig.fieldGroups.map((g: FieldGroupConfig) => ({
-                      ...g, enabled: lightOn.has(g.id),
-                    })),
-                    // (Fix bug #4 — card AI1.1) Dịch nhẹ KHÔNG đổi tên biến MVU nữa: Strategy B
-                    // từng áp từ điển tên biến lên CẢ CARD (kể cả script Zod không được dịch) →
-                    // tên VI có dấu cách làm object key không quote vỡ syntax (`Tự Sự:`) → schema
-                    // chết → framework báo "card không hỗ trợ". Đúng định nghĩa Dịch nhẹ: RUỘT
-                    // (content/script/biến) giữ 100% tiếng Trung — AI tự đọc và trả lời tiếng Việt.
-                    enableMvuSync: false,
-                    exportKeyMode: 'merge',
-                    lorebookStrategy: 'batch', // đa luồng + gộp call (nhất quán mọi preset)
-                    lightSkipContent: true,
-                    // Dịch nhẹ dịch REGEX (code) → ép Dịch phẫu thuật để chỉ trích chuỗi CJK,
-                    // giữ 100% cấu trúc JS/HTML (mặc định surgical TẮT → dễ vỡ regex nếu quên bật).
-                    surgicalMode: true,
-                  });
-                  // Nếu field đã trích sẵn, ignore luôn content to cho UI phản ánh ngay
-                  // (prepareFields vẫn là nguồn chân lý lúc Start).
-                  const isNameOrComment = (p: string) => /(^|\.)name$/.test(p) || /\.comment$/.test(p);
-                  if (fields.length > 0) {
-                    setFields(fields.map(f => {
-                      if (f.group !== 'core' && f.group !== 'lorebook') return f;
-                      if (isNameOrComment(f.path)) {
-                        return f.status === 'ignored' ? { ...f, status: 'pending' as const } : f;
-                      }
-                      return f.status === 'done' ? f : { ...f, status: 'ignored' as const };
-                    }));
-                  }
-                  markPreset('light');
-                  addToast('success', ui.tcPresetLightDone);
-                }}
-              >
+              <button type="button" className="btn btn-sm" style={presetBtnStyle('light')} title={ui.tcPresetLightHint}
+                onClick={() => applyPreset('light')}>
                 {ui.tcPresetLight}{recStar('light')}
               </button>
-              <button
-                type="button"
-                className="btn btn-sm"
-                style={presetBtnStyle('full')}
-                onClick={() => {
-                  setTranslationConfig({
-                    fieldGroups: translationConfig.fieldGroups.map((g: FieldGroupConfig) => ({ ...g, enabled: true })),
-                    lightSkipContent: false,
-                    lorebookStrategy: 'batch', // đa luồng + gộp call (nhất quán mọi preset)
-                  });
-                  // Gỡ ignore mà "Dịch nhẹ" đã đặt cho content, để dịch lại đầy đủ.
-                  setFields(fields.map(f => f.status === 'ignored' ? { ...f, status: 'pending' as const } : f));
-                  markPreset('full');
-                  addToast('success', ui.tcPresetFullDone);
-                }}
-              >
+              <button type="button" className="btn btn-sm" style={presetBtnStyle('full')}
+                onClick={() => applyPreset('full')}>
                 {ui.tcPresetFull}{recStar('full')}
               </button>
-              <button
-                type="button"
-                className="btn btn-sm"
-                style={presetBtnStyle('turbo')}
-                title={ui.tcPresetTurboHint}
-                onClick={() => {
-                  // 🚀 Dịch siêu tốc: dịch ĐẦY ĐỦ nhưng gom call thông minh —
-                  // bật mọi nhóm + chế độ hàng loạt lorebook + smart bin-packing:
-                  // entry ngắn dồn chung 1 call (đi model phụ/flash), entry dài để riêng (model chính/pro).
-                  setTranslationConfig({
-                    fieldGroups: translationConfig.fieldGroups.map((g: FieldGroupConfig) => ({ ...g, enabled: true })),
-                    lightSkipContent: false,
-                    lorebookStrategy: 'batch',
-                    smartBatchPacking: true,
-                    enableMvuSync: true,
-                    exportKeyMode: 'merge',
-                  });
-                  setFields(fields.map(f => f.status === 'ignored' ? { ...f, status: 'pending' as const } : f));
-                  markPreset('turbo');
-                  addToast('success', ui.tcPresetTurboDone);
-                }}
-              >
+              <button type="button" className="btn btn-sm" style={presetBtnStyle('turbo')} title={ui.tcPresetTurboHint}
+                onClick={() => applyPreset('turbo')}>
                 {ui.tcPresetTurbo}{recStar('turbo')}
               </button>
             </div>

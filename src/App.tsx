@@ -9,6 +9,7 @@ import { useStore, flushProgressBeacon } from './store';
 import { useT, useUi } from './i18n/useLocale';
 import { Languages, X, Globe } from 'lucide-react';
 import PresetImportPanel from './components/PresetImportPanel';
+import PresetRecommendModal from './components/PresetRecommendModal';
 import { APP_VERSION, APP_VERSION_NOTE } from './version';
 
 // Lazy-load heavy components — only loaded after card is imported
@@ -349,6 +350,9 @@ export default function App() {
           <span>{t.appFooter}</span>
         </footer>
       </main>
+
+      {/* Popup gợi ý cấu hình sau khi import card */}
+      <PresetRecommendModal />
 
       {/* ─── Toasts ─── */}
       <div className="toast-container">

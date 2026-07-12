@@ -2,6 +2,13 @@
 
 > Cách cập nhật: mở thư mục cài đặt, chạy `git pull origin main`, rồi **tắt hẳn và chạy lại `start.bat`** (không chỉ F5).
 
+## v1.73.0 — Popup gợi ý cấu hình sau khi import card 💬★
+- **Nạp card mới xong → popup hiện ngay giữa màn hình:** preset khuyên dùng (★ ⚡ Dịch nhẹ / 📖 Đầy đủ / 🚀 Siêu tốc) + **dòng giải thích vì sao**, kèm 2 nút:
+  - **✅ Dùng cấu hình gợi ý** — áp toàn bộ setting khuyên dùng ngay 1 chạm (bật/tắt nhóm field, MVU sync, chế độ phẫu thuật, chiến lược lorebook… đúng y như bấm nút preset tương ứng), có toast xác nhận. Không tự bấm Start — user vẫn chủ động khi nào dịch.
+  - **Giữ cấu hình hiện tại** — đóng popup, không đổi bất kỳ setting nào.
+- **Không quấy rầy:** card khôi phục tiến trình dịch cũ (đã có field xong/lỗi) hoặc đang ở Mod Mode thì popup **không hiện**; mỗi card chỉ hỏi 1 lần, nạp card khác lại hỏi cho card đó.
+- Kỹ thuật: logic áp preset gom về 1 hook `usePresetApply` dùng chung cho 3 nút preset + popup (hết cảnh copy 2 nơi); preset đang chọn chuyển vào store (`st-preset-active-id`) để nút và popup đồng bộ highlight. Đã verify live cả 2 nút bằng card AI帝国1.1 (popup nhận diện MVU → khuyên ⚡ Dịch nhẹ; bấm Dùng → config áp đúng + nút preset sáng viền).
+
 ## v1.72.0 — Tự phân tích card khi import → gợi ý chế độ dịch 🔍★
 - **Nạp card xong, app tự quét và khuyên nên dịch kiểu gì** — người mới không cần biết gì cũng chọn đúng:
   - Card có **khung biến MVU** (`[initvar]`/`[mvu_update]`/stat_data/registerMvuSchema) hoặc **script giao diện nặng** → khuyên **⚡ Dịch nhẹ** (an toàn logic tuyệt đối — bài học từ bug #4).

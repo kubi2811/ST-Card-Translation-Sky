@@ -849,6 +849,9 @@ const ui: UiKeys = {
   tcRecScript: '🔍 Card này có SCRIPT giao diện nặng → khuyên dùng ⚡ Dịch nhẹ (★) để không đụng script (an toàn logic). Muốn UI trong game tiếng Việt hết → 📖 Dịch đầy đủ.',
   tcRecBig: '🔍 Card LỚN / nhiều entry → khuyên dùng 🚀 Dịch siêu tốc (★): gom entry ngắn chung call, nhanh hơn nhiều mà vẫn dịch đầy đủ.',
   tcRecSmall: '🔍 Card gọn nhẹ → khuyên dùng 📖 Dịch đầy đủ (★): dịch trọn vẹn mọi thứ, không tốn bao nhiêu lượt gọi.',
+  prmTitle: 'Gợi ý cấu hình cho card này',
+  prmUse: 'Dùng cấu hình gợi ý',
+  prmKeep: 'Giữ cấu hình hiện tại',
   tcAdvancedToggle: 'Cài đặt nâng cao',
   pcMainProviderTitle: 'Provider #1 (chính)',
 };

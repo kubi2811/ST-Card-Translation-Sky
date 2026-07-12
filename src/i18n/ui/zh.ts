@@ -264,6 +264,8 @@ const ui: UiKeys = {
   tcGomorrah: 'Gomorrah NSFW 规则（优化内容，去除多余过滤）',
   tcObjective: '直译模式（忠于原意，不添油加醋）',
   tcGlossary: '术语表',
+  tcAutoGlossary: '📖 自动人名术语表（第0阶段）',
+  tcAutoGlossaryHint: '翻译前：扫描卡内反复出现的人名/地名/术语及世界书关键词，用一次 AI 调用翻译整张表并加入下方术语表。所有并行线程共用 → 全卡译名统一。你手动填写的条目始终优先。',
   tcGlossaryDesc: '添加强制术语对。AI 遇到原词时会严格使用这里的译法。',
   tcGlossarySrc: '原词',
   tcGlossaryTgt: '译文',

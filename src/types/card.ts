@@ -342,6 +342,12 @@ export interface TranslationConfig {
   customSchema?: string;
   exportKeyMode: ExportKeyMode; // How to handle lorebook keys on export
   glossary: GlossaryEntry[]; // Terminology pairs for consistent translation
+  /**
+   * Pha 0 — Bảng tên riêng tự động: trước khi dịch, đếm tên/thuật ngữ Hán lặp lại trong
+   * các field sắp dịch + keyword lorebook, gửi 1 lượt gọi AI dịch cả bảng rồi merge vào
+   * glossary → mọi luồng dịch song song dùng chung, tên nhất quán toàn card.
+   */
+  autoNameGlossary: boolean;
   enableMvuSync: boolean; // Enable Strategy B (Sync MVU Variables)
   mvuDictionary: Record<string, string>; // Dictionary for Strategy B
   enableRAGContext: boolean; // Enable Cross-field Context RAG for consistency

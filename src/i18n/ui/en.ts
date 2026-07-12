@@ -266,6 +266,8 @@ const ui = {
   tcGomorrah: 'Gomorrah NSFW Rules (Content quality, remove excess filters)',
   tcObjective: 'Objective Mode (Literal translation, no embellishments)',
   tcGlossary: 'Glossary',
+  tcAutoGlossary: '📖 Auto name glossary (Phase 0)',
+  tcAutoGlossaryHint: 'Before translating: scan recurring character/place/term names in the card + lorebook keywords, translate the whole table in ONE AI call and add it to the glossary below. All parallel threads share it → names stay consistent across the card. Your manual entries always win.',
   tcGlossaryDesc: 'Add mandatory term pairs. The AI will use these exact translations when it encounters the source term.',
   tcGlossarySrc: 'Source term',
   tcGlossaryTgt: 'Translation',

@@ -274,6 +274,8 @@ const ui: UiKeys = {
   tcGomorrah: 'Gomorrah NSFW Rules (Content quality, remove excess filters)',
   tcObjective: 'Objective Mode (Literal translation, no embellishments)',
   tcGlossary: 'Glossary',
+  tcAutoGlossary: '📖 Tự xây bảng tên riêng (Pha 0)',
+  tcAutoGlossaryHint: 'Trước khi dịch: quét tên nhân vật/địa danh/thuật ngữ lặp lại trong card + keyword lorebook, dịch cả bảng bằng 1 lượt gọi AI rồi thêm vào từ điển bên dưới. Mọi luồng dịch song song dùng chung → tên nhất quán toàn card (hết cảnh 叶凡 chỗ là Diệp Phàm chỗ là Ye Fan). Mục bạn tự nhập luôn được ưu tiên.',
   tcGlossaryDesc: 'Add mandatory term pairs. The AI will use these exact translations when it encounters the source term.',
   tcGlossarySrc: 'Source term',
   tcGlossaryTgt: 'Translation',

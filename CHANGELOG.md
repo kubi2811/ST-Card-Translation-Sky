@@ -2,6 +2,17 @@
 
 > Cách cập nhật: mở thư mục cài đặt, chạy `git pull origin main`, rồi **tắt hẳn và chạy lại `start.bat`** (không chỉ F5).
 
+## v1.74.0 — Pha 0: Bảng tên riêng tự động 📖
+> Điểm yếu cố hữu của dịch đa luồng: 2 entry do 2 luồng khác nhau dịch, cùng nhân vật `叶凡` chỗ ra "Diệp Phàm", chỗ ra "Ye Fan". Từ nay hết.
+- **Bấm Start là app tự xây bảng tên trước khi dịch:**
+  1. Quét **cục bộ, 0 token** các cụm Hán lặp lại (≥3 lần) trong đúng những field sắp dịch + toàn bộ keyword lorebook + tên card (lọc hư từ, khử cụm con, ưu tiên keyword).
+  2. Gửi **1 lượt gọi AI duy nhất** dịch cả bảng — tên người/địa danh/tông môn theo âm Hán-Việt (叶凡→Diệp Phàm, 青云宗→Thanh Vân Tông), thuật ngữ theo nghĩa chuẩn (金丹→Kim Đan); AI tự loại từ thông dụng.
+  3. Nạp kết quả vào **Từ điển thuật ngữ** → mọi luồng dịch song song dùng chung ⇒ tên nhất quán toàn card.
+- **An toàn:** mục user tự nhập LUÔN thắng; field schema/biến MVU không đưa vào quét (đã có từ điển MVU riêng — không giẫm chân); Pha 0 lỗi/timeout thì bỏ qua và dịch tiếp bình thường, không bao giờ chặn run; chạy tiếp (Continue) không gọi lại nếu bảng đã đủ.
+- **Tối ưu prompt:** từ điển > 8 mục giờ chỉ nhét vào mỗi prompt những mục **thật sự xuất hiện** trong đoạn đang dịch — đỡ phình token, model không áp tên không liên quan (từ điển nhỏ nhập tay giữ nguyên hành vi cũ).
+- Toggle "📖 Tự xây bảng tên riêng (Pha 0)" trong mục Từ điển, mặc định BẬT. i18n VI/EN/中文.
+- +13 test (178 tổng). Verify live bằng card AI帝国1.1: quét ra 28 ứng viên → AI giữ đúng 2 tên thật (中国→Trung Quốc, 帝国→Đế Quốc), log Pha 0 hiện đủ 2 bước, dịch chạy tiếp bình thường.
+
 ## v1.73.0 — Popup gợi ý cấu hình sau khi import card 💬★
 - **Nạp card mới xong → popup hiện ngay giữa màn hình:** preset khuyên dùng (★ ⚡ Dịch nhẹ / 📖 Đầy đủ / 🚀 Siêu tốc) + **dòng giải thích vì sao**, kèm 2 nút:
   - **✅ Dùng cấu hình gợi ý** — áp toàn bộ setting khuyên dùng ngay 1 chạm (bật/tắt nhóm field, MVU sync, chế độ phẫu thuật, chiến lược lorebook… đúng y như bấm nút preset tương ứng), có toast xác nhận. Không tự bấm Start — user vẫn chủ động khi nào dịch.

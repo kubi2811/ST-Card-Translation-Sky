@@ -516,6 +516,9 @@ export const useStore = create<AppState>((set) => ({
     customSchema: LS.get('st-translator-custom-schema', ''),
     exportKeyMode: LS.get('st-translator-export-key-mode', 'merge') as ExportKeyMode,
     glossary: LS.get('st-translator-glossary', []) as GlossaryEntry[],
+    // Pha 0 (bảng tên riêng tự động) mặc định BẬT: chi phí 1 call, đổi lại tên nhân vật
+    // nhất quán trên mọi luồng dịch song song. User tắt thì LS nhớ.
+    autoNameGlossary: LS.get('st-translator-auto-name-glossary', true),
     enableMvuSync: LS.get('st-translator-mvu-sync-enabled', true),
     mvuDictionary: LS.get('st-translator-mvu-dict', {}) as Record<string, string>,
     enableRAGContext: LS.get('st-translator-rag-enabled', true),
@@ -557,6 +560,9 @@ export const useStore = create<AppState>((set) => ({
       const next = { ...s.translationConfig, ...partial };
       if ('glossary' in partial) {
         LS.set('st-translator-glossary', next.glossary);
+      }
+      if ('autoNameGlossary' in partial) {
+        LS.set('st-translator-auto-name-glossary', next.autoNameGlossary);
       }
       if ('mvuDictionary' in partial) {
         LS.set('st-translator-mvu-dict', next.mvuDictionary);
@@ -746,6 +752,7 @@ export const useStore = create<AppState>((set) => ({
       customSchema: '',
       exportKeyMode: 'merge' as const,
       glossary: [],
+      autoNameGlossary: true,
       enableMvuSync: false,
       mvuDictionary: {},
       enableRAGContext: true,
@@ -799,6 +806,7 @@ export const useStore = create<AppState>((set) => ({
     LS.set('st-translator-custom-schema', defaultTranslationConfig.customSchema);
     LS.set('st-translator-export-key-mode', defaultTranslationConfig.exportKeyMode);
     LS.set('st-translator-glossary', defaultTranslationConfig.glossary);
+    LS.set('st-translator-auto-name-glossary', defaultTranslationConfig.autoNameGlossary);
     LS.set('st-translator-mvu-sync-enabled', defaultTranslationConfig.enableMvuSync);
     LS.set('st-translator-mvu-dict', defaultTranslationConfig.mvuDictionary);
     LS.set('st-translator-rag-enabled', defaultTranslationConfig.enableRAGContext);

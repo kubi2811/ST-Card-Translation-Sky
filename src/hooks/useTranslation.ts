@@ -2,7 +2,8 @@ import { splitLorebookBatches } from '../utils/batchSplit';
 import { stripUrlsForCjkCheck } from '../utils/cjk';
 import { useCallback, useRef } from 'react';
 import { useStore } from '../store';
-import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookEntries, ChunkError, ApiError, setExtraProviders, resetProviderPool, computePoolConcurrency } from '../utils/apiClient';
+import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookEntries, ChunkError, ApiError, setExtraProviders, resetProviderPool, computePoolConcurrency, callProvider } from '../utils/apiClient';
+import { extractNameCandidates, buildNameGlossaryPrompt, parseNameGlossaryResponse, mergeGlossary } from '../utils/nameGlossary';
 import { extractTranslatableFields, applyTranslationsToCard, autoTranslateLorebookTriggerKeys, injectNewLorebookEntries } from '../utils/cardFields';
 import { syncMvuVariables, postProcessRegexHtml, normalizeSmartQuotesInCode, fixNestedQuoteBracketPaths, fixBrokenLodashPaths, fixDotNotationPaths, extractPotentialMvuKeyStrings, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, enforceInitvarCovariance, extractMappingFromTranslatedInitvar, enforceExactConsistency, enforceVariableCasing, fixZodSyntaxErrors, validateDictionaryConflicts, aiResolveMvuConflicts } from '../utils/mvuSync';
 import { shouldSkipTranslation, detectLanguage, detectResidualCjk } from '../utils/langDetect';
@@ -1538,6 +1539,42 @@ export function useTranslation() {
       const hasFindRegex = fields.some(f => f.path.includes('findRegex'));
       if (hasFindRegex) {
         store.addLog('info', `📋 findRegex fields moved to front (translate before narrative)`);
+      }
+    }
+
+    // ═══ Pha 0: Bảng tên riêng tự động — dịch bảng tên TRƯỚC để mọi luồng song song dùng chung ═══
+    // Đếm cục bộ (0 token) các cụm Hán lặp lại trong đúng những field sắp dịch + keyword lorebook,
+    // rồi 1 lượt gọi AI dịch cả bảng → merge vào glossary (entry user nhập tay luôn thắng).
+    // Continue/re-run: ứng viên đã có trong glossary bị lọc ra ⇒ đủ bảng thì 0 call, không tốn thêm.
+    if (useStore.getState().translationConfig.autoNameGlossary) {
+      try {
+        const cfgP0 = useStore.getState().translationConfig;
+        const existingSources = new Set(cfgP0.glossary.map(g => g.source.trim()));
+        const candidates = extractNameCandidates(fields).filter(c => !existingSources.has(c.term));
+        if (candidates.length >= 2) {
+          store.addLog('info', `📖 Pha 0 — bảng tên riêng: thấy ${candidates.length} tên/thuật ngữ lặp lại, đang dịch bảng tên (1 lượt gọi) để thống nhất toàn card…`);
+          const { system, user } = buildNameGlossaryPrompt(candidates, cfgP0.targetLanguage);
+          const rawNames = await callProvider(store.proxy, system, user, abortRef.current!.signal, undefined,
+            { label: '📖 Bảng tên riêng (Pha 0)', charCount: user.length });
+          const nameEntries = parseNameGlossaryResponse(rawNames, candidates);
+          if (nameEntries.length > 0) {
+            const { merged, added } = mergeGlossary(useStore.getState().translationConfig.glossary, nameEntries);
+            store.setTranslationConfig({ glossary: merged });
+            const sample = nameEntries.slice(0, 3).map(e => `${e.source}→${e.target}`).join(', ');
+            store.addLog('success', `📖 Pha 0 xong: +${added} mục vào bảng tên (${sample}${nameEntries.length > 3 ? ', …' : ''}) — mọi luồng dịch dùng chung, tên nhất quán.`);
+          } else {
+            store.addLog('info', '📖 Pha 0: AI không giữ tên nào (card ít tên riêng lặp lại) — dịch tiếp bình thường.');
+          }
+        }
+      } catch (e: any) {
+        if (checkAbort()) {
+          runningRef.current = false;
+          store.setPhase(pauseRef.current ? 'paused' : 'cancelled');
+          store.addLog('warning', '⏹ Đã dừng dịch theo yêu cầu.');
+          return;
+        }
+        // Pha 0 chỉ là tăng cường chất lượng — lỗi thì bỏ qua, KHÔNG chặn lượt dịch.
+        store.addLog('warning', `📖 Pha 0 lỗi (${e?.message || e}) — bỏ qua bảng tên, dịch tiếp bình thường.`);
       }
     }
 

@@ -482,6 +482,22 @@ export default function TranslateConfig() {
             {ui.tcGlossaryDesc}
           </div>
 
+          {/* Pha 0: tự xây bảng tên riêng ngay khi bấm Start (1 lượt gọi AI) */}
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', cursor: 'pointer', marginBottom: '8px' }}>
+            <input
+              type="checkbox"
+              checked={translationConfig.autoNameGlossary}
+              onChange={(e) => setTranslationConfig({ autoNameGlossary: e.target.checked })}
+              style={{ marginTop: '2px' }}
+            />
+            <span>
+              <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>{ui.tcAutoGlossary}</span>
+              <span style={{ display: 'block', fontSize: '0.65rem', color: 'var(--text-muted)', lineHeight: 1.45 }}>
+                {ui.tcAutoGlossaryHint}
+              </span>
+            </span>
+          </label>
+
           {/* Glossary entries */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {translationConfig.glossary.map((entry, idx) => (

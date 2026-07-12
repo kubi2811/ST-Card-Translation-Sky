@@ -20,6 +20,7 @@
 import type { TranslationField, GlossaryEntry } from '../types/card';
 import { buildUnifiedRAGContext, type TranslationMemoryHit } from './ragContext';
 import { buildEjsPromptBlock } from './ejsSync';
+import { filterGlossaryForText } from './nameGlossary';
 
 /* ═══════════════════════════════════════════════════════════════════
    PROMPT CONSTANTS — Moved from useTranslation.ts
@@ -1100,7 +1101,7 @@ export function buildEffectivePrompt(options: PromptBuildOptions): PromptBuildRe
     allFields,
     batchFields,
     mvuDictionary,
-    glossary,
+    glossary: fullGlossary,
     customSchema,
     liveSchemaContext,
     ragMaxFields = 5,
@@ -1117,6 +1118,15 @@ export function buildEffectivePrompt(options: PromptBuildOptions): PromptBuildRe
   const enableModThinking = Boolean(options.enableModThinking);
   const forceModStandalone = Boolean(options.forceModStandalone);
   const isModActive = Boolean(enableModMode && (modInstructions.trim() || modPreset !== 'none'));
+
+  // Glossary TO (Pha 0 tự xây có thể 40-60 mục): chỉ nhét vào prompt những mục THẬT SỰ xuất hiện
+  // trong văn bản sắp dịch — đỡ phình token + model không áp tên không liên quan. Glossary nhỏ
+  // (≤8, thường là user nhập tay) giữ nguyên hành vi cũ. Chunk/surgical là chuỗi con của original
+  // nên lọc theo original luôn là tập bao (không bao giờ thiếu mục cần).
+  const glossaryScopeText = (batchFields && batchFields.length > 0)
+    ? batchFields.map(f => f.original).join('\n')
+    : (field?.original ?? '');
+  const glossary = filterGlossaryForText(fullGlossary ?? [], glossaryScopeText);
 
   // ═══ STANDALONE MOD MODE ═══
   // When forceModStandalone is true, use specialized MOD_STANDALONE_PROMPT

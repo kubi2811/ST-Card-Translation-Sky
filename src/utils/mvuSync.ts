@@ -311,6 +311,106 @@ export function syncMvuVariables(
 }
 
 /**
+ * (User yêu cầu 2026) ĐỒNG NHẤT TÊN BIẾN MVU trên TOÀN THẺ — non-AI, dùng cho:
+ *  (a) sweep cuối pipeline sau khi dịch, và (b) nút bấm tay cho thẻ đã dịch trước bản vá.
+ * Quy trình:
+ *  1. Làm sạch dict về dạng chuẩn "Họ Tên" (enforceExactConsistency — bỏ `_`/`-`, gom cụm gần giống).
+ *  2. Áp CJK-nguồn → dict sạch trên toàn thẻ (syncMvuVariables) — bắt biến còn tiếng Trung.
+ *  3. Với TỪNG field code (tavern_helper / regex / lorebook entry): enforce tên biến ĐÃ DỊCH nhưng
+ *     lệch dạng (Họ_Tên/Họ tên → Họ Tên) qua enforceInitvarCovariance (4 pass) + enforceVariableCasing
+ *     + fixZodSyntaxErrors (bọc nháy key có space cho khỏi vỡ Zod).
+ * Trả về thẻ mới + dict đã chuẩn + số field đã đổi.
+ */
+export function recanonicalizeMvuInCard(
+  card: CharacterCard,
+  mvuDictionary: Record<string, string>,
+): { card: CharacterCard; dictionary: Record<string, string>; fixCount: number } {
+  const { fixedDict } = enforceExactConsistency(mvuDictionary);
+  const synced = syncMvuVariables(card, fixedDict);
+  let fixCount = 0;
+
+  const enforceCode = (text: unknown): string => {
+    if (typeof text !== 'string' || !text) return text as string;
+    let t = enforceInitvarCovariance(text, fixedDict, false).text;
+    t = enforceVariableCasing(t, fixedDict).text;
+    t = fixZodSyntaxErrors(t);
+    if (t !== text) fixCount++;
+    return t;
+  };
+
+  const data = synced.data;
+  if (data) {
+    // TavernHelper scripts (Zod schema, code)
+    const th = data.extensions?.tavern_helper as any;
+    const fixScript = (s: any) => {
+      if (!s || typeof s !== 'object') return s;
+      const r = { ...s };
+      if (typeof r.content === 'string') r.content = enforceCode(r.content);
+      if (typeof r.script === 'string') r.script = enforceCode(r.script);
+      if (typeof r.code === 'string') r.code = enforceCode(r.code);
+      return r;
+    };
+    if (th?.scripts && Array.isArray(th.scripts)) th.scripts = th.scripts.map(fixScript);
+    else if (Array.isArray(th)) {
+      for (const item of th) {
+        if (Array.isArray(item) && item[0] === 'scripts' && Array.isArray(item[1])) item[1] = item[1].map(fixScript);
+        else if (item && typeof item === 'object' && !Array.isArray(item) && (item.content || item.script || item.code)) Object.assign(item, fixScript(item));
+      }
+    }
+    const legacy = data.extensions?.TavernHelper_scripts as any;
+    if (Array.isArray(legacy)) data.extensions!.TavernHelper_scripts = legacy.map(fixScript);
+
+    // Regex scripts (HTML/UI code)
+    if (data.extensions?.regex_scripts) {
+      data.extensions.regex_scripts = data.extensions.regex_scripts.map((s) => ({
+        ...s,
+        replaceString: typeof s.replaceString === 'string' ? enforceCode(s.replaceString) : s.replaceString,
+      }));
+    }
+
+    // Lorebook entries (initvar / update-rules / controller)
+    if (data.character_book?.entries) {
+      data.character_book.entries = data.character_book.entries.map((e) => ({
+        ...e,
+        content: enforceCode(e.content),
+      }));
+    }
+  }
+
+  return { card: synced, dictionary: fixedDict, fixCount };
+}
+
+/**
+ * (User yêu cầu 2026) Bản field-level của {@link recanonicalizeMvuInCard} — dùng cho phiên DỊCH
+ * đang chạy (bản dịch nằm ở `fields`, chưa bake vào card). Làm sạch dict rồi enforce lại giá trị
+ * `translated` của MỌI field code/lorebook đã 'done'. Trả về mảng field mới + dict sạch + số field đổi.
+ * Dùng chung ở: sweep cuối pipeline (useTranslation) và nút "Đồng nhất tên biến MVU".
+ */
+export function recanonicalizeMvuInFields(
+  fields: TranslationField[],
+  mvuDictionary: Record<string, string>,
+  keyMetadata?: Record<string, { confidence?: string; keyType?: string }>,
+): { fields: TranslationField[]; dictionary: Record<string, string>; fixCount: number } {
+  const { fixedDict } = enforceExactConsistency(mvuDictionary, keyMetadata as any);
+  let fixCount = 0;
+  const out = fields.map((f) => {
+    if (f.status !== 'done' || typeof f.translated !== 'string' || !f.translated) return f;
+    const isCode =
+      f.entryType === 'initvar' || f.entryType === 'controller' || f.entryType === 'mvu_logic' ||
+      f.group === 'regex' || f.group === 'tavern_helper';
+    const isLbNarr = f.group === 'lorebook' && !isCode;
+    if (!isCode && !isLbNarr) return f;
+    let t = enforceInitvarCovariance(f.translated, fixedDict, isLbNarr).text;
+    t = enforceVariableCasing(t, fixedDict).text;
+    if (isCode) t = fixZodSyntaxErrors(t);
+    if (t === f.translated) return f;
+    fixCount++;
+    return { ...f, translated: t };
+  });
+  return { fields: out, dictionary: fixedDict, fixCount };
+}
+
+/**
  * Enforce covariance between initvar YAML keys and the MVU Dictionary.
  * After AI translates an initvar entry, this function scans all YAML keys
  * in the translated text and replaces any that don't match the MVU Dictionary
@@ -381,8 +481,14 @@ export function enforceInitvarCovariance(
         `^(\\s*)([\"']?)${escaped}([\"']?)(\\s*:)`,
         'gm'
       );
-      const safeReplacement = correctValue.replace(/\$/g, '$$$$');
-      const newText = result.replace(keyRegex, `$1$2${safeReplacement}$3$4`);
+      // (User yêu cầu 2026) An toàn cú pháp: nếu tên chuẩn CÓ SPACE (vd "Họ Tên") mà key gốc là BARE
+      // identifier (không nháy — vd Zod `{ Họ_Tên: z.string() }`), phải BỌC NHÁY '…' để không vỡ cú
+      // pháp JS. Nháy đơn hợp lệ ở cả YAML lẫn JS/Zod.
+      const valNeedsQuote = /\s/.test(correctValue);
+      const newText = result.replace(keyRegex, (_m: string, indent: string, q1: string, q2: string, colon: string) => {
+        if (valNeedsQuote && !q1 && !q2) return `${indent}'${correctValue}'${colon}`;
+        return `${indent}${q1}${correctValue}${q2}${colon}`;
+      });
       if (newText !== result) {
         result = newText;
         fixes.push({ found: yamlKey, replaced: correctValue });
@@ -782,6 +888,29 @@ const PROTECTED_CODE_KEYWORDS = new Set([
   // Common Vietnamese short words that shouldn't be fuzzy-matched
   'Thu', 'thu',
 ]);
+
+/**
+ * (User yêu cầu 2026) Chuẩn hoá TÊN BIẾN MVU đã dịch về MỘT dạng DUY NHẤT: bỏ dấu `_`/`-` mà AI
+ * hay chèn (vì tưởng biến là identifier code) → dùng dạng "Họ Tên" (cách). MVU truy cập biến bằng
+ * KEY chuỗi (`_.get`/`bracket['X']`/YAML/Zod string key) nên dạng có space vẫn hợp lệ VÀ đồng nhất
+ * mọi nơi (đây là gốc lỗi: chỗ `Họ_Tên`, chỗ `Họ Tên`, chỗ `Họ tên`).
+ *
+ * CHỈ đụng tên đã DỊCH (có ký tự NON-ASCII: tiếng Việt có dấu / CJK). KHÔNG đụng:
+ *  - identifier code THUẦN ASCII (`stat_data`, `mvu_update`, `_mvu`, `camelCase`…) — dấu `_` bắt buộc.
+ *  - từ khoá bảo vệ (PROTECTED_CODE_KEYWORDS).
+ * Giữ nguyên HOA/THƯỜNG (việc đồng nhất case đã có `enforceVariableCasing`).
+ */
+export function canonicalizeMvuVarName(name: string): string {
+  if (!name || typeof name !== 'string') return name;
+  const unquoted = name.trim().replace(/^["']|["']$/g, '').trim();
+  if (!unquoted) return name;
+  // ASCII thuần (không dấu tiếng Việt/CJK) ⇒ có thể là identifier code ⇒ KHÔNG đụng (giữ `_`).
+  if (!/[^\x00-\x7F]/.test(unquoted)) return name;
+  if (PROTECTED_CODE_KEYWORDS.has(unquoted) || PROTECTED_CODE_KEYWORDS.has(unquoted.toLowerCase())) return name;
+  // Bỏ `_`/`-` (word-separator) → space; gộp space thừa.
+  const cleaned = unquoted.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return cleaned || name;
+}
 
 /**
  * Find the closest matching dictionary value for a potentially mismatched YAML key.
@@ -1304,6 +1433,16 @@ export function enforceExactConsistency(
         fixedDict[entry.origKey] = canonical;
         fixes.push(`"${entry.origKey}": "${entry.transValue}" → "${canonical}"`);
       }
+    }
+  }
+
+  // (User yêu cầu 2026) Làm SẠCH mọi giá trị về dạng chuẩn "Họ Tên" (bỏ `_`/`-` → space) — khoá
+  // dạng canonical DUY NHẤT cho MỌI biến, kể cả biến đơn lẻ không thuộc cụm nào ở trên.
+  for (const [k, v] of Object.entries(fixedDict)) {
+    const clean = canonicalizeMvuVarName(v);
+    if (clean !== v) {
+      fixedDict[k] = clean;
+      fixes.push(`"${k}": "${v}" → "${clean}" (chuẩn hoá dấu)`);
     }
   }
 

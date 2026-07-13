@@ -11,7 +11,9 @@ import {
   type MvuKeyInfo,
   enforceExactConsistency,
   validateDictionaryConflicts,
-  aiResolveMvuConflicts
+  aiResolveMvuConflicts,
+  recanonicalizeMvuInCard,
+  recanonicalizeMvuInFields
 } from '../utils/mvuSync';
 import { isMvuCard, getMvuZodSummary } from '../utils/mvuDetector';
 import { 
@@ -38,17 +40,19 @@ import {
 
 export default function MvuSyncPanel() {
   const { 
-    card, 
-    fields, 
-    translationConfig, 
-    setTranslationConfig, 
-    locale, 
-    proxy, 
+    card,
+    fields,
+    translationConfig,
+    setTranslationConfig,
+    locale,
+    proxy,
     addToast,
     mvuKeyMetadata,
     setMvuKeyMetadata,
     mvuDictionaryHistory,
-    pushDictionaryHistory
+    pushDictionaryHistory,
+    updateCard,
+    setFields
   } = useStore();
   const t = useT();
   const [isExpanded, setIsExpanded] = useState(false);
@@ -614,6 +618,33 @@ export default function MvuSyncPanel() {
     }
   };
 
+  // (User yêu cầu 2026) ĐỒNG NHẤT TÊN BIẾN MVU — non-AI, quét CẢ card (đã bake) LẪN field (phiên dịch):
+  // làm sạch dict về "Họ Tên" (bỏ _/-) rồi enforce lại mọi field code/lorebook → 1 dạng thống nhất.
+  const handleUnifyMvuNames = () => {
+    if (!card) return;
+    const dict = translationConfig.mvuDictionary;
+    if (!dict || Object.keys(dict).length === 0) {
+      addToast('info', ui.msUnifyNoDict);
+      return;
+    }
+    // 1. Field của phiên dịch hiện tại (bản dịch nằm ở fields, chưa bake vào card)
+    const fieldRes = recanonicalizeMvuInFields(fields, dict, mvuKeyMetadata);
+    // 2. Card (bản đã bake / thẻ import dịch trước bản vá) — dùng dict đã làm sạch ở bước 1
+    const cardRes = recanonicalizeMvuInCard(card, fieldRes.dictionary);
+    const cleanDict = cardRes.dictionary;
+    const total = fieldRes.fixCount + cardRes.fixCount;
+    const dictChanged = JSON.stringify(cleanDict) !== JSON.stringify(dict);
+    if (total > 0 || dictChanged) {
+      pushDictionaryHistory(dict);
+      setTranslationConfig({ mvuDictionary: cleanDict });
+      if (fieldRes.fixCount > 0) setFields(fieldRes.fields);
+      if (cardRes.fixCount > 0) updateCard(cardRes.card);
+      addToast('success', fmt(ui.msUnifyDone, { count: total }));
+    } else {
+      addToast('info', ui.msConsistent);
+    }
+  };
+
   return (
     <div style={{
       marginBottom: '16px',
@@ -858,6 +889,21 @@ export default function MvuSyncPanel() {
               }
             </button>
           </div>
+
+          {/* (User 2026) Nút ĐỒNG NHẤT TÊN BIẾN MVU — non-AI, quét cả card + field về 1 dạng "Họ Tên" */}
+          <button
+            className="btn btn-secondary"
+            onClick={handleUnifyMvuNames}
+            title={ui.msUnifyTip}
+            style={{
+              width: '100%', marginBottom: '12px', padding: '7px', fontSize: '0.75rem',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+              background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.22)', color: '#4ade80',
+            }}
+          >
+            <RefreshCw size={14} />
+            {ui.msUnifyNames}
+          </button>
 
           {/* Toolbar: Search + Stats + Undo + Exact Consistency + Import/Export */}
           <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', alignItems: 'center' }}>

@@ -6,7 +6,7 @@ import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookE
 import { extractNameCandidates, buildNameGlossaryPrompt, parseNameGlossaryResponse, mergeGlossary } from '../utils/nameGlossary';
 import { GLOSSARY_PRESETS } from '../utils/glossaryPresets';
 import { extractTranslatableFields, applyTranslationsToCard, autoTranslateLorebookTriggerKeys, injectNewLorebookEntries, isMvuUpdateField } from '../utils/cardFields';
-import { syncMvuVariables, postProcessRegexHtml, normalizeSmartQuotesInCode, fixNestedQuoteBracketPaths, fixBrokenLodashPaths, fixDotNotationPaths, extractPotentialMvuKeyStrings, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, enforceInitvarCovariance, extractMappingFromTranslatedInitvar, enforceExactConsistency, enforceVariableCasing, fixZodSyntaxErrors, validateDictionaryConflicts, aiResolveMvuConflicts } from '../utils/mvuSync';
+import { syncMvuVariables, postProcessRegexHtml, normalizeSmartQuotesInCode, fixNestedQuoteBracketPaths, fixBrokenLodashPaths, fixDotNotationPaths, extractPotentialMvuKeyStrings, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, enforceInitvarCovariance, extractMappingFromTranslatedInitvar, enforceExactConsistency, enforceVariableCasing, fixZodSyntaxErrors, validateDictionaryConflicts, aiResolveMvuConflicts, recanonicalizeMvuInFields } from '../utils/mvuSync';
 import { shouldSkipTranslation, detectLanguage, detectResidualCjk } from '../utils/langDetect';
 import { clearRAGCache } from '../utils/ragContext';
 import { storeTranslation, lookupTranslationMemory } from '../utils/translationMemory';
@@ -2496,6 +2496,25 @@ export function useTranslation() {
       if (i < fields.length && store.proxy.requestDelay > 0) {
         await new Promise((r) => setTimeout(r, store.proxy.requestDelay));
       }
+    }
+
+    // ═══ (User yêu cầu 2026) SWEEP CUỐI: ĐỒNG NHẤT TÊN BIẾN MVU toàn thẻ ═══
+    // Field dịch TRƯỚC khi dict đủ có thể còn dạng lệch (Họ_Tên / Họ tên). Nay dict đã đủ → làm sạch
+    // dict về dạng chuẩn "Họ Tên" (bỏ `_`/`-`) rồi ENFORCE LẠI mọi field code/lorebook đã xong.
+    if (store.translationConfig.enableMvuSync) {
+      try {
+        const rawDict = useStore.getState().translationConfig.mvuDictionary;
+        if (rawDict && Object.keys(rawDict).length > 0) {
+          const { fields: sweptFields, dictionary: fixedDict, fixCount } = recanonicalizeMvuInFields(
+            useStore.getState().fields, rawDict, useStore.getState().mvuKeyMetadata,
+          );
+          store.setTranslationConfig({ mvuDictionary: fixedDict });
+          if (fixCount > 0) {
+            store.setFields(sweptFields);
+            store.addLog('success', `🔗 Đồng nhất tên biến MVU: chuẩn hoá ${fixCount} field về 1 dạng thống nhất (bỏ dấu _/-).`);
+          }
+        }
+      } catch { /* sweep chỉ tăng cường chất lượng — lỗi thì bỏ qua, không chặn hoàn tất */ }
     }
 
     runningRef.current = false;

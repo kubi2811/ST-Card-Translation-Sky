@@ -87,6 +87,8 @@ const ui: UiKeys = {
   acPeak: '峰值：{count} 线程',
   acCompleted: '✓ 已完成 {count} 次调用',
   acSecondary: '（备用）',
+  acPvpBadge: 'PVP',
+  acPvpTip: 'PVP = 正在与很多人"争抢"同一个共享代理（连续 {count} 次 429/拥堵）——不是你的卡或密钥的问题。该通道会休息 15 秒并把请求转到其他密钥/通道；畅通后自动重置。若频繁 PVP：降低 RPM、增加密钥/提供商，或错峰运行。',
 
   // ─── UpdateButton ───
   ubErrPrefix: '错误',

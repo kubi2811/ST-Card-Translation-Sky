@@ -50,9 +50,11 @@ describe('laneOrder (routing model phụ theo ngưỡng ký tự)', () => {
     expect(laneOrder(p, 100).map(l => l.model)).toEqual(['pro']);
   });
 
-  it('RPM lane = rpm/model × số key', () => {
+  it('(User 2026) RPM lane = rpm/model của 1 KEY (per-key lane, KHÔNG nhân số key)', () => {
     const p = mkPool({ keys: ['k1', 'k2', 'k3'] });
-    expect(laneOrder(p, 500)[0].rpm).toBe(20 * 3); // phụ
-    expect(laneOrder(p, 5000)[0].rpm).toBe(5 * 3);  // chính
+    // Mỗi key giờ là 1 lane RIÊNG (bucket riêng) → laneOrder trả nhịp per-key. Tổng công suất
+    // (perKey × số key) nằm ở computePoolConcurrency, không phải ở đây.
+    expect(laneOrder(p, 500)[0].rpm).toBe(20); // phụ, per-key
+    expect(laneOrder(p, 5000)[0].rpm).toBe(5);  // chính, per-key
   });
 });

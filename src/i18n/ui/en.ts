@@ -89,6 +89,8 @@ const ui = {
   acPeak: 'Peak: {count} threads',
   acCompleted: '✓ {count} calls done',
   acSecondary: '(extra)',
+  acPvpBadge: 'PVP',
+  acPvpTip: 'PVP = you are "competing" for a SHARED proxy with many others (got 429/congested {count} times in a row) — NOT a problem with your card or key. This lane rests 15s then calls shift to another key/lane; it auto-resets once traffic clears. If PVP happens a lot: lower RPM, add keys/providers, or run during off-peak hours.',
 
   // ─── UpdateButton ───
   ubErrPrefix: 'Error',

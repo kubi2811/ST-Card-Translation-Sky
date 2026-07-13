@@ -129,19 +129,19 @@ export default function ActiveCallsPanel() {
                 <span style={{ display: 'flex', alignItems: 'center', gap: '5px', color: 'var(--text-secondary)', minWidth: 0 }}>
                   <Cpu size={11} style={{ flexShrink: 0, color: lane.isSecondary ? '#fbbf24' : accent }} />
                   {showProviderName && <span style={{ fontSize: '0.55rem', color: 'var(--text-muted)', background: 'var(--bg-secondary)', padding: '0 4px', borderRadius: '3px', flexShrink: 0 }}>{lane.providerName}</span>}
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: lane.failCount >= 5 ? 'var(--accent-danger)' : undefined, fontWeight: lane.failCount >= 5 ? 700 : undefined }}>{lane.model}</span>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: lane.failCount >= 5 ? 'var(--accent-warning)' : undefined, fontWeight: lane.failCount >= 5 ? 700 : undefined }}>{lane.model}</span>
                   {lane.isSecondary && <span style={{ fontSize: '0.55rem', color: '#fbbf24', flexShrink: 0 }}>{ui.acSecondary}</span>}
                   {lane.failCount > 0 && (
                     <span
-                      title={`Lane này đã fail ${lane.failCount} lần liên tiếp (429/5xx/timeout — proxy có thể đang nghẽn). Mỗi lần fail lane tự nghỉ 15s, call dồn sang lane khác; thành công sẽ tự reset.`}
+                      title={fmt(ui.acPvpTip, { count: lane.failCount })}
                       style={{
                         flexShrink: 0, fontSize: '0.55rem', fontWeight: 800, padding: '0 5px', borderRadius: '3px',
-                        color: lane.failCount >= 5 ? '#fff' : 'var(--accent-danger)',
-                        background: lane.failCount >= 5 ? 'var(--accent-danger)' : 'rgba(239,68,68,0.15)',
-                        border: '1px solid var(--accent-danger)',
+                        color: lane.failCount >= 5 ? '#fff' : 'var(--accent-warning)',
+                        background: lane.failCount >= 5 ? 'var(--accent-warning)' : 'rgba(245,158,11,0.15)',
+                        border: '1px solid var(--accent-warning)',
                       }}
                     >
-                      ⚠ lỗi ×{lane.failCount}
+                      ⚡ {ui.acPvpBadge} ×{lane.failCount}
                     </span>
                   )}
                 </span>

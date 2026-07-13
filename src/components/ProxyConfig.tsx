@@ -2,10 +2,10 @@ import { useState } from 'react';
 import { useStore } from '../store';
 import { useT, useUi } from '../i18n/useLocale';
 import { fmt } from '../i18n';
-import { testConnection, getModelSuggestions, getDefaultProxyUrl, fetchModelsFromProxy } from '../utils/apiClient';
+import { testConnection, getModelSuggestions, fetchModelsFromProxy, detectProviderFromUrl } from '../utils/apiClient';
 import ProviderPoolConfig from './ProviderPoolConfig';
 import KeysTextarea from './KeysTextarea';
-import type { AIProvider } from '../types/card';
+import ModelPicker from './ModelPicker';
 import {
   Settings,
   ChevronDown,
@@ -22,12 +22,13 @@ import {
   Layers,
 } from 'lucide-react';
 
-const PROVIDERS: { value: AIProvider; label: string }[] = [
-  { value: 'openai', label: 'OpenAI Compatible' },
-  { value: 'anthropic', label: 'Anthropic' },
-  { value: 'google', label: 'Google (Gemini)' },
-  { value: 'custom', label: 'Custom / Local' },
-];
+// Nhãn hiển thị loại provider TỰ NHẬN từ Base URL (badge cạnh ô URL — user không phải chọn tay).
+const PROVIDER_LABEL: Record<string, string> = {
+  openai: 'OpenAI-compatible',
+  anthropic: 'Anthropic (Claude)',
+  google: 'Google (Gemini)',
+  custom: 'Custom / Local',
+};
 
 export default function ProxyConfig() {
   const { proxy, setProxy, connectionStatus, setConnectionStatus, scannedModels, setScannedModels, addToast, locale, resetProxy } = useStore();
@@ -43,15 +44,11 @@ export default function ProxyConfig() {
     ...getModelSuggestions(proxy.provider).filter(s => !scannedModels.includes(s))
   ];
 
-  const handleProviderChange = (provider: AIProvider) => {
-    setProxy({
-      provider,
-      proxyUrl: getDefaultProxyUrl(provider),
-      model: getModelSuggestions(provider)[0] || '',
-    });
+  // (User 2026) Bỏ field "Loại" — đổi Base URL là tự nhận diện provider (định dạng request).
+  const handleUrlChange = (url: string) => {
+    setProxy({ proxyUrl: url, provider: detectProviderFromUrl(url) });
     setConnectionStatus('untested');
     setTestMessage('');
-    setScannedModels([]);
   };
 
   const handleScanModels = async () => {
@@ -112,31 +109,21 @@ export default function ProxyConfig() {
             <span style={{ fontWeight: 700, fontSize: '0.8rem', color: 'var(--text-primary)' }}>{ui.pcMainProviderTitle}</span>
           </div>
 
-          {/* Loại + Base URL (2 cột — như provider phụ) */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-            <div>
-              <label style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginBottom: 2, display: 'block', fontWeight: 600 }}>{ui.ppKind}</label>
-              <select
-                className="input"
-                value={proxy.provider}
-                onChange={(e) => handleProviderChange(e.target.value as AIProvider)}
-                style={{ fontSize: '0.78rem', padding: '6px 9px', cursor: 'pointer' }}
-              >
-                {PROVIDERS.map((p) => (
-                  <option key={p.value} value={p.value}>{p.label}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginBottom: 2, display: 'block', fontWeight: 600 }}>Base URL</label>
-              <input
-                className="input input-mono"
-                value={proxy.proxyUrl}
-                onChange={(e) => setProxy({ proxyUrl: e.target.value })}
-                placeholder="http://localhost:8080/v1"
-                style={{ fontSize: '0.78rem', padding: '6px 9px' }}
-              />
-            </div>
+          {/* Base URL (full) — loại provider TỰ NHẬN từ URL (badge bên phải, không còn field "Loại") */}
+          <div>
+            <label style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600 }}>
+              Base URL
+              <span style={{ fontSize: '0.6rem', fontWeight: 700, padding: '1px 6px', borderRadius: 8, color: 'var(--accent-secondary)', background: 'rgba(56,189,248,0.12)', border: '1px solid rgba(56,189,248,0.25)' }}>
+                → {PROVIDER_LABEL[proxy.provider] || proxy.provider}
+              </span>
+            </label>
+            <input
+              className="input input-mono"
+              value={proxy.proxyUrl}
+              onChange={(e) => handleUrlChange(e.target.value)}
+              placeholder="https://api.openai.com/v1 · …generativelanguage.googleapis.com · …anthropic.com"
+              style={{ fontSize: '0.78rem', padding: '6px 9px', width: '100%' }}
+            />
           </div>
 
           {/* API Key — nhiều key, mỗi dòng 1 key (KeysTextarea fix bug Enter không xuống dòng) */}
@@ -175,21 +162,17 @@ export default function ProxyConfig() {
               <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>{scannedModels.length} model</span>
             )}
           </div>
-          <datalist id="models-main">
-            {suggestions.map((m) => <option key={m} value={m} />)}
-          </datalist>
-
           {/* Model chính + RPM chính (2 cột — như provider phụ) */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px', gap: 8 }}>
             <div>
               <label style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginBottom: 2, display: 'block', fontWeight: 600 }}>{ui.ppPrimaryModel}</label>
-              <input
+              <ModelPicker
                 className="input input-mono"
                 value={proxy.model}
-                onChange={(e) => setProxy({ model: e.target.value })}
-                list="models-main"
+                onChange={(m) => setProxy({ model: m })}
+                models={suggestions}
                 placeholder="gpt-4o"
-                style={{ fontSize: '0.78rem', padding: '6px 9px' }}
+                style={{ fontSize: '0.78rem', padding: '6px 9px', width: '100%' }}
               />
             </div>
             <div>
@@ -213,13 +196,13 @@ export default function ProxyConfig() {
             <div className="fade-in" style={{ display: 'grid', gridTemplateColumns: '1fr 80px 90px', gap: 8 }}>
               <div>
                 <label style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginBottom: 2, display: 'block', fontWeight: 600 }}>{ui.ppSecondaryModel}</label>
-                <input
+                <ModelPicker
                   className="input input-mono"
                   value={proxy.secondaryModel ?? ''}
-                  onChange={(e) => setProxy({ secondaryModel: e.target.value })}
-                  list="models-main"
+                  onChange={(m) => setProxy({ secondaryModel: m })}
+                  models={suggestions}
                   placeholder="flash…"
-                  style={{ fontSize: '0.76rem', padding: '6px 9px' }}
+                  style={{ fontSize: '0.76rem', padding: '6px 9px', width: '100%' }}
                 />
               </div>
               <div>

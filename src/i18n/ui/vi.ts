@@ -91,6 +91,8 @@ const ui: UiKeys = {
   acPeak: 'Cao điểm: {count} luồng',
   acCompleted: '✓ {count} call xong',
   acSecondary: '(phụ)',
+  acPvpBadge: 'PVP',
+  acPvpTip: 'PVP = đang "tranh" proxy CHUNG với nhiều người (bị 429/nghẽn {count} lần liên tiếp) — KHÔNG phải lỗi thẻ hay key của bạn. Lane này tự nghỉ 15s rồi dồn call sang key/lane khác; khi thông sẽ tự reset. Nếu PVP nhiều: giảm RPM, thêm key/provider, hoặc chạy lúc vắng.',
 
   // ─── UpdateButton ───
   ubErrPrefix: 'Lỗi',

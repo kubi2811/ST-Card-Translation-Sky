@@ -8,7 +8,11 @@ type Phase = 'idle' | 'open' | 'updating' | 'done';
 // Lưu SỐ commit đang chờ mà user đã bấm "Để sau/Đóng". Chỉ tự mở lại popup khi số này
 // THAY ĐỔI (có commit mới hơn) → không làm phiền lặp lại cùng một bản.
 const DISMISS_KEY = 'update-autopopup-dismissed-behind';
-const AUTO_CHECK_MS = 30 * 60 * 1000; // tự quét cập nhật mỗi 30 phút
+// (User yêu cầu 2026) Quét cập nhật NHANH hơn: nền 3 phút/lần + quét NGAY khi user quay lại tab
+// (visibilitychange/focus) → push xong là thấy badge +N trong ~vài giây. Debounce ≥60s để không
+// spam `git fetch`. Endpoint /api/check-update chỉ chạy git fetch (rẻ), 3 phút/lần vô hại.
+const AUTO_CHECK_MS = 3 * 60 * 1000;   // nền: 3 phút/lần
+const FOCUS_DEBOUNCE_MS = 60 * 1000;   // quét-khi-focus: tối đa 1 lần/phút
 
 /**
  * Always-visible Hub update control. Lives right below the flow list so it shows in
@@ -66,13 +70,27 @@ export default function HubUpdateButton() {
     return 0;
   };
 
+  const lastCheckAt = useRef(0);
   useEffect(() => {
     if (checkedOnce.current) return;
     checkedOnce.current = true;
-    check({ openIfFound: true });
-    // Quét lại mỗi 30 phút: nếu có commit mới hơn lần đã bỏ qua → tự bật popup báo.
-    const id = setInterval(() => { check({ openIfFound: true }); }, AUTO_CHECK_MS);
-    return () => clearInterval(id);
+    const doCheck = () => { lastCheckAt.current = Date.now(); check({ openIfFound: true }); };
+    doCheck();
+    // Nền: quét lại mỗi 3 phút.
+    const id = setInterval(doCheck, AUTO_CHECK_MS);
+    // Quét NGAY khi user quay lại tab (bật màn/đổi tab về), nhưng tối đa 1 lần/phút.
+    const onFocus = () => {
+      if (document.visibilityState === 'hidden') return;
+      if (Date.now() - lastCheckAt.current < FOCUS_DEBOUNCE_MS) return;
+      doCheck();
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

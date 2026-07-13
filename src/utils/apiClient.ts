@@ -1158,19 +1158,11 @@ export function getUniqueKeyCount(config: { apiKey: string; apiKeys: string[] })
   return getUniqueKeys(config).length || 1;
 }
 
-// Key rotation is PER PROVIDER now (multi-provider pool) — mỗi provider có con trỏ key riêng.
-const _keyIndexByProvider = new Map<string, number>();
-function getRotatedKeyFor(providerId: string, keys: string[]): { key: string; index: number; count: number } {
-  if (keys.length === 0) return { key: '', index: 0, count: 1 };
-  const cur = _keyIndexByProvider.get(providerId) || 0;
-  const index = cur % keys.length;
-  _keyIndexByProvider.set(providerId, (cur + 1) % keys.length);
-  return { key: keys[index], index, count: keys.length };
-}
-/** Force advance to next key for a provider (e.g. after 429). */
-function advanceKeyRotationFor(providerId: string) {
-  _keyIndexByProvider.set(providerId, (_keyIndexByProvider.get(providerId) || 0) + 1);
-}
+// (User yêu cầu 2026) ĐA KEY = N LANE ĐỘC LẬP. Trước đây key xoay vòng chung 1 con trỏ + CHUNG
+// 1 rate-bucket/cooling theo (provider,model) → 1 key dính 429 làm cả provider nghỉ 15s ("treo/
+// như chỉ 1 key"). Nay MỖI (provider, keyIndex) là 1 lane riêng: bucket RPM riêng + cooling riêng
+// (xem `_laneKey` + `pickLane`). Không còn con trỏ key toàn cục — vòng round-robin của pickLane
+// tự trải đều qua từng key.
 
 /* ─── Rate Limiter — Per-model Sliding Window ─── */
 
@@ -1221,24 +1213,28 @@ function isLaneCooling(rlKey: string): boolean {
   const f = _laneFailures.get(rlKey);
   return !!f && Date.now() - f.lastAt < LANE_FAILURE_COOLDOWN_MS;
 }
-/** Số lần fail liên tiếp của từng lane (key = `${providerId}::${model}`) — cho UI. */
+/** Số lần fail liên tiếp mỗi lane, GỘP về dạng (provider,model) cho UI (cộng count qua các key). */
 export function getLaneFailures(): Record<string, { count: number; lastAt: number }> {
   const out: Record<string, { count: number; lastAt: number }> = {};
-  for (const [k, v] of _laneFailures) out[k] = { ...v };
+  for (const [laneK, v] of _laneFailures) {
+    const pk = _laneKeyToPanel(laneK);
+    const cur = out[pk];
+    out[pk] = cur ? { count: cur.count + v.count, lastAt: Math.max(cur.lastAt, v.lastAt) } : { count: v.count, lastAt: v.lastAt };
+  }
   return out;
 }
 
-/** How many requests each model has made in the current 60s window (for live UI). */
+/** Số request trong cửa sổ 60s, GỘP mọi key của 1 (provider,model) về dạng UI dùng (`_rlKey`). */
 export function getRateLimitUsage(): Record<string, number> {
   const now = Date.now();
   const out: Record<string, number> = {};
-  for (const [model, bucket] of _modelTimestamps) {
+  for (const [laneK, bucket] of _modelTimestamps) {
     let count = 0;
     for (let i = bucket.length - 1; i >= 0; i--) {
       if (bucket[i] > now - RATE_LIMIT_WINDOW_MS) count++;
       else break;
     }
-    if (count > 0) out[model] = count;
+    if (count > 0) { const pk = _laneKeyToPanel(laneK); out[pk] = (out[pk] || 0) + count; }
   }
   return out;
 }
@@ -1291,7 +1287,6 @@ let _laneCursor = 0;
 /** Reset pool round-robin + per-provider key rotation at the start of a run. */
 export function resetProviderPool(): void {
   _laneCursor = 0;
-  _keyIndexByProvider.clear();
 }
 
 export interface PoolProvider {
@@ -1303,9 +1298,23 @@ interface ChosenLane { providerId: string; provider: AIProvider; proxyUrl: strin
 
 const _rlKey = (id: string, model: string) => (id === 'default' ? model : `${id}${model}`);
 
+// (User yêu cầu 2026) ĐA KEY = N LANE ĐỘC LẬP. Khoá bucket/cooling NỘI BỘ gồm keyIndex → mỗi
+// (provider, key, model) có nhịp RPM + cooling RIÊNG (1 key 429 KHÔNG làm cả provider nghỉ).
+// `_rlKey` ở trên (id + model) là dạng GỘP mà ActiveCallsPanel đọc; `_laneKey` thêm keyIndex; dùng
+// CÙNG ký tự phân tách với `_rlKey` để `getRateLimitUsage`/`getLaneFailures` tách lại + gộp về UI.
+const _LANE_SEP = '\x1F';
+const _laneKey = (id: string, keyIndex: number, model: string) => `${id}${_LANE_SEP}${keyIndex}${_LANE_SEP}${model}`;
+/** Tách khoá lane nội bộ (id␟ki␟model) → dạng GỘP của UI (id␟model / model) = `_rlKey`. */
+function _laneKeyToPanel(laneKey: string): string {
+  const parts = laneKey.split(_LANE_SEP);
+  if (parts.length >= 3) return _rlKey(parts[0], parts.slice(2).join(_LANE_SEP));
+  return laneKey; // an toàn nếu gặp khoá dạng cũ (đã là dạng gộp)
+}
+
 function _toPoolProvider(id: string, c: { provider: AIProvider; proxyUrl: string; apiKey: string; apiKeys: string[]; model: string; primaryModelRpm: number; enableSecondaryModel: boolean; secondaryModel: string; secondaryModelRpm: number; secondaryModelThreshold: number }): PoolProvider {
   return {
-    id, provider: c.provider, proxyUrl: c.proxyUrl, keys: getUniqueKeys(c),
+    // (User 2026) provider suy TỪ Base URL hiện tại — config cũ lưu provider lệch vẫn chạy đúng.
+    id, provider: detectProviderFromUrl(c.proxyUrl) || c.provider, proxyUrl: c.proxyUrl, keys: getUniqueKeys(c),
     primaryModel: c.model, primaryRpm: c.primaryModelRpm > 0 ? c.primaryModelRpm : 5,
     enableSecondary: !!c.enableSecondaryModel && !!c.secondaryModel?.trim(),
     secondaryModel: c.secondaryModel, secondaryRpm: c.secondaryModelRpm > 0 ? c.secondaryModelRpm : 17,
@@ -1340,8 +1349,9 @@ export function computePoolConcurrency(base: ProxySettings): number {
  *  tiếp). Trước đây path pool quy đổi token ≈ ceil(ký tự/4) nên entry 2200 ký tự (~550 token) vẫn
  *  lọt ngưỡng 800 → dùng nhầm model phụ; nay so thẳng số ký tự. */
 export function laneOrder(p: PoolProvider, charCount?: number, _preferSecondary = false): { model: string; rpm: number }[] {
-  const kc = Math.max(1, p.keys.length || 1);
-  const primary = { model: p.primaryModel, rpm: p.primaryRpm * kc };
+  // (User yêu cầu 2026) RPM ở đây là NHỊP CHO 1 KEY (per-key lane) — KHÔNG nhân số key: mỗi key là 1
+  // lane riêng với bucket riêng (xem pickLane). Tổng công suất (Σ perKey×kc) nằm ở computePoolConcurrency.
+  const primary = { model: p.primaryModel, rpm: p.primaryRpm };
   if (!p.enableSecondary) return [primary];
   // (User yêu cầu 2026) Model PHỤ CHỈ chạy entry NGẮN hơn/bằng ngưỡng ký tự (secondaryThreshold, >0).
   // ĐÃ BỎ:
@@ -1351,37 +1361,54 @@ export function laneOrder(p: PoolProvider, charCount?: number, _preferSecondary 
   //  ⇒ Routing giờ THUẦN theo số ký tự: ngắn→phụ, dài→chính. Model phụ tự "dò" mọi entry ngắn (bất kỳ
   //    thứ tự) qua pool round-robin.
   const isShort = p.secondaryThreshold > 0 && charCount != null && charCount <= p.secondaryThreshold;
-  return isShort ? [{ model: p.secondaryModel, rpm: p.secondaryRpm * kc }] : [primary];
+  return isShort ? [{ model: p.secondaryModel, rpm: p.secondaryRpm }] : [primary];
 }
-/** Chọn lane kế tiếp (round-robin đều) còn RPM; nếu tất cả đầy thì chờ lane con trỏ. */
+/** Chọn lane kế tiếp (round-robin đều) còn RPM; nếu tất cả đầy thì chờ lane con trỏ.
+ *  (User yêu cầu 2026) LANE = (provider × TỪNG key): trải phẳng mọi key thành lane độc lập, mỗi lane
+ *  bucket RPM + cooling riêng theo `_laneKey(id, keyIndex, model)`. ⇒ nhét N key = N lane chạy song
+ *  song; 1 key dính 429/nghẽn chỉ nghỉ lane key đó, các key còn lại vẫn chạy (không "treo cả provider"). */
+/** Trải phẳng pool thành các LANE (provider × TỪNG key) — mỗi key 1 lane. Export cho test. */
+export function flattenLanes(pool: PoolProvider[]): { p: PoolProvider; ki: number }[] {
+  const flat: { p: PoolProvider; ki: number }[] = [];
+  for (const p of pool) {
+    const kc = Math.max(1, p.keys.length || 1);
+    for (let ki = 0; ki < kc; ki++) flat.push({ p, ki });
+  }
+  return flat;
+}
+/** Khoá lane nội bộ (id␟ki␟model) + gộp về dạng UI — export cho test đa-key. */
+export const laneKeyForTest = _laneKey;
+export const laneKeyToPanelForTest = _laneKeyToPanel;
+
 async function pickLane(pool: PoolProvider[], charCount: number | undefined, signal?: AbortSignal, preferSecondary = false): Promise<ChosenLane> {
-  const n = pool.length;
-  const build = (p: PoolProvider, model: string): ChosenLane => {
-    const { key, index, count } = getRotatedKeyFor(p.id, p.keys);
-    return { providerId: p.id, provider: p.provider, proxyUrl: p.proxyUrl, model, key, keyIndex: index, keyTotal: count };
+  const flat = flattenLanes(pool);
+  const n = flat.length;
+  const build = (p: PoolProvider, ki: number, model: string): ChosenLane => {
+    const total = Math.max(1, p.keys.length || 1);
+    const key = p.keys.length ? p.keys[ki % p.keys.length] : '';
+    return { providerId: p.id, provider: p.provider, proxyUrl: p.proxyUrl, model, key, keyIndex: ki, keyTotal: total };
   };
-  // Lượt 1: né lane đang NGHỈ 15s vì vừa fail (proxy chung nghẽn) — dồn call sang lane khoẻ.
-  // Lượt 2: nếu mọi lane khoẻ đều đầy RPM thì chấp nhận cả lane đang nghỉ (tránh kẹt).
+  // Lượt 1: né lane đang NGHỈ 15s vì vừa fail. Lượt 2: mọi lane khoẻ đầy RPM thì chấp nhận cả lane nghỉ.
   for (const skipCooling of [true, false]) {
     for (let i = 0; i < n; i++) {
-      const p = pool[(_laneCursor + i) % n];
+      const { p, ki } = flat[(_laneCursor + i) % n];
       for (const L of laneOrder(p, charCount, preferSecondary)) {
-        const rk = _rlKey(p.id, L.model);
+        const rk = _laneKey(p.id, ki, L.model);
         if (skipCooling && isLaneCooling(rk)) continue;
         if (hasRateLimitCapacity(rk, L.rpm)) {
           recordRateLimitRequest(rk);
           _laneCursor = (_laneCursor + i + 1) % n;
-          return build(p, L.model);
+          return build(p, ki, L.model);
         }
       }
     }
   }
-  // Mọi lane đầy → chờ lane đầu (theo thứ tự ưu tiên) của provider con trỏ.
-  const p = pool[_laneCursor % n];
+  // Mọi lane đầy → chờ lane con trỏ (model ưu tiên đầu).
+  const { p, ki } = flat[_laneCursor % n];
   const L = laneOrder(p, charCount, preferSecondary)[0];
-  await waitForRateLimitModel(_rlKey(p.id, L.model), L.rpm, signal);
+  await waitForRateLimitModel(_laneKey(p.id, ki, L.model), L.rpm, signal);
   _laneCursor = (_laneCursor + 1) % n;
-  return build(p, L.model);
+  return build(p, ki, L.model);
 }
 
 /* ─── Route to correct provider (with key rotation + per-model rate limiting) ─── */
@@ -1416,7 +1443,7 @@ export async function callProvider(
     startedAt: Date.now(),
   });
 
-  const laneRlKey = _rlKey(lane.providerId, lane.model);
+  const laneRlKey = _laneKey(lane.providerId, lane.keyIndex, lane.model);
   // Hứng token thật từ response (usage/usageMetadata); API/proxy nào strip mất thì ước lượng.
   const usageSink: TokenUsageSink = {};
   try {
@@ -1446,10 +1473,8 @@ export async function callProvider(
     });
     return result;
   } catch (err) {
-    // On rate limit, advance to next key for THIS provider on retry
-    if (err instanceof ApiError && err.statusCode === 429) {
-      advanceKeyRotationFor(lane.providerId);
-    }
+    // (User 2026) Per-key lane: 429 chỉ đánh dấu LANE KEY NÀY fail (cooling 15s) — pickLane round-robin
+    // tự né sang key/provider khác. Không cần "advance key rotation" thủ công nữa.
     // Lỗi TẠM THỜI (429/5xx/timeout/mạng) → đánh dấu lane fail (nghỉ 15s + UI tô đỏ).
     // Lỗi do người dùng hủy (abort) thì KHÔNG tính.
     const msg = err instanceof Error ? err.message : String(err);
@@ -3955,6 +3980,19 @@ export function getModelSuggestions(provider: AIProvider): string[] {
     default:
       return [];
   }
+}
+
+/* ─── (User yêu cầu 2026) Tự NHẬN DIỆN loại provider từ Base URL — bỏ field "Loại" ở UI ─── */
+/**
+ * Suy `AIProvider` từ Base URL: chứa `anthropic`→anthropic; `googleapis`/`generativelanguage`→google;
+ * còn lại→openai (OpenAI-compatible, gồm cả proxy/local — chúng đi CHUNG path định dạng OpenAI).
+ * Dùng khi user nhập/đổi Base URL để tự set provider (định dạng request), không cần chọn tay.
+ */
+export function detectProviderFromUrl(url: string): AIProvider {
+  const u = (url || '').toLowerCase();
+  if (u.includes('anthropic')) return 'anthropic';
+  if (u.includes('googleapis') || u.includes('generativelanguage')) return 'google';
+  return 'openai';
 }
 
 /* ─── Default proxy URLs per provider ─── */

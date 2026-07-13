@@ -1,25 +1,23 @@
 import { useStore } from '../store';
-import { fetchModelsFromProxy } from '../utils/apiClient';
-import type { AIProvider, ProviderConfig, ProxySettings } from '../types/card';
+import { fetchModelsFromProxy, detectProviderFromUrl } from '../utils/apiClient';
+import type { ProviderConfig, ProxySettings } from '../types/card';
 import { Plus, Trash2, Server, ChevronDown, ChevronRight, RefreshCw, Loader2 } from 'lucide-react';
 import { useState } from 'react';
 import KeysTextarea from './KeysTextarea';
+import ModelPicker from './ModelPicker';
 import { useUi } from '../i18n/useLocale';
 import { fmt } from '../i18n';
 
-const PROVIDERS: { value: AIProvider; label: string }[] = [
-  { value: 'openai', label: 'OpenAI Compatible' },
-  { value: 'anthropic', label: 'Anthropic' },
-  { value: 'google', label: 'Google (Gemini)' },
-  { value: 'custom', label: 'Custom / Local' },
-];
+// Nhãn loại provider TỰ NHẬN từ Base URL (badge — không còn field "Loại").
+const PROVIDER_LABEL: Record<string, string> = {
+  openai: 'OpenAI-compatible', anthropic: 'Anthropic (Claude)', google: 'Google (Gemini)', custom: 'Custom / Local',
+};
 
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '6px 9px', fontSize: '0.78rem', background: 'var(--bg-elevated)',
   border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)',
 };
 const lbl: React.CSSProperties = { fontSize: '0.64rem', color: 'var(--text-muted)', marginBottom: 2, display: 'block', fontWeight: 600 };
-const row2: React.CSSProperties = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 };
 
 /**
  * Cấu hình các PROVIDER PHỤ (ngoài provider chính #1). Engine gộp tất cả provider đang bật → rải
@@ -72,7 +70,6 @@ function ProviderCard({ p, index, onChange, onRemove }: { p: ProviderConfig; ind
   // Cờ riêng thay cho scanMsg.startsWith('Lỗi'): chuỗi đã i18n nên không dùng làm logic được nữa.
   const [scanErr, setScanErr] = useState(false);
   const keyCount = [p.apiKey, ...(p.apiKeys || [])].filter((k) => k.trim()).length;
-  const listId = `models-${p.id}`;
 
   const scanModels = async () => {
     const firstKey = p.apiKey?.trim() || (p.apiKeys || []).find((k) => k.trim()) || '';
@@ -101,18 +98,15 @@ function ProviderCard({ p, index, onChange, onRemove }: { p: ProviderConfig; ind
         </button>
       </div>
 
-      {/* Loại + Base URL (2 cột) */}
-      <div style={row2}>
-        <div>
-          <label style={lbl}>{ui.ppKind}</label>
-          <select value={p.provider} onChange={(e) => onChange({ provider: e.target.value as AIProvider })} style={{ ...inputStyle, cursor: 'pointer' }}>
-            {PROVIDERS.map((pr) => <option key={pr.value} value={pr.value}>{pr.label}</option>)}
-          </select>
-        </div>
-        <div>
-          <label style={lbl}>Base URL</label>
-          <input value={p.proxyUrl} onChange={(e) => onChange({ proxyUrl: e.target.value })} placeholder="https://…/v1" style={inputStyle} />
-        </div>
+      {/* Base URL (full) — loại provider TỰ NHẬN từ URL (badge, không còn field "Loại") */}
+      <div>
+        <label style={{ ...lbl, display: 'flex', alignItems: 'center', gap: 6 }}>
+          Base URL
+          <span style={{ fontSize: '0.56rem', fontWeight: 700, padding: '1px 5px', borderRadius: 8, color: 'var(--accent-secondary)', background: 'rgba(56,189,248,0.12)', border: '1px solid rgba(56,189,248,0.25)' }}>
+            → {PROVIDER_LABEL[detectProviderFromUrl(p.proxyUrl)]}
+          </span>
+        </label>
+        <input value={p.proxyUrl} onChange={(e) => onChange({ proxyUrl: e.target.value, provider: detectProviderFromUrl(e.target.value) })} placeholder="https://…/v1" style={inputStyle} />
       </div>
 
       {/* API keys */}
@@ -132,13 +126,11 @@ function ProviderCard({ p, index, onChange, onRemove }: { p: ProviderConfig; ind
         </button>
         {scanMsg && <span style={{ fontSize: '0.66rem', color: scanErr ? 'var(--accent-danger)' : 'var(--text-muted)' }}>{scanMsg}</span>}
       </div>
-      <datalist id={listId}>{models.map((m) => <option key={m} value={m} />)}</datalist>
-
       {/* Model chính + RPM (2 cột) */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px', gap: 8 }}>
         <div>
           <label style={lbl}>{ui.ppPrimaryModel}</label>
-          <input value={p.model} onChange={(e) => onChange({ model: e.target.value })} list={listId} placeholder="gemini-2.5-pro" style={inputStyle} />
+          <ModelPicker value={p.model} onChange={(m) => onChange({ model: m })} models={models} placeholder="gemini-2.5-pro" style={inputStyle} />
         </div>
         <div>
           <label style={lbl}>{ui.ppPrimaryRpm}</label>
@@ -155,7 +147,7 @@ function ProviderCard({ p, index, onChange, onRemove }: { p: ProviderConfig; ind
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 90px', gap: 8 }}>
           <div>
             <label style={lbl}>{ui.ppSecondaryModel}</label>
-            <input value={p.secondaryModel} onChange={(e) => onChange({ secondaryModel: e.target.value })} list={listId} placeholder="gemini-2.5-flash" style={inputStyle} />
+            <ModelPicker value={p.secondaryModel} onChange={(m) => onChange({ secondaryModel: m })} models={models} placeholder="gemini-2.5-flash" style={inputStyle} />
           </div>
           <div>
             <label style={lbl}>{ui.ppSecondaryRpm}</label>

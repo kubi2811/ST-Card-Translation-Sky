@@ -10,6 +10,7 @@ import { useT, useUi } from './i18n/useLocale';
 import { Languages, X, Globe } from 'lucide-react';
 import PresetImportPanel from './components/PresetImportPanel';
 import PresetRecommendModal from './components/PresetRecommendModal';
+import PostTranslateGuideModal from './components/PostTranslateGuideModal';
 import { APP_VERSION, APP_VERSION_NOTE } from './version';
 
 // Lazy-load heavy components — only loaded after card is imported
@@ -293,12 +294,16 @@ export default function App() {
             <Suspense fallback={<LazyFallback />}>
               <FieldEditor />
             </Suspense>
-            <Suspense fallback={<LazyFallback />}>
-              <VerifyPanel />
-            </Suspense>
-            <Suspense fallback={<LazyFallback />}>
-              <ExportPanel />
-            </Suspense>
+            <div id="verify-panel-anchor">
+              <Suspense fallback={<LazyFallback />}>
+                <VerifyPanel />
+              </Suspense>
+            </div>
+            <div id="export-panel-anchor">
+              <Suspense fallback={<LazyFallback />}>
+                <ExportPanel />
+              </Suspense>
+            </div>
 
           </div>
         )}
@@ -353,6 +358,9 @@ export default function App() {
 
       {/* Popup gợi ý cấu hình sau khi import card */}
       <PresetRecommendModal />
+
+      {/* Popup hướng dẫn bước tiếp theo sau khi dịch xong */}
+      <PostTranslateGuideModal />
 
       {/* ─── Toasts ─── */}
       <div className="toast-container">

@@ -2528,6 +2528,10 @@ export function useTranslation() {
     store.addLog('info', `🎉 Dịch xong: ${doneCount} thành công, ${failCount} lỗi`);
     store.addToast('success', `Translation complete! ${doneCount}/${fields.length} fields translated`);
 
+    // (User 2026) Dịch xong có kết quả thật → mở popup hướng dẫn bước tiếp (Sức khoẻ thẻ / Đồng nhất
+    // biến MVU / AI Verify). Popup tự tôn trọng "Đừng hiện lại" nên gọi vô điều kiện ở đây.
+    if (doneCount > 0) useStore.getState().triggerTranslateGuide();
+
     // ═══ Tổng kết token THẬT của cả run (đọc từ usage/usageMetadata; thiếu thì ước lượng ~) ═══
     {
       const tok = CallMonitor.getTokenTotals();

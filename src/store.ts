@@ -171,6 +171,10 @@ interface AppState {
   presetRecommendCard: string;
   presetRecommendSeed: number;
   triggerPresetRecommend: (cardFileName: string) => void;
+  /** (User 2026) Bump mỗi khi 1 lần dịch HOÀN TẤT (doneCount>0) → mở popup hướng dẫn bước tiếp theo
+   *  (Sức khoẻ thẻ → Đồng nhất biến MVU → chỉ AI Verify khi lỗi ngữ nghĩa). Ephemeral, không persist. */
+  translateGuideSeed: number;
+  triggerTranslateGuide: () => void;
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
 
@@ -953,6 +957,8 @@ export const useStore = create<AppState>((set) => ({
   presetRecommendSeed: 0,
   triggerPresetRecommend: (cardFileName) =>
     set((s) => ({ presetRecommendCard: cardFileName, presetRecommendSeed: s.presetRecommendSeed + 1 })),
+  translateGuideSeed: 0,
+  triggerTranslateGuide: () => set((s) => ({ translateGuideSeed: s.translateGuideSeed + 1 })),
   sidebarCollapsed: false,
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
 

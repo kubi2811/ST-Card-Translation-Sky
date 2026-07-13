@@ -326,6 +326,12 @@ export interface GlossaryEntry {
    * cũ. Mục user tự gõ / import / bấm nạp preset KHÔNG có cờ này ⇒ giữ nguyên qua các card.
    */
   auto?: boolean;
+  /**
+   * NGUỒN GỐC của mục (để visualize "bộ rule của thẻ"): 'name' = Pha 0 quét tên riêng;
+   * 'harvest' = HỌC được trong khi dịch (biệt danh/alias từ keyword lorebook + tên); 'preset' =
+   * nạp bộ thuật ngữ có sẵn; 'manual'/thiếu = user tự gõ/import. Chỉ để hiển thị, không đổi logic dịch.
+   */
+  origin?: 'name' | 'harvest' | 'preset' | 'manual';
 }
 
 export type ModPreset = 'none' | 'ntr_to_ntl';

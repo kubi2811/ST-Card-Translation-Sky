@@ -11,6 +11,7 @@ import { Languages, X, Globe } from 'lucide-react';
 import PresetImportPanel from './components/PresetImportPanel';
 import PresetRecommendModal from './components/PresetRecommendModal';
 import PostTranslateGuideModal from './components/PostTranslateGuideModal';
+import GlossaryVizPanel from './components/GlossaryVizPanel';
 import { APP_VERSION, APP_VERSION_NOTE } from './version';
 
 // Lazy-load heavy components — only loaded after card is imported
@@ -291,6 +292,7 @@ export default function App() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: 'none' /* (feedback) khung keo het canh phai, khong du khoang trong */ }}>
             <CardPreview />
             <TranslationProgress />
+            <GlossaryVizPanel />
             <Suspense fallback={<LazyFallback />}>
               <FieldEditor />
             </Suspense>

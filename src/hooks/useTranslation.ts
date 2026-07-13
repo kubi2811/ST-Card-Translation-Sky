@@ -3,7 +3,7 @@ import { stripUrlsForCjkCheck } from '../utils/cjk';
 import { useCallback, useRef } from 'react';
 import { useStore } from '../store';
 import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookEntries, ChunkError, ApiError, setExtraProviders, resetProviderPool, computePoolConcurrency, callProvider } from '../utils/apiClient';
-import { extractNameCandidates, buildNameGlossaryPrompt, parseNameGlossaryResponse, mergeGlossary } from '../utils/nameGlossary';
+import { extractNameCandidates, buildNameGlossaryPrompt, parseNameGlossaryResponse, mergeGlossary, harvestGlossaryFromFields } from '../utils/nameGlossary';
 import { GLOSSARY_PRESETS } from '../utils/glossaryPresets';
 import { extractTranslatableFields, applyTranslationsToCard, autoTranslateLorebookTriggerKeys, injectNewLorebookEntries, isMvuUpdateField } from '../utils/cardFields';
 import { syncMvuVariables, postProcessRegexHtml, normalizeSmartQuotesInCode, fixNestedQuoteBracketPaths, fixBrokenLodashPaths, fixDotNotationPaths, extractPotentialMvuKeyStrings, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, enforceInitvarCovariance, extractMappingFromTranslatedInitvar, enforceExactConsistency, enforceVariableCasing, fixZodSyntaxErrors, validateDictionaryConflicts, aiResolveMvuConflicts, recanonicalizeMvuInFields } from '../utils/mvuSync';
@@ -1571,7 +1571,7 @@ export function useTranslation() {
             const hits = pack.entries.filter(e => corpus.includes(e.source)).length;
             if (hits >= 8) {
               // (Fix bug #10) đánh dấu auto: bộ nạp theo card → dọn khi gỡ card/xoá cache.
-              const { merged, added } = mergeGlossary(cfgPk.glossary, pack.entries.map(e => ({ ...e, auto: true })));
+              const { merged, added } = mergeGlossary(cfgPk.glossary, pack.entries.map(e => ({ ...e, auto: true, origin: 'preset' as const })));
               store.setTranslationConfig({ glossary: merged });
               store.addLog('info', `📚 Card có ${hits} thuật ngữ tu tiên/võ hiệp → đã tự nạp bộ thuật ngữ chuẩn (+${added} mục vào Từ điển; mục bạn tự nhập luôn được giữ).`);
               break;
@@ -1590,7 +1590,7 @@ export function useTranslation() {
           const nameEntries = parseNameGlossaryResponse(rawNames, candidates);
           if (nameEntries.length > 0) {
             // (Fix bug #10) đánh dấu auto: tên riêng của card hiện tại → dọn khi gỡ card/xoá cache.
-            const { merged, added } = mergeGlossary(useStore.getState().translationConfig.glossary, nameEntries.map(e => ({ ...e, auto: true })));
+            const { merged, added } = mergeGlossary(useStore.getState().translationConfig.glossary, nameEntries.map(e => ({ ...e, auto: true, origin: 'name' as const })));
             store.setTranslationConfig({ glossary: merged });
             const sample = nameEntries.slice(0, 3).map(e => `${e.source}→${e.target}`).join(', ');
             store.addLog('success', `📖 Pha 0 xong: +${added} mục vào bảng tên (${sample}${nameEntries.length > 3 ? ', …' : ''}) — mọi luồng dịch dùng chung, tên nhất quán.`);
@@ -2516,6 +2516,21 @@ export function useTranslation() {
         }
       } catch { /* sweep chỉ tăng cường chất lượng — lỗi thì bỏ qua, không chặn hoàn tất */ }
     }
+
+    // ═══ (User 2026) HỌC TỪ ĐIỂN TRONG KHI DỊCH: "gặt" tên/biệt danh từ keyword lorebook + tên thẻ
+    // ĐÃ DỊCH → merge vào glossary (origin 'harvest'). Bộ rule của thẻ tự lớn dần từ chính bản dịch;
+    // lần dịch lại / dịch tiếp dùng chung → tên nhất quán. Thuần luật, không tốn AI. ═══
+    try {
+      const harvested = harvestGlossaryFromFields(useStore.getState().fields);
+      if (harvested.length > 0) {
+        const { merged, added } = mergeGlossary(useStore.getState().translationConfig.glossary, harvested);
+        if (added > 0) {
+          store.setTranslationConfig({ glossary: merged });
+          const sample = harvested.slice(0, 3).map(e => `${e.source}→${e.target}`).join(', ');
+          store.addLog('success', `📚 Học từ điển khi dịch: +${added} tên/biệt danh từ bản dịch (${sample}${harvested.length > 3 ? ', …' : ''}) — thêm vào bộ rule của thẻ.`);
+        }
+      }
+    } catch { /* harvest chỉ tăng cường — lỗi thì bỏ qua */ }
 
     runningRef.current = false;
     store.setPhase('done');

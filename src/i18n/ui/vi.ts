@@ -93,6 +93,15 @@ const ui: UiKeys = {
   acSecondary: '(phụ)',
   acPvpBadge: 'PVP',
   acPvpTip: 'PVP = đang "tranh" proxy CHUNG với nhiều người (bị 429/nghẽn {count} lần liên tiếp) — KHÔNG phải lỗi thẻ hay key của bạn. Lane này tự nghỉ 15s rồi dồn call sang key/lane khác; khi thông sẽ tự reset. Nếu PVP nhiều: giảm RPM, thêm key/provider, hoặc chạy lúc vắng.',
+  // Panel visualize Từ điển dịch của thẻ
+  gvTitle: 'Bộ quy tắc dịch của thẻ này',
+  gvHint: 'Từ điển KHÔNG cố định — nó tự lớn dần để đồng nhất tên/xưng hô/biệt danh: quét tên riêng TRƯỚC khi dịch, HỌC thêm tên & biệt danh TRONG khi dịch, và tự nạp bộ thuật ngữ khớp thể loại. Mọi luồng dịch dùng chung bộ này → toàn thẻ gọi tên một kiểu.',
+  gvEmpty: 'Chưa có quy tắc nào. Cứ bấm Dịch — bộ rule sẽ tự sinh (đang bật "Bảng tên riêng tự động"). Bạn cũng có thể tự thêm ở phần Cấu hình → Từ điển.',
+  gvGroupName: 'Tên riêng (quét tự động trước khi dịch)',
+  gvGroupHarvest: 'Học được khi dịch (tên & biệt danh từ bản dịch)',
+  gvGroupPreset: 'Thuật ngữ có sẵn (tu tiên/võ hiệp…)',
+  gvGroupManual: 'Bạn tự thêm / import',
+  gvEditHint: 'Mục {name}{harvest} do công cụ tự sinh cho thẻ này (dọn khi gỡ thẻ). Muốn sửa/thêm/xoá: vào Cấu hình → Từ điển.',
 
   // ─── UpdateButton ───
   ubErrPrefix: 'Lỗi',

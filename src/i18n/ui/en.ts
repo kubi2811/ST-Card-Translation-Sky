@@ -91,6 +91,15 @@ const ui = {
   acSecondary: '(extra)',
   acPvpBadge: 'PVP',
   acPvpTip: 'PVP = you are "competing" for a SHARED proxy with many others (got 429/congested {count} times in a row) — NOT a problem with your card or key. This lane rests 15s then calls shift to another key/lane; it auto-resets once traffic clears. If PVP happens a lot: lower RPM, add keys/providers, or run during off-peak hours.',
+  // Translation glossary visualization panel
+  gvTitle: "This card's translation rules",
+  gvHint: 'The glossary is NOT fixed — it grows to keep names/pronouns/nicknames consistent: it scans proper nouns BEFORE translating, LEARNS more names & nicknames WHILE translating, and auto-loads a matching term pack. Every parallel lane shares this set → the whole card names things the same way.',
+  gvEmpty: 'No rules yet. Just hit Translate — the rule set builds itself ("Auto name glossary" is on). You can also add your own in Settings → Glossary.',
+  gvGroupName: 'Proper nouns (auto-scanned before translating)',
+  gvGroupHarvest: 'Learned while translating (names & nicknames from the output)',
+  gvGroupPreset: 'Preset terms (cultivation/wuxia…)',
+  gvGroupManual: 'Added / imported by you',
+  gvEditHint: 'Entries {name}{harvest} are auto-generated for this card (cleared when the card is removed). To edit/add/remove: go to Settings → Glossary.',
 
   // ─── UpdateButton ───
   ubErrPrefix: 'Error',

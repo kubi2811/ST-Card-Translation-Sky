@@ -213,6 +213,45 @@ export function parseNameGlossaryResponse(
   return out;
 }
 
+/**
+ * ─── HỌC TỪ ĐIỂN TRONG KHI DỊCH (harvest, non-AI) ───
+ * Sau khi dịch xong, "gặt" các cặp tên NGUỒN→ĐÍCH đã được xác lập từ field ĐÃ DỊCH — chủ yếu từ
+ * KEYWORD lorebook (mỗi entry lorebook thường là 1 nhân vật/vật phẩm: source keyword ↔ translated
+ * keyword = tên + biệt danh + alias) và TÊN thẻ. Đây là nguồn tên/biệt danh tin cậy nhất (do chính
+ * bản dịch tạo ra), bổ sung cho Pha 0 (chỉ đoán theo tần suất). Thuần luật, KHÔNG gọi AI.
+ * Điều kiện an toàn: chỉ nhận cặp khi source có chữ Hán, target KHÔNG còn chữ Hán, và (với keyword)
+ * số lượng key nguồn/đích KHỚP nhau để zip đúng thứ tự.
+ */
+export function harvestGlossaryFromFields(fields: TranslationField[]): GlossaryEntry[] {
+  const out: GlossaryEntry[] = [];
+  const seen = new Set<string>();
+  const add = (rawSource: string, rawTarget: string) => {
+    const source = rawSource.trim();
+    const target = rawTarget.trim().replace(/^["'「『]|["'」』]$/g, '').trim();
+    if (!source || !target || source === target || seen.has(source)) return;
+    if (!/\p{Script=Han}/u.test(source)) return;   // nguồn phải có chữ Hán (là tên Trung)
+    if (/\p{Script=Han}/u.test(target)) return;    // đích còn chữ Hán = chưa dịch xong → bỏ
+    const slen = Array.from(source).length;
+    if (slen < 1 || slen > 12) return;             // tên/biệt danh hợp lý
+    if (hasParticle(source) || STOP_TERMS.has(source)) return;
+    seen.add(source);
+    out.push({ source, target, auto: true, origin: 'harvest' });
+  };
+  for (const f of fields) {
+    if (f.status !== 'done' || typeof f.translated !== 'string' || !f.translated) continue;
+    if (f.group === 'lorebook_keys') {
+      const src = splitKeywordList(f.original);
+      const tgt = splitKeywordList(f.translated);
+      if (src.length > 0 && src.length === tgt.length) {
+        for (let i = 0; i < src.length; i++) add(src[i], tgt[i]);
+      }
+    } else if (/(^|\.)name$/.test(f.path) && f.group === 'core') {
+      add(f.original, f.translated);
+    }
+  }
+  return out;
+}
+
 /** Merge entry mới vào glossary hiện có — entry user nhập tay/đã có LUÔN thắng. */
 export function mergeGlossary(
   existing: GlossaryEntry[],

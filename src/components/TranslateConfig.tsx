@@ -180,7 +180,7 @@ export default function TranslateConfig() {
       for (const [source, target] of Object.entries(extracted)) {
         if (source.trim() && !existingSources.has(source.trim().toLowerCase())) {
           // (Fix bug #10) trích từ card hiện tại → đánh dấu auto để dọn khi gỡ card/xoá cache.
-          newEntries.push({ source: source.trim(), target: target.trim(), auto: true });
+          newEntries.push({ source: source.trim(), target: target.trim(), auto: true, origin: 'name' });
           added++;
         }
       }
@@ -588,7 +588,7 @@ export default function TranslateConfig() {
                 <button
                   key={preset.id}
                   onClick={() => {
-                    const { merged, added } = mergeGlossary(translationConfig.glossary, preset.entries);
+                    const { merged, added } = mergeGlossary(translationConfig.glossary, preset.entries.map(e => ({ ...e, origin: 'preset' as const })));
                     setTranslationConfig({ glossary: merged });
                     addToast('success', fmt(ui.gpLoadedToast, { count: added }));
                   }}

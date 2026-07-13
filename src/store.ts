@@ -516,6 +516,8 @@ export const useStore = create<AppState>((set) => ({
     // (Audit đợt 1) Mặc định 'batch': đa luồng + gộp call — 'single' cũ làm user mới dịch 74 entry
     // lorebook TUẦN TỰ từng cái (chậm kinh khủng). User đã tự chọn thì LS giữ nguyên lựa chọn.
     lorebookStrategy: LS.get('st-translator-lorebook-strategy', 'batch') as any,
+    lorebookManualBatch: LS.get('st-translator-lorebook-manual-batch', false),
+    lorebookBatchSize: LS.get('st-translator-lorebook-batch-size', 5),
     skipAlreadyTranslated: LS.get('st-translator-skip-already-translated', true),
     lightSkipContent: LS.get('st-translator-light-skip-content', false),
     smartBatchPacking: LS.get('st-translator-smart-batch-packing', false),
@@ -676,6 +678,12 @@ export const useStore = create<AppState>((set) => ({
       if ('lorebookStrategy' in partial) {
         LS.set('st-translator-lorebook-strategy', next.lorebookStrategy);
       }
+      if ('lorebookManualBatch' in partial) {
+        LS.set('st-translator-lorebook-manual-batch', next.lorebookManualBatch);
+      }
+      if ('lorebookBatchSize' in partial) {
+        LS.set('st-translator-lorebook-batch-size', next.lorebookBatchSize);
+      }
       if ('skipAlreadyTranslated' in partial) {
         LS.set('st-translator-skip-already-translated', next.skipAlreadyTranslated);
       }
@@ -758,6 +766,8 @@ export const useStore = create<AppState>((set) => ({
       translationPrompt: '',
       mode: 'field' as const,
       lorebookStrategy: 'single' as const,
+      lorebookManualBatch: false,
+      lorebookBatchSize: 5,
       skipAlreadyTranslated: true,
       lightSkipContent: false,
       smartBatchPacking: false,
@@ -806,6 +816,8 @@ export const useStore = create<AppState>((set) => ({
     LS.set('st-translator-custom-prompt', defaultTranslationConfig.translationPrompt);
     LS.set('st-translator-translation-mode', defaultTranslationConfig.mode);
     LS.set('st-translator-lorebook-strategy', defaultTranslationConfig.lorebookStrategy);
+    LS.set('st-translator-lorebook-manual-batch', defaultTranslationConfig.lorebookManualBatch);
+    LS.set('st-translator-lorebook-batch-size', defaultTranslationConfig.lorebookBatchSize);
     LS.set('st-translator-skip-already-translated', defaultTranslationConfig.skipAlreadyTranslated);
     LS.set('st-translator-light-skip-content', defaultTranslationConfig.lightSkipContent);
     LS.set('st-translator-smart-batch-packing', defaultTranslationConfig.smartBatchPacking);

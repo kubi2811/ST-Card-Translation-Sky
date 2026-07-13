@@ -22,6 +22,7 @@ import { getActivePresetPromptContent } from '../utils/presetParser';
 import { CallMonitor } from '../utils/callMonitor';
 import { runWorkerPool } from '../utils/runWorkerPool';
 import { smartPackFields } from '../utils/smartPack';
+import { estimateLorebookBatchLoad } from '../utils/estimateBatchTokens';
 import type { FieldGroup, FieldGroupConfig, TranslationField } from '../types/card';
 
 /**
@@ -1010,7 +1011,11 @@ export function useTranslation() {
     const mvuCriticalCount = batchFields.filter(isMvuCriticalField).length;
     const entryTypes = [...new Set(batchFields.map(f => f.entryType).filter(Boolean))];
     const typeLabel = entryTypes.length > 0 ? ` [${entryTypes.join(',')}]` : '';
-    store.addLog('active', `${retryPrefix}Đang dịch ${batchFields.length} mục${typeLabel} (${totalChars} ký tự${mvuCriticalCount > 0 ? `, ${mvuCriticalCount} mục biến số MVU` : ''})${targetModel !== store.proxy.model ? ` [Model: ${targetModel}]` : ''}`);
+    // (User yêu cầu) Lô GỘP ≥2 mục → hiện RÕ đang chạy những entry nào (giúp theo dõi batch nào chạy mục nào).
+    const entryListLabel = batchFields.length > 1
+      ? `: ${batchFields.map(f => f.label).slice(0, 8).join(' · ')}${batchFields.length > 8 ? ` …(+${batchFields.length - 8})` : ''}`
+      : '';
+    store.addLog('active', `${retryPrefix}Đang dịch ${batchFields.length} mục${typeLabel} (${totalChars} ký tự${mvuCriticalCount > 0 ? `, ${mvuCriticalCount} mục biến số MVU` : ''})${targetModel !== store.proxy.model ? ` [Model: ${targetModel}]` : ''}${entryListLabel}`);
 
     try {
       const items = batchFields.map(f => ({ text: f.original, fieldName: f.label }));
@@ -1606,10 +1611,13 @@ export function useTranslation() {
     }
 
     const isBatchLorebook = store.translationConfig.lorebookStrategy === 'batch';
-    // #6/#7: dịch TỪNG ENTRY (mỗi field 1 request) thay vì gộp nhiều entry/1 call — loại bỏ AI trộn
-    // thứ tự (gán nhầm bản dịch) + retry cả nhóm + ghi đè. Tốc độ đến từ đa luồng RPM (#1), không từ
-    // gộp lô. (Ô "Số mục mỗi đợt" bỏ ở #10.)
-    const batchSize = 1;
+    // Mặc định TỪNG ENTRY (batchSize=1): mỗi field 1 request — an toàn nhất (AI không trộn thứ tự /
+    // gán nhầm giữa các mục). Tốc độ đến từ đa luồng RPM (#1).
+    // (User yêu cầu khôi phục) Nếu bật "gộp nhiều entry / 1 lần gọi" thì batchSize = số user nhập
+    // (2..50); splitLorebookBatches vẫn tự chia nhỏ nếu 1 lô vượt trần ký tự/token.
+    const batchSize = (isBatchLorebook && store.translationConfig.lorebookManualBatch)
+      ? Math.max(2, Math.min(50, Math.floor(store.translationConfig.lorebookBatchSize) || 5))
+      : 1;
     const lorebookGroups: FieldGroup[] = ['lorebook', 'lorebook_keys'];
 
     // ═══ (Fix bug #12) Card THƯỜNG (không MVU/không EJS) → KHÔNG chạy đồng bộ biến / "tự chế key" ═══
@@ -1959,6 +1967,25 @@ export function useTranslation() {
         while (i < fields.length && lorebookGroups.includes(fields[i].group)) {
           allLorebookFields.push(fields[i]);
           i++;
+        }
+
+        // ═══ (User yêu cầu) KIỂM TRA TOKEN TRƯỚC KHI CHẠY (chỉ khi gộp nhiều entry / 1 lần gọi) ═══
+        // Ước lượng lô nặng nhất so với trần OUTPUT token của model → cảnh báo nếu batchSize quá lớn.
+        // splitLorebookBatches vẫn tự chia nhỏ để không tràn, nên đây là cảnh báo + gợi ý (không chặn).
+        if (store.translationConfig.lorebookManualBatch && batchSize > 1) {
+          const est = estimateLorebookBatchLoad(
+            allLorebookFields.map(f => f.original),
+            batchSize,
+            store.proxy.maxTokens || 65536,
+          );
+          const pct = Math.round(est.ratio * 100);
+          if (est.verdict === 'danger') {
+            store.addLog('warning', `⚠️ Gộp ${batchSize} entry/lô: lô nặng nhất ~${est.worstBatchChars.toLocaleString()} ký tự → ước ~${est.estOutputTokens.toLocaleString()} token đầu ra (${pct}% trần ${est.outputLimit.toLocaleString()} của model) — CÓ THỂ VƯỢT/CẮT CỤT. Đề xuất giảm còn ${est.recommendedBatchSize} entry/lô. (Hệ thống sẽ tự chia nhỏ lô quá lớn để tránh tràn.)`);
+          } else if (est.verdict === 'warn') {
+            store.addLog('info', `ℹ️ Gộp ${batchSize} entry/lô: lô nặng nhất ~${est.estOutputTokens.toLocaleString()} token đầu ra (${pct}% trần model). An toàn tương đối; nếu thấy dịch thiếu/lỗi, giảm còn ~${est.recommendedBatchSize} entry/lô.`);
+          } else {
+            store.addLog('info', `✅ Gộp ${batchSize} entry/lô: ước ~${est.estOutputTokens.toLocaleString()} token đầu ra/lô (${pct}% trần model) — an toàn.`);
+          }
         }
 
         // Step 2: Split into sub-batches — logic chia lô DÙNG CHUNG với pipeline Mod
@@ -3917,10 +3944,13 @@ export function useTranslation() {
 
     // ═══ Main Mod Loop — mirrors startTranslation exactly ═══
     const isBatchLorebook = store.translationConfig.lorebookStrategy === 'batch';
-    // #6/#7: dịch TỪNG ENTRY (mỗi field 1 request) thay vì gộp nhiều entry/1 call — loại bỏ AI trộn
-    // thứ tự (gán nhầm bản dịch) + retry cả nhóm + ghi đè. Tốc độ đến từ đa luồng RPM (#1), không từ
-    // gộp lô. (Ô "Số mục mỗi đợt" bỏ ở #10.)
-    const batchSize = 1;
+    // Mặc định TỪNG ENTRY (batchSize=1): mỗi field 1 request — an toàn nhất (AI không trộn thứ tự /
+    // gán nhầm giữa các mục). Tốc độ đến từ đa luồng RPM (#1).
+    // (User yêu cầu khôi phục) Nếu bật "gộp nhiều entry / 1 lần gọi" thì batchSize = số user nhập
+    // (2..50); splitLorebookBatches vẫn tự chia nhỏ nếu 1 lô vượt trần ký tự/token.
+    const batchSize = (isBatchLorebook && store.translationConfig.lorebookManualBatch)
+      ? Math.max(2, Math.min(50, Math.floor(store.translationConfig.lorebookBatchSize) || 5))
+      : 1;
     const lorebookGroups: FieldGroup[] = ['lorebook', 'lorebook_keys'];
 
     let i = 0;

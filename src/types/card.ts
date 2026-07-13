@@ -332,6 +332,16 @@ export interface TranslationConfig {
   translationPrompt: string;
   mode: TranslationMode;
   lorebookStrategy: LorebookStrategy;
+  /**
+   * (User yêu cầu khôi phục) Bật = GỘP nhiều entry lorebook vào MỘT lần gọi AI (batch thủ công),
+   * số entry mỗi lô = `lorebookBatchSize`. Tắt = mỗi entry 1 request (an toàn nhất, mặc định).
+   * Dù bật hay tắt, các lô/entry vẫn chạy ĐA LUỒNG song song qua pool RPM.
+   * Lưu ý an toàn: `splitLorebookBatches` vẫn tự chia nhỏ lô nếu tổng ký tự vượt trần token
+   * (maxBatchChars / softCharCap) — batchSize chỉ là mức TRẦN số entry / lô.
+   */
+  lorebookManualBatch: boolean;
+  /** Số entry gộp mỗi lô khi `lorebookManualBatch` bật (2..50). */
+  lorebookBatchSize: number;
   skipAlreadyTranslated: boolean;
   /**
    * Preset "Dịch nhẹ": bật nhóm core/lorebook để LẤY tên card + tên/comment lorebook,

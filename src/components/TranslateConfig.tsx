@@ -11,6 +11,7 @@ import { Languages, FileJson, BookOpen, Plus, Trash2, Download, Upload, Bot, Loa
 import { recommendPreset } from '../utils/presetRecommend';
 import { GLOSSARY_PRESETS } from '../utils/glossaryPresets';
 import { mergeGlossary } from '../utils/nameGlossary';
+import { estimateLorebookBatchLoad } from '../utils/estimateBatchTokens';
 import { usePresetApply } from '../hooks/usePresetApply';
 import MvuSyncPanel from './MvuSyncPanel';
 import EjsSyncPanel from './EjsSyncPanel';
@@ -46,6 +47,14 @@ export default function TranslateConfig() {
     const groups: FieldGroup[] = ['core', 'messages', 'system', 'creator', 'lorebook', 'lorebook_keys', 'regex', 'depth_prompt', 'tavern_helper'];
     return extractTranslatableFields(card, groups);
   }, [card]);
+
+  // (User yêu cầu) Ước lượng tải token cho chế độ gộp nhiều entry/lô — hiển thị cảnh báo trước khi chạy.
+  const batchLoadEstimate = useMemo(() => {
+    if (!translationConfig.lorebookManualBatch || translationConfig.lorebookStrategy !== 'batch') return null;
+    const loreTexts = allAvailableFields.filter(f => f.group === 'lorebook').map(f => f.original);
+    if (loreTexts.length === 0) return null;
+    return estimateLorebookBatchLoad(loreTexts, translationConfig.lorebookBatchSize, proxy.maxTokens || 65536);
+  }, [allAvailableFields, translationConfig.lorebookManualBatch, translationConfig.lorebookStrategy, translationConfig.lorebookBatchSize, proxy.maxTokens]);
 
   const handleApplyToAllSimilar = (currentValue: string, fieldPath: string, groupId: string) => {
     const baseKey = getFieldBaseKey(fieldPath);
@@ -659,8 +668,59 @@ export default function TranslateConfig() {
                   />
                 </div>
                 {translationConfig.lorebookStrategy === 'batch' && (
-                  <div style={{ marginTop: '8px', fontSize: '0.65rem', color: 'var(--text-muted)' }}>
-                    {ui.tcBatchHint1} <b>{ui.tcBatchHint2}</b> {ui.tcBatchHint3}
+                  <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {/* (User yêu cầu khôi phục) Toggle gộp nhiều entry / 1 lần gọi + field số entry/batch */}
+                    <label className="checkbox-wrapper" style={{ margin: 0 }}>
+                      <input
+                        type="checkbox"
+                        checked={translationConfig.lorebookManualBatch}
+                        onChange={(e) => setTranslationConfig({ lorebookManualBatch: e.target.checked })}
+                      />
+                      <div>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>{ui.tcManualBatch}</span>
+                        <span style={{ color: 'var(--text-muted)', fontSize: '0.62rem', display: 'block', marginTop: '2px' }}>
+                          {ui.tcManualBatchHint}
+                        </span>
+                      </div>
+                    </label>
+
+                    {translationConfig.lorebookManualBatch ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', paddingLeft: '4px' }}>
+                        <label className="label" style={{ fontSize: '0.7rem' }}>{ui.tcEntriesPerBatch}</label>
+                        <input
+                          className="input"
+                          type="number"
+                          min={2}
+                          max={50}
+                          style={{ maxWidth: '140px' }}
+                          value={translationConfig.lorebookBatchSize}
+                          onChange={(e) => setTranslationConfig({ lorebookBatchSize: Math.max(2, Math.min(50, parseInt(e.target.value) || 5)) })}
+                        />
+                        {batchLoadEstimate && (
+                          <div style={{
+                            fontSize: '0.64rem', lineHeight: 1.5, marginTop: '2px', padding: '5px 8px',
+                            borderRadius: 'var(--radius-sm)',
+                            border: `1px solid ${batchLoadEstimate.verdict === 'danger' ? 'rgba(255,90,90,0.4)' : batchLoadEstimate.verdict === 'warn' ? 'rgba(255,180,0,0.4)' : 'rgba(80,200,120,0.35)'}`,
+                            background: batchLoadEstimate.verdict === 'danger' ? 'rgba(255,90,90,0.08)' : batchLoadEstimate.verdict === 'warn' ? 'rgba(255,180,0,0.07)' : 'rgba(80,200,120,0.06)',
+                            color: 'var(--text-secondary)',
+                          }}>
+                            {batchLoadEstimate.verdict === 'danger' ? '⚠️ ' : batchLoadEstimate.verdict === 'warn' ? 'ℹ️ ' : '✅ '}
+                            {fmt(ui.tcBatchTokenEst, {
+                              size: translationConfig.lorebookBatchSize,
+                              tokens: batchLoadEstimate.estOutputTokens.toLocaleString(),
+                              pct: Math.round(batchLoadEstimate.ratio * 100),
+                              limit: batchLoadEstimate.outputLimit.toLocaleString(),
+                            })}
+                            {batchLoadEstimate.verdict !== 'safe' && ' ' + fmt(ui.tcBatchTokenRec, { rec: batchLoadEstimate.recommendedBatchSize })}
+                          </div>
+                        )}
+                        <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>{ui.tcManualBatchParallel}</div>
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                        {ui.tcBatchHint1} <b>{ui.tcBatchHint2}</b> {ui.tcBatchHint3}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

@@ -1294,7 +1294,7 @@ export function resetProviderPool(): void {
   _keyIndexByProvider.clear();
 }
 
-interface PoolProvider {
+export interface PoolProvider {
   id: string; provider: AIProvider; proxyUrl: string; keys: string[];
   primaryModel: string; primaryRpm: number;
   enableSecondary: boolean; secondaryModel: string; secondaryRpm: number; secondaryThreshold: number;
@@ -1327,7 +1327,10 @@ export function computePoolConcurrency(base: ProxySettings): number {
   let total = 0;
   for (const p of buildPool(base)) {
     const kc = Math.max(1, p.keys.length || 1);
-    const perKey = p.primaryRpm + (p.enableSecondary ? p.secondaryRpm : 0);
+    // (User yêu cầu) Model phụ CHỈ chạy entry ngắn hơn ngưỡng ký tự → chỉ cộng RPM phụ vào ngân
+    // sách luồng khi có ngưỡng (>0). Không ngưỡng ⇒ phụ không bao giờ chạy ⇒ không tính.
+    const secondaryActive = p.enableSecondary && p.secondaryThreshold > 0;
+    const perKey = p.primaryRpm + (secondaryActive ? p.secondaryRpm : 0);
     total += Math.max(1, perKey) * kc;
   }
   return Math.max(1, Math.min(total, 512));
@@ -1336,16 +1339,19 @@ export function computePoolConcurrency(base: ProxySettings): number {
  *  Ngưỡng đo theo SỐ KÝ TỰ để đồng nhất với UI + path không-pool (useTranslation so charCount trực
  *  tiếp). Trước đây path pool quy đổi token ≈ ceil(ký tự/4) nên entry 2200 ký tự (~550 token) vẫn
  *  lọt ngưỡng 800 → dùng nhầm model phụ; nay so thẳng số ký tự. */
-function laneOrder(p: PoolProvider, charCount?: number, preferSecondary = false): { model: string; rpm: number }[] {
+export function laneOrder(p: PoolProvider, charCount?: number, _preferSecondary = false): { model: string; rpm: number }[] {
   const kc = Math.max(1, p.keys.length || 1);
   const primary = { model: p.primaryModel, rpm: p.primaryRpm * kc };
   if (!p.enableSecondary) return [primary];
-  const secondary = { model: p.secondaryModel, rpm: p.secondaryRpm * kc };
-  // preferSecondary: dùng cho LẦN THỬ LẠI — model phụ (flash) thường RPM cao gấp mấy lần + nhanh hơn,
-  // nên đẩy retry xuống phụ để (a) xài phần RPM phụ đang rảnh, (b) chừa lane chính (pro) cho lượt đầu.
-  if (preferSecondary) return [secondary, primary];
-  if (p.secondaryThreshold > 0 && charCount != null && charCount <= p.secondaryThreshold) return [secondary, primary];
-  return [primary, secondary];
+  // (User yêu cầu 2026) Model PHỤ CHỈ chạy entry NGẮN hơn/bằng ngưỡng ký tự (secondaryThreshold, >0).
+  // ĐÃ BỎ:
+  //  - fallback "model chính bận/treo/hết RPM → phụ": entry DÀI (hoặc không rõ độ dài) LUÔN đi model chính,
+  //    dù chính đang bận (pickLane sẽ CHỜ chính chứ không nhảy sang phụ).
+  //  - ép-phụ-khi-retry và ép-phụ-cho-lô-smartPack (bỏ qua preferSecondary).
+  //  ⇒ Routing giờ THUẦN theo số ký tự: ngắn→phụ, dài→chính. Model phụ tự "dò" mọi entry ngắn (bất kỳ
+  //    thứ tự) qua pool round-robin.
+  const isShort = p.secondaryThreshold > 0 && charCount != null && charCount <= p.secondaryThreshold;
+  return isShort ? [{ model: p.secondaryModel, rpm: p.secondaryRpm * kc }] : [primary];
 }
 /** Chọn lane kế tiếp (round-robin đều) còn RPM; nếu tất cả đầy thì chờ lane con trỏ. */
 async function pickLane(pool: PoolProvider[], charCount: number | undefined, signal?: AbortSignal, preferSecondary = false): Promise<ChosenLane> {
@@ -2027,8 +2033,9 @@ async function translateChunk(
       let result = await callProvider(config, systemPrompt, userPrompt, combinedSignal, undefined, {
         label: totalChunks > 1 ? `${fieldName} (phần ${chunkIdx + 1}/${totalChunks})` : fieldName,
         charCount: chunk.length,
-        // Retry (attempt>0) HOẶC field đang thử lại ở tầng trên ⇒ đẩy xuống model phụ (flash) cho nhanh.
-        preferSecondary: preferSecondary || attempt > 0,
+        // (User yêu cầu 2026) Routing model phụ giờ THUẦN theo số ký tự của chunk (laneOrder), KHÔNG
+        // còn ép xuống phụ khi retry. Giữ preferSecondary chỉ để tương thích chữ ký (laneOrder bỏ qua).
+        preferSecondary,
       });
       clearTimeout(timeoutId);
 
@@ -3540,8 +3547,9 @@ ${sectionList}
       const rawResult = await callProvider(config, system, user, combinedSignal, undefined, {
         label: items.length > 1 ? `Lô ${items.length} mục: ${firstName}…` : firstName,
         charCount: batchChars,
-        // Lô entry ngắn (siêu tốc) hoặc lượt THỬ LẠI ⇒ đi model phụ (flash) cho nhanh.
-        preferSecondary: preferSecondary || attempt > 0,
+        // (User yêu cầu 2026) Routing model phụ THUẦN theo TỔNG số ký tự của lô (laneOrder) — lô nhỏ
+        // hơn ngưỡng → phụ, lớn hơn → chính; KHÔNG còn ép phụ khi retry.
+        preferSecondary,
       });
       clearTimeout(timeoutId);
 

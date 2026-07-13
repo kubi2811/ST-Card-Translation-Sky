@@ -458,9 +458,9 @@ export function useTranslation() {
           },
           // cssCjkHandling
           store.translationConfig.cssCjkHandling,
-          // preferSecondary: nếu field đang THỬ LẠI (retries>0) → đẩy xuống model phụ (flash) cho nhanh,
-          // chừa lane chính (pro, RPM thấp) cho lượt đầu của các field khác. Lượt đầu vẫn dùng pro.
-          freshRetries() > 0
+          // (User yêu cầu 2026) KHÔNG còn đẩy retry xuống model phụ: model phụ CHỈ chạy entry ngắn
+          // theo ngưỡng ký tự (xem laneOrder). Retry đi lại đúng model theo độ dài entry.
+          false
         );
       }
 

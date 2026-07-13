@@ -272,13 +272,17 @@ export interface ProxySettings {
   expertMode: boolean;
   /** Rate limit for primary model (requests/minute). Default 5. */
   primaryModelRpm: number;
-  /** Secondary model name (e.g. gemini-2.0-flash) — used as overflow when primary is rate-limited */
+  /** Secondary model name (e.g. gemini-2.0-flash) — runs ONLY entries shorter than the threshold. */
   secondaryModel: string;
   /** Rate limit for secondary model (requests/minute). Default 17. */
   secondaryModelRpm: number;
-  /** When true, auto-switch to secondaryModel when primary hits its RPM limit */
+  /**
+   * (User yêu cầu 2026) Bật model phụ. Model phụ CHỈ chạy entry có số ký tự ≤ `secondaryModelThreshold`.
+   * KHÔNG còn là "overflow/fallback khi model chính bận/treo" — entry dài LUÔN đi model chính.
+   * Cần `secondaryModelThreshold > 0` mới có tác dụng (không ngưỡng ⇒ model phụ không chạy gì).
+   */
   enableSecondaryModel: boolean;
-  /** Character threshold: fields shorter than this are sent to secondaryModel directly (0 = disabled) */
+  /** Ngưỡng ký tự: entry NGẮN HƠN/BẰNG số này → đi model phụ; dài hơn → model chính. 0 = tắt model phụ. */
   secondaryModelThreshold: number;
 }
 

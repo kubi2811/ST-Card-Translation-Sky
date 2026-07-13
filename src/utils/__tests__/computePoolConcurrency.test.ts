@@ -25,12 +25,22 @@ describe('computePoolConcurrency', () => {
     expect(computePoolConcurrency(mkProxy({ apiKey: 'k1', primaryModelRpm: 5 }))).toBe(5);
   });
 
-  it('4 key + model phụ bật → (primaryRpm + secondaryRpm) × số key', () => {
+  it('4 key + model phụ bật + CÓ ngưỡng → (primaryRpm + secondaryRpm) × số key', () => {
     const base = mkProxy({
       apiKey: 'k1', apiKeys: ['k2', 'k3', 'k4'],
       primaryModelRpm: 5, enableSecondaryModel: true, secondaryModel: 'flash', secondaryModelRpm: 20,
+      secondaryModelThreshold: 1000, // (User 2026) phụ chỉ chạy khi có ngưỡng ⇒ mới tính RPM phụ
     });
     expect(computePoolConcurrency(base)).toBe((5 + 20) * 4); // 100
+  });
+
+  it('(User 2026) model phụ bật nhưng NGƯỠNG = 0 → KHÔNG tính RPM phụ (phụ không bao giờ chạy)', () => {
+    const base = mkProxy({
+      apiKey: 'k1', apiKeys: ['k2', 'k3', 'k4'],
+      primaryModelRpm: 5, enableSecondaryModel: true, secondaryModel: 'flash', secondaryModelRpm: 20,
+      secondaryModelThreshold: 0,
+    });
+    expect(computePoolConcurrency(base)).toBe(5 * 4); // 20 — chỉ RPM chính
   });
 
   it('bật model phụ nhưng tên model rỗng → KHÔNG tính RPM phụ', () => {

@@ -921,9 +921,10 @@ export default function MvuSyncPanel() {
           </button>
 
           {/* Toolbar: Search + Stats + Undo + Exact Consistency + Import/Export */}
-          <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', alignItems: 'center' }}>
-            <div style={{ 
-              flex: 1, display: 'flex', alignItems: 'center', 
+          {/* (User 2026) flexWrap + search minWidth:0 + nút flexShrink:0 → nút Import KHÔNG bị tràn/đẩy khỏi khung. */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '10px', alignItems: 'center' }}>
+            <div style={{
+              flex: 1, minWidth: '120px', display: 'flex', alignItems: 'center',
               background: 'var(--bg-primary)', border: '1px solid var(--border-subtle)',
               borderRadius: 'var(--radius-sm)', padding: '0 8px',
             }}>
@@ -948,7 +949,7 @@ export default function MvuSyncPanel() {
                   background: 'rgba(99,102,241,0.06)',
                   border: '1px solid rgba(99,102,241,0.18)',
                   borderRadius: 'var(--radius-sm)',
-                  padding: '5px', cursor: 'pointer', color: '#818cf8',
+                  padding: '5px', cursor: 'pointer', flexShrink: 0, color: '#818cf8',
                   display: 'flex', alignItems: 'center',
                 }}
               >
@@ -963,7 +964,7 @@ export default function MvuSyncPanel() {
                 background: 'rgba(34,197,94,0.06)',
                 border: '1px solid rgba(34,197,94,0.18)',
                 borderRadius: 'var(--radius-sm)',
-                padding: '5px', cursor: 'pointer', color: '#4ade80',
+                padding: '5px', cursor: 'pointer', flexShrink: 0, color: '#4ade80',
                 display: 'flex', alignItems: 'center',
               }}
             >
@@ -977,7 +978,7 @@ export default function MvuSyncPanel() {
                 background: showStats ? 'rgba(99,102,241,0.1)' : 'none',
                 border: '1px solid var(--border-subtle)',
                 borderRadius: 'var(--radius-sm)',
-                padding: '5px', cursor: 'pointer', color: 'var(--text-secondary)',
+                padding: '5px', cursor: 'pointer', flexShrink: 0, color: 'var(--text-secondary)',
                 display: 'flex', alignItems: 'center',
               }}
             >
@@ -989,7 +990,7 @@ export default function MvuSyncPanel() {
               style={{
                 background: 'none', border: '1px solid var(--border-subtle)',
                 borderRadius: 'var(--radius-sm)',
-                padding: '5px', cursor: 'pointer', color: 'var(--text-secondary)',
+                padding: '5px', cursor: 'pointer', flexShrink: 0, color: 'var(--text-secondary)',
                 display: 'flex', alignItems: 'center',
               }}
             >
@@ -1001,7 +1002,7 @@ export default function MvuSyncPanel() {
               style={{
                 background: 'none', border: '1px solid var(--border-subtle)',
                 borderRadius: 'var(--radius-sm)',
-                padding: '5px', cursor: 'pointer', color: 'var(--text-secondary)',
+                padding: '5px', cursor: 'pointer', flexShrink: 0, color: 'var(--text-secondary)',
                 display: 'flex', alignItems: 'center',
               }}
             >
@@ -1152,76 +1153,82 @@ export default function MvuSyncPanel() {
                         const isSelected = selectedKeys.has(k);
                         const confidence = mvuKeyMetadata[k]?.confidence;
 
+                        const hasMeta = !!(
+                          (confidence && confidenceBadgeStyle(confidence)) ||
+                          (keyInfo?.sources && keyInfo.sources.length > 0) ||
+                          keyInfo?.description
+                        );
                         return (
-                          <div key={k} style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
-                            <button
-                              onClick={() => toggleSelectKey(k)}
-                              style={{
-                                background: 'none', border: 'none', color: 'var(--text-muted)',
-                                cursor: 'pointer', display: 'flex', alignItems: 'center', padding: '4px'
-                              }}
-                            >
-                              {isSelected ? <CheckSquare size={13} color="var(--accent-primary)" /> : <Square size={13} />}
-                            </button>
-                            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                <input
-                                  type="text"
-                                  value={k}
-                                  readOnly
-                                  title={keyInfo?.description || k}
-                                  style={{
-                                    flex: 1, padding: '5px 7px', fontSize: '0.72rem',
-                                    background: 'var(--bg-primary)', border: '1px solid var(--border-subtle)',
-                                    borderRadius: 'var(--radius-sm)', color: 'var(--text-muted)',
-                                    fontFamily: 'var(--font-mono, monospace)',
-                                  }}
-                                />
+                          // (User 2026) Hàng biến: DÒNG TRÊN = gốc | → | đã dịch NẰM CẠNH NHAU, cả 2 ô
+                          // đều flex:1 + minWidth:0 nên CO vừa khung — hết cuộn ngang kéo qua kéo lại.
+                          // Badges (nguồn/độ tin/loại) + mô tả dồn xuống DÒNG DƯỚI (wrap), không giành ngang.
+                          <div key={k} style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                            <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
+                              <button
+                                onClick={() => toggleSelectKey(k)}
+                                style={{
+                                  background: 'none', border: 'none', color: 'var(--text-muted)', flexShrink: 0,
+                                  cursor: 'pointer', display: 'flex', alignItems: 'center', padding: '2px'
+                                }}
+                              >
+                                {isSelected ? <CheckSquare size={13} color="var(--accent-primary)" /> : <Square size={13} />}
+                              </button>
+                              <input
+                                type="text"
+                                value={k}
+                                readOnly
+                                title={keyInfo?.description || k}
+                                style={{
+                                  flex: 1, minWidth: 0, padding: '5px 7px', fontSize: '0.72rem',
+                                  background: 'var(--bg-primary)', border: '1px solid var(--border-subtle)',
+                                  borderRadius: 'var(--radius-sm)', color: 'var(--text-muted)',
+                                  fontFamily: 'var(--font-mono, monospace)',
+                                }}
+                              />
+                              <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', flexShrink: 0 }}>→</span>
+                              <input
+                                type="text"
+                                value={v}
+                                onChange={(e) => updateEntry(k, e.target.value)}
+                                placeholder={ui.msTranslationPh}
+                                style={{
+                                  flex: 1, minWidth: 0, padding: '5px 7px', fontSize: '0.72rem',
+                                  background: v ? 'var(--bg-primary)' : 'rgba(240,196,106,0.06)',
+                                  border: `1px solid ${v ? 'var(--border-subtle)' : 'rgba(240,196,106,0.3)'}`,
+                                  borderRadius: 'var(--radius-sm)',
+                                  outline: 'none',
+                                  fontFamily: 'var(--font-mono, monospace)',
+                                }}
+                                autoFocus={v === ''}
+                              />
+                              <button
+                                onClick={() => removeEntry(k)}
+                                style={{ background: 'none', border: 'none', color: 'var(--accent-danger)', cursor: 'pointer', padding: '2px', flexShrink: 0 }}
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                            {hasMeta && (
+                              <div style={{
+                                display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px',
+                                paddingLeft: '25px', fontSize: '0.6rem',
+                              }}>
+                                {keyInfo?.keyType && keyTypeBadgeStyle(keyInfo.keyType) && (
+                                  <span style={keyTypeBadgeStyle(keyInfo.keyType)!}>{keyTypeLabel(keyInfo.keyType)}</span>
+                                )}
+                                {keyInfo?.sources?.map(s => (
+                                  <span key={s} style={sourceBadgeStyle(s)}>{s}</span>
+                                ))}
                                 {confidence && confidenceBadgeStyle(confidence) && (
                                   <span style={confidenceBadgeStyle(confidence)!}>{confidence}</span>
                                 )}
-                                {keyInfo?.sources && keyInfo.sources.length > 0 && (
-                                  <div style={{ display: 'flex', gap: '2px', flexShrink: 0 }}>
-                                    {keyInfo.keyType && keyTypeBadgeStyle(keyInfo.keyType) && (
-                                      <span style={keyTypeBadgeStyle(keyInfo.keyType)!}>{keyTypeLabel(keyInfo.keyType)}</span>
-                                    )}
-                                    {keyInfo.sources.map(s => (
-                                      <span key={s} style={sourceBadgeStyle(s)}>{s}</span>
-                                    ))}
-                                  </div>
+                                {keyInfo?.description && (
+                                  <span style={{ color: 'var(--text-muted)', fontStyle: 'italic', opacity: 0.7 }}>
+                                    {keyInfo.description}
+                                  </span>
                                 )}
                               </div>
-                              {keyInfo?.description && (
-                                <div style={{ 
-                                  fontSize: '0.6rem', color: 'var(--text-muted)', paddingLeft: '7px',
-                                  fontStyle: 'italic', opacity: 0.7,
-                                }}>
-                                  {keyInfo.description}
-                                </div>
-                              )}
-                            </div>
-                            <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>→</span>
-                            <input
-                              type="text"
-                              value={v}
-                              onChange={(e) => updateEntry(k, e.target.value)}
-                              placeholder={ui.msTranslationPh}
-                              style={{
-                                flex: 1, padding: '5px 7px', fontSize: '0.72rem',
-                                background: v ? 'var(--bg-primary)' : 'rgba(240,196,106,0.06)',
-                                border: `1px solid ${v ? 'var(--border-subtle)' : 'rgba(240,196,106,0.3)'}`,
-                                borderRadius: 'var(--radius-sm)',
-                                outline: 'none',
-                                fontFamily: 'var(--font-mono, monospace)',
-                              }}
-                              autoFocus={v === ''}
-                            />
-                            <button
-                              onClick={() => removeEntry(k)}
-                              style={{ background: 'none', border: 'none', color: 'var(--accent-danger)', cursor: 'pointer', padding: '4px' }}
-                            >
-                              <Trash2 size={13} />
-                            </button>
+                            )}
                           </div>
                         );
                       })}
@@ -1246,7 +1253,7 @@ export default function MvuSyncPanel() {
               onChange={(e) => setNewKey(e.target.value)}
               placeholder={ui.msOriginalKeyPh}
               style={{
-                flex: 1, padding: '6px 8px', fontSize: '0.75rem',
+                flex: 1, minWidth: 0, padding: '6px 8px', fontSize: '0.75rem',
                 background: 'var(--bg-primary)', border: '1px solid var(--border-subtle)',
                 borderRadius: 'var(--radius-sm)'
               }}
@@ -1258,7 +1265,7 @@ export default function MvuSyncPanel() {
               onChange={(e) => setNewValue(e.target.value)}
               placeholder={ui.msTranslatedPh}
               style={{
-                flex: 1, padding: '6px 8px', fontSize: '0.75rem',
+                flex: 1, minWidth: 0, padding: '6px 8px', fontSize: '0.75rem',
                 background: 'var(--bg-primary)', border: '1px solid var(--border-subtle)',
                 borderRadius: 'var(--radius-sm)'
               }}
@@ -1268,7 +1275,7 @@ export default function MvuSyncPanel() {
               onClick={addEntry}
               style={{
                 background: 'var(--accent-primary)', color: 'white',
-                border: 'none', borderRadius: 'var(--radius-sm)',
+                border: 'none', borderRadius: 'var(--radius-sm)', flexShrink: 0,
                 padding: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center'
               }}
               disabled={!newKey.trim() || !newValue.trim()}

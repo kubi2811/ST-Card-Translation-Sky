@@ -1,0 +1,1072 @@
+const WIDGET_ID = 'st-map-search-widget';
+
+(function initWidget() {
+    const CONFIG = {
+        ID: WIDGET_ID,
+        Z_INDEX: 2147483647,
+        SAFE_MARGIN: 15,
+        CLICK_DIST: 3,
+        STORAGE_KEY: 'st_map_widget_pos',
+        THEME_KEY: 'st_map_widget_theme',
+        API_KEY: 'st_map_widget_api',
+        WB_NAME: 'Vĩnh Gia phong lưu'
+    };
+
+    const STATES = { IDLE: 'IDLE', BALL_DRAG: 'BALL_DRAG', PANEL_OPEN: 'PANEL_OPEN', PANEL_DRAG: 'PANEL_DRAG' };
+    let currentState = STATES.IDLE;
+    let currentView = 'MAP';
+    let currentCategory = 'npc';
+    let currentEra = 'yongjia3';
+    let isVisible = true;
+    let isGenerating = false;
+    let currentTheme = 'light';
+    let currentAbortController = null;
+
+    // Cấu hình API mặc định
+    let apiConfig = {
+        provider: 'deepseek',
+        baseUrl: 'https://api.deepseek.com/v1',
+        apiKey: '',
+        model: 'deepseek-chat',
+        stream: true,
+        temperature: 0.7
+    };
+    try {
+        const saved = JSON.parse(localStorage.getItem(CONFIG.API_KEY) || '{}');
+        apiConfig = { ...apiConfig, ...saved };
+    } catch (e) {}
+
+    let tWin = window, tDoc = document;
+    try {
+        if (window.parent && window.parent.document) { tWin = window.parent; tDoc = window.parent.document; }
+    } catch (e) { console.warn('[MapWidget] Hạ cấp xuyên miền'); }
+
+    try {
+        const saved = localStorage.getItem(CONFIG.THEME_KEY);
+        if (saved) currentTheme = saved;
+        else if (tWin.matchMedia && tWin.matchMedia('(prefers-color-scheme: dark)').matches) currentTheme = 'dark';
+    } catch (e) {}
+
+    const old = tDoc.getElementById(CONFIG.ID);
+    if (old) old.remove();
+
+    const container = tDoc.createElement('div');
+    container.id = CONFIG.ID;
+    Object.assign(container.style, {
+        position: 'fixed', top: '0', left: '0', width: '0', height: '0',
+        overflow: 'visible', pointerEvents: 'none', zIndex: CONFIG.Z_INDEX
+    });
+    tDoc.body.appendChild(container);
+    const shadow = container.attachShadow({ mode: 'open' });
+
+    const fa = tDoc.createElement('link');
+    fa.rel = 'stylesheet';
+    fa.href = 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css';
+    shadow.appendChild(fa);
+
+    // Dữ liệu đa giác khu vực kiểm soát thế lực (bao phủ đại khái)
+    const FACTIONS = {
+        jin: { name: 'Tấn', color: 'rgba(72, 118, 168, 0.28)', stroke: 'rgba(72, 118, 168, 0.7)' },
+        hanzhao: { name: 'Hán Triệu', color: 'rgba(180, 60, 60, 0.28)', stroke: 'rgba(180, 60, 60, 0.7)' },
+        chenghan: { name: 'Thành Hán', color: 'rgba(180, 130, 60, 0.28)', stroke: 'rgba(180, 130, 60, 0.7)' },
+        liangzhou: { name: 'Lương Châu', color: 'rgba(90, 140, 90, 0.28)', stroke: 'rgba(90, 140, 90, 0.7)' },
+        shile: { name: 'Thạch Lặc', color: 'rgba(120, 70, 130, 0.28)', stroke: 'rgba(120, 70, 130, 0.7)' },
+        wangjun: { name: 'Vương Tuấn', color: 'rgba(150, 110, 60, 0.28)', stroke: 'rgba(150, 110, 60, 0.7)' },
+        east_jin: { name: 'Đông Tấn', color: 'rgba(72, 118, 168, 0.28)', stroke: 'rgba(72, 118, 168, 0.7)' },
+        former_zhao: { name: 'Tiền Triệu', color: 'rgba(180, 60, 60, 0.28)', stroke: 'rgba(180, 60, 60, 0.7)' },
+        later_zhao: { name: 'Hậu Triệu', color: 'rgba(120, 70, 130, 0.28)', stroke: 'rgba(120, 70, 130, 0.7)' }
+    };
+
+    // Dữ liệu bản đồ nhiều thời kỳ
+    const ERAS = {
+        yongjia3: {
+            name: 'Vĩnh Gia năm thứ ba',
+            desc: 'Năm 309 Công nguyên·Tây Tấn lung lay sắp đổ, tàn tro Loạn Bát Vương chưa tắt',
+            territories: [
+                { faction: 'jin', points: '440,320 560,300 630,340 660,420 640,490 570,510 480,510 430,470 410,400' },
+                { faction: 'hanzhao', points: '430,240 500,240 510,300 460,320 420,290' },
+                { faction: 'chenghan', points: '310,440 400,440 410,500 340,520 300,490' },
+                { faction: 'liangzhou', points: '210,290 290,290 300,360 240,370 200,340' },
+                { faction: 'shile', points: '500,270 590,270 610,340 540,330' },
+                { faction: 'wangjun', points: '540,180 640,180 660,240 580,250 540,220' }
+            ],
+            markers: [
+                { id: 'luoyang', name:'Lạc Dương', cx: 500, cy: 360, ruler: 'Tấn Hoài Đế Tư Mã Xí', intro: 'Kinh sư Tây Tấn, nằm ở Hà Lạc. Tuy là trung tâm thiên hạ, nhưng trải qua Loạn Bát Vương đã tàn tạ không chịu nổi, lương thảo đứt đoạn, xác chết đói đầy đường. Thái phó Tư Mã Việt thâu tóm triều chính.', chars: ['Tư Mã Việt', 'Cẩu Hy', 'Vương Diễn', 'Kê Thiệu'] },
+                { id: 'changan', name:'Trường An', cx: 380, cy: 380, ruler: 'Nam Dương Vương Tư Mã Mô', intro: 'Trọng trấn Quan Trung, cố đô Hán Đường. Trong Loạn Bát Vương nhiều lần thành chiến trường, cung thất tàn phá, nạn đói liên miên.', chars: ['Tư Mã Mô', 'Lương Tống'] },
+                { id: 'yecheng', name:'Nghiệp Thành', cx: 540, cy: 310, ruler: 'Hán Triệu Thạch Lặc', intro: 'Danh đô Hà Bắc, núi sông bao quanh. Thạch Lặc dẫn kỵ binh Yết Hồ tung hoành Hà Bắc, ổ bảo san sát nhưng không thể tự bảo vệ.', chars: ['Thạch Lặc', 'Trương Tân'] },
+                { id: 'jianye', name:'Kiến Nghiệp', cx: 620, cy: 470, ruler: 'Lang Nha Vương Tư Mã Duệ', intro: 'Đô hội Giang Đông, rồng cuộn hổ ngồi. Lang Nha Vương Tư Mã Duệ đô đốc Dương Châu, cùng Vương Đạo kinh doanh Giang Tả.', chars: ['Tư Mã Duệ', 'Vương Đạo', 'Cố Vinh', 'Chu Dĩ'] },
+                { id: 'chengdu', name:'Thành Đô', cx: 345, cy: 480, ruler: 'Thành Hán Lý Hùng', intro: 'Thiên phủ chi quốc. Lý Hùng tiếm hiệu Thành Đô Vương, chiếm Thục tự lập, phân đình kháng lễ với Tấn.', chars: ['Lý Hùng', 'Phạm Trường Sinh'] },
+                { id: 'youzhou', name:'U Châu', cx: 590, cy: 220, ruler: 'Vương Tuấn', intro: 'Trọng trấn Bắc cương. Vương Tuấn ủng binh tự trọng, kết giao với Ô Hoàn và Đoàn bộ Tiên Ti.', chars: ['Vương Tuấn', 'Đoàn Vụ Vật Trần'] },
+                { id: 'liangzhou', name:'Lương Châu', cx: 250, cy: 330, ruler: 'Lương Châu Thứ sử Trương Quỹ', intro: 'Yếu xung hành lang Hà Tây, tịnh độ duy nhất giữa loạn thế Trung Nguyên. Trương Quỹ trung thành với Tấn thất, đúc tiền Lương Tạo Tân Tuyền, thu nạp rộng rãi sĩ tộc Trung Nguyên lưu vong.', chars: ['Trương Quỹ', 'Trương Thực', 'Tống Phối'] },
+                { id: 'pingyang', name:'Bình Dương', cx: 465, cy: 285, ruler: 'Hán Triệu Thiên vương Lưu Uyên', intro: 'Nơi đặt bá phủ Hán Triệu của Hung Nô. Lưu Uyên xưng đế lập Hán, dưới trướng có các tướng hổ lang như Lưu Thông, Lưu Diệu, Vương Di.', chars: ['Lưu Uyên', 'Lưu Thông', 'Lưu Diệu', 'Vương Di'] },
+                { id: 'bingzhou', name:'Tịnh Châu', cx: 470, cy: 235, ruler: 'Lưu Côn', intro: 'Tấn Tịnh Châu Thứ sử Lưu Côn cô lập sau lưng địch, điển tích văn kê khởi vũ (nghe gà gáy múa kiếm) chính là xuất phát từ đây.', chars: ['Lưu Côn', 'Tổ Địch'] }
+            ]
+        },
+        yongjia5: {
+            name: 'Vĩnh Gia năm thứ năm',
+            desc: 'Năm 311 Công nguyên·Loạn Vĩnh Gia, Lạc Dương thất thủ',
+            territories: [
+                { faction: 'jin', points: '470,400 620,410 660,470 620,510 500,510 460,470' },
+                { faction: 'hanzhao', points: '410,240 540,240 590,320 540,380 460,380 420,320' },
+                { faction: 'chenghan', points: '310,440 400,440 410,500 340,520 300,490' },
+                { faction: 'liangzhou', points: '210,290 290,290 300,360 240,370 200,340' },
+                { faction: 'shile', points: '500,270 620,270 650,360 550,380 490,340' },
+                { faction: 'wangjun', points: '540,180 640,180 660,240 580,250 540,220' }
+            ],
+            markers: [
+                { id: 'luoyang', name:'Lạc Dương', cx: 500, cy: 360, ruler: 'Hán Triệu Hô Diên Yến (Thất thủ)', intro: 'Tháng sáu, Hán Triệu Lưu Thông sai Hô Diên Yến, Vương Di, Lưu Diệu, Thạch Lặc công phá Lạc Dương. Tấn Hoài Đế bị bắt, tông miếu bị đốt, sĩ dân chết hơn mười vạn, sử gọi là Loạn Vĩnh Gia.', chars: ['Hô Diên Yến', 'Vương Di', 'Lưu Diệu'] },
+                { id: 'changan', name:'Trường An', cx: 380, cy: 380, ruler: 'Tấn Diêm Đỉnh (Ủng lập Tần Vương)', intro: 'Sau khi Lạc Dương thất thủ, bọn Diêm Đỉnh ủng lập Tần Vương Tư Mã Nghiệp đi về phía tây vào Quan Trung, muốn lấy Trường An để xây dựng lại tàn cục Tấn thất.', chars: ['Diêm Đỉnh', 'Tư Mã Nghiệp'] },
+                { id: 'yecheng', name:'Nghiệp Thành', cx: 540, cy: 310, ruler: 'Hán Triệu Thạch Lặc', intro: 'Thạch Lặc trong trận Ninh Bình Thành tiêu diệt toàn bộ chủ lực quân Tấn, chém Thái úy Vương Diễn cùng các vương công đại thần. Tinh nhuệ Trung Nguyên mất sạch.', chars: ['Thạch Lặc', 'Trương Tân'] },
+                { id: 'jianye', name:'Kiến Nghiệp', cx: 620, cy: 470, ruler: 'Lang Nha Vương Tư Mã Duệ', intro: 'Tin tức Trung Nguyên luân tang truyền đến, sĩ tộc phương bắc quy mô lớn nam độ nương tựa Lang Nha Vương.', chars: ['Tư Mã Duệ', 'Vương Đạo', 'Vương Đôn'] },
+                { id: 'chengdu', name:'Thành Đô', cx: 345, cy: 480, ruler: 'Thành Hán Lý Hùng', intro: 'Lý Hùng tọa quan Trung Nguyên thối nát, an hưởng Ba Thục thái bình.', chars: ['Lý Hùng', 'Phạm Trường Sinh'] },
+                { id: 'youzhou', name:'U Châu', cx: 590, cy: 220, ruler: 'Vương Tuấn', intro: 'Vương Tuấn tự xưng lĩnh Ký Châu Mục, muốn tự lập giữa loạn thế, nhưng lại cô lập ở vùng đông bắc.', chars: ['Vương Tuấn'] },
+                { id: 'liangzhou', name:'Lương Châu', cx: 250, cy: 330, ruler: 'Lương Châu Thứ sử Trương Quỹ', intro: 'Trương Quỹ sai Tống Phối dẫn ba ngàn kỵ binh vào viện trợ Trường An, hộ tống tông thất lưu vong, Lương Châu trở thành nơi tị nạn cuối cùng của y quan nhà Hán.', chars: ['Trương Quỹ', 'Trương Thực', 'Tống Phối'] },
+                { id: 'pingyang', name:'Bình Dương', cx: 465, cy: 285, ruler: 'Hán Triệu Thiên tử Lưu Thông', intro: 'Lưu Thông đã giết anh tự lập. Tấn Hoài Đế bị áp giải đến Bình Dương sau đó chịu đủ nhục nhã, bị bắt mặc áo xanh rót rượu.', chars: ['Lưu Thông', 'Lưu Diệu'] },
+                { id: 'bingzhou', name:'Tịnh Châu', cx: 470, cy: 235, ruler: 'Lưu Côn', intro: 'Lưu Côn giữ Tấn Dương, kết minh với Thác Bạt Tiên Ti Y Lư, cô quân phấn chiến.', chars: ['Lưu Côn', 'Thác Bạt Y Lư'] }
+            ]
+        },
+        jianxing4: {
+            name: 'Kiến Hưng năm thứ tư',
+            desc: 'Năm 316 Công nguyên·Trường An thất thủ, Tây Tấn diệt vong',
+            territories: [
+                { faction: 'east_jin', points: '540,430 640,430 670,500 590,520 520,500' },
+                { faction: 'hanzhao', points: '350,240 500,240 540,320 480,380 400,380 340,320' },
+                { faction: 'shile', points: '500,260 630,260 660,360 570,400 490,350' },
+                { faction: 'chenghan', points: '310,440 400,440 410,500 340,520 300,490' },
+                { faction: 'liangzhou', points: '210,290 290,290 300,360 240,370 200,340' }
+            ],
+            markers: [
+                { id: 'luoyang', name:'Lạc Dương (Phế tích)', cx: 500, cy: 360, ruler: 'Hán Triệu ky mi', intro: 'Lạc Dương từ lâu đã thành phế tích. Cung thất tông miếu hủy hết, xương trắng phơi đầy đồng, cáo thỏ chạy xuyên qua đường Đồng Đà.', chars: [] },
+                { id: 'changan', name:'Trường An', cx: 380, cy: 380, ruler: 'Hán Triệu Lưu Diệu (Thất thủ)', intro: 'Tháng mười một, đại quân Lưu Diệu vây Trường An mấy tháng, cạn lương tuyệt viện. Tấn Mẫn Đế xe mộc ngựa trắng ra hàng, Tây Tấn danh thực đều mất.', chars: ['Lưu Diệu', 'Tư Mã Nghiệp'] },
+                { id: 'xiangguo', name:'Tương Quốc', cx: 540, cy: 310, ruler: 'Hán Triệu Thạch Lặc', intro: 'Thạch Lặc chiếm Tương Quốc, bằng mặt không bằng lòng với Lưu Diệu, ngầm tích súc thực lực, sắp mở ra cơ nghiệp Thạch Triệu.', chars: ['Thạch Lặc', 'Trương Tân', 'Thạch Hổ'] },
+                { id: 'jianye', name:'Kiến Khang', cx: 620, cy: 470, ruler: 'Tấn Lang Nha Vương Tư Mã Duệ', intro: 'Kiến Nghiệp tị húy Tấn Mẫn Đế đổi tên thành Kiến Khang. Tư Mã Duệ thừa chế cải nguyên, Giang Tả nghiễm nhiên mang khí tượng triều đại mới.', chars: ['Tư Mã Duệ', 'Vương Đạo', 'Vương Đôn', 'Tổ Địch'] },
+                { id: 'chengdu', name:'Thành Đô', cx: 345, cy: 480, ruler: 'Thành Hán Lý Hùng', intro: 'Lý Hùng lập con là Lý Ban làm Thái tử, Thành Hán bước vào thời kỳ thủ thành tương đối ổn định.', chars: ['Lý Hùng'] },
+                { id: 'youzhou', name:'U Châu (Thất thủ)', cx: 590, cy: 220, ruler: 'Hán Triệu Thạch Lặc', intro: 'Vương Tuấn đã bị Thạch Lặc dụ giết vào năm Kiến Hưng thứ hai, U Châu hoàn toàn rơi vào tay Yết Hồ.', chars: ['Thạch Lặc'] },
+                { id: 'liangzhou', name:'Lương Châu', cx: 250, cy: 330, ruler: 'Tây Bình Công Trương Thực', intro: 'Trương Quỹ qua đời, con là Trương Thực kế vị. Lương Châu tuế cống không dứt, xa phụng chính sóc Kiến Khang.', chars: ['Trương Thực', 'Trương Mậu'] },
+                { id: 'pingyang', name:'Bình Dương', cx: 465, cy: 285, ruler: 'Hán Triệu Thiên tử Lưu Thông', intro: 'Lưu Thông hoang dâm vô độ, Cận Chuẩn dần nắm quyền bính, nội bộ Hán Triệu sóng ngầm cuộn trào.', chars: ['Lưu Thông', 'Cận Chuẩn'] },
+                { id: 'huai', name:'Hoài Tứ', cx: 590, cy: 400, ruler: 'Tấn Tổ Địch', intro: 'Tổ Địch trung lưu kích tiếp (giữa dòng gõ mái chèo), dẫn bộ hạ qua sông bắc phạt, đóng quân ở Hoài Tứ, thu phục một phần quận huyện Dự Châu.', chars: ['Túc_Địch'] }
+            ]
+        },
+        taixing1: {
+            name: 'Thái Hưng nguyên niên',
+            desc: 'Năm 318 Công nguyên·Đông Tấn thành lập, nam bắc đối trĩ',
+            territories: [
+                { faction: 'east_jin', points: '480,410 660,410 680,510 560,530 470,500' },
+                { faction: 'former_zhao', points: '340,270 450,260 490,340 440,390 360,380 320,330' },
+                { faction: 'later_zhao', points: '450,260 610,260 650,370 540,400 470,370' },
+                { faction: 'chenghan', points: '310,440 400,440 410,500 340,520 300,490' },
+                { faction: 'liangzhou', points: '210,290 290,290 300,360 240,370 200,340' }
+            ],
+            markers: [
+                { id: 'luoyang', name:'Lạc Dương (Phế tích)', cx: 500, cy: 360, ruler: 'Tiền Triệu Lưu Diệu', intro: 'Lưu Diệu dời đô đến Trường An, đổi quốc hiệu thành Triệu (sử gọi là Tiền Triệu). Lạc Dương cuối cùng không còn hy vọng khôi phục.', chars: ['Lưu Diệu'] },
+                { id: 'changan', name:'Trường An', cx: 380, cy: 380, ruler: 'Tiền Triệu Thiên tử Lưu Diệu', intro: 'Hán Triệu nội loạn, Cận Chuẩn giết Lưu Xán, Lưu Diệu tự lập làm hoàng đế. Đổi quốc hiệu là Triệu, định đô ở Trường An.', chars: ['Lưu Diệu'] },
+                { id: 'xiangguo', name:'Tương Quốc', cx: 540, cy: 310, ruler: 'Hậu Triệu Thạch Lặc', intro: 'Thạch Lặc tuyệt giao với Lưu Diệu, tự xưng Đại tướng quân, Đại thiền vu, Triệu Vương, sử gọi là Hậu Triệu. Hai nước Triệu đối trĩ.', chars: ['Thạch Lặc', 'Trương Tân'] },
+                { id: 'jianye', name:'Kiến Khang', cx: 620, cy: 470, ruler: 'Tấn Nguyên Đế Tư Mã Duệ', intro: 'Tin Tấn Mẫn Đế băng hà truyền đến Kiến Khang. Tháng ba, Tư Mã Duệ lên ngôi hoàng đế, cải nguyên Thái Hưng, đó là Đông Tấn. Vương Đạo bái làm Thừa tướng, Vương và Mã cùng chung thiên hạ.', chars: ['Tư Mã Duệ', 'Vương Đạo', 'Vương Đôn', 'Điêu Hiệp'] },
+                { id: 'chengdu', name:'Thành Đô', cx: 345, cy: 480, ruler: 'Thành Hán Hoàng đế Lý Hùng', intro: 'Lý Hùng tiếm xưng đế hiệu đã lâu, cùng Đông Tấn, Tiền Hậu Triệu thế chân vạc mà đứng.', chars: ['Lý Hùng'] },
+                { id: 'liangzhou', name:'Lương Châu', cx: 250, cy: 330, ruler: 'Tây Bình Công Trương Thực', intro: 'Trương Thực phụng chính sóc Đông Tấn, Lương Châu trở thành cô trung cõi tây hô ứng nam bắc.', chars: ['Trương Thực', 'Trương Mậu'] },
+                { id: 'pingyang', name:'Bình Dương', cx: 465, cy: 285, ruler: 'Tiền Triệu ky mi', intro: 'Cố đô Hán Triệu, trải qua loạn Cận Chuẩn gần như thành phế tích, thực chất là vùng giằng co giữa Tiền Triệu và Hậu Triệu.', chars: [] },
+                { id: 'huai', name:'Dự Châu', cx: 590, cy: 400, ruler: 'Tấn Tổ Địch', intro: 'Tổ Địch đóng quân ở Tiếu Thành, chiêu phủ ổ bảo, cách Hoàng Hà đối trĩ với Thạch Lặc, Trung Nguyên hơi có dấu hiệu khôi phục.', chars: ['Túc_Địch'] },
+                { id: 'jingzhou', name:'Kinh Châu', cx: 500, cy: 450, ruler: 'Tấn Vương Đôn', intro: 'Vương Đôn đô đốc chư quân sự sáu châu Giang Kinh v.v., tọa trấn Vũ Xương, binh quyền trong tay.', chars: ['Vương Đôn', 'Đào Khản'] }
+            ]
+        }
+    };const PROMPTS = {
+        npc: (q) => `Bạn đang cung cấp dịch vụ tra cứu cho cốt truyện lịch sử thời Ngụy Tấn Nam Bắc triều. Vui lòng dựa vào nhân vật mà người dùng tra cứu, xuất trực tiếp thông tin cụ thể của nhân vật này (tên thật, năm sinh năm mất, tóm tắt tiểu sử), kiểm soát nghiêm ngặt dưới 300 chữ.
+
+【Yêu cầu xuất】
+Bắt buộc phải điền nội dung chân thực vào trong thẻ XML dưới đây, không giữ lại dấu ngoặc hoặc văn bản giữ chỗ. Ngoài nội dung trong thẻ, không xuất bất kỳ văn bản nào khác (bao gồm giải thích, suy nghĩ, chào hỏi, tuyên bố miễn trừ trách nhiệm).
+
+【Ví dụ】
+Người dùng tra cứu: Hãy cho tôi biết Tư Mã Trung là ai?
+Đầu ra chính xác:
+<npc>Tư Mã Trung (259 - 307), tự Chính Độ, con trai thứ của Tấn Vũ Đế Tư Mã Viêm. Hoàng đế thứ hai của Tây Tấn, tức Tấn Huệ Đế. Nổi tiếng vì sự ngu ngốc, nghe tin dân đói có câu nói "Sao không ăn cháo thịt". Trong thời gian tại vị, đại quyền lần lượt rơi vào tay Giả Nam Phong và các vương, trực tiếp gây ra Loạn Bát Vương, quốc tộ Tây Tấn từ đó sụp đổ.</npc>
+
+【Người dùng tra cứu】
+${q}`,
+        place: (q) => `Bạn đang cung cấp dịch vụ tra cứu cho cốt truyện lịch sử thời Ngụy Tấn Nam Bắc triều. Vui lòng dựa vào khu vực mà người dùng tra cứu, xuất trực tiếp thông tin cụ thể của khu vực này (tên thật, người cai trị thực tế hiện tại, khái quát nhân vật tiêu biểu), kiểm soát nghiêm ngặt dưới 300 chữ.
+
+【Yêu cầu xuất】
+Bắt buộc phải điền nội dung chân thực vào trong thẻ XML dưới đây, không giữ lại dấu ngoặc hoặc văn bản giữ chỗ. Ngoài nội dung trong thẻ, không xuất bất kỳ văn bản nào khác.
+
+【Ví dụ】
+Người dùng tra cứu: Lạc Dương hiện tại tình hình ra sao?
+Đầu ra chính xác:
+<place>Lạc Dương, kinh sư Tây Tấn, nằm giữa vùng Hà Lạc, xưa là nơi bốn phương tụ hội. Những năm Vĩnh Gia cung thất đổ nát, lương thảo đứt đoạn, xác chết đói đầy đường. Trên danh nghĩa do Tấn Hoài Đế Tư Mã Xí tại vị, thực quyền đều do Thái phó Tư Mã Việt nắm giữ. Nhân vật tiêu biểu: Tư Mã Việt, Vương Diễn, Cẩu Hy, Kê Thiệu v.v. Ngoài thành lưu dân ngàn dặm, kỵ binh Hồ dòm ngó, đã thành một tòa thành nguy hiểm.</place>
+
+【Người dùng tra cứu】
+${q}`,
+        thing: (q) => `Bạn đang cung cấp dịch vụ tra cứu cho cốt truyện lịch sử thời Ngụy Tấn Nam Bắc triều. Vui lòng dựa vào mốc thời gian mà người dùng tra cứu, xuất trực tiếp sự kiện lịch sử trọng đại xảy ra trước và sau thời điểm đó (tên sự kiện, thời gian kéo dài, chi tiết sự kiện), kiểm soát nghiêm ngặt dưới 500 chữ.
+
+【Yêu cầu xuất】
+Bắt buộc phải điền nội dung chân thực vào trong thẻ XML dưới đây, không giữ lại dấu ngoặc hoặc văn bản giữ chỗ. Ngoài nội dung trong thẻ, không xuất bất kỳ văn bản nào khác.
+
+【Ví dụ】
+Người dùng tra cứu: Năm 311 Công nguyên đã xảy ra chuyện gì?
+Đầu ra chính xác:
+<thing>Loạn Vĩnh Gia, tháng sáu năm Vĩnh Gia thứ năm (311). Sau khi Tấn Thái phó Tư Mã Việt lo sợ mà chết, Hung Nô Hán Triệu Thiên vương Lưu Thông phái bốn cánh đại quân Hô Diên Yến, Vương Di, Lưu Diệu, Thạch Lặc tiến xuống phía nam. Thạch Lặc trong trận Ninh Bình Thành đã tiêu diệt hơn mười vạn quân chủ lực của Tấn, chém Thái úy Vương Diễn cùng các vương công. Hô Diên Yến đánh vào Lạc Dương, xua quân đồ sát, sĩ dân chết hơn ba vạn người, cung thất tông miếu bị thiêu rụi hoàn toàn. Tấn Hoài Đế Tư Mã Xí bị bắt đưa lên Bình Dương ở phía bắc, chịu đủ mọi nhục nhã rồi bị sát hại vào năm sau. Trận chiến này là trận chiến quyết định sự diệt vong của Tây Tấn, tinh nhuệ Trung Nguyên mất sạch trong một sớm, y quan nam độ bắt đầu từ đây.</thing>
+
+【Người dùng tra cứu】
+${q}`,
+        other: (q) => `Bạn đang cung cấp dịch vụ tra cứu cho cốt truyện lịch sử thời Ngụy Tấn Nam Bắc triều. Vui lòng đưa ra câu trả lời tường tận cho nội dung mà người dùng tra cứu, kiểm soát nghiêm ngặt dưới 500 chữ.
+
+【Yêu cầu xuất】
+Bắt buộc phải điền nội dung chân thực vào trong thẻ XML dưới đây, không giữ lại dấu ngoặc hoặc văn bản giữ chỗ. Ngoài nội dung trong thẻ, không xuất bất kỳ văn bản nào khác.
+
+【Ví dụ】
+Người dùng tra cứu: Hãy giới thiệu một chút về Cửu phẩm trung chính chế.
+Đầu ra chính xác:
+<other>Cửu phẩm trung chính chế. Do Trần Quần sáng lập vào năm Hoàng Sơ nguyên niên thời Tào Ngụy (220), trải qua Lưỡng Tấn Nam Bắc triều, đến năm Khai Hoàng thời Tùy Văn Đế thì bị bãi bỏ, tồn tại khoảng bốn trăm năm. Chế độ này thiết lập các quan Đại Tiểu Trung chính ở châu quận, khảo sát gia thế, hành trạng, tài năng của sĩ nhân bản tịch, đánh giá thành chín phẩm cấp từ Thượng thượng đến Hạ hạ, làm căn cứ để Lại bộ phong quan. Mục đích ban đầu vốn là để sửa chữa tệ nạn sát cử cuối thời Hán, nhưng quan Trung chính phần lớn do các thế gia đại tộc thao túng, cục diện chính trị môn phiệt "thượng phẩm vô hàn môn, hạ phẩm vô thế tộc" từ đó được định hình.</other>
+
+【Người dùng tra cứu】
+${q}`
+    };
+
+    const PLACEHOLDERS = {
+        npc: "Ví dụ nhập: 'Hãy cho tôi biết Tư Mã Trung là ai?'",
+        place: "Ví dụ nhập: 'Lạc Dương hiện tại tình hình ra sao?'",
+        thing: "Ví dụ nhập: 'Năm 311 Công nguyên đã xảy ra chuyện gì?'",
+        other: "Ví dụ nhập: 'Hãy giới thiệu một chút về Cửu phẩm trung chính chế.'"
+    };
+
+    const CATEGORIES = [
+        { id: 'npc', name:'Tìm kiếm nhân vật', icon: 'fa-user' },
+        { id: 'place', name:'Tìm kiếm khu vực', icon: 'fa-map-marker-alt' },
+        { id: 'thing', name:'Tìm kiếm sự kiện', icon: 'fa-scroll' },
+        { id: 'other', name:'Khác', icon: 'fa-question-circle' }
+    ];
+
+    const style = tDoc.createElement('style');
+    style.textContent = `
+    :host {
+        --primary: #a0522d; --secondary: #4a6b57; --accent: #8b3a3a;
+        --map-land: #e8d5a8; --map-land-hover: #d4b678; --map-stroke: #6b4423;
+        --map-water: rgba(120, 150, 170, 0.25);
+        --bg-panel: rgba(244, 236, 216, 0.82); --bg-modal: rgba(244, 236, 216, 0.95);
+        --bg-card: rgba(255, 248, 230, 0.75); --border-c: rgba(139, 90, 43, 0.4);
+        --text-main: #2a1a0e; --text-sub: #5c3d1f; --text-muted: #9c8560;
+        --shadow-soft: 0 8px 32px rgba(61, 40, 23, 0.18), 0 2px 8px rgba(61, 40, 23, 0.12);
+        --shadow-hover: 0 12px 40px rgba(61, 40, 23, 0.28);
+        --glow: 0 0 20px rgba(160, 82, 45, 0.5);
+        --font-serif: 'Be Vietnam Pro', 'Inter', 'Segoe UI', Arial, sans-serif;
+        --font-body: 'Be Vietnam Pro', 'Inter', 'Segoe UI', Arial, sans-serif;
+        --trans: all 0.35s cubic-bezier(0.25, 0.8, 0.25, 1);
+        all: initial;
+    }
+    :host(.dark) {
+        --primary: #d4b678; --secondary: #7a8b6f; --accent: #d47060;
+        --map-land: #4a3a26; --map-land-hover: #6b5238; --map-stroke: #d4b678;
+        --map-water: rgba(60, 80, 100, 0.35);
+        --bg-panel: rgba(26, 22, 18, 0.85); --bg-modal: rgba(30, 24, 20, 0.96);
+        --bg-card: rgba(45, 36, 28, 0.75); --border-c: rgba(212, 182, 120, 0.35);
+        --text-main: #f0e6cc; --text-sub: #d4b678; --text-muted: #9a8768;
+        --shadow-soft: 0 8px 32px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
+        --shadow-hover: 0 12px 40px rgba(0, 0, 0, 0.75);
+        --glow: 0 0 25px rgba(212, 182, 120, 0.6);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: var(--font-body); }
+    .force-hide { display: none !important; }
+
+    .ball {
+        position: absolute; width: 58px; height: 58px; border-radius: 50%;
+        background: var(--bg-panel); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+        border: 1.5px solid var(--border-c); box-shadow: var(--shadow-soft), inset 0 0 15px rgba(160,82,45,0.2);
+        cursor: grab; pointer-events: auto; display: flex; justify-content: center; align-items: center;
+        color: var(--primary); font-size: 22px; user-select: none; transition: var(--trans); z-index: 10;
+        animation: ball-breath 3.5s ease-in-out infinite alternate;
+    }
+    .ball .ball-icon { animation: compass-spin 20s linear infinite; }
+    .ball-ring {
+        position: absolute; top: -8px; left: -8px; width: calc(100% + 16px); height: calc(100% + 16px);
+        pointer-events: none;
+    }
+    .ball:hover { transform: scale(1.08); box-shadow: var(--shadow-hover), var(--glow); color: var(--accent); }
+    .ball:active { cursor: grabbing; transform: scale(0.94); }
+    .ball.dragging { transition: none; opacity: 0.85; animation: none; }
+    .ball.hidden { transform: scale(0); opacity: 0; pointer-events: none; }
+    @keyframes ball-breath {
+        0% { box-shadow: var(--shadow-soft), inset 0 0 10px rgba(160,82,45,0.15); }
+        100% { box-shadow: var(--shadow-soft), 0 0 25px rgba(160,82,45,0.45), inset 0 0 18px rgba(160,82,45,0.3); }
+    }
+    @keyframes compass-spin { to { transform: rotate(360deg); } }
+
+    .panel {
+        position: absolute; width: min(460px, calc(100vw - 20px)); height: min(640px, calc(100vh - 20px));
+        min-width: 340px; min-height: 480px;
+        background: var(--bg-panel); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+        border: 1.5px solid var(--border-c); border-radius: 14px; box-shadow: var(--shadow-soft);
+        display: flex; flex-direction: column; opacity: 0; transform: scale(0.9) translateY(15px);
+        pointer-events: none; transition: var(--trans); z-index: 20; overflow: hidden;
+    }
+    .panel.show { opacity: 1; transform: scale(1) translateY(0); pointer-events: auto; }
+    .panel.dragging { transition: none; }
+    .panel::before {
+        content: ''; position: absolute; inset: 0; pointer-events: none; opacity: 0.4; z-index: 0;
+        background-image:
+            radial-gradient(circle at 20% 30%, rgba(160,82,45,0.08) 0%, transparent 40%),
+            radial-gradient(circle at 80% 70%, rgba(74,107,87,0.08) 0%, transparent 40%);
+    }
+
+    .particles { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 1; }
+    .particle {
+        position: absolute; color: var(--primary); opacity: 0; font-size: 14px;
+        font-family: var(--font-serif); animation: particle-float linear infinite;
+    }
+    @keyframes particle-float {
+        0% { transform: translateY(100%) rotate(0deg); opacity: 0; }
+        10% { opacity: 0.4; }
+        90% { opacity: 0.3; }
+        100% { transform: translateY(-120%) rotate(360deg); opacity: 0; }
+    }
+
+    .header {
+        height: 52px; padding: 0 14px; display: flex; align-items: center; gap: 8px;
+        border-bottom: 1px solid var(--border-c); cursor: move; user-select: none; flex-shrink: 0;
+        background: linear-gradient(180deg, rgba(160,82,45,0.1) 0%, transparent 100%);
+        position: relative; z-index: 2;
+    }
+    .header::after {
+        content: ''; position: absolute; bottom: -1px; left: 10%; right: 10%; height: 1px;
+        background: linear-gradient(90deg, transparent, var(--primary), transparent); opacity: 0.6;
+    }
+    .tabs { display: flex; gap: 4px; flex: 1; }
+    .tab {
+        padding: 6px 14px; border-radius: 18px; cursor: pointer; color: var(--text-sub);
+        font-family: var(--font-serif); font-size: 15px; letter-spacing: 1px;
+        transition: var(--trans); position: relative;
+    }
+    .tab:hover { color: var(--text-main); background: rgba(160,82,45,0.15); }
+    .tab.active { color: var(--primary); background: rgba(160,82,45,0.2); }
+    .tab.active::before {
+        content: ''; position: absolute; bottom: -8px; left: 25%; right: 25%; height: 2px;
+        background: linear-gradient(90deg, transparent, var(--primary), transparent);
+        border-radius: 2px; box-shadow: 0 0 8px var(--primary);
+    }
+    .icon-btn {
+        width: 32px; height: 32px; border-radius: 50%; display: flex; justify-content: center; align-items: center;
+        cursor: pointer; color: var(--text-sub); transition: var(--trans); font-size: 14px;
+    }
+    .icon-btn:hover { background: rgba(160,82,45,0.2); color: var(--primary); transform: rotate(15deg); }
+    .icon-btn.close:hover { color: var(--accent); transform: rotate(90deg); }
+
+    .view { flex: 1; overflow: hidden; position: relative; z-index: 2; display: none; }
+    .view.active { display: flex; flex-direction: column; }
+
+    .era-bar { display: flex; gap: 4px; padding: 8px 12px 4px; flex-wrap: wrap; flex-shrink: 0; }
+    .era-tab {
+        padding: 5px 10px; border-radius: 12px; font-size: 11px; cursor: pointer;
+        background: rgba(255,255,255,0.2); border: 1px solid var(--border-c);
+        color: var(--text-sub); transition: var(--trans); font-family: var(--font-serif); letter-spacing: 1px;
+    }
+    :host(.dark) .era-tab { background: rgba(255,255,255,0.05); }
+    .era-tab:hover { transform: translateY(-2px); color: var(--text-main); }
+    .era-tab.active {
+        background: var(--primary); color: #fff; border-color: var(--primary);
+        box-shadow: 0 4px 10px rgba(160,82,45,0.4);
+    }
+    .era-desc {
+        padding: 0 12px 6px; font-size: 11px; color: var(--text-muted); font-family: var(--font-serif);
+        letter-spacing: 1px; flex-shrink: 0; text-align: center;
+    }
+    .map-wrap {
+        flex: 1; position: relative; overflow: hidden; margin: 4px 12px 8px;
+        border-radius: 8px; border: 1px solid var(--border-c);
+        background: var(--map-water);
+    }
+    .map-viewport { width: 100%; height: 100%; overflow: hidden; position: relative; cursor: grab; }
+    .map-viewport.grabbing { cursor: grabbing; }
+    .map-svg {
+        width: 100%; height: 100%; display: block; transform-origin: 0 0;
+        transition: transform 0.1s ease-out;
+    }
+    .province { fill: var(--map-land); stroke: var(--map-stroke); stroke-width: 1.8; stroke-linejoin: round; transition: fill 0.25s; }
+    .province:hover { fill: var(--map-land-hover); }
+    .territory { transition: opacity 0.4s; }
+    .marker-group { cursor: pointer; }
+    .marker-outer { fill: var(--accent); opacity: 0.35; transition: var(--trans); }
+    .marker-inner { fill: var(--accent); }
+    .marker-group:hover .marker-outer { opacity: 0.6; }
+    .marker-label {
+        font-family: var(--font-serif); font-size: 14px; fill: var(--text-main); pointer-events: none;
+        font-weight: bold; paint-order: stroke; stroke: var(--map-land); stroke-width: 3px;
+        stroke-linejoin: round;
+    }
+    :host(.dark) .marker-label { fill: #f0e6cc; stroke: #1a1612; }
+
+    .map-controls { position: absolute; top: 10px; right: 10px; display: flex; flex-direction: column; gap: 5px; z-index: 5; }
+    .zoom-btn {
+        width: 30px; height: 30px; border-radius: 6px; background: var(--bg-panel);
+        border: 1px solid var(--border-c); color: var(--primary); cursor: pointer;
+        display: flex; justify-content: center; align-items: center; font-size: 14px;
+        backdrop-filter: blur(8px); transition: var(--trans); box-shadow: var(--shadow-soft);
+    }
+    .zoom-btn:hover { background: var(--primary); color: #fff; transform: scale(1.08); }
+    .zoom-btn:active { transform: scale(0.92); }.legend {
+        position: absolute; bottom: 8px; left: 8px; z-index: 5;
+        background: var(--bg-panel); backdrop-filter: blur(8px); border: 1px solid var(--border-c);
+        border-radius: 6px; padding: 6px 8px; font-size: 10px; color: var(--text-sub);
+        display: flex; flex-wrap: wrap; gap: 4px 8px; max-width: 60%;
+    }
+    .legend-item { display: flex; align-items: center; gap: 3px; }
+    .legend-dot { width: 10px; height: 10px; border-radius: 2px; border: 1px solid; }
+
+    /* Khu vực tìm kiếm */
+    .api-hint {
+        margin: 10px 12px 0; padding: 10px 12px; border-radius: 8px;
+        background: linear-gradient(135deg, rgba(160,82,45,0.15), rgba(139,58,58,0.1));
+        border-left: 3px solid var(--accent); font-size: 12px; color: var(--text-sub);
+        line-height: 1.5; display: flex; align-items: center; gap: 8px;
+    }
+    .api-hint i { color: var(--accent); font-size: 15px; }
+    .api-hint .cfg-link {
+        color: var(--accent); text-decoration: underline; cursor: pointer; font-weight: bold;
+    }
+    .api-hint .cfg-link:hover { color: var(--primary); }
+
+    .search-tabs { display: flex; padding: 10px 12px 0; gap: 6px; flex-shrink: 0; flex-wrap: wrap; }
+    .cat-tab {
+        padding: 6px 12px; border-radius: 14px; cursor: pointer; font-size: 12px;
+        color: var(--text-sub); background: rgba(255,255,255,0.2); border: 1px solid var(--border-c);
+        transition: var(--trans); display: flex; align-items: center; gap: 5px;
+    }
+    :host(.dark) .cat-tab { background: rgba(255,255,255,0.05); }
+    .cat-tab:hover { color: var(--text-main); transform: translateY(-2px); box-shadow: var(--shadow-soft); }
+    .cat-tab.active {
+        background: var(--primary); color: #fff; border-color: var(--primary);
+        box-shadow: 0 4px 12px rgba(160,82,45,0.4);
+    }
+    .search-input-wrap { display: flex; gap: 8px; padding: 10px 12px; flex-shrink: 0; }
+    .search-input {
+        flex: 1; height: 38px; padding: 0 14px; border-radius: 20px;
+        background: rgba(255,255,255,0.3); border: 1px solid var(--border-c);
+        color: var(--text-main); font-size: 13px; outline: none; transition: var(--trans);
+    }
+    :host(.dark) .search-input { background: rgba(255,255,255,0.06); }
+    .search-input::placeholder { color: var(--text-muted); font-style: italic; }
+    .search-input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(160,82,45,0.15); }
+    .search-btn {
+        width: 38px; height: 38px; border-radius: 50%; border: none; cursor: pointer;
+        background: var(--primary); color: #fff; transition: var(--trans);
+        display: flex; justify-content: center; align-items: center; flex-shrink: 0;
+        box-shadow: 0 4px 12px rgba(160,82,45,0.4);
+    }
+    .search-btn:hover:not(:disabled) { transform: translateY(-2px) rotate(15deg); box-shadow: 0 6px 18px rgba(160,82,45,0.6); }
+    .search-btn:active:not(:disabled) { transform: scale(0.9); }
+    .search-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .cfg-btn {
+        width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--border-c); cursor: pointer;
+        background: transparent; color: var(--primary); transition: var(--trans);
+        display: flex; justify-content: center; align-items: center; flex-shrink: 0;
+    }
+    .cfg-btn:hover { background: rgba(160,82,45,0.15); transform: rotate(90deg); }
+
+    .results { flex: 1; overflow-y: auto; padding: 0 12px 12px; }
+    .results::-webkit-scrollbar { width: 5px; }
+    .results::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 3px; opacity: 0.5; }
+
+    .result-card {
+        background: var(--bg-card); border: 1px solid var(--border-c); border-radius: 10px;
+        padding: 14px; margin-bottom: 12px; position: relative; overflow: hidden;
+        animation: card-in 0.5s cubic-bezier(0.25,0.8,0.25,1) both; transition: var(--trans);
+    }
+    .result-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-hover); }
+    .result-card::before {
+        content: ''; position: absolute; top: 0; left: -100%; width: 100%; height: 2px;
+        background: linear-gradient(90deg, transparent, var(--primary), transparent);
+        animation: flow-light 3s ease-in-out infinite;
+    }
+    @keyframes flow-light { 0%,100%{left:-100%;} 50%{left:100%;} }
+    @keyframes card-in { from { opacity:0; transform:translateY(20px);} to {opacity:1; transform:translateY(0);} }
+
+    .card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px dashed var(--border-c); }
+    .card-badge { padding: 3px 10px; border-radius: 10px; font-size: 11px; background: var(--primary); color: #fff; }
+    .card-badge.place { background: var(--secondary); }
+    .card-badge.thing { background: var(--accent); }
+    .card-badge.other { background: var(--text-sub); }
+    .card-meta { font-size: 11px; color: var(--text-muted); }
+    .card-body { font-size: 13px; color: var(--text-sub); line-height: 1.75; white-space: pre-wrap; word-break: break-word; min-height: 20px; }
+    .card-body.streaming::after {
+        content: '▊'; display: inline-block; color: var(--primary); animation: caret-blink 0.8s infinite;
+        margin-left: 2px;
+    }
+    @keyframes caret-blink { 50% { opacity: 0; } }
+    .card-close {
+        position: absolute; top: 8px; right: 8px; width: 20px; height: 20px; border-radius: 50%;
+        display: flex; justify-content: center; align-items: center; cursor: pointer;
+        color: var(--text-muted); font-size: 11px; transition: var(--trans);
+    }
+    .card-close:hover { color: var(--accent); background: rgba(139,58,58,0.15); transform: rotate(90deg); }
+
+    .loading-card { text-align: center; padding: 20px; color: var(--text-muted); }
+    .typing-dots { display: inline-flex; gap: 4px; }
+    .typing-dots span {
+        width: 8px; height: 8px; border-radius: 50%; background: var(--primary);
+        animation: dot-blink 1.4s infinite ease-in-out both;
+    }
+    .typing-dots span:nth-child(1){ animation-delay: -0.32s; }
+    .typing-dots span:nth-child(2){ animation-delay: -0.16s; }
+    @keyframes dot-blink { 0%,80%,100%{ transform:scale(0);} 40%{ transform:scale(1);} }
+    .empty-hint { text-align: center; padding: 30px 10px; color: var(--text-muted); font-size: 13px; font-family: var(--font-serif); }
+
+    .modal-mask {
+        position: absolute; inset: 0; background: rgba(0,0,0,0.5); backdrop-filter: blur(6px);
+        display: flex; justify-content: center; align-items: center; opacity: 0;
+        pointer-events: none; transition: var(--trans); z-index: 100;
+    }
+    .modal-mask.show { opacity: 1; pointer-events: auto; }
+    .modal {
+        width: 92%; max-width: 380px; max-height: 88%; background: var(--bg-modal);
+        border: 1.5px solid var(--border-c); border-radius: 12px; padding: 18px;
+        transform: scale(0.85); transition: var(--trans); overflow-y: auto;
+        box-shadow: var(--shadow-hover), var(--glow);
+    }
+    .modal-mask.show .modal { transform: scale(1); }
+    .modal-head {
+        text-align: center; padding-bottom: 12px; border-bottom: 2px double var(--border-c); margin-bottom: 14px;
+        font-family: var(--font-serif); font-size: 22px; color: var(--primary); letter-spacing: 4px;
+        text-shadow: 0 0 10px rgba(160,82,45,0.4); position: relative;
+    }
+    .modal-head::before, .modal-head::after {
+        content: '❈'; position: absolute; top: 50%; transform: translateY(-50%);
+        color: var(--secondary); font-size: 14px; opacity: 0.6;
+    }
+    .modal-head::before { left: 12%; }
+    .modal-head::after { right: 12%; }
+    .modal-section { margin-bottom: 14px; }
+    .modal-label {
+        font-size: 11px; color: var(--text-muted); letter-spacing: 2px; margin-bottom: 6px;
+        display: flex; align-items: center; gap: 6px;
+    }
+    .modal-label::before { content: ''; width: 3px; height: 12px; background: var(--primary); border-radius: 1px; }
+    .modal-content { font-size: 13px; color: var(--text-main); line-height: 1.75; }
+    .modal-content.ruler { font-family: var(--font-serif); font-size: 16px; color: var(--accent); }
+    .char-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .char-chip {
+        padding: 4px 10px; border-radius: 12px; font-size: 12px;
+        background: rgba(160,82,45,0.2); color: var(--text-main); border: 1px solid var(--border-c);
+        transition: var(--trans);
+    }
+    .char-chip:hover { background: var(--primary); color: #fff; transform: translateY(-2px); }
+    .modal-close {
+        display: block; margin: 10px auto 0; padding: 6px 20px; border: 1px solid var(--accent);
+        background: transparent; color: var(--accent); border-radius: 4px; cursor: pointer;
+        font-family: var(--font-serif); letter-spacing: 2px; transition: var(--trans);
+    }
+    .modal-close:hover { background: var(--accent); color: #fff; box-shadow: 0 0 15px rgba(139,58,58,0.5); }
+
+    /* Biểu mẫu cấu hình API */
+    .cfg-form { display: flex; flex-direction: column; gap: 12px; }
+    .cfg-field { display: flex; flex-direction: column; gap: 4px; }
+    .cfg-field label { font-size: 12px; color: var(--text-sub); font-weight: bold; }
+    .cfg-field input, .cfg-field select {
+        height: 34px; padding: 0 10px; border-radius: 6px;
+        background: rgba(255,255,255,0.4); border: 1px solid var(--border-c);
+        color: var(--text-main); font-size: 13px; outline: none; transition: var(--trans);
+        font-family: var(--font-body);
+    }
+    :host(.dark) .cfg-field input, :host(.dark) .cfg-field select { background: rgba(255,255,255,0.08); }
+    .cfg-field input:focus, .cfg-field select:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(160,82,45,0.15); }
+    .cfg-model-row { display: flex; gap: 6px; }
+    .cfg-model-row select { flex: 1; }
+    .cfg-model-row input { flex: 1; }
+    .cfg-fetch-btn {
+        padding: 0 12px; height: 34px; border-radius: 6px; border: 1px solid var(--primary);
+        background: var(--primary); color: #fff; cursor: pointer; font-size: 12px;
+        transition: var(--trans); white-space: nowrap; display: flex; align-items: center; gap: 4px;
+    }
+    .cfg-fetch-btn:hover:not(:disabled) { box-shadow: 0 4px 10px rgba(160,82,45,0.4); transform: translateY(-1px); }
+    .cfg-fetch-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .cfg-switch { display: flex; align-items: center; justify-content: space-between; }
+    .switch { position: relative; width: 40px; height: 20px; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+        position: absolute; cursor: pointer; inset: 0; background: rgba(139,90,43,0.3);
+        border-radius: 20px; transition: 0.3s;
+    }
+    .slider::before {
+        content: ''; position: absolute; height: 16px; width: 16px; left: 2px; top: 2px;
+        background: #fff; border-radius: 50%; transition: 0.3s;
+    }
+    .switch input:checked + .slider { background: var(--primary); }
+    .switch input:checked + .slider::before { transform: translateX(20px); }
+    .cfg-btn-row { display: flex; gap: 8px; margin-top: 8px; }
+    .cfg-save, .cfg-cancel {
+        flex: 1; padding: 8px; border-radius: 6px; border: none; cursor: pointer;
+        font-family: var(--font-serif); letter-spacing: 2px; font-size: 13px; transition: var(--trans);
+    }
+    .cfg-save { background: var(--primary); color: #fff; }
+    .cfg-save:hover { box-shadow: 0 4px 12px rgba(160,82,45,0.5); }
+    .cfg-cancel { background: transparent; border: 1px solid var(--border-c); color: var(--text-sub); }
+    .cfg-cancel:hover { background: rgba(160,82,45,0.1); }.resize-handle {
+        position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize; z-index: 30;
+    }
+    .resize-handle::after {
+        content: ''; position: absolute; right: 3px; bottom: 3px; width: 8px; height: 8px;
+        border-right: 2px solid var(--primary); border-bottom: 2px solid var(--primary); opacity: 0.5;
+    }
+    `;
+    shadow.appendChild(style);
+
+    const ball = tDoc.createElement('div');
+    ball.className = 'ball';
+    ball.innerHTML = `
+        <i class="fas fa-compass ball-icon"></i>
+        <svg class="ball-ring" viewBox="0 0 100 100">
+            <circle cx="50" cy="50" r="46" fill="none" stroke="currentColor" stroke-width="0.8" stroke-dasharray="3 4" opacity="0.5">
+                <animateTransform attributeName="transform" type="rotate" from="0 50 50" to="360 50 50" dur="15s" repeatCount="indefinite"/>
+            </circle>
+            <circle cx="50" cy="4" r="2" fill="currentColor">
+                <animateTransform attributeName="transform" type="rotate" from="0 50 50" to="360 50 50" dur="8s" repeatCount="indefinite"/>
+            </circle>
+        </svg>
+    `;
+    let savedPos = null;
+    try { savedPos = JSON.parse(localStorage.getItem(CONFIG.STORAGE_KEY)); } catch (e) {}
+    if (savedPos && savedPos.left != null) {
+        ball.style.left = savedPos.left + 'px'; ball.style.top = savedPos.top + 'px';
+    } else {
+        ball.style.left = (tWin.innerWidth - 58 - CONFIG.SAFE_MARGIN) + 'px';
+        ball.style.top = (tWin.innerHeight * 0.5) + 'px';
+    }
+    shadow.appendChild(ball);
+
+    // Đường nét phác thảo Trung Quốc chi tiết hơn (có góc cạnh)
+    const chinaPath = `
+        M 210,215
+        L 240,190 L 285,175 L 335,168 L 395,160 L 455,158 L 510,165 L 560,172
+        L 605,182 L 645,198 L 680,215 L 710,235 L 730,258 L 742,285 L 748,315
+        L 745,348 L 738,382 L 725,415 L 705,445 L 680,470 L 645,490 L 605,505
+        L 555,517 L 505,522 L 450,522 L 400,517 L 355,505 L 315,485 L 285,460
+        L 258,428 L 240,392 L 225,352 L 215,308 L 210,265 Z
+    `;
+
+    const panel = tDoc.createElement('div');
+    panel.className = 'panel';
+
+    // Xây dựng chú giải thế lực
+    const legendItems = {
+        yongjia3: ['jin', 'hanzhao', 'chenghan', 'liangzhou', 'shile', 'wangjun'],
+        yongjia5: ['jin', 'hanzhao', 'chenghan', 'liangzhou', 'shile', 'wangjun'],
+        jianxing4: ['east_jin', 'hanzhao', 'shile', 'chenghan', 'liangzhou'],
+        taixing1: ['east_jin', 'former_zhao', 'later_zhao', 'chenghan', 'liangzhou']
+    };
+
+    panel.innerHTML = `
+        <div class="particles"></div>
+        <div class="header">
+            <div class="tabs">
+                <div class="tab active" data-view="MAP"><i class="fas fa-map"></i> Dư đồ</div>
+                <div class="tab" data-view="SEARCH"><i class="fas fa-search"></i> Tìm kiếm</div>
+            </div>
+            <div class="icon-btn theme-btn" title="Chuyển đổi giao diện"><i class="fas fa-${currentTheme === 'dark' ? 'sun' : 'moon'}"></i></div>
+            <div class="icon-btn close" title="Đóng"><i class="fas fa-times"></i></div>
+        </div>
+
+        <div class="view active" data-view="MAP">
+            <div class="era-bar">
+                ${Object.entries(ERAS).map(([id]) =>
+                    `<div class="era-tab ${id === currentEra ? 'active' : ''}" data-era="${id}">${ERAS[id].name}</div>`
+                ).join('')}
+            </div>
+            <div class="era-desc"></div>
+            <div class="map-wrap">
+                <div class="map-viewport">
+                    <svg class="map-svg" viewBox="0 0 800 600" preserveAspectRatio="xMidYMid meet">
+                        <defs>
+                            <pattern id="paperTex" x="0" y="0" width="6" height="6" patternUnits="userSpaceOnUse">
+                                <rect width="6" height="6" fill="var(--map-land)"/>
+                                <circle cx="3" cy="3" r="0.4" fill="var(--map-stroke)" opacity="0.15"/>
+                            </pattern>
+                            <filter id="territoryShadow"><feDropShadow dx="0" dy="1" stdDeviation="1" flood-opacity="0.2"/></filter>
+                        </defs>
+                        <path class="province" d="${chinaPath}" fill="url(#paperTex)"/>
+                        <g class="territory-layer"></g>
+                        <g class="markers-layer"></g>
+                    </svg>
+                </div>
+                <div class="map-controls">
+                    <div class="zoom-btn zoom-in" title="Phóng to"><i class="fas fa-plus"></i></div>
+                    <div class="zoom-btn zoom-out" title="Thu nhỏ"><i class="fas fa-minus"></i></div>
+                    <div class="zoom-btn zoom-reset" title="Đặt lại"><i class="fas fa-crosshairs"></i></div>
+                </div>
+                <div class="legend"></div>
+            </div>
+        </div>
+
+        <div class="view" data-view="SEARCH">
+            <div class="api-hint">
+                <i class="fas fa-info-circle"></i>
+                <span>Bạn có thể sử dụng giao diện tìm kiếm này để hỗ trợ trải nghiệm nhập vai, nhớ phải <span class="cfg-link">cấu hình API tùy chỉnh</span>!</span>
+            </div>
+            <div class="search-tabs">
+                ${CATEGORIES.map((c, i) => `<div class="cat-tab ${i === 0 ? 'active' : ''}" data-cat="${c.id}"><i class="fas ${c.icon}"></i>${c.name}</div>`).join('')}
+            </div>
+            <div class="search-input-wrap">
+                <input class="search-input" type="text" placeholder="${PLACEHOLDERS.npc}" autocomplete="off"/>
+                <button class="cfg-btn" title="Cấu hình API"><i class="fas fa-cog"></i></button>
+                <button class="search-btn"><i class="fas fa-search"></i></button>
+            </div>
+            <div class="results">
+                <div class="empty-hint">～ Vui lòng nhập vào phía trên để tìm kiếm ～</div>
+            </div>
+        </div><div class="modal-mask"><div class="modal"></div></div>
+        <div class="resize-handle"></div>
+    `;
+    shadow.appendChild(panel);
+
+    function applyTheme() {
+        if (currentTheme === 'dark') shadow.host.classList.add('dark');
+        else shadow.host.classList.remove('dark');
+    }
+    applyTheme();
+
+    const $ = (sel) => panel.querySelector(sel);
+    const $$ = (sel) => panel.querySelectorAll(sel);
+    const header = $('.header');
+    const closeBtn = $('.icon-btn.close');
+    const themeBtn = $('.theme-btn');
+    const searchInput = $('.search-input');
+    const searchBtn = $('.search-btn');
+    const cfgBtn = $('.cfg-btn');
+    const resultsArea = $('.results');
+    const modalMask = $('.modal-mask');
+    const modal = $('.modal');
+    const resizeHandle = $('.resize-handle');
+    const particlesLayer = $('.particles');
+    const eraDesc = $('.era-desc');
+    const markersLayer = $('.territory-layer');
+    const territoryLayer = $('.territory-layer');
+    const legendEl = $('.legend');
+    const mapViewport = $('.map-viewport');
+    const mapSvg = $('.map-svg');
+
+    function renderEra(eraId) {
+        const era = ERAS[eraId];
+        if (!era) return;
+        currentEra = eraId;
+        eraDesc.textContent = era.desc;
+        $$('.era-tab').forEach(t => t.classList.toggle('active', t.dataset.era === eraId));
+
+        // Khu vực kiểm soát thế lực
+        territoryLayer.innerHTML = (era.territories || []).map(t => {
+            const f = FACTIONS[t.faction];
+            if (!f) return '';
+            return `<polygon class="territory" points="${t.points}" fill="${f.color}" stroke="${f.stroke}" stroke-width="1.5" stroke-dasharray="4 2" filter="url(#territoryShadow)"/>`;
+        }).join('');
+
+        // Chú giải
+        legendEl.innerHTML = (legendItems[eraId] || []).map(fid => {
+            const f = FACTIONS[fid];
+            return `<div class="legend-item"><span class="legend-dot" style="background:${f.color};border-color:${f.stroke}"></span>${f.name}</div>`;
+        }).join('');
+
+        // Điểm neo
+        markersLayer.innerHTML = era.markers.map(m => `
+            <g class="marker-group" data-id="${m.id}">
+                <circle class="marker-outer" cx="${m.cx}" cy="${m.cy}" r="10">
+                    <animate attributeName="r" values="8;14;8" dur="2.5s" repeatCount="indefinite"/>
+                    <animate attributeName="opacity" values="0.5;0.15;0.5" dur="2.5s" repeatCount="indefinite"/>
+                </circle>
+                <circle class="marker-inner" cx="${m.cx}" cy="${m.cy}" r="4"/>
+                <text class="marker-label" x="${m.cx}" y="${m.cy - 15}" text-anchor="middle">${m.name}</text>
+            </g>
+        `).join('');
+        markersLayer.querySelectorAll('.marker-group').forEach(g => {
+            g.addEventListener('click', () => showModal(g.dataset.id));
+        });
+    }
+    renderEra(currentEra);
+
+    $$('.era-tab').forEach(t => {
+        t.onclick = () => renderEra(t.dataset.era);
+    });
+
+    // Thu phóng và di chuyển
+    let mapScale = 1, mapX = 0, mapY = 0;
+    function applyTransform() {
+        mapSvg.style.transform = `translate(${mapX}px, ${mapY}px) scale(${mapScale})`;
+    }
+    function setScale(newScale, cx, cy) {
+        const rect = mapViewport.getBoundingClientRect();
+        if (cx == null) cx = rect.width / 2;
+        if (cy == null) cy = rect.height / 2;
+        const oldScale = mapScale;
+        newScale = Math.max(0.5, Math.min(4, newScale));
+        mapX = cx - (cx - mapX) * (newScale / oldScale);
+        mapY = cy - (cy - mapY) * (newScale / oldScale);
+        mapScale = newScale;
+        applyTransform();
+    }
+    $('.zoom-in').onclick = () => setScale(mapScale * 1.3);
+    $('.zoom-out').onclick = () => setScale(mapScale / 1.3);
+    $('.zoom-reset').onclick = () => { mapScale = 1; mapX = 0; mapY = 0; applyTransform(); };
+
+    mapViewport.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const rect = mapViewport.getBoundingClientRect();
+        const cx = e.clientX - rect.left;
+        const cy = e.clientY - rect.top;
+        const delta = e.deltaY < 0 ? 1.15 : 1/1.15;
+        setScale(mapScale * delta, cx, cy);
+    }, { passive: false });
+
+    let mapDragging = false, mapDragSX, mapDragSY, mapDragOX, mapDragOY;
+    mapViewport.addEventListener('mousedown', (e) => {
+        if (e.target.closest('.marker-group')) return;
+        mapDragging = true;
+        mapDragSX = e.clientX; mapDragSY = e.clientY;
+        mapDragOX = mapX; mapDragOY = mapY;
+        mapViewport.classList.add('grabbing');
+    });
+    tDoc.addEventListener('mousemove', (e) => {
+        if (!mapDragging) return;
+        mapX = mapDragOX + e.clientX - mapDragSX;
+        mapY = mapDragOY + e.clientY - mapDragSY;
+        applyTransform();
+    });
+    tDoc.addEventListener('mouseup', () => {
+        if (mapDragging) { mapDragging = false; mapViewport.classList.remove('grabbing'); }
+    });
+    let touchStartDist = null;
+    mapViewport.addEventListener('touchstart', (e) => {
+        if (e.touches.length === 1) {
+            if (e.target.closest('.marker-group')) return;
+            mapDragging = true;
+            mapDragSX = e.touches[0].clientX; mapDragSY = e.touches[0].clientY;
+            mapDragOX = mapX; mapDragOY = mapY;
+        } else if (e.touches.length === 2) {
+            mapDragging = false;
+            const dx = e.touches[0].clientX - e.touches[1].clientX;
+            const dy = e.touches[0].clientY - e.touches[1].clientY;
+            touchStartDist = Math.sqrt(dx*dx + dy*dy);
+        }
+    }, { passive: true });
+    mapViewport.addEventListener('touchmove', (e) => {
+        if (e.touches.length === 1 && mapDragging) {
+            mapX = mapDragOX + e.touches[0].clientX - mapDragSX;
+            mapY = mapDragOY + e.touches[0].clientY - mapDragSY;
+            applyTransform();
+            e.preventDefault();
+        } else if (e.touches.length === 2 && touchStartDist != null) {
+            const dx = e.touches[0].clientX - e.touches[1].clientX;
+            const dy = e.touches[0].clientY - e.touches[1].clientY;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            setScale(mapScale * (dist / touchStartDist));
+            touchStartDist = dist;
+            e.preventDefault();
+        }
+    }, { passive: false });
+    mapViewport.addEventListener('touchend', () => {
+        mapDragging = false; touchStartDist = null;
+    });
+
+    const particleChars = ['Hán', 'Tấn', 'Vân', 'Sơn', 'Phong', 'Nguyệt', '❈', '✦', 'Long', 'Hổ', 'Huyền', 'Chu'];
+    function spawnParticle() {
+        if (!panel.classList.contains('show')) return;
+        const p = tDoc.createElement('div');
+        p.className = 'particle';
+        p.textContent = particleChars[Math.floor(Math.random() * particleChars.length)];
+        p.style.left = Math.random() * 100 + '%';
+        p.style.animationDuration = (8 + Math.random() * 8) + 's';
+        p.style.fontSize = (10 + Math.random() * 8) + 'px';
+        particlesLayer.appendChild(p);
+        setTimeout(() => p.remove(), 16000);
+    }
+    let particleTimer = null;
+    function startParticles() { if (!particleTimer) particleTimer = setInterval(spawnParticle, 800); }
+    function stopParticles() { if (particleTimer) { clearInterval(particleTimer); particleTimer = null; } }
+
+    themeBtn.onclick = () => {
+        currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
+        try { localStorage.setItem(CONFIG.THEME_KEY, currentTheme); } catch (e) {}
+        themeBtn.innerHTML = `<i class="fas fa-${currentTheme === 'dark' ? 'sun' : 'moon'}"></i>`;
+        applyTheme();
+    };
+
+    $$('.tab').forEach(tab => {
+        tab.onclick = () => {
+            currentView = tab.dataset.view;
+            $$('.tab').forEach(t => t.classList.toggle('active', t === tab));
+            $$('.view').forEach(view => view.classList.toggle('active', view.dataset.view === currentView));
+        };
+    });
+
+    $$('.cat-tab').forEach(t => {
+        t.onclick = () => {
+            currentCategory = t.dataset.cat;
+            $$('.cat-tab').forEach(x => x.classList.toggle('active', x === t));
+            searchInput.placeholder = PLACEHOLDERS[currentCategory];
+        };
+    });
+
+    function showModal(id) {
+        const era = ERAS[currentEra];
+        const data = era.markers.find(m => m.id === id);
+        if (!data) return;
+        modal.innerHTML = `
+            <div class="modal-head">${data.name}</div>
+            <div class="modal-section">
+                <div class="modal-label">Đương kim chưởng quyền</div>
+                <div class="modal-content ruler">${data.ruler}</div>
+            </div>
+            <div class="modal-section">
+                <div class="modal-label">Giới thiệu khu vực</div>
+                <div class="modal-content">${data.intro}</div>
+            </div>
+            ${data.chars && data.chars.length ? `
+            <div class="modal-section">
+                <div class="modal-label">Khái quát nhân vật</div>
+                <div class="char-chips">${data.chars.map(c => `<span class="char-chip">${c}</span>`).join('')}</div>
+            </div>` : ''}
+            <button class="modal-close">Đóng</button>
+        `;
+        modalMask.classList.add('show');
+        modal.querySelector('.modal-close').onclick = () => modalMask.classList.remove('show');
+    }
+    modalMask.addEventListener('click', (e) => {
+        if (e.target === modalMask) modalMask.classList.remove('show');
+    });
+
+    // ===== Cửa sổ cấu hình API =====
+    function showConfigModal() {
+        const providerPresets = {
+            deepseek: { baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
+            openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+            custom: { baseUrl: '', model: '' }
+        };
+
+        modal.innerHTML = `
+            <div class="modal-head">Cấu hình API</div>
+            <div class="cfg-form">
+                <div class="cfg-field">
+                    <label>Nhà cung cấp dịch vụ</label>
+                    <select id="cfg-provider">
+                        <option value="deepseek">DeepSeek</option>
+                        <option value="openai">OpenAI (Định dạng tương thích)</option>
+                        <option value="custom">Tùy chỉnh</option>
+                    </select>
+                </div>
+                <div class="cfg-field">
+                    <label>Base URL</label>
+                    <input type="text" id="cfg-url" placeholder="https://api.deepseek.com/v1"/>
+                </div>
+                <div class="cfg-field">
+                    <label>API Key</label>
+                    <input type="password" id="cfg-key" placeholder="sk-..."/>
+                </div>
+                <div class="cfg-field">
+                    <label>Mô hình <span style="font-weight:normal;color:var(--text-muted);font-size:11px;">(Có thể nhấn nút bên phải để lấy)</span></label>
+                    <div class="cfg-model-row">
+                        <input type="text" id="cfg-model" placeholder="deepseek-chat"/>
+                        <select id="cfg-model-select" style="display:none;"></select>
+                        <button class="cfg-fetch-btn" id="cfg-fetch"><i class="fas fa-cloud-download-alt"></i>Lấy</button>
+                    </div>
+                </div>
+                <div class="cfg-field">
+                    <label>Temperature</label>
+                    <input type="number" id="cfg-temp" min="0" max="2" step="0.1"/>
+                </div>
+                <div class="cfg-switch">
+                    <label style="font-size:13px;color:var(--text-main);">Phản hồi dạng luồng (hiệu ứng máy đánh chữ)</label>
+                    <label class="switch">
+                        <input type="checkbox" id="cfg-stream"/>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="cfg-btn-row">
+                    <button class="cfg-cancel" id="cfg-cancel">Hủy</button>
+                    <button class="cfg-save" id="cfg-save">Lưu</button>
+                </div>
+            </div>
+        `;
+        modalMask.classList.add('show');
+
+        const providerSel = modal.querySelector('#cfg-provider');
+        const urlIn = modal.querySelector('#cfg-url');
+        const keyIn = modal.querySelector('#cfg-key');
+        const modelIn = modal.querySelector('#cfg-model');
+        const modelSelect = modal.querySelector('#cfg-model-select');
+        const tempIn = modal.querySelector('#cfg-temp');
+        const streamIn = modal.querySelector('#cfg-stream');
+        const fetchBtn = modal.querySelector('#cfg-fetch');
+
+        providerSel.value = apiConfig.provider;
+        urlIn.value = apiConfig.baseUrl;
+        keyIn.value = apiConfig.apiKey;
+        modelIn.value = apiConfig.model;
+        tempIn.value = apiConfig.temperature;
+        streamIn.checked = apiConfig.stream;
+
+        providerSel.onchange = () => {
+            const preset = providerPresets[providerSel.value];
+            if (preset) {
+                if (preset.baseUrl) urlIn.value = preset.baseUrl;
+                if (preset.model) modelIn.value = preset.model;
+            }
+            modelSelect.style.display = 'none';
+            modelIn.style.display = '';
+        };
+
+        fetchBtn.onclick = async () => {
+            const url = urlIn.value.trim().replace(/\/$/, '');
+            const key = keyIn.value.trim();
+            if (!url || !key) {
+                alert('Vui lòng điền Base URL và API Key trước');
+                return;
+            }
+            fetchBtn.disabled = true;
+            fetchBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>Đang lấy';
+            try {
+                const res = await fetch(`${url}/models`, {
+                    headers: { 'Authorization': `Bearer ${key}` }
+                });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+                const models = (data.data || data.models || []).map(m => m.id || m.name || m).filter(Boolean);
+                if (models.length === 0) throw new Error('Không trả về mô hình nào');
+                modelSelect.innerHTML = models.map(m => `<option value="${m}">${m}</option>`).join('');
+                if (models.includes(modelIn.value)) modelSelect.value = modelIn.value;
+                modelSelect.style.display = '';
+                modelIn.style.display = 'none';
+                modelSelect.onchange = () => { modelIn.value = modelSelect.value; };
+                modelIn.value = modelSelect.value;
+                fetchBtn.innerHTML = '<i class="fas fa-check"></i>Đã lấy';
+                setTimeout(() => {
+                    fetchBtn.innerHTML = '<i class="fas fa-cloud-download-alt"></i>Lấy';
+                    fetchBtn.disabled = false;
+                }, 1500);
+            } catch (e) {
+                console.error(e);
+                alert('Lấy mô hình thất bại: ' + e.message);
+                fetchBtn.innerHTML = '<i class="fas fa-cloud-download-alt"></i>Lấy';
+                fetchBtn.disabled = false;
+            }
+        };modal.querySelector('#cfg-cancel').onclick = () => modalMask.classList.remove('show');
+        modal.querySelector('#cfg-save').onclick = () => {
+            apiConfig = {
+                provider: providerSel.value,
+                baseUrl: urlIn.value.trim().replace(/\/$/, ''),
+                apiKey: keyIn.value.trim(),
+                model: modelIn.value.trim(),
+                temperature: parseFloat(tempIn.value) || 0.7,
+                stream: streamIn.checked
+            };
+            try { localStorage.setItem(CONFIG.API_KEY, JSON.stringify(apiConfig)); } catch (e) {}
+            modalMask.classList.remove('show');
+            if (typeof triggerSlash === 'function') triggerSlash('/echo severity=success Cấu hình API đã được lưu');
+        };
+    }
+    cfgBtn.onclick = showConfigModal;
+    panel.querySelector('.cfg-link').onclick = showConfigModal;
+
+    // ===== Gọi API độc lập =====
+    const REGEX_MAP = {
+        npc: /<npc>([\s\S]*?)<\/npc>/i,
+        place: /<place>([\s\S]*?)<\/place>/i,
+        thing: /<thing>([\s\S]*?)<\/thing>/i,
+        other: /<other>([\s\S]*?)<\/other>/i
+    };
+    const OPEN_TAG = { npc: '<npc>', place: '<place>', thing: '<thing>', other: '<other>' };
+    const CLOSE_TAG = { npc: '</npc>', place: '</place>', thing: '</thing>', other: '</other>' };
+
+    function extractTagContent(cat, raw) {
+        if (!raw) return null;
+        let cleaned = raw.replace(/

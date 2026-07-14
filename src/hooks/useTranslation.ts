@@ -19,6 +19,7 @@ import { parsePatchOutput, applyPatches, validatePatchResult } from '../utils/pa
 import { injectMvuZodSystem } from '../utils/mvuGenerator';
 import { detectEjsCard, extractEjsEntryNames, extractEjsKeywords, aiTranslateEjsEntries, validateEjsSync, autoFixEjsEntryNames, autoFixEjsKeywords, enforceEjsEntryName, enforceEjsCovariance, enforceEjsKeywordCasing, autoFixEjsKeywordsExtended, enforceEjsDictConsistency } from '../utils/ejsSync';
 import { isEjsProseField, maskEjsCode, unmaskEjsCode, countEjsBlocks } from '../utils/ejsSegmenter';
+import { isLikelyJsScript, jsParseErrorAny, isImportOnlyScript } from '../utils/scriptSafety';
 import { getActivePresetPromptContent } from '../utils/presetParser';
 import { CallMonitor } from '../utils/callMonitor';
 import { runWorkerPool } from '../utils/runWorkerPool';
@@ -900,6 +901,27 @@ export function useTranslation() {
         }
       }
 
+      // ═══ (User 2026 — bug script TavernHelper 71K cụt đuôi giữa regex) GUARD CÚ PHÁP JS FIELD ═══
+      // Field là SCRIPT JS trần (TavernHelper/JS-Slash-Runner) mà bản GỐC parse sạch (acorn, cả mode
+      // module lẫn script) thì bản DỊCH cũng PHẢI parse sạch. Vỡ (cụt output, đứt regex/chuỗi…) →
+      // retry; hết retry → GIỮ NGUYÊN bản gốc + chỉ rõ DÒNG lỗi. Card không bao giờ xuất script liệt.
+      if (translated && translated !== field.original && isLikelyJsScript(field.original) && jsParseErrorAny(field.original) === null) {
+        const jsErr = jsParseErrorAny(translated);
+        if (jsErr) {
+          if (freshRetries() < (store.proxy.maxRetries || 3)) {
+            store.updateField(field.path, { retries: freshRetries() + 1 });
+            store.addLog('retry', `⚠️ Script vỡ cú pháp sau dịch (${field.label}, dòng ~${jsErr.line}: ${jsErr.msg.slice(0, 60)}) → dịch lại…`);
+            await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
+            return 'retry';
+          }
+          store.addLog('warning',
+            `⚠️ Script toàn vẹn: ${field.label} vẫn vỡ cú pháp JS sau retry (dòng ~${jsErr.line}) → GIỮ NGUYÊN ` +
+            `bản gốc để script KHÔNG liệt trong SillyTavern. Hãy dịch lại riêng entry này.`
+          );
+          translated = field.original;
+        }
+      }
+
       // Keep chunk progress for export, clear failed index only
       store.updateField(field.path, { status: 'done', translated, failedChunkIndex: undefined });
       store.addLog('success', `✅ Đã dịch: ${field.label} (${translated.length} ký tự)`);
@@ -991,6 +1013,15 @@ export function useTranslation() {
     if (inFlightPaths.current.has(field.path)) {
       store.addLog('warning', `⏭️ Bỏ qua dịch trùng: ${field.label} (đang được dịch ở luồng khác)`);
       return 'skip';
+    }
+
+    // (User 2026 — học từ template script cộng đồng) Script CHỈ gồm `import 'https://…jsdelivr…'`
+    // (+comment): nội dung THẬT nằm trên CDN tự cập nhật — dịch vô ích, đụng vào chỉ thêm rủi ro
+    // → giữ nguyên, done ngay, 0 call AI.
+    if (field.group === 'tavern_helper' && isImportOnlyScript(field.original)) {
+      store.updateField(field.path, { status: 'done', translated: field.original, error: undefined });
+      store.addLog('info', `⏭️ ${field.label}: script chỉ import từ CDN (tự cập nhật) — giữ nguyên, không cần dịch.`);
+      return 'done';
     }
 
     // ♻️ BỘ NHỚ DỊCH: nếu đã có 1 trường KHÁC (trùng HỆT nội dung gốc + nhóm + loại) dịch xong
@@ -1391,6 +1422,20 @@ export function useTranslation() {
             store.addLog('warning',
               `⚠️ EJS toàn vẹn: ${batchFields[j].label} có ${tB}/${oB} khối <%…%> (lệch ${tB - oB}) → GIỮ NGUYÊN ` +
               `bản gốc field này để KHÔNG vỡ JS khi xuất. Hãy dịch lại riêng entry này.`
+            );
+            translated = batchFields[j].original;
+          }
+        }
+
+        // ═══ (User 2026) GUARD CÚ PHÁP JS (đường BATCH) — script gốc parse sạch mà bản dịch vỡ
+        // (cụt output/đứt regex/chuỗi) → GIỮ NGUYÊN bản gốc, không xuất script liệt. ═══
+        if (translated && translated !== batchFields[j].original &&
+            isLikelyJsScript(batchFields[j].original) && jsParseErrorAny(batchFields[j].original) === null) {
+          const jsErr = jsParseErrorAny(translated);
+          if (jsErr) {
+            store.addLog('warning',
+              `⚠️ Script toàn vẹn: ${batchFields[j].label} vỡ cú pháp JS sau dịch (dòng ~${jsErr.line}) → GIỮ NGUYÊN ` +
+              `bản gốc field này. Hãy dịch lại riêng entry này.`
             );
             translated = batchFields[j].original;
           }

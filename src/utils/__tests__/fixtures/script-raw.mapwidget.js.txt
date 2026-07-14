@@ -1,0 +1,1455 @@
+const WIDGET_ID = 'st-map-search-widget';
+
+(function initWidget() {
+    const CONFIG = {
+        ID: WIDGET_ID,
+        Z_INDEX: 2147483647,
+        SAFE_MARGIN: 15,
+        CLICK_DIST: 3,
+        STORAGE_KEY: 'st_map_widget_pos',
+        THEME_KEY: 'st_map_widget_theme',
+        API_KEY: 'st_map_widget_api',
+        WB_NAME: '永嘉风流'
+    };
+
+    const STATES = { IDLE: 'IDLE', BALL_DRAG: 'BALL_DRAG', PANEL_OPEN: 'PANEL_OPEN', PANEL_DRAG: 'PANEL_DRAG' };
+    let currentState = STATES.IDLE;
+    let currentView = 'MAP';
+    let currentCategory = 'npc';
+    let currentEra = 'yongjia3';
+    let isVisible = true;
+    let isGenerating = false;
+    let currentTheme = 'light';
+    let currentAbortController = null;
+
+    // API 配置默认
+    let apiConfig = {
+        provider: 'deepseek',
+        baseUrl: 'https://api.deepseek.com/v1',
+        apiKey: '',
+        model: 'deepseek-chat',
+        stream: true,
+        temperature: 0.7
+    };
+    try {
+        const saved = JSON.parse(localStorage.getItem(CONFIG.API_KEY) || '{}');
+        apiConfig = { ...apiConfig, ...saved };
+    } catch (e) {}
+
+    let tWin = window, tDoc = document;
+    try {
+        if (window.parent && window.parent.document) { tWin = window.parent; tDoc = window.parent.document; }
+    } catch (e) { console.warn('[MapWidget] 跨域降级'); }
+
+    try {
+        const saved = localStorage.getItem(CONFIG.THEME_KEY);
+        if (saved) currentTheme = saved;
+        else if (tWin.matchMedia && tWin.matchMedia('(prefers-color-scheme: dark)').matches) currentTheme = 'dark';
+    } catch (e) {}
+
+    const old = tDoc.getElementById(CONFIG.ID);
+    if (old) old.remove();
+
+    const container = tDoc.createElement('div');
+    container.id = CONFIG.ID;
+    Object.assign(container.style, {
+        position: 'fixed', top: '0', left: '0', width: '0', height: '0',
+        overflow: 'visible', pointerEvents: 'none', zIndex: CONFIG.Z_INDEX
+    });
+    tDoc.body.appendChild(container);
+    const shadow = container.attachShadow({ mode: 'open' });
+
+    const fa = tDoc.createElement('link');
+    fa.rel = 'stylesheet';
+    fa.href = 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css';
+    shadow.appendChild(fa);
+
+    // 势力控制区多边形数据（大致覆盖）
+    const FACTIONS = {
+        jin: { name: '晋', color: 'rgba(72, 118, 168, 0.28)', stroke: 'rgba(72, 118, 168, 0.7)' },
+        hanzhao: { name: '汉赵', color: 'rgba(180, 60, 60, 0.28)', stroke: 'rgba(180, 60, 60, 0.7)' },
+        chenghan: { name: '成汉', color: 'rgba(180, 130, 60, 0.28)', stroke: 'rgba(180, 130, 60, 0.7)' },
+        liangzhou: { name: '凉州', color: 'rgba(90, 140, 90, 0.28)', stroke: 'rgba(90, 140, 90, 0.7)' },
+        shile: { name: '石勒', color: 'rgba(120, 70, 130, 0.28)', stroke: 'rgba(120, 70, 130, 0.7)' },
+        wangjun: { name: '王浚', color: 'rgba(150, 110, 60, 0.28)', stroke: 'rgba(150, 110, 60, 0.7)' },
+        east_jin: { name: '东晋', color: 'rgba(72, 118, 168, 0.28)', stroke: 'rgba(72, 118, 168, 0.7)' },
+        former_zhao: { name: '前赵', color: 'rgba(180, 60, 60, 0.28)', stroke: 'rgba(180, 60, 60, 0.7)' },
+        later_zhao: { name: '后赵', color: 'rgba(120, 70, 130, 0.28)', stroke: 'rgba(120, 70, 130, 0.7)' }
+    };
+
+    // 多时期地图数据
+    const ERAS = {
+        yongjia3: {
+            name: '永嘉三年',
+            desc: '公元309年·西晋摇摇欲坠，八王余烬未熄',
+            territories: [
+                { faction: 'jin', points: '440,320 560,300 630,340 660,420 640,490 570,510 480,510 430,470 410,400' },
+                { faction: 'hanzhao', points: '430,240 500,240 510,300 460,320 420,290' },
+                { faction: 'chenghan', points: '310,440 400,440 410,500 340,520 300,490' },
+                { faction: 'liangzhou', points: '210,290 290,290 300,360 240,370 200,340' },
+                { faction: 'shile', points: '500,270 590,270 610,340 540,330' },
+                { faction: 'wangjun', points: '540,180 640,180 660,240 580,250 540,220' }
+            ],
+            markers: [
+                { id: 'luoyang', name: '洛阳', cx: 500, cy: 360, ruler: '晋怀帝 司马炽', intro: '西晋京师，位居河洛。虽为天下之中，然经八王之乱残破不堪，粮秣断绝，饿殍载道。太傅司马越把持朝政。', chars: ['司马越', '苟晞', '王衍', '嵇绍'] },
+                { id: 'changan', name: '长安', cx: 380, cy: 380, ruler: '南阳王 司马模', intro: '关中重镇，汉唐旧都。八王之乱屡为战场，宫室残破，饥荒频仍。', chars: ['司马模', '梁综'] },
+                { id: 'yecheng', name: '邺城', cx: 540, cy: 310, ruler: '汉赵 石勒', intro: '河北名都，襟带山河。石勒率羯胡骑兵纵横河北，坞堡林立而不能自保。', chars: ['石勒', '张宾'] },
+                { id: 'jianye', name: '建业', cx: 620, cy: 470, ruler: '琅琊王 司马睿', intro: '江东都会，龙盘虎踞。琅琊王司马睿都督扬州，与王导经营江左。', chars: ['司马睿', '王导', '顾荣', '周玘'] },
+                { id: 'chengdu', name: '成都', cx: 345, cy: 480, ruler: '成汉 李雄', intro: '天府之国。李雄僭号成都王，据蜀自立，与晋分庭抗礼。', chars: ['李雄', '范长生'] },
+                { id: 'youzhou', name: '幽州', cx: 590, cy: 220, ruler: '王浚', intro: '北疆重镇。王浚拥兵自重，结好乌桓段部鲜卑。', chars: ['王浚', '段务勿尘'] },
+                { id: 'liangzhou', name: '凉州', cx: 250, cy: 330, ruler: '凉州刺史 张轨', intro: '河西走廊要冲，中原乱世唯一净土。张轨忠于晋室，铸凉造新泉，广纳中原流亡士族。', chars: ['张轨', '张寔', '宋配'] },
+                { id: 'pingyang', name: '平阳', cx: 465, cy: 285, ruler: '汉赵天王 刘渊', intro: '匈奴汉赵霸府所在。刘渊称帝建汉，麾下有刘聪、刘曜、王弥等虎狼之将。', chars: ['刘渊', '刘聪', '刘曜', '王弥'] },
+                { id: 'bingzhou', name: '并州', cx: 470, cy: 235, ruler: '刘琨', intro: '晋并州刺史刘琨孤悬敌后，闻鸡起舞之典即出于此。', chars: ['刘琨', '祖逖'] }
+            ]
+        },
+        yongjia5: {
+            name: '永嘉五年',
+            desc: '公元311年·永嘉之乱，洛阳陷落',
+            territories: [
+                { faction: 'jin', points: '470,400 620,410 660,470 620,510 500,510 460,470' },
+                { faction: 'hanzhao', points: '410,240 540,240 590,320 540,380 460,380 420,320' },
+                { faction: 'chenghan', points: '310,440 400,440 410,500 340,520 300,490' },
+                { faction: 'liangzhou', points: '210,290 290,290 300,360 240,370 200,340' },
+                { faction: 'shile', points: '500,270 620,270 650,360 550,380 490,340' },
+                { faction: 'wangjun', points: '540,180 640,180 660,240 580,250 540,220' }
+            ],
+            markers: [
+                { id: 'luoyang', name: '洛阳', cx: 500, cy: 360, ruler: '汉赵 呼延晏（陷）', intro: '六月，汉赵刘聪遣呼延晏、王弥、刘曜、石勒攻破洛阳。晋怀帝被俘，宗庙焚毁，士民死者十余万，史称永嘉之乱。', chars: ['呼延晏', '王弥', '刘曜'] },
+                { id: 'changan', name: '长安', cx: 380, cy: 380, ruler: '晋阎鼎（拥秦王）', intro: '洛阳陷落后，阎鼎等人拥立秦王司马邺西入关中，欲以长安重建晋室残局。', chars: ['阎鼎', '司马邺'] },
+                { id: 'yecheng', name: '邺城', cx: 540, cy: 310, ruler: '汉赵 石勒', intro: '石勒于宁平城一战全歼晋军主力，斩太尉王衍及诸王公大臣。中原精锐尽丧。', chars: ['石勒', '张宾'] },
+                { id: 'jianye', name: '建业', cx: 620, cy: 470, ruler: '琅琊王 司马睿', intro: '中原沦丧的消息传来，北方士族大规模南渡投奔琅琊王。', chars: ['司马睿', '王导', '王敦'] },
+                { id: 'chengdu', name: '成都', cx: 345, cy: 480, ruler: '成汉 李雄', intro: '李雄坐观中原糜烂，安享巴蜀太平。', chars: ['李雄', '范长生'] },
+                { id: 'youzhou', name: '幽州', cx: 590, cy: 220, ruler: '王浚', intro: '王浚自称领冀州牧，欲于乱世自立，然孤悬东北。', chars: ['王浚'] },
+                { id: 'liangzhou', name: '凉州', cx: 250, cy: 330, ruler: '凉州刺史 张轨', intro: '张轨遣宋配率骑兵三千入援长安，护送流亡宗室，凉州成为汉家衣冠最后避难所。', chars: ['张轨', '张寔', '宋配'] },
+                { id: 'pingyang', name: '平阳', cx: 465, cy: 285, ruler: '汉赵天子 刘聪', intro: '刘聪已弑兄自立。晋怀帝被押赴平阳后备受折辱，令其青衣行酒。', chars: ['刘聪', '刘曜'] },
+                { id: 'bingzhou', name: '并州', cx: 470, cy: 235, ruler: '刘琨', intro: '刘琨守晋阳，与拓跋鲜卑猗卢结盟，孤军奋战。', chars: ['刘琨', '拓跋猗卢'] }
+            ]
+        },
+        jianxing4: {
+            name: '建兴四年',
+            desc: '公元316年·长安陷落，西晋终焉',
+            territories: [
+                { faction: 'east_jin', points: '540,430 640,430 670,500 590,520 520,500' },
+                { faction: 'hanzhao', points: '350,240 500,240 540,320 480,380 400,380 340,320' },
+                { faction: 'shile', points: '500,260 630,260 660,360 570,400 490,350' },
+                { faction: 'chenghan', points: '310,440 400,440 410,500 340,520 300,490' },
+                { faction: 'liangzhou', points: '210,290 290,290 300,360 240,370 200,340' }
+            ],
+            markers: [
+                { id: 'luoyang', name: '洛阳（废墟）', cx: 500, cy: 360, ruler: '汉赵羁縻', intro: '洛阳久成废墟。宫室宗庙尽毁，白骨露野，狐兔穿行于铜驼陌。', chars: [] },
+                { id: 'changan', name: '长安', cx: 380, cy: 380, ruler: '汉赵 刘曜（陷）', intro: '十一月，刘曜大军围长安数月，粮尽援绝。晋愍帝素车白马出降，西晋名实俱亡。', chars: ['刘曜', '司马邺'] },
+                { id: 'xiangguo', name: '襄国', cx: 540, cy: 310, ruler: '汉赵 石勒', intro: '石勒据襄国，与刘曜貌合神离，暗蓄实力，将开石赵之基业。', chars: ['石勒', '张宾', '石虎'] },
+                { id: 'jianye', name: '建康', cx: 620, cy: 470, ruler: '晋琅琊王 司马睿', intro: '建业避晋愍帝讳改称建康。司马睿承制改元，江左俨然新朝气象。', chars: ['司马睿', '王导', '王敦', '祖逖'] },
+                { id: 'chengdu', name: '成都', cx: 345, cy: 480, ruler: '成汉 李雄', intro: '李雄立子李班为太子，成汉进入相对稳定的守成之世。', chars: ['李雄'] },
+                { id: 'youzhou', name: '幽州（陷）', cx: 590, cy: 220, ruler: '汉赵 石勒', intro: '王浚已于建兴二年被石勒诱杀，幽州尽入羯胡之手。', chars: ['石勒'] },
+                { id: 'liangzhou', name: '凉州', cx: 250, cy: 330, ruler: '西平公 张寔', intro: '张轨去世，其子张寔继位。凉州岁贡不绝，遥奉建康正朔。', chars: ['张寔', '张茂'] },
+                { id: 'pingyang', name: '平阳', cx: 465, cy: 285, ruler: '汉赵天子 刘聪', intro: '刘聪荒淫无度，靳准渐得权柄，汉赵内部暗流涌动。', chars: ['刘聪', '靳准'] },
+                { id: 'huai', name: '淮泗', cx: 590, cy: 400, ruler: '晋 祖逖', intro: '祖逖中流击楫，率部渡江北伐，屯于淮泗，收复豫州部分郡县。', chars: ['祖逖'] }
+            ]
+        },
+        taixing1: {
+            name: '太兴元年',
+            desc: '公元318年·东晋建立，南北对峙',
+            territories: [
+                { faction: 'east_jin', points: '480,410 660,410 680,510 560,530 470,500' },
+                { faction: 'former_zhao', points: '340,270 450,260 490,340 440,390 360,380 320,330' },
+                { faction: 'later_zhao', points: '450,260 610,260 650,370 540,400 470,370' },
+                { faction: 'chenghan', points: '310,440 400,440 410,500 340,520 300,490' },
+                { faction: 'liangzhou', points: '210,290 290,290 300,360 240,370 200,340' }
+            ],
+            markers: [
+                { id: 'luoyang', name: '洛阳（废墟）', cx: 500, cy: 360, ruler: '前赵 刘曜', intro: '刘曜迁都长安，改国号为赵（史称前赵）。洛阳终无恢复之望。', chars: ['刘曜'] },
+                { id: 'changan', name: '长安', cx: 380, cy: 380, ruler: '前赵天子 刘曜', intro: '汉赵内乱，靳准弑刘粲，刘曜自立为帝。改国号赵，定都长安。', chars: ['刘曜'] },
+                { id: 'xiangguo', name: '襄国', cx: 540, cy: 310, ruler: '后赵 石勒', intro: '石勒与刘曜决裂，自称大将军、大单于、赵王，史称后赵。二赵对峙。', chars: ['石勒', '张宾'] },
+                { id: 'jianye', name: '建康', cx: 620, cy: 470, ruler: '晋元帝 司马睿', intro: '晋愍帝崩讯至建康。三月，司马睿即皇帝位，改元太兴，是为东晋。王导拜丞相，王与马共天下。', chars: ['司马睿', '王导', '王敦', '刁协'] },
+                { id: 'chengdu', name: '成都', cx: 345, cy: 480, ruler: '成汉皇帝 李雄', intro: '李雄僭称帝号已久，与东晋、前后赵鼎足而立。', chars: ['李雄'] },
+                { id: 'liangzhou', name: '凉州', cx: 250, cy: 330, ruler: '西平公 张寔', intro: '张寔奉东晋正朔，凉州成为南北呼应的西陲孤忠。', chars: ['张寔', '张茂'] },
+                { id: 'pingyang', name: '平阳', cx: 465, cy: 285, ruler: '前赵羁縻', intro: '汉赵旧都，历经靳准之乱几成废墟，实为前赵与后赵拉锯地带。', chars: [] },
+                { id: 'huai', name: '豫州', cx: 590, cy: 400, ruler: '晋 祖逖', intro: '祖逖屯谯城，招抚坞堡，与石勒隔黄河对峙，中原稍有恢复之象。', chars: ['祖逖'] },
+                { id: 'jingzhou', name: '荆州', cx: 500, cy: 450, ruler: '晋 王敦', intro: '王敦都督江荆等六州诸军事，坐镇武昌，兵权在握。', chars: ['王敦', '陶侃'] }
+            ]
+        }
+    };
+
+    const PROMPTS = {
+        npc: (q) => `你正在为魏晋南北朝历史剧情提供检索服务。请针对用户查询的人物，直接输出这个人物的具体信息（真实姓名、生卒年、生平简介），严格控制在300字以内。
+
+【输出要求】
+必须将真实内容填入以下XML标签中，不要保留括号或占位符文字。除标签内容外不要输出任何其它文字（包括解释、思考、寒暄、免责声明）。
+
+【示例】
+用户查询：请告诉我司马衷是谁？
+正确输出：
+<npc>司马衷（259年—307年），字正度，晋武帝司马炎次子。西晋第二位皇帝，即晋惠帝。以愚痴闻名，闻民饥有"何不食肉糜"之语。在位期间大权先后落入贾南风、诸王之手，直接引发八王之乱，西晋国祚由此崩摧。</npc>
+
+【用户查询】
+${q}`,
+        place: (q) => `你正在为魏晋南北朝历史剧情提供检索服务。请针对用户查询的地区，直接输出这个地区的具体信息（真实名称、当前实际统治者、代表性人物概览），严格控制在300字以内。
+
+【输出要求】
+必须将真实内容填入以下XML标签中，不要保留括号或占位符文字。除标签内容外不要输出任何其它文字。
+
+【示例】
+用户查询：洛阳当前是什么情况？
+正确输出：
+<place>洛阳，西晋京师，位居河洛之中，昔为四方辐辏之地。永嘉年间宫室倾颓，粮秣断绝，饿殍载道。名义上由晋怀帝司马炽在位，实权尽归太傅司马越把持。代表人物：司马越、王衍、苟晞、嵇绍等。城外流民千里，胡骑窥伺，已成危城。</place>
+
+【用户查询】
+${q}`,
+        thing: (q) => `你正在为魏晋南北朝历史剧情提供检索服务。请针对用户查询的时间点，直接输出该时间前后发生的重大历史事件（事件名称、持续时间、事件详情），严格控制在500字以内。
+
+【输出要求】
+必须将真实内容填入以下XML标签中，不要保留括号或占位符文字。除标签内容外不要输出任何其它文字。
+
+【示例】
+用户查询：公元311年发生了什么？
+正确输出：
+<thing>永嘉之乱，永嘉五年六月（311年）。晋太傅司马越忧惧而亡后，匈奴汉赵天王刘聪遣呼延晏、王弥、刘曜、石勒四路大军南下。石勒于宁平城之战中歼灭晋军主力十余万，斩太尉王衍及诸王公。呼延晏攻入洛阳，纵兵屠戮，士民死者三万余人，宫室宗庙焚毁殆尽。晋怀帝司马炽被俘北送平阳，受尽凌辱后于次年遇害。此役为西晋覆亡之决定性一战，中原精锐一朝丧尽，衣冠南渡由此肇始。</thing>
+
+【用户查询】
+${q}`,
+        other: (q) => `你正在为魏晋南北朝历史剧情提供检索服务。请针对用户查询的内容做出翔实回答，严格控制在500字以内。
+
+【输出要求】
+必须将真实内容填入以下XML标签中，不要保留括号或占位符文字。除标签内容外不要输出任何其它文字。
+
+【示例】
+用户查询：请介绍一下九品中正制。
+正确输出：
+<other>九品中正制。曹魏黄初元年（220年）陈群创立，历两晋南北朝，至隋文帝开皇年间废止，行世约四百年。此制于州郡设大小中正官，考察本籍士人的家世、行状、才能，评定为上上至下下九等品级，作为吏部授官依据。初衷本为纠汉末察举流弊，然中正官多由世家大族把持，"上品无寒门，下品无势族"之门阀政治格局由此定型。</other>
+
+【用户查询】
+${q}`
+    };
+
+    const PLACEHOLDERS = {
+        npc: "输入示例：'请告诉我司马衷是谁？'",
+        place: "输入示例：'洛阳当前是什么情况？'",
+        thing: "输入示例：'公元311年发生了什么？'",
+        other: "输入示例：'请介绍一下九品中正制。'"
+    };
+
+    const CATEGORIES = [
+        { id: 'npc', name: '人物搜索', icon: 'fa-user' },
+        { id: 'place', name: '地区搜索', icon: 'fa-map-marker-alt' },
+        { id: 'thing', name: '事件搜索', icon: 'fa-scroll' },
+        { id: 'other', name: '其它', icon: 'fa-question-circle' }
+    ];
+
+    const style = tDoc.createElement('style');
+    style.textContent = `
+    :host {
+        --primary: #a0522d; --secondary: #4a6b57; --accent: #8b3a3a;
+        --map-land: #e8d5a8; --map-land-hover: #d4b678; --map-stroke: #6b4423;
+        --map-water: rgba(120, 150, 170, 0.25);
+        --bg-panel: rgba(244, 236, 216, 0.82); --bg-modal: rgba(244, 236, 216, 0.95);
+        --bg-card: rgba(255, 248, 230, 0.75); --border-c: rgba(139, 90, 43, 0.4);
+        --text-main: #2a1a0e; --text-sub: #5c3d1f; --text-muted: #9c8560;
+        --shadow-soft: 0 8px 32px rgba(61, 40, 23, 0.18), 0 2px 8px rgba(61, 40, 23, 0.12);
+        --shadow-hover: 0 12px 40px rgba(61, 40, 23, 0.28);
+        --glow: 0 0 20px rgba(160, 82, 45, 0.5);
+        --font-serif: 'Ma Shan Zheng', 'STKaiti', 'KaiTi', 'FangSong', serif;
+        --font-body: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+        --trans: all 0.35s cubic-bezier(0.25, 0.8, 0.25, 1);
+        all: initial;
+    }
+    :host(.dark) {
+        --primary: #d4b678; --secondary: #7a8b6f; --accent: #d47060;
+        --map-land: #4a3a26; --map-land-hover: #6b5238; --map-stroke: #d4b678;
+        --map-water: rgba(60, 80, 100, 0.35);
+        --bg-panel: rgba(26, 22, 18, 0.85); --bg-modal: rgba(30, 24, 20, 0.96);
+        --bg-card: rgba(45, 36, 28, 0.75); --border-c: rgba(212, 182, 120, 0.35);
+        --text-main: #f0e6cc; --text-sub: #d4b678; --text-muted: #9a8768;
+        --shadow-soft: 0 8px 32px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
+        --shadow-hover: 0 12px 40px rgba(0, 0, 0, 0.75);
+        --glow: 0 0 25px rgba(212, 182, 120, 0.6);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: var(--font-body); }
+    .force-hide { display: none !important; }
+
+    .ball {
+        position: absolute; width: 58px; height: 58px; border-radius: 50%;
+        background: var(--bg-panel); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+        border: 1.5px solid var(--border-c); box-shadow: var(--shadow-soft), inset 0 0 15px rgba(160,82,45,0.2);
+        cursor: grab; pointer-events: auto; display: flex; justify-content: center; align-items: center;
+        color: var(--primary); font-size: 22px; user-select: none; transition: var(--trans); z-index: 10;
+        animation: ball-breath 3.5s ease-in-out infinite alternate;
+    }
+    .ball .ball-icon { animation: compass-spin 20s linear infinite; }
+    .ball-ring {
+        position: absolute; top: -8px; left: -8px; width: calc(100% + 16px); height: calc(100% + 16px);
+        pointer-events: none;
+    }
+    .ball:hover { transform: scale(1.08); box-shadow: var(--shadow-hover), var(--glow); color: var(--accent); }
+    .ball:active { cursor: grabbing; transform: scale(0.94); }
+    .ball.dragging { transition: none; opacity: 0.85; animation: none; }
+    .ball.hidden { transform: scale(0); opacity: 0; pointer-events: none; }
+    @keyframes ball-breath {
+        0% { box-shadow: var(--shadow-soft), inset 0 0 10px rgba(160,82,45,0.15); }
+        100% { box-shadow: var(--shadow-soft), 0 0 25px rgba(160,82,45,0.45), inset 0 0 18px rgba(160,82,45,0.3); }
+    }
+    @keyframes compass-spin { to { transform: rotate(360deg); } }
+
+    .panel {
+        position: absolute; width: min(460px, calc(100vw - 20px)); height: min(640px, calc(100vh - 20px));
+        min-width: 340px; min-height: 480px;
+        background: var(--bg-panel); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+        border: 1.5px solid var(--border-c); border-radius: 14px; box-shadow: var(--shadow-soft);
+        display: flex; flex-direction: column; opacity: 0; transform: scale(0.9) translateY(15px);
+        pointer-events: none; transition: var(--trans); z-index: 20; overflow: hidden;
+    }
+    .panel.show { opacity: 1; transform: scale(1) translateY(0); pointer-events: auto; }
+    .panel.dragging { transition: none; }
+    .panel::before {
+        content: ''; position: absolute; inset: 0; pointer-events: none; opacity: 0.4; z-index: 0;
+        background-image:
+            radial-gradient(circle at 20% 30%, rgba(160,82,45,0.08) 0%, transparent 40%),
+            radial-gradient(circle at 80% 70%, rgba(74,107,87,0.08) 0%, transparent 40%);
+    }
+
+    .particles { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 1; }
+    .particle {
+        position: absolute; color: var(--primary); opacity: 0; font-size: 14px;
+        font-family: var(--font-serif); animation: particle-float linear infinite;
+    }
+    @keyframes particle-float {
+        0% { transform: translateY(100%) rotate(0deg); opacity: 0; }
+        10% { opacity: 0.4; }
+        90% { opacity: 0.3; }
+        100% { transform: translateY(-120%) rotate(360deg); opacity: 0; }
+    }
+
+    .header {
+        height: 52px; padding: 0 14px; display: flex; align-items: center; gap: 8px;
+        border-bottom: 1px solid var(--border-c); cursor: move; user-select: none; flex-shrink: 0;
+        background: linear-gradient(180deg, rgba(160,82,45,0.1) 0%, transparent 100%);
+        position: relative; z-index: 2;
+    }
+    .header::after {
+        content: ''; position: absolute; bottom: -1px; left: 10%; right: 10%; height: 1px;
+        background: linear-gradient(90deg, transparent, var(--primary), transparent); opacity: 0.6;
+    }
+    .tabs { display: flex; gap: 4px; flex: 1; }
+    .tab {
+        padding: 6px 14px; border-radius: 18px; cursor: pointer; color: var(--text-sub);
+        font-family: var(--font-serif); font-size: 15px; letter-spacing: 1px;
+        transition: var(--trans); position: relative;
+    }
+    .tab:hover { color: var(--text-main); background: rgba(160,82,45,0.15); }
+    .tab.active { color: var(--primary); background: rgba(160,82,45,0.2); }
+    .tab.active::before {
+        content: ''; position: absolute; bottom: -8px; left: 25%; right: 25%; height: 2px;
+        background: linear-gradient(90deg, transparent, var(--primary), transparent);
+        border-radius: 2px; box-shadow: 0 0 8px var(--primary);
+    }
+    .icon-btn {
+        width: 32px; height: 32px; border-radius: 50%; display: flex; justify-content: center; align-items: center;
+        cursor: pointer; color: var(--text-sub); transition: var(--trans); font-size: 14px;
+    }
+    .icon-btn:hover { background: rgba(160,82,45,0.2); color: var(--primary); transform: rotate(15deg); }
+    .icon-btn.close:hover { color: var(--accent); transform: rotate(90deg); }
+
+    .view { flex: 1; overflow: hidden; position: relative; z-index: 2; display: none; }
+    .view.active { display: flex; flex-direction: column; }
+
+    .era-bar { display: flex; gap: 4px; padding: 8px 12px 4px; flex-wrap: wrap; flex-shrink: 0; }
+    .era-tab {
+        padding: 5px 10px; border-radius: 12px; font-size: 11px; cursor: pointer;
+        background: rgba(255,255,255,0.2); border: 1px solid var(--border-c);
+        color: var(--text-sub); transition: var(--trans); font-family: var(--font-serif); letter-spacing: 1px;
+    }
+    :host(.dark) .era-tab { background: rgba(255,255,255,0.05); }
+    .era-tab:hover { transform: translateY(-2px); color: var(--text-main); }
+    .era-tab.active {
+        background: var(--primary); color: #fff; border-color: var(--primary);
+        box-shadow: 0 4px 10px rgba(160,82,45,0.4);
+    }
+    .era-desc {
+        padding: 0 12px 6px; font-size: 11px; color: var(--text-muted); font-family: var(--font-serif);
+        letter-spacing: 1px; flex-shrink: 0; text-align: center;
+    }
+    .map-wrap {
+        flex: 1; position: relative; overflow: hidden; margin: 4px 12px 8px;
+        border-radius: 8px; border: 1px solid var(--border-c);
+        background: var(--map-water);
+    }
+    .map-viewport { width: 100%; height: 100%; overflow: hidden; position: relative; cursor: grab; }
+    .map-viewport.grabbing { cursor: grabbing; }
+    .map-svg {
+        width: 100%; height: 100%; display: block; transform-origin: 0 0;
+        transition: transform 0.1s ease-out;
+    }
+    .province { fill: var(--map-land); stroke: var(--map-stroke); stroke-width: 1.8; stroke-linejoin: round; transition: fill 0.25s; }
+    .province:hover { fill: var(--map-land-hover); }
+    .territory { transition: opacity 0.4s; }
+    .marker-group { cursor: pointer; }
+    .marker-outer { fill: var(--accent); opacity: 0.35; transition: var(--trans); }
+    .marker-inner { fill: var(--accent); }
+    .marker-group:hover .marker-outer { opacity: 0.6; }
+    .marker-label {
+        font-family: var(--font-serif); font-size: 14px; fill: var(--text-main); pointer-events: none;
+        font-weight: bold; paint-order: stroke; stroke: var(--map-land); stroke-width: 3px;
+        stroke-linejoin: round;
+    }
+    :host(.dark) .marker-label { fill: #f0e6cc; stroke: #1a1612; }
+
+    .map-controls { position: absolute; top: 10px; right: 10px; display: flex; flex-direction: column; gap: 5px; z-index: 5; }
+    .zoom-btn {
+        width: 30px; height: 30px; border-radius: 6px; background: var(--bg-panel);
+        border: 1px solid var(--border-c); color: var(--primary); cursor: pointer;
+        display: flex; justify-content: center; align-items: center; font-size: 14px;
+        backdrop-filter: blur(8px); transition: var(--trans); box-shadow: var(--shadow-soft);
+    }
+    .zoom-btn:hover { background: var(--primary); color: #fff; transform: scale(1.08); }
+    .zoom-btn:active { transform: scale(0.92); }
+
+    .legend {
+        position: absolute; bottom: 8px; left: 8px; z-index: 5;
+        background: var(--bg-panel); backdrop-filter: blur(8px); border: 1px solid var(--border-c);
+        border-radius: 6px; padding: 6px 8px; font-size: 10px; color: var(--text-sub);
+        display: flex; flex-wrap: wrap; gap: 4px 8px; max-width: 60%;
+    }
+    .legend-item { display: flex; align-items: center; gap: 3px; }
+    .legend-dot { width: 10px; height: 10px; border-radius: 2px; border: 1px solid; }
+
+    /* 搜索区 */
+    .api-hint {
+        margin: 10px 12px 0; padding: 10px 12px; border-radius: 8px;
+        background: linear-gradient(135deg, rgba(160,82,45,0.15), rgba(139,58,58,0.1));
+        border-left: 3px solid var(--accent); font-size: 12px; color: var(--text-sub);
+        line-height: 1.5; display: flex; align-items: center; gap: 8px;
+    }
+    .api-hint i { color: var(--accent); font-size: 15px; }
+    .api-hint .cfg-link {
+        color: var(--accent); text-decoration: underline; cursor: pointer; font-weight: bold;
+    }
+    .api-hint .cfg-link:hover { color: var(--primary); }
+
+    .search-tabs { display: flex; padding: 10px 12px 0; gap: 6px; flex-shrink: 0; flex-wrap: wrap; }
+    .cat-tab {
+        padding: 6px 12px; border-radius: 14px; cursor: pointer; font-size: 12px;
+        color: var(--text-sub); background: rgba(255,255,255,0.2); border: 1px solid var(--border-c);
+        transition: var(--trans); display: flex; align-items: center; gap: 5px;
+    }
+    :host(.dark) .cat-tab { background: rgba(255,255,255,0.05); }
+    .cat-tab:hover { color: var(--text-main); transform: translateY(-2px); box-shadow: var(--shadow-soft); }
+    .cat-tab.active {
+        background: var(--primary); color: #fff; border-color: var(--primary);
+        box-shadow: 0 4px 12px rgba(160,82,45,0.4);
+    }
+    .search-input-wrap { display: flex; gap: 8px; padding: 10px 12px; flex-shrink: 0; }
+    .search-input {
+        flex: 1; height: 38px; padding: 0 14px; border-radius: 20px;
+        background: rgba(255,255,255,0.3); border: 1px solid var(--border-c);
+        color: var(--text-main); font-size: 13px; outline: none; transition: var(--trans);
+    }
+    :host(.dark) .search-input { background: rgba(255,255,255,0.06); }
+    .search-input::placeholder { color: var(--text-muted); font-style: italic; }
+    .search-input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(160,82,45,0.15); }
+    .search-btn {
+        width: 38px; height: 38px; border-radius: 50%; border: none; cursor: pointer;
+        background: var(--primary); color: #fff; transition: var(--trans);
+        display: flex; justify-content: center; align-items: center; flex-shrink: 0;
+        box-shadow: 0 4px 12px rgba(160,82,45,0.4);
+    }
+    .search-btn:hover:not(:disabled) { transform: translateY(-2px) rotate(15deg); box-shadow: 0 6px 18px rgba(160,82,45,0.6); }
+    .search-btn:active:not(:disabled) { transform: scale(0.9); }
+    .search-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .cfg-btn {
+        width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--border-c); cursor: pointer;
+        background: transparent; color: var(--primary); transition: var(--trans);
+        display: flex; justify-content: center; align-items: center; flex-shrink: 0;
+    }
+    .cfg-btn:hover { background: rgba(160,82,45,0.15); transform: rotate(90deg); }
+
+    .results { flex: 1; overflow-y: auto; padding: 0 12px 12px; }
+    .results::-webkit-scrollbar { width: 5px; }
+    .results::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 3px; opacity: 0.5; }
+
+    .result-card {
+        background: var(--bg-card); border: 1px solid var(--border-c); border-radius: 10px;
+        padding: 14px; margin-bottom: 12px; position: relative; overflow: hidden;
+        animation: card-in 0.5s cubic-bezier(0.25,0.8,0.25,1) both; transition: var(--trans);
+    }
+    .result-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-hover); }
+    .result-card::before {
+        content: ''; position: absolute; top: 0; left: -100%; width: 100%; height: 2px;
+        background: linear-gradient(90deg, transparent, var(--primary), transparent);
+        animation: flow-light 3s ease-in-out infinite;
+    }
+    @keyframes flow-light { 0%,100%{left:-100%;} 50%{left:100%;} }
+    @keyframes card-in { from { opacity:0; transform:translateY(20px);} to {opacity:1; transform:translateY(0);} }
+
+    .card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px dashed var(--border-c); }
+    .card-badge { padding: 3px 10px; border-radius: 10px; font-size: 11px; background: var(--primary); color: #fff; }
+    .card-badge.place { background: var(--secondary); }
+    .card-badge.thing { background: var(--accent); }
+    .card-badge.other { background: var(--text-sub); }
+    .card-meta { font-size: 11px; color: var(--text-muted); }
+    .card-body { font-size: 13px; color: var(--text-sub); line-height: 1.75; white-space: pre-wrap; word-break: break-word; min-height: 20px; }
+    .card-body.streaming::after {
+        content: '▊'; display: inline-block; color: var(--primary); animation: caret-blink 0.8s infinite;
+        margin-left: 2px;
+    }
+    @keyframes caret-blink { 50% { opacity: 0; } }
+    .card-close {
+        position: absolute; top: 8px; right: 8px; width: 20px; height: 20px; border-radius: 50%;
+        display: flex; justify-content: center; align-items: center; cursor: pointer;
+        color: var(--text-muted); font-size: 11px; transition: var(--trans);
+    }
+    .card-close:hover { color: var(--accent); background: rgba(139,58,58,0.15); transform: rotate(90deg); }
+
+    .loading-card { text-align: center; padding: 20px; color: var(--text-muted); }
+    .typing-dots { display: inline-flex; gap: 4px; }
+    .typing-dots span {
+        width: 8px; height: 8px; border-radius: 50%; background: var(--primary);
+        animation: dot-blink 1.4s infinite ease-in-out both;
+    }
+    .typing-dots span:nth-child(1){ animation-delay: -0.32s; }
+    .typing-dots span:nth-child(2){ animation-delay: -0.16s; }
+    @keyframes dot-blink { 0%,80%,100%{ transform:scale(0);} 40%{ transform:scale(1);} }
+    .empty-hint { text-align: center; padding: 30px 10px; color: var(--text-muted); font-size: 13px; font-family: var(--font-serif); }
+
+    .modal-mask {
+        position: absolute; inset: 0; background: rgba(0,0,0,0.5); backdrop-filter: blur(6px);
+        display: flex; justify-content: center; align-items: center; opacity: 0;
+        pointer-events: none; transition: var(--trans); z-index: 100;
+    }
+    .modal-mask.show { opacity: 1; pointer-events: auto; }
+    .modal {
+        width: 92%; max-width: 380px; max-height: 88%; background: var(--bg-modal);
+        border: 1.5px solid var(--border-c); border-radius: 12px; padding: 18px;
+        transform: scale(0.85); transition: var(--trans); overflow-y: auto;
+        box-shadow: var(--shadow-hover), var(--glow);
+    }
+    .modal-mask.show .modal { transform: scale(1); }
+    .modal-head {
+        text-align: center; padding-bottom: 12px; border-bottom: 2px double var(--border-c); margin-bottom: 14px;
+        font-family: var(--font-serif); font-size: 22px; color: var(--primary); letter-spacing: 4px;
+        text-shadow: 0 0 10px rgba(160,82,45,0.4); position: relative;
+    }
+    .modal-head::before, .modal-head::after {
+        content: '❈'; position: absolute; top: 50%; transform: translateY(-50%);
+        color: var(--secondary); font-size: 14px; opacity: 0.6;
+    }
+    .modal-head::before { left: 12%; }
+    .modal-head::after { right: 12%; }
+    .modal-section { margin-bottom: 14px; }
+    .modal-label {
+        font-size: 11px; color: var(--text-muted); letter-spacing: 2px; margin-bottom: 6px;
+        display: flex; align-items: center; gap: 6px;
+    }
+    .modal-label::before { content: ''; width: 3px; height: 12px; background: var(--primary); border-radius: 1px; }
+    .modal-content { font-size: 13px; color: var(--text-main); line-height: 1.75; }
+    .modal-content.ruler { font-family: var(--font-serif); font-size: 16px; color: var(--accent); }
+    .char-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .char-chip {
+        padding: 4px 10px; border-radius: 12px; font-size: 12px;
+        background: rgba(160,82,45,0.2); color: var(--text-main); border: 1px solid var(--border-c);
+        transition: var(--trans);
+    }
+    .char-chip:hover { background: var(--primary); color: #fff; transform: translateY(-2px); }
+    .modal-close {
+        display: block; margin: 10px auto 0; padding: 6px 20px; border: 1px solid var(--accent);
+        background: transparent; color: var(--accent); border-radius: 4px; cursor: pointer;
+        font-family: var(--font-serif); letter-spacing: 2px; transition: var(--trans);
+    }
+    .modal-close:hover { background: var(--accent); color: #fff; box-shadow: 0 0 15px rgba(139,58,58,0.5); }
+
+    /* API 配置表单 */
+    .cfg-form { display: flex; flex-direction: column; gap: 12px; }
+    .cfg-field { display: flex; flex-direction: column; gap: 4px; }
+    .cfg-field label { font-size: 12px; color: var(--text-sub); font-weight: bold; }
+    .cfg-field input, .cfg-field select {
+        height: 34px; padding: 0 10px; border-radius: 6px;
+        background: rgba(255,255,255,0.4); border: 1px solid var(--border-c);
+        color: var(--text-main); font-size: 13px; outline: none; transition: var(--trans);
+        font-family: var(--font-body);
+    }
+    :host(.dark) .cfg-field input, :host(.dark) .cfg-field select { background: rgba(255,255,255,0.08); }
+    .cfg-field input:focus, .cfg-field select:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(160,82,45,0.15); }
+    .cfg-model-row { display: flex; gap: 6px; }
+    .cfg-model-row select { flex: 1; }
+    .cfg-model-row input { flex: 1; }
+    .cfg-fetch-btn {
+        padding: 0 12px; height: 34px; border-radius: 6px; border: 1px solid var(--primary);
+        background: var(--primary); color: #fff; cursor: pointer; font-size: 12px;
+        transition: var(--trans); white-space: nowrap; display: flex; align-items: center; gap: 4px;
+    }
+    .cfg-fetch-btn:hover:not(:disabled) { box-shadow: 0 4px 10px rgba(160,82,45,0.4); transform: translateY(-1px); }
+    .cfg-fetch-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .cfg-switch { display: flex; align-items: center; justify-content: space-between; }
+    .switch { position: relative; width: 40px; height: 20px; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+        position: absolute; cursor: pointer; inset: 0; background: rgba(139,90,43,0.3);
+        border-radius: 20px; transition: 0.3s;
+    }
+    .slider::before {
+        content: ''; position: absolute; height: 16px; width: 16px; left: 2px; top: 2px;
+        background: #fff; border-radius: 50%; transition: 0.3s;
+    }
+    .switch input:checked + .slider { background: var(--primary); }
+    .switch input:checked + .slider::before { transform: translateX(20px); }
+    .cfg-btn-row { display: flex; gap: 8px; margin-top: 8px; }
+    .cfg-save, .cfg-cancel {
+        flex: 1; padding: 8px; border-radius: 6px; border: none; cursor: pointer;
+        font-family: var(--font-serif); letter-spacing: 2px; font-size: 13px; transition: var(--trans);
+    }
+    .cfg-save { background: var(--primary); color: #fff; }
+    .cfg-save:hover { box-shadow: 0 4px 12px rgba(160,82,45,0.5); }
+    .cfg-cancel { background: transparent; border: 1px solid var(--border-c); color: var(--text-sub); }
+    .cfg-cancel:hover { background: rgba(160,82,45,0.1); }
+
+    .resize-handle {
+        position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize; z-index: 30;
+    }
+    .resize-handle::after {
+        content: ''; position: absolute; right: 3px; bottom: 3px; width: 8px; height: 8px;
+        border-right: 2px solid var(--primary); border-bottom: 2px solid var(--primary); opacity: 0.5;
+    }
+    `;
+    shadow.appendChild(style);
+
+    const ball = tDoc.createElement('div');
+    ball.className = 'ball';
+    ball.innerHTML = `
+        <i class="fas fa-compass ball-icon"></i>
+        <svg class="ball-ring" viewBox="0 0 100 100">
+            <circle cx="50" cy="50" r="46" fill="none" stroke="currentColor" stroke-width="0.8" stroke-dasharray="3 4" opacity="0.5">
+                <animateTransform attributeName="transform" type="rotate" from="0 50 50" to="360 50 50" dur="15s" repeatCount="indefinite"/>
+            </circle>
+            <circle cx="50" cy="4" r="2" fill="currentColor">
+                <animateTransform attributeName="transform" type="rotate" from="0 50 50" to="360 50 50" dur="8s" repeatCount="indefinite"/>
+            </circle>
+        </svg>
+    `;
+    let savedPos = null;
+    try { savedPos = JSON.parse(localStorage.getItem(CONFIG.STORAGE_KEY)); } catch (e) {}
+    if (savedPos && savedPos.left != null) {
+        ball.style.left = savedPos.left + 'px'; ball.style.top = savedPos.top + 'px';
+    } else {
+        ball.style.left = (tWin.innerWidth - 58 - CONFIG.SAFE_MARGIN) + 'px';
+        ball.style.top = (tWin.innerHeight * 0.5) + 'px';
+    }
+    shadow.appendChild(ball);
+
+    // 更精细的中国轮廓路径（有棱角）
+    const chinaPath = `
+        M 210,215
+        L 240,190 L 285,175 L 335,168 L 395,160 L 455,158 L 510,165 L 560,172
+        L 605,182 L 645,198 L 680,215 L 710,235 L 730,258 L 742,285 L 748,315
+        L 745,348 L 738,382 L 725,415 L 705,445 L 680,470 L 645,490 L 605,505
+        L 555,517 L 505,522 L 450,522 L 400,517 L 355,505 L 315,485 L 285,460
+        L 258,428 L 240,392 L 225,352 L 215,308 L 210,265 Z
+    `;
+
+    const panel = tDoc.createElement('div');
+    panel.className = 'panel';
+
+    // 构建势力图例
+    const legendItems = {
+        yongjia3: ['jin', 'hanzhao', 'chenghan', 'liangzhou', 'shile', 'wangjun'],
+        yongjia5: ['jin', 'hanzhao', 'chenghan', 'liangzhou', 'shile', 'wangjun'],
+        jianxing4: ['east_jin', 'hanzhao', 'shile', 'chenghan', 'liangzhou'],
+        taixing1: ['east_jin', 'former_zhao', 'later_zhao', 'chenghan', 'liangzhou']
+    };
+
+    panel.innerHTML = `
+        <div class="particles"></div>
+        <div class="header">
+            <div class="tabs">
+                <div class="tab active" data-view="MAP"><i class="fas fa-map"></i> 舆图</div>
+                <div class="tab" data-view="SEARCH"><i class="fas fa-search"></i> 搜寻</div>
+            </div>
+            <div class="icon-btn theme-btn" title="切换主题"><i class="fas fa-${currentTheme === 'dark' ? 'sun' : 'moon'}"></i></div>
+            <div class="icon-btn close" title="关闭"><i class="fas fa-times"></i></div>
+        </div>
+
+        <div class="view active" data-view="MAP">
+            <div class="era-bar">
+                ${Object.entries(ERAS).map(([id]) =>
+                    `<div class="era-tab ${id === currentEra ? 'active' : ''}" data-era="${id}">${ERAS[id].name}</div>`
+                ).join('')}
+            </div>
+            <div class="era-desc"></div>
+            <div class="map-wrap">
+                <div class="map-viewport">
+                    <svg class="map-svg" viewBox="0 0 800 600" preserveAspectRatio="xMidYMid meet">
+                        <defs>
+                            <pattern id="paperTex" x="0" y="0" width="6" height="6" patternUnits="userSpaceOnUse">
+                                <rect width="6" height="6" fill="var(--map-land)"/>
+                                <circle cx="3" cy="3" r="0.4" fill="var(--map-stroke)" opacity="0.15"/>
+                            </pattern>
+                            <filter id="territoryShadow"><feDropShadow dx="0" dy="1" stdDeviation="1" flood-opacity="0.2"/></filter>
+                        </defs>
+                        <path class="province" d="${chinaPath}" fill="url(#paperTex)"/>
+                        <g class="territory-layer"></g>
+                        <g class="markers-layer"></g>
+                    </svg>
+                </div>
+                <div class="map-controls">
+                    <div class="zoom-btn zoom-in" title="放大"><i class="fas fa-plus"></i></div>
+                    <div class="zoom-btn zoom-out" title="缩小"><i class="fas fa-minus"></i></div>
+                    <div class="zoom-btn zoom-reset" title="复位"><i class="fas fa-crosshairs"></i></div>
+                </div>
+                <div class="legend"></div>
+            </div>
+        </div>
+
+        <div class="view" data-view="SEARCH">
+            <div class="api-hint">
+                <i class="fas fa-info-circle"></i>
+                <span>你可以使用这个搜索界面来辅助你进行沉浸感的游玩，记得要<span class="cfg-link">配置自定义API</span>！</span>
+            </div>
+            <div class="search-tabs">
+                ${CATEGORIES.map((c, i) => `<div class="cat-tab ${i === 0 ? 'active' : ''}" data-cat="${c.id}"><i class="fas ${c.icon}"></i>${c.name}</div>`).join('')}
+            </div>
+            <div class="search-input-wrap">
+                <input class="search-input" type="text" placeholder="${PLACEHOLDERS.npc}" autocomplete="off"/>
+                <button class="cfg-btn" title="API配置"><i class="fas fa-cog"></i></button>
+                <button class="search-btn"><i class="fas fa-search"></i></button>
+            </div>
+            <div class="results">
+                <div class="empty-hint">～ 请在上方输入以进行搜寻 ～</div>
+            </div>
+        </div>
+
+        <div class="modal-mask"><div class="modal"></div></div>
+        <div class="resize-handle"></div>
+    `;
+    shadow.appendChild(panel);
+
+    function applyTheme() {
+        if (currentTheme === 'dark') shadow.host.classList.add('dark');
+        else shadow.host.classList.remove('dark');
+    }
+    applyTheme();
+
+    const $ = (sel) => panel.querySelector(sel);
+    const $$ = (sel) => panel.querySelectorAll(sel);
+    const header = $('.header');
+    const closeBtn = $('.icon-btn.close');
+    const themeBtn = $('.theme-btn');
+    const searchInput = $('.search-input');
+    const searchBtn = $('.search-btn');
+    const cfgBtn = $('.cfg-btn');
+    const resultsArea = $('.results');
+    const modalMask = $('.modal-mask');
+    const modal = $('.modal');
+    const resizeHandle = $('.resize-handle');
+    const particlesLayer = $('.particles');
+    const eraDesc = $('.era-desc');
+    const markersLayer = $('.markers-layer');
+    const territoryLayer = $('.territory-layer');
+    const legendEl = $('.legend');
+    const mapViewport = $('.map-viewport');
+    const mapSvg = $('.map-svg');
+
+    function renderEra(eraId) {
+        const era = ERAS[eraId];
+        if (!era) return;
+        currentEra = eraId;
+        eraDesc.textContent = era.desc;
+        $$('.era-tab').forEach(t => t.classList.toggle('active', t.dataset.era === eraId));
+
+        // 势力控制区
+        territoryLayer.innerHTML = (era.territories || []).map(t => {
+            const f = FACTIONS[t.faction];
+            if (!f) return '';
+            return `<polygon class="territory" points="${t.points}" fill="${f.color}" stroke="${f.stroke}" stroke-width="1.5" stroke-dasharray="4 2" filter="url(#territoryShadow)"/>`;
+        }).join('');
+
+        // 图例
+        legendEl.innerHTML = (legendItems[eraId] || []).map(fid => {
+            const f = FACTIONS[fid];
+            return `<div class="legend-item"><span class="legend-dot" style="background:${f.color};border-color:${f.stroke}"></span>${f.name}</div>`;
+        }).join('');
+
+        // 锚点
+        markersLayer.innerHTML = era.markers.map(m => `
+            <g class="marker-group" data-id="${m.id}">
+                <circle class="marker-outer" cx="${m.cx}" cy="${m.cy}" r="10">
+                    <animate attributeName="r" values="8;14;8" dur="2.5s" repeatCount="indefinite"/>
+                    <animate attributeName="opacity" values="0.5;0.15;0.5" dur="2.5s" repeatCount="indefinite"/>
+                </circle>
+                <circle class="marker-inner" cx="${m.cx}" cy="${m.cy}" r="4"/>
+                <text class="marker-label" x="${m.cx}" y="${m.cy - 15}" text-anchor="middle">${m.name}</text>
+            </g>
+        `).join('');
+        markersLayer.querySelectorAll('.marker-group').forEach(g => {
+            g.addEventListener('click', () => showModal(g.dataset.id));
+        });
+    }
+    renderEra(currentEra);
+
+    $$('.era-tab').forEach(t => {
+        t.onclick = () => renderEra(t.dataset.era);
+    });
+
+    // 缩放平移
+    let mapScale = 1, mapX = 0, mapY = 0;
+    function applyTransform() {
+        mapSvg.style.transform = `translate(${mapX}px, ${mapY}px) scale(${mapScale})`;
+    }
+    function setScale(newScale, cx, cy) {
+        const rect = mapViewport.getBoundingClientRect();
+        if (cx == null) cx = rect.width / 2;
+        if (cy == null) cy = rect.height / 2;
+        const oldScale = mapScale;
+        newScale = Math.max(0.5, Math.min(4, newScale));
+        mapX = cx - (cx - mapX) * (newScale / oldScale);
+        mapY = cy - (cy - mapY) * (newScale / oldScale);
+        mapScale = newScale;
+        applyTransform();
+    }
+    $('.zoom-in').onclick = () => setScale(mapScale * 1.3);
+    $('.zoom-out').onclick = () => setScale(mapScale / 1.3);
+    $('.zoom-reset').onclick = () => { mapScale = 1; mapX = 0; mapY = 0; applyTransform(); };
+
+    mapViewport.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const rect = mapViewport.getBoundingClientRect();
+        const cx = e.clientX - rect.left;
+        const cy = e.clientY - rect.top;
+        const delta = e.deltaY < 0 ? 1.15 : 1/1.15;
+        setScale(mapScale * delta, cx, cy);
+    }, { passive: false });
+
+    let mapDragging = false, mapDragSX, mapDragSY, mapDragOX, mapDragOY;
+    mapViewport.addEventListener('mousedown', (e) => {
+        if (e.target.closest('.marker-group')) return;
+        mapDragging = true;
+        mapDragSX = e.clientX; mapDragSY = e.clientY;
+        mapDragOX = mapX; mapDragOY = mapY;
+        mapViewport.classList.add('grabbing');
+    });
+    tDoc.addEventListener('mousemove', (e) => {
+        if (!mapDragging) return;
+        mapX = mapDragOX + e.clientX - mapDragSX;
+        mapY = mapDragOY + e.clientY - mapDragSY;
+        applyTransform();
+    });
+    tDoc.addEventListener('mouseup', () => {
+        if (mapDragging) { mapDragging = false; mapViewport.classList.remove('grabbing'); }
+    });
+    let touchStartDist = null;
+    mapViewport.addEventListener('touchstart', (e) => {
+        if (e.touches.length === 1) {
+            if (e.target.closest('.marker-group')) return;
+            mapDragging = true;
+            mapDragSX = e.touches[0].clientX; mapDragSY = e.touches[0].clientY;
+            mapDragOX = mapX; mapDragOY = mapY;
+        } else if (e.touches.length === 2) {
+            mapDragging = false;
+            const dx = e.touches[0].clientX - e.touches[1].clientX;
+            const dy = e.touches[0].clientY - e.touches[1].clientY;
+            touchStartDist = Math.sqrt(dx*dx + dy*dy);
+        }
+    }, { passive: true });
+    mapViewport.addEventListener('touchmove', (e) => {
+        if (e.touches.length === 1 && mapDragging) {
+            mapX = mapDragOX + e.touches[0].clientX - mapDragSX;
+            mapY = mapDragOY + e.touches[0].clientY - mapDragSY;
+            applyTransform();
+            e.preventDefault();
+        } else if (e.touches.length === 2 && touchStartDist != null) {
+            const dx = e.touches[0].clientX - e.touches[1].clientX;
+            const dy = e.touches[0].clientY - e.touches[1].clientY;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            setScale(mapScale * (dist / touchStartDist));
+            touchStartDist = dist;
+            e.preventDefault();
+        }
+    }, { passive: false });
+    mapViewport.addEventListener('touchend', () => {
+        mapDragging = false; touchStartDist = null;
+    });
+
+    const particleChars = ['汉', '晋', '云', '山', '风', '月', '❈', '✦', '龍', '虎', '玄', '朱'];
+    function spawnParticle() {
+        if (!panel.classList.contains('show')) return;
+        const p = tDoc.createElement('div');
+        p.className = 'particle';
+        p.textContent = particleChars[Math.floor(Math.random() * particleChars.length)];
+        p.style.left = Math.random() * 100 + '%';
+        p.style.animationDuration = (8 + Math.random() * 8) + 's';
+        p.style.fontSize = (10 + Math.random() * 8) + 'px';
+        particlesLayer.appendChild(p);
+        setTimeout(() => p.remove(), 16000);
+    }
+    let particleTimer = null;
+    function startParticles() { if (!particleTimer) particleTimer = setInterval(spawnParticle, 800); }
+    function stopParticles() { if (particleTimer) { clearInterval(particleTimer); particleTimer = null; } }
+
+    themeBtn.onclick = () => {
+        currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
+        try { localStorage.setItem(CONFIG.THEME_KEY, currentTheme); } catch (e) {}
+        themeBtn.innerHTML = `<i class="fas fa-${currentTheme === 'dark' ? 'sun' : 'moon'}"></i>`;
+        applyTheme();
+    };
+
+    $$('.tab').forEach(tab => {
+        tab.onclick = () => {
+            currentView = tab.dataset.view;
+            $$('.tab').forEach(t => t.classList.toggle('active', t === tab));
+            $$('.view').forEach(view => view.classList.toggle('active', view.dataset.view === currentView));
+        };
+    });
+
+    $$('.cat-tab').forEach(t => {
+        t.onclick = () => {
+            currentCategory = t.dataset.cat;
+            $$('.cat-tab').forEach(x => x.classList.toggle('active', x === t));
+            searchInput.placeholder = PLACEHOLDERS[currentCategory];
+        };
+    });
+
+    function showModal(id) {
+        const era = ERAS[currentEra];
+        const data = era.markers.find(m => m.id === id);
+        if (!data) return;
+        modal.innerHTML = `
+            <div class="modal-head">${data.name}</div>
+            <div class="modal-section">
+                <div class="modal-label">当今掌权</div>
+                <div class="modal-content ruler">${data.ruler}</div>
+            </div>
+            <div class="modal-section">
+                <div class="modal-label">地区简介</div>
+                <div class="modal-content">${data.intro}</div>
+            </div>
+            ${data.chars && data.chars.length ? `
+            <div class="modal-section">
+                <div class="modal-label">人物概览</div>
+                <div class="char-chips">${data.chars.map(c => `<span class="char-chip">${c}</span>`).join('')}</div>
+            </div>` : ''}
+            <button class="modal-close">关 闭</button>
+        `;
+        modalMask.classList.add('show');
+        modal.querySelector('.modal-close').onclick = () => modalMask.classList.remove('show');
+    }
+    modalMask.addEventListener('click', (e) => {
+        if (e.target === modalMask) modalMask.classList.remove('show');
+    });
+
+    // ===== API 配置弹窗 =====
+    function showConfigModal() {
+        const providerPresets = {
+            deepseek: { baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
+            openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+            custom: { baseUrl: '', model: '' }
+        };
+
+        modal.innerHTML = `
+            <div class="modal-head">API 配置</div>
+            <div class="cfg-form">
+                <div class="cfg-field">
+                    <label>服务提供商</label>
+                    <select id="cfg-provider">
+                        <option value="deepseek">DeepSeek</option>
+                        <option value="openai">OpenAI（兼容格式）</option>
+                        <option value="custom">自定义</option>
+                    </select>
+                </div>
+                <div class="cfg-field">
+                    <label>Base URL</label>
+                    <input type="text" id="cfg-url" placeholder="https://api.deepseek.com/v1"/>
+                </div>
+                <div class="cfg-field">
+                    <label>API Key</label>
+                    <input type="password" id="cfg-key" placeholder="sk-..."/>
+                </div>
+                <div class="cfg-field">
+                    <label>模型 <span style="font-weight:normal;color:var(--text-muted);font-size:11px;">（可点击右侧按钮拉取）</span></label>
+                    <div class="cfg-model-row">
+                        <input type="text" id="cfg-model" placeholder="deepseek-chat"/>
+                        <select id="cfg-model-select" style="display:none;"></select>
+                        <button class="cfg-fetch-btn" id="cfg-fetch"><i class="fas fa-cloud-download-alt"></i>拉取</button>
+                    </div>
+                </div>
+                <div class="cfg-field">
+                    <label>Temperature</label>
+                    <input type="number" id="cfg-temp" min="0" max="2" step="0.1"/>
+                </div>
+                <div class="cfg-switch">
+                    <label style="font-size:13px;color:var(--text-main);">流式响应（打字机效果）</label>
+                    <label class="switch">
+                        <input type="checkbox" id="cfg-stream"/>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="cfg-btn-row">
+                    <button class="cfg-cancel" id="cfg-cancel">取消</button>
+                    <button class="cfg-save" id="cfg-save">保存</button>
+                </div>
+            </div>
+        `;
+        modalMask.classList.add('show');
+
+        const providerSel = modal.querySelector('#cfg-provider');
+        const urlIn = modal.querySelector('#cfg-url');
+        const keyIn = modal.querySelector('#cfg-key');
+        const modelIn = modal.querySelector('#cfg-model');
+        const modelSelect = modal.querySelector('#cfg-model-select');
+        const tempIn = modal.querySelector('#cfg-temp');
+        const streamIn = modal.querySelector('#cfg-stream');
+        const fetchBtn = modal.querySelector('#cfg-fetch');
+
+        providerSel.value = apiConfig.provider;
+        urlIn.value = apiConfig.baseUrl;
+        keyIn.value = apiConfig.apiKey;
+        modelIn.value = apiConfig.model;
+        tempIn.value = apiConfig.temperature;
+        streamIn.checked = apiConfig.stream;
+
+        providerSel.onchange = () => {
+            const preset = providerPresets[providerSel.value];
+            if (preset) {
+                if (preset.baseUrl) urlIn.value = preset.baseUrl;
+                if (preset.model) modelIn.value = preset.model;
+            }
+            modelSelect.style.display = 'none';
+            modelIn.style.display = '';
+        };
+
+        fetchBtn.onclick = async () => {
+            const url = urlIn.value.trim().replace(/\/$/, '');
+            const key = keyIn.value.trim();
+            if (!url || !key) {
+                alert('请先填写 Base URL 和 API Key');
+                return;
+            }
+            fetchBtn.disabled = true;
+            fetchBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>拉取中';
+            try {
+                const res = await fetch(`${url}/models`, {
+                    headers: { 'Authorization': `Bearer ${key}` }
+                });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+                const models = (data.data || data.models || []).map(m => m.id || m.name || m).filter(Boolean);
+                if (models.length === 0) throw new Error('未返回任何模型');
+                modelSelect.innerHTML = models.map(m => `<option value="${m}">${m}</option>`).join('');
+                if (models.includes(modelIn.value)) modelSelect.value = modelIn.value;
+                modelSelect.style.display = '';
+                modelIn.style.display = 'none';
+                modelSelect.onchange = () => { modelIn.value = modelSelect.value; };
+                modelIn.value = modelSelect.value;
+                fetchBtn.innerHTML = '<i class="fas fa-check"></i>已拉取';
+                setTimeout(() => {
+                    fetchBtn.innerHTML = '<i class="fas fa-cloud-download-alt"></i>拉取';
+                    fetchBtn.disabled = false;
+                }, 1500);
+            } catch (e) {
+                console.error(e);
+                alert('拉取模型失败：' + e.message);
+                fetchBtn.innerHTML = '<i class="fas fa-cloud-download-alt"></i>拉取';
+                fetchBtn.disabled = false;
+            }
+        };
+
+        modal.querySelector('#cfg-cancel').onclick = () => modalMask.classList.remove('show');
+        modal.querySelector('#cfg-save').onclick = () => {
+            apiConfig = {
+                provider: providerSel.value,
+                baseUrl: urlIn.value.trim().replace(/\/$/, ''),
+                apiKey: keyIn.value.trim(),
+                model: modelIn.value.trim(),
+                temperature: parseFloat(tempIn.value) || 0.7,
+                stream: streamIn.checked
+            };
+            try { localStorage.setItem(CONFIG.API_KEY, JSON.stringify(apiConfig)); } catch (e) {}
+            modalMask.classList.remove('show');
+            if (typeof triggerSlash === 'function') triggerSlash('/echo severity=success API 配置已保存');
+        };
+    }
+    cfgBtn.onclick = showConfigModal;
+    panel.querySelector('.cfg-link').onclick = showConfigModal;
+
+    // ===== 独立API调用 =====
+    const REGEX_MAP = {
+        npc: /<npc>([\s\S]*?)<\/npc>/i,
+        place: /<place>([\s\S]*?)<\/place>/i,
+        thing: /<thing>([\s\S]*?)<\/thing>/i,
+        other: /<other>([\s\S]*?)<\/other>/i
+    };
+    const OPEN_TAG = { npc: '<npc>', place: '<place>', thing: '<thing>', other: '<other>' };
+    const CLOSE_TAG = { npc: '</npc>', place: '</place>', thing: '</thing>', other: '</other>' };
+
+    function extractTagContent(cat, raw) {
+        if (!raw) return null;
+        let cleaned = raw.replace(/<think>[\s\S]*?<\/think>/gi, '');
+        cleaned = cleaned.replace(/^[\s\S]*?<\/think>/i, '');
+        const match = cleaned.match(REGEX_MAP[cat]);
+        if (match && match[1]) {
+            const content = match[1].trim();
+            if (/^[（(].*[）)][（(].*[）)]/.test(content) && content.length < 50) return null;
+            return content;
+        }
+        return null;
+    }
+
+    // 流式过程中的部分内容提取（用于打字机）
+    function extractPartial(cat, buffer) {
+        if (!buffer) return '';
+        let cleaned = buffer.replace(/<think>[\s\S]*?<\/think>/gi, '');
+        cleaned = cleaned.replace(/^[\s\S]*?<\/think>/i, '');
+        const openIdx = cleaned.indexOf(OPEN_TAG[cat]);
+        if (openIdx < 0) return '';
+        const start = openIdx + OPEN_TAG[cat].length;
+        const closeIdx = cleaned.indexOf(CLOSE_TAG[cat], start);
+        if (closeIdx >= 0) {
+            return cleaned.substring(start, closeIdx).trim();
+        }
+        return cleaned.substring(start).trim();
+    }
+
+    function renderCardShell(cat) {
+        const catInfo = CATEGORIES.find(c => c.id === cat);
+        const card = tDoc.createElement('div');
+        card.className = 'result-card';
+        card.innerHTML = `
+            <div class="card-close"><i class="fas fa-times"></i></div>
+            <div class="card-head">
+                <span class="card-badge ${cat}">${catInfo.name}</span>
+                <span class="card-meta">${new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit'})}</span>
+            </div>
+            <div class="card-body streaming"></div>
+        `;
+        card.querySelector('.card-close').onclick = () => {
+            if (currentAbortController) { try { currentAbortController.abort(); } catch (e) {} }
+            card.style.animation = 'card-in 0.3s reverse';
+            setTimeout(() => card.remove(), 300);
+        };
+        return card;
+    }
+
+    async function callApiStream(prompt, onDelta, signal) {
+        const url = `${apiConfig.baseUrl}/chat/completions`;
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiConfig.apiKey}`
+            },
+            body: JSON.stringify({
+                model: apiConfig.model,
+                messages: [{ role: 'user', content: prompt }],
+                temperature: apiConfig.temperature,
+                stream: true
+            }),
+            signal
+        });
+        if (!res.ok) {
+            const errText = await res.text().catch(() => '');
+            throw new Error(`HTTP ${res.status}: ${errText.slice(0, 200)}`);
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+        let full = '';
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed || !trimmed.startsWith('data:')) continue;
+                const data = trimmed.slice(5).trim();
+                if (data === '[DONE]') continue;
+                try {
+                    const parsed = JSON.parse(data);
+                    const delta = parsed.choices?.[0]?.delta?.content || '';
+                    if (delta) {
+                        full += delta;
+                        onDelta(full);
+                    }
+                } catch (e) {}
+            }
+        }
+        return full;
+    }
+
+    async function callApiNonStream(prompt, signal) {
+        const url = `${apiConfig.baseUrl}/chat/completions`;
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiConfig.apiKey}`
+            },
+            body: JSON.stringify({
+                model: apiConfig.model,
+                messages: [{ role: 'user', content: prompt }],
+                temperature: apiConfig.temperature,
+                stream: false
+            }),
+            signal
+        });
+        if (!res.ok) {
+            const errText = await res.text().catch(() => '');
+            throw new Error(`HTTP ${res.status}: ${errText.slice(0, 200)}`);
+        }
+        const data = await res.json();
+        return data.choices?.[0]?.message?.content || '';
+    }
+
+    async function handleSearch() {
+        const q = searchInput.value.trim();
+        if (!q || isGenerating) return;
+
+        if (!apiConfig.apiKey || !apiConfig.baseUrl || !apiConfig.model) {
+            if (typeof triggerSlash === 'function') triggerSlash('/echo severity=warning 请先配置 API');
+            showConfigModal();
+            return;
+        }
+
+        isGenerating = true;
+        searchBtn.disabled = true;
+        searchInput.disabled = true;
+
+        const hint = resultsArea.querySelector('.empty-hint');
+        if (hint) hint.remove();
+
+        const cat = currentCategory;
+        const prompt = PROMPTS[cat](q);
+        const card = renderCardShell(cat);
+        const cardBody = card.querySelector('.card-body');
+        resultsArea.insertBefore(card, resultsArea.firstChild);
+
+        // 显示初始加载点
+        cardBody.innerHTML = `<span style="color:var(--text-muted);">正在检索……</span>`;
+
+        currentAbortController = new AbortController();
+        let raw = '';
+
+        try {
+            if (apiConfig.stream) {
+                raw = await callApiStream(prompt, (accumulated) => {
+                    const partial = extractPartial(cat, accumulated);
+                    if (partial) {
+                        cardBody.textContent = partial;
+                    }
+                }, currentAbortController.signal);
+            } else {
+                cardBody.classList.remove('streaming');
+                cardBody.innerHTML = `<div style="text-align:center;color:var(--text-muted);"><div class="typing-dots"><span></span><span></span><span></span></div></div>`;
+                raw = await callApiNonStream(prompt, currentAbortController.signal);
+            }
+
+            const content = extractTagContent(cat, raw);
+            cardBody.classList.remove('streaming');
+            if (content) {
+                cardBody.textContent = content;
+            } else {
+                cardBody.textContent = raw ? '（未能解析出结构化结果，原文如下）\n\n' + raw.trim() : '（未获取到有效回复）';
+            }
+        } catch (e) {
+            cardBody.classList.remove('streaming');
+            if (e.name === 'AbortError') {
+                cardBody.textContent = '（已取消）';
+            } else {
+                cardBody.textContent = '请求失败：' + e.message;
+                console.error('[Search API]', e);
+            }
+        } finally {
+            currentAbortController = null;
+            searchInput.value = '';
+            isGenerating = false;
+            searchBtn.disabled = false;
+            searchInput.disabled = false;
+            searchInput.focus();
+        }
+    }
+    searchBtn.onclick = handleSearch;
+    searchInput.onkeypress = (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); handleSearch(); }
+    };
+
+    function clamp(el, isBall) {
+        const w = el.offsetWidth, h = el.offsetHeight;
+        let l = parseFloat(el.style.left) || 0;
+        let t = parseFloat(el.style.top) || 0;
+        const maxL = tWin.innerWidth - w - CONFIG.SAFE_MARGIN;
+        const maxT = isBall ? tWin.innerHeight - h - CONFIG.SAFE_MARGIN : tWin.innerHeight - 50;
+        el.style.left = Math.max(CONFIG.SAFE_MARGIN, Math.min(l, maxL)) + 'px';
+        el.style.top = Math.max(CONFIG.SAFE_MARGIN, Math.min(t, maxT)) + 'px';
+    }
+
+    tWin.addEventListener('resize', () => {
+        if (!isVisible) return;
+        if (currentState === STATES.PANEL_OPEN) clamp(panel, false);
+        if (currentState === STATES.IDLE) clamp(ball, true);
+    });
+
+    function makeDrag(el, handle, isBall) {
+        let sx, sy, il, it, dragging = false, raf, downTime;
+        const onDown = (e) => {
+            if (isBall && currentState !== STATES.IDLE) return;
+            if (!isBall && currentState !== STATES.PANEL_OPEN) return;
+            const ev = e.touches ? e.touches[0] : e;
+            sx = ev.clientX; sy = ev.clientY;
+            const rect = el.getBoundingClientRect();
+            il = rect.left; it = rect.top;
+            dragging = false; downTime = Date.now();
+            tDoc.addEventListener('mousemove', onMove, { passive: false });
+            tDoc.addEventListener('touchmove', onMove, { passive: false });
+            tDoc.addEventListener('mouseup', onUp);
+            tDoc.addEventListener('touchend', onUp);
+        };
+        const onMove = (e) => {
+            const ev = e.touches ? e.touches[0] : e;
+            const dx = ev.clientX - sx, dy = ev.clientY - sy;
+            if (!dragging) {
+                if (Math.sqrt(dx*dx + dy*dy) > CONFIG.CLICK_DIST) {
+                    dragging = true;
+                    el.classList.add('dragging');
+                    currentState = isBall ? STATES.BALL_DRAG : STATES.PANEL_DRAG;
+                } else return;
+            }
+            e.preventDefault();
+            if (raf) cancelAnimationFrame(raf);
+            raf = requestAnimationFrame(() => {
+                let nl = il + dx, nt = it + dy;
+                const w = el.offsetWidth, h = el.offsetHeight;
+                const maxL = tWin.innerWidth - w - CONFIG.SAFE_MARGIN;
+                const maxT = isBall ? tWin.innerHeight - h - CONFIG.SAFE_MARGIN : tWin.innerHeight - 50;
+                el.style.left = Math.max(CONFIG.SAFE_MARGIN, Math.min(nl, maxL)) + 'px';
+                el.style.top = Math.max(CONFIG.SAFE_MARGIN, Math.min(nt, maxT)) + 'px';
+            });
+        };
+        const onUp = () => {
+            tDoc.removeEventListener('mousemove', onMove);
+            tDoc.removeEventListener('touchmove', onMove);
+            tDoc.removeEventListener('mouseup', onUp);
+            tDoc.removeEventListener('touchend', onUp);
+            if (raf) cancelAnimationFrame(raf);
+            const elapsed = Date.now() - downTime;
+            if (!dragging && elapsed < 500) {
+                if (isBall) openPanel();
+            } else if (dragging) {
+                el.classList.remove('dragging');
+                if (isBall) {
+                    snapEdge();
+                    try {
+                        localStorage.setItem(CONFIG.STORAGE_KEY, JSON.stringify({
+                            left: parseFloat(el.style.left), top: parseFloat(el.style.top)
+                        }));
+                    } catch (e) {}
+                } else {
+                    currentState = STATES.PANEL_OPEN;
+                    clamp(el, false);
+                }
+            }
+            dragging = false;
+        };
+        handle.addEventListener('mousedown', onDown);
+        handle.addEventListener('touchstart', onDown, { passive: true });
+    }
+
+    function snapEdge() {
+        const rect = ball.getBoundingClientRect();
+        const targetL = (rect.left + rect.width / 2) < tWin.innerWidth / 2
+            ? CONFIG.SAFE_MARGIN
+            : tWin.innerWidth - rect.width - CONFIG.SAFE_MARGIN;
+        ball.style.left = targetL + 'px';
+        setTimeout(() => { currentState = STATES.IDLE; }, 350);
+    }
+
+    function openPanel() {
+        currentState = STATES.PANEL_OPEN;
+        ball.classList.add('hidden');
+        panel.classList.add('show');
+        const br = ball.getBoundingClientRect();
+        const pw = panel.offsetWidth, ph = panel.offsetHeight;
+        let pl = br.left - pw / 2 + br.width / 2;
+        let pt = br.top - ph - 10;
+        if (pt < CONFIG.SAFE_MARGIN) pt = br.bottom + 10;
+        pl = Math.max(CONFIG.SAFE_MARGIN, Math.min(pl, tWin.innerWidth - pw - CONFIG.SAFE_MARGIN));
+        pt = Math.max(CONFIG.SAFE_MARGIN, Math.min(pt, tWin.innerHeight - ph - CONFIG.SAFE_MARGIN));
+        panel.style.left = pl + 'px';
+        panel.style.top = pt + 'px';
+        startParticles();
+    }
+
+    function closePanel() {
+        currentState = STATES.IDLE;
+        panel.classList.remove('show');
+        ball.classList.remove('hidden');
+        modalMask.classList.remove('show');
+        stopParticles();
+        if (isVisible) clamp(ball, true);
+    }
+
+    closeBtn.onclick = closePanel;
+    closeBtn.addEventListener('touchend', (e) => { e.preventDefault(); closePanel(); });
+
+    (function setupResize() {
+        let sx, sy, sw, sh;
+        const onDown = (e) => {
+            const ev = e.touches ? e.touches[0] : e;
+            sx = ev.clientX; sy = ev.clientY;
+            sw = panel.offsetWidth; sh = panel.offsetHeight;
+            panel.style.transition = 'none';
+            tDoc.addEventListener('mousemove', onMove, { passive: false });
+            tDoc.addEventListener('touchmove', onMove, { passive: false });
+            tDoc.addEventListener('mouseup', onUp);
+            tDoc.addEventListener('touchend', onUp);
+            e.stopPropagation(); e.preventDefault();
+        };
+        const onMove = (e) => {
+            const ev = e.touches ? e.touches[0] : e;
+            requestAnimationFrame(() => {
+                const cl = parseFloat(panel.style.left) || 0;
+                const ct = parseFloat(panel.style.top) || 0;
+                let nw = Math.max(340, sw + ev.clientX - sx);
+                let nh = Math.max(480, sh + ev.clientY - sy);
+                nw = Math.min(nw, tWin.innerWidth - cl - CONFIG.SAFE_MARGIN);
+                nh = Math.min(nh, tWin.innerHeight - ct - CONFIG.SAFE_MARGIN);
+                panel.style.width = nw + 'px';
+                panel.style.height = nh + 'px';
+            });
+        };
+        const onUp = () => {
+            tDoc.removeEventListener('mousemove', onMove);
+            tDoc.removeEventListener('touchmove', onMove);
+            tDoc.removeEventListener('mouseup', onUp);
+            tDoc.removeEventListener('touchend', onUp);
+            panel.style.transition = '';
+            clamp(panel, false);
+        };
+        resizeHandle.addEventListener('mousedown', onDown);
+        resizeHandle.addEventListener('touchstart', onDown, { passive: false });
+    })();
+
+    makeDrag(ball, ball, true);
+    makeDrag(panel, header, false);
+
+    if (typeof appendInexistentScriptButtons === 'function') {
+        appendInexistentScriptButtons([{ name: '显隐悬浮球', visible: true }]);
+    }
+    if (typeof eventOn === 'function' && typeof getButtonEvent === 'function') {
+        eventOn(getButtonEvent('显隐悬浮球'), () => {
+            isVisible = !isVisible;
+            if (isVisible) {
+                ball.classList.remove('force-hide');
+                panel.classList.remove('force-hide');
+                if (typeof triggerSlash === 'function') triggerSlash('/echo severity=info 悬浮球已显示');
+            } else {
+                ball.classList.add('force-hide');
+                panel.classList.add('force-hide');
+                if (typeof triggerSlash === 'function') triggerSlash('/echo severity=info 悬浮球已隐藏');
+            }
+        });
+    }
+})();
+
+$(window).on('pagehide', () => {
+    let td = document;
+    try { if (window.parent && window.parent.document) td = window.parent.document; } catch (e) {}
+    const orphan = td.getElementById(WIDGET_ID);
+    if (orphan) orphan.remove();
+});

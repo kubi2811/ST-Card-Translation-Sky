@@ -132,6 +132,34 @@ export default function TranslateConfig() {
   const removeGlossaryEntry = (index: number) => {
     const updated = translationConfig.glossary.filter((_, i) => i !== index);
     setTranslationConfig({ glossary: updated });
+    setSelectedGlossary((prev) => {
+      const next = new Set<number>();
+      for (const i of prev) { if (i < index) next.add(i); else if (i > index) next.add(i - 1); }
+      return next;
+    });
+  };
+
+  // (User 2026) XOÁ NHIỀU MỤC 1 LẦN — tick chọn từng dòng (hoặc chọn tất cả) rồi xoá 1 phát,
+  // thay vì bấm thùng rác từng dòng với từ điển hàng trăm mục.
+  const [selectedGlossary, setSelectedGlossary] = useState<Set<number>>(new Set());
+  const toggleGlossarySelected = (idx: number) => {
+    setSelectedGlossary((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx); else next.add(idx);
+      return next;
+    });
+  };
+  const removeSelectedGlossary = () => {
+    if (selectedGlossary.size === 0) return;
+    const updated = translationConfig.glossary.filter((_, i) => !selectedGlossary.has(i));
+    setTranslationConfig({ glossary: updated });
+    setSelectedGlossary(new Set());
+  };
+  const removeAllGlossary = () => {
+    if (translationConfig.glossary.length === 0) return;
+    if (!window.confirm(fmt(ui.tcGlsDelAllConfirm, { count: translationConfig.glossary.length }))) return;
+    setTranslationConfig({ glossary: [] });
+    setSelectedGlossary(new Set());
   };
 
   const exportGlossary = () => {
@@ -532,10 +560,56 @@ export default function TranslateConfig() {
             </span>
           </div>
 
+          {/* (User 2026) Thanh xoá hàng loạt — tick chọn nhiều dòng xoá 1 phát / xoá tất cả (có xác nhận) */}
+          {translationConfig.glossary.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', fontSize: '0.68rem', color: 'var(--text-secondary)' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }} title={ui.tcGlsSelectAllTip}>
+                <input
+                  type="checkbox"
+                  checked={selectedGlossary.size > 0 && selectedGlossary.size === translationConfig.glossary.length}
+                  onChange={(e) =>
+                    setSelectedGlossary(e.target.checked ? new Set(translationConfig.glossary.map((_, i) => i)) : new Set())
+                  }
+                />
+                {ui.tcGlsSelectAll}
+              </label>
+              <button
+                onClick={removeSelectedGlossary}
+                disabled={selectedGlossary.size === 0}
+                title={ui.tcGlsDelSelectedTip}
+                style={{
+                  padding: '3px 10px', fontSize: '0.68rem', fontWeight: 600, borderRadius: 'var(--radius-sm)',
+                  border: '1px solid rgba(240,100,100,0.4)', background: 'transparent',
+                  color: 'var(--accent-danger)', cursor: selectedGlossary.size === 0 ? 'not-allowed' : 'pointer',
+                  opacity: selectedGlossary.size === 0 ? 0.5 : 1,
+                }}
+              >
+                🗑 {fmt(ui.tcGlsDelSelected, { count: selectedGlossary.size })}
+              </button>
+              <button
+                onClick={removeAllGlossary}
+                title={ui.tcGlsDelAllTip}
+                style={{
+                  padding: '3px 10px', fontSize: '0.68rem', fontWeight: 600, borderRadius: 'var(--radius-sm)',
+                  border: 'none', background: 'var(--accent-danger)', color: '#fff', cursor: 'pointer', marginLeft: 'auto',
+                }}
+              >
+                {ui.tcGlsDelAll}
+              </button>
+            </div>
+          )}
+
           {/* Glossary entries */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {translationConfig.glossary.map((entry, idx) => (
               <div key={idx} style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                <input
+                  type="checkbox"
+                  checked={selectedGlossary.has(idx)}
+                  onChange={() => toggleGlossarySelected(idx)}
+                  style={{ flexShrink: 0, cursor: 'pointer' }}
+                  title={ui.tcGlsPickTip}
+                />
                 <input
                   className="input"
                   placeholder={ui.tcGlossarySrc}

@@ -10,6 +10,7 @@ import { setNestedValue } from '../utils/cardFields';
 import { scanFieldsHealth, buildTranslationReport, type HealthSeverity } from '../utils/cardHealth';
 import { verifyFields, quickVerify, type FieldIssue, type VerifyIssue } from '../utils/aiVerify';
 import { countEjsBlocks } from '../utils/ejsSegmenter';
+import { isLikelyJsScript, jsParseErrorAny } from '../utils/scriptSafety';
 import type { ExportKeyMode } from '../types/card';
 
 /** 1 dòng vấn đề trong báo cáo GỘP của "🩺 Kiểm tra tổng" (3 nguồn về chung 1 shape). */
@@ -69,19 +70,31 @@ export default function ExportPanel() {
   // Entry lớn bị chunk → AI rơi khối <%…%> → xuất ra card ST chạy LỖI (tag mismatch). Nút này quét
   // mọi field 'done' mà SỐ khối <%…%> của bản dịch KHÁC bản gốc → REVERT field đó về bản gốc (code
   // Trung vẫn chạy, an toàn tuyệt đối). Từ v1.99.4 lỗi này được chặn NGAY khi dịch; nút để chữa card cũ.
+  // (User 2026) Gồm 2 loại VỠ: (a) EJS lệch số khối <%…%>; (b) script JS trần (TavernHelper) gốc
+  // parse sạch mà bản dịch vỡ cú pháp (cụt output/đứt regex — bug script 71K). Cả 2 revert về gốc là an toàn.
   const brokenEjsFields = useMemo(
-    () => fields.filter(f =>
-      f.status === 'done' && f.translated && f.original.includes('<%') &&
-      countEjsBlocks(f.original) > 0 && countEjsBlocks(f.translated) !== countEjsBlocks(f.original)
-    ),
+    () => fields.filter(f => {
+      if (f.status !== 'done' || !f.translated || f.translated === f.original) return false;
+      if (f.original.includes('<%')) {
+        const o = countEjsBlocks(f.original);
+        if (o > 0 && countEjsBlocks(f.translated) !== o) return true;
+      }
+      if (isLikelyJsScript(f.original) && jsParseErrorAny(f.original) === null && jsParseErrorAny(f.translated) !== null) {
+        return true;
+      }
+      return false;
+    }),
     [fields],
   );
   const [repairMsg, setRepairMsg] = useState('');
   const repairBrokenEjs = () => {
     let reverted = 0;
     for (const f of brokenEjsFields) {
+      const reason = f.original.includes('<%') && countEjsBlocks(f.original) > 0 && countEjsBlocks(f.translated || '') !== countEjsBlocks(f.original)
+        ? `${countEjsBlocks(f.translated || '')}/${countEjsBlocks(f.original)} khối <%…%>`
+        : `script vỡ cú pháp JS (dòng ~${jsParseErrorAny(f.translated || '')?.line ?? '?'})`;
       updateField(f.path, { translated: f.original });
-      addLog('info', `🔧 EJS: revert "${f.label}" về bản gốc (${countEjsBlocks(f.translated)}/${countEjsBlocks(f.original)} khối <%…%> → khôi phục đủ, không vỡ JS).`);
+      addLog('info', `🔧 Sửa nhanh: revert "${f.label}" về bản gốc (${reason} → khôi phục nguyên vẹn, không vỡ JS).`);
       reverted++;
     }
     saveTranslationCache();

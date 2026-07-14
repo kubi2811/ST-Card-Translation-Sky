@@ -145,6 +145,38 @@ export function hasEjsMarkers(s: string): boolean {
   return typeof s === 'string' && (/<%[\s\S]*?%>/.test(s) || /\{\{__ejs_\d+__\}\}/.test(s));
 }
 
+/** Chunk gốc có phải CODE không (đủ dòng mang dấu hiệu code để guard cấu trúc). */
+export function isCodeChunk(s: string): boolean {
+  if (typeof s !== 'string' || s.length < 80) return false;
+  let n = 0;
+  for (const l of s.split('\n')) {
+    if (/[;{}()=]/.test(l)) n++;
+    if (n >= 5) return true;
+  }
+  return false;
+}
+
+/**
+ * (User 2026 — bug script 71K CỤT ĐUÔI giữa regex, mất 383 dòng mà vẫn "done") Guard CẤU TRÚC cho
+ * chunk CODE sau dịch — deterministic, 0 call AI:
+ *  1. CỤT: bản dịch < 55% độ dài gốc (code giữ nguyên ~1:1 ký tự, teo mạnh = bị cắt cụt output).
+ *  2. LỆCH CÂN BẰNG: hiệu (mở−đóng) của {} / () / [] phải BẰNG của gốc — chuỗi dịch có thêm cặp
+ *     ngoặc CÂN thì hiệu không đổi nên không báo nhầm.
+ *  3. BACKTICK lẻ: gốc chẵn (template literal đóng đủ) mà dịch lẻ ⇒ vỡ template literal.
+ * Trả lý do để log; null = ổn.
+ */
+export function codeChunkBroken(orig: string, trans: string): string | null {
+  if (typeof orig !== 'string' || typeof trans !== 'string') return 'invalid input';
+  if (trans.length < orig.length * 0.55) return `cụt: ${trans.length}/${orig.length} ký tự`;
+  const net = (s: string, o: string, c: string) => (s.split(o).length - 1) - (s.split(c).length - 1);
+  for (const [o, c, name] of [['{', '}', '{}'], ['(', ')', '()'], ['[', ']', '[]']] as const) {
+    if (net(orig, o, c) !== net(trans, o, c)) return `lệch cân bằng ${name}`;
+  }
+  const bt = (s: string) => (s.match(/(?<!\\)`/g) || []).length;
+  if (bt(orig) % 2 === 0 && bt(trans) % 2 !== 0) return 'backtick lẻ (vỡ template literal)';
+  return null;
+}
+
 /* ─── CORS Proxy URL Rewriting ─── */
 
 /** Known provider proxy paths (must match vite.config.ts proxy entries) */
@@ -3035,6 +3067,13 @@ export async function translateText(
       }
     }
   }
+  // (User 2026 — bug script 71K bị CỤT ĐUÔI giữa regex) Code-heavy: chunk NHỎ hơn (9k) khi user không
+  // tự đặt. Code dịch ra giữ nguyên ~1:1 ký tự nên chunk 15k dễ CHẠM TRẦN token output → AI cắt cụt
+  // giữa chuỗi/regex → JS vỡ. Chunk nhỏ = output ngắn = không chạm trần; guard chunk bên dưới bọc hậu.
+  if (!effectiveChunkSize && isCodeHeavy && maskedText.length > 9000) {
+    effectiveChunkSize = 9000;
+    console.log(`[translateText] ${fieldName}: code-heavy ${maskedText.length} ký tự → chunk 9000 (chống cụt output)`);
+  }
   const chunks = chunkText(maskedText, effectiveChunkSize, config.maxTokens);
 
   if (onChunksReady) {
@@ -3222,25 +3261,34 @@ export async function translateText(
           const translated = await translateChunkHedged(idx, system, user);
           let chunkCleaned = cleanTranslationResponse(chunks[idx], translated, isExpert, true);
 
-          // ═══ (User 2026) GUARD TOÀN VẸN EJS THEO CHUNK — deterministic, 0 call AI. Chunk gốc có
-          // marker EJS mà bản dịch LỆCH (rơi/đúp khối `<%…%>` hoặc token mask) → dịch lại ĐÚNG chunk
-          // này 1 lần; vẫn lệch → GIỮ NGUYÊN chunk gốc (chunk chưa dịch nhưng card KHÔNG BAO GIỜ vỡ
-          // JS; guard field-level + covariance/dict xử tiếp). Rẻ hơn nhiều so với retry cả field 16k. ═══
-          if (hasEjsMarkers(chunks[idx]) && !ejsMarkersIntact(chunks[idx], chunkCleaned)) {
-            console.warn(`[translateText] ⚠️ Chunk ${idx + 1}/${chunks.length}: EJS markers lệch sau dịch — thử lại chunk này…`);
-            try {
-              const retryRaw = await translateChunkHedged(idx, system, user);
-              const retryCleaned = cleanTranslationResponse(chunks[idx], retryRaw, isExpert, true);
-              if (ejsMarkersIntact(chunks[idx], retryCleaned)) {
-                chunkCleaned = retryCleaned;
-                console.log(`[translateText] Chunk ${idx + 1}: retry giữ đủ marker EJS ✓`);
-              } else {
+          // ═══ (User 2026) GUARD TOÀN VẸN THEO CHUNK — deterministic, 0 call AI. Gồm 2 lớp:
+          //  a) EJS: rơi/đúp khối `<%…%>`/token mask;  b) CODE: cụt output / lệch cân bằng ngoặc /
+          // backtick lẻ (bug script 71K bị cắt cụt giữa regex mà vẫn "done"). Lệch → dịch lại ĐÚNG
+          // chunk này 1 lần; vẫn lệch → GIỮ NGUYÊN chunk gốc (card KHÔNG BAO GIỜ vỡ JS). ═══
+          {
+            const chunkProblem = (t: string): string | null => {
+              if (hasEjsMarkers(chunks[idx]) && !ejsMarkersIntact(chunks[idx], t)) return 'EJS markers lệch';
+              if (isCodeChunk(chunks[idx])) return codeChunkBroken(chunks[idx], t);
+              return null;
+            };
+            const firstProblem = chunkProblem(chunkCleaned);
+            if (firstProblem) {
+              console.warn(`[translateText] ⚠️ Chunk ${idx + 1}/${chunks.length}: ${firstProblem} — thử lại chunk này…`);
+              try {
+                const retryRaw = await translateChunkHedged(idx, system, user);
+                const retryCleaned = cleanTranslationResponse(chunks[idx], retryRaw, isExpert, true);
+                const retryProblem = chunkProblem(retryCleaned);
+                if (!retryProblem) {
+                  chunkCleaned = retryCleaned;
+                  console.log(`[translateText] Chunk ${idx + 1}: retry giữ đủ cấu trúc ✓`);
+                } else {
+                  chunkCleaned = chunks[idx];
+                  console.warn(`[translateText] Chunk ${idx + 1}: retry vẫn lỗi (${retryProblem}) — GIỮ NGUYÊN chunk gốc (không vỡ JS).`);
+                }
+              } catch {
                 chunkCleaned = chunks[idx];
-                console.warn(`[translateText] Chunk ${idx + 1}: retry vẫn lệch marker — GIỮ NGUYÊN chunk gốc (không vỡ JS).`);
+                console.warn(`[translateText] Chunk ${idx + 1}: retry lỗi mạng — GIỮ NGUYÊN chunk gốc (không vỡ JS).`);
               }
-            } catch {
-              chunkCleaned = chunks[idx];
-              console.warn(`[translateText] Chunk ${idx + 1}: retry lỗi mạng — GIỮ NGUYÊN chunk gốc (không vỡ JS).`);
             }
           }
           translatedChunks[idx] = chunkCleaned;
@@ -3369,25 +3417,35 @@ export async function translateText(
         );
         let chunkCleaned = cleanTranslationResponse(chunks[idx], translated, isExpert, true);
 
-        // ═══ (User 2026) GUARD TOÀN VẸN EJS THEO CHUNK (đường tuần tự) — như đường song song:
-        // lệch marker → dịch lại chunk 1 lần; vẫn lệch → giữ nguyên chunk gốc, không vỡ JS. ═══
-        if (hasEjsMarkers(chunks[idx]) && !ejsMarkersIntact(chunks[idx], chunkCleaned)) {
-          console.warn(`[translateText] ⚠️ Chunk ${idx + 1}/${chunks.length}: EJS markers lệch sau dịch — thử lại chunk này…`);
-          try {
-            const retryRaw = await translateChunk(
-              chunks[idx], idx, chunks.length, fieldName, config, targetLang, sourceLang, system, user, signal, isModMode, preferSecondary
-            );
-            const retryCleaned = cleanTranslationResponse(chunks[idx], retryRaw, isExpert, true);
-            if (ejsMarkersIntact(chunks[idx], retryCleaned)) {
-              chunkCleaned = retryCleaned;
-              console.log(`[translateText] Chunk ${idx + 1}: retry giữ đủ marker EJS ✓`);
-            } else {
+        // ═══ (User 2026) GUARD TOÀN VẸN THEO CHUNK (đường tuần tự) — như đường song song:
+        // EJS lệch marker HOẶC code cụt/lệch ngoặc/backtick lẻ → dịch lại chunk 1 lần; vẫn lỗi →
+        // giữ nguyên chunk gốc, không vỡ JS. ═══
+        {
+          const chunkProblem = (t: string): string | null => {
+            if (hasEjsMarkers(chunks[idx]) && !ejsMarkersIntact(chunks[idx], t)) return 'EJS markers lệch';
+            if (isCodeChunk(chunks[idx])) return codeChunkBroken(chunks[idx], t);
+            return null;
+          };
+          const firstProblem = chunkProblem(chunkCleaned);
+          if (firstProblem) {
+            console.warn(`[translateText] ⚠️ Chunk ${idx + 1}/${chunks.length}: ${firstProblem} — thử lại chunk này…`);
+            try {
+              const retryRaw = await translateChunk(
+                chunks[idx], idx, chunks.length, fieldName, config, targetLang, sourceLang, system, user, signal, isModMode, preferSecondary
+              );
+              const retryCleaned = cleanTranslationResponse(chunks[idx], retryRaw, isExpert, true);
+              const retryProblem = chunkProblem(retryCleaned);
+              if (!retryProblem) {
+                chunkCleaned = retryCleaned;
+                console.log(`[translateText] Chunk ${idx + 1}: retry giữ đủ cấu trúc ✓`);
+              } else {
+                chunkCleaned = chunks[idx];
+                console.warn(`[translateText] Chunk ${idx + 1}: retry vẫn lỗi (${retryProblem}) — GIỮ NGUYÊN chunk gốc (không vỡ JS).`);
+              }
+            } catch {
               chunkCleaned = chunks[idx];
-              console.warn(`[translateText] Chunk ${idx + 1}: retry vẫn lệch marker — GIỮ NGUYÊN chunk gốc (không vỡ JS).`);
+              console.warn(`[translateText] Chunk ${idx + 1}: retry lỗi mạng — GIỮ NGUYÊN chunk gốc (không vỡ JS).`);
             }
-          } catch {
-            chunkCleaned = chunks[idx];
-            console.warn(`[translateText] Chunk ${idx + 1}: retry lỗi mạng — GIỮ NGUYÊN chunk gốc (không vỡ JS).`);
           }
         }
         translatedChunks[idx] = chunkCleaned;

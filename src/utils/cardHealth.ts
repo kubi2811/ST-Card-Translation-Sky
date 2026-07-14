@@ -7,7 +7,7 @@
 // Tái dùng `checkCodeFieldForCjk` (mvuValidator) cho CJK-trong-code, acorn cho parse JS.
 // ═══════════════════════════════════════════════════════════════════════════════
 import { checkCodeFieldForCjk } from './mvuValidator';
-import { extractScriptBodies, isJsSyntaxOk } from './scriptSafety';
+import { extractScriptBodies, isJsSyntaxOk, isLikelyJsScript, jsParseErrorAny } from './scriptSafety';
 import type { TranslationField, GlossaryEntry } from '../types/card';
 
 /** Ideograph CJK (Trung/Nhật/Hàn) — dùng để phát hiện chữ chưa dịch còn sót. */
@@ -18,6 +18,7 @@ export type HealthKind =
   | 'field_error'        // trường dịch lỗi
   | 'field_pending'      // trường chưa dịch xong
   | 'broken_script'      // <script> gốc lành mà bản dịch vỡ cú pháp → nút bấm liệt
+  | 'source_script_broken' // script GỐC đã vỡ SẴN (card import bị lỗi từ trước, không phải do dịch)
   | 'residual_cjk_code'  // chữ Hán còn trong field code (json_patch/initvar/controller)
   | 'residual_cjk_text'  // chữ Hán còn sót trong văn bản đã "done" (có thể là tên riêng cố ý)
   | 'glossary_unapplied';// thuật ngữ trong Từ điển vẫn còn NGUYÊN GỐC trong bản dịch (dịch chưa nhất quán)
@@ -81,11 +82,31 @@ export function scanFieldsHealth(fields: TranslationField[], glossary?: Glossary
         detail: 'Chưa dịch xong.' });
     }
 
+    // ─── (User 2026 — bug script 71K cụt đuôi) SCRIPT JS TRẦN (TavernHelper, không có <script> tag) ───
+    // Chạy TRƯỚC gate `!trans` để card VỪA IMPORT (chưa dịch) cũng được soi: script GỐC đã vỡ sẵn
+    // (import card lỗi từ trước) → báo ngay kèm SỐ DÒNG, khỏi đợi dịch xong mới biết.
+    const orig = f.original || '';
+    if (isLikelyJsScript(orig)) {
+      const origErr = jsParseErrorAny(orig);
+      if (origErr === null) {
+        if (f.translated && f.translated !== orig) {
+          const tErr = jsParseErrorAny(f.translated);
+          if (tErr) {
+            brokenScripts++;
+            issues.push({ severity: 'error', kind: 'broken_script', label: f.label, path: f.path,
+              detail: `Script vỡ cú pháp JS SAU DỊCH (dòng ~${tErr.line}: ${tErr.msg.slice(0, 70)}) — script sẽ liệt trong SillyTavern. Gốc lành → có thể khôi phục bằng nút Sửa nhanh.` });
+          }
+        }
+      } else if (f.group === 'tavern_helper') {
+        issues.push({ severity: 'warning', kind: 'source_script_broken', label: f.label, path: f.path,
+          detail: `Script GỐC đã vỡ cú pháp SẴN (dòng ~${origErr.line}: ${origErr.msg.slice(0, 70)}) — lỗi có từ trước khi dịch (card nguồn hỏng/cụt). Cần bản gốc lành để khôi phục.` });
+      }
+    }
+
     const trans = f.translated;
     if (!trans) continue;
 
     // ─── <script> vỡ cú pháp DO DỊCH (gốc lành → bản dịch vỡ) ───
-    const orig = f.original || '';
     if (trans.includes('<script') && orig.includes('<script')) {
       const ob = extractScriptBodies(orig);
       const tb = extractScriptBodies(trans);

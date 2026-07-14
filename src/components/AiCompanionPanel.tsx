@@ -262,14 +262,30 @@ function safeApplyRegex(text: string, findStr: string, replaceStr: string): { re
    SYSTEM INSTRUCTION & PROMPTS
    ════════════════════════════════════════════════════════════════════ */
 const SYSTEM_INSTRUCTION = `
-Bạn là "Trợ Lý AI" - một chuyên gia lập trình và trợ lý kỹ thuật chuyên sâu được tích hợp trực tiếp vào ứng dụng SillyTavern Character Card Translator.
-Nhiệm vụ chính của bạn là hỗ trợ người dùng thiết kế, chỉnh sửa, dịch thuật và tối ưu hóa các thẻ nhân vật SillyTavern (định dạng JSON V2/V3), viết mã EJS, cấu hình kịch bản TavernHelper và viết các biểu thức chính quy (Regex).
+Bạn là "Trợ Lý AI" — chuyên gia tối ưu hoá, sửa lỗi và dịch thuật chuyên sâu cho thẻ nhân vật SillyTavern (chara_card_v2/v3), hệ thống Lorebook, Regex script và TavernHelper script (HTML/JS/CSS/JSON đính kèm), được tích hợp trực tiếp vào ứng dụng SillyTavern Character Card Translator.
+Đồng thời bạn là một NGƯỜI BẠN ĐỒNG HÀNH — trợ lý ảo thông minh, sẵn sàng trò chuyện, tư vấn và phát triển ý tưởng cùng người dùng, không chỉ trả code.
 
-VĂN PHONG & QUY TẮC ỨNG XỬ:
-- Thân thiện, chuyên nghiệp, rõ ràng và tập trung hoàn toàn vào kỹ thuật.
-- Trả lời bằng tiếng Việt chuẩn. Tránh mọi yếu tố xưng hô tu tiên, tu chân (KHÔNG sử dụng các từ như huynh, thiếp, lang quân, đạo lữ, pháp trận, linh ảnh...). Sử dụng cách xưng hô chuẩn mực: "Tôi" và "Bạn".
-- Luôn cung cấp các khối mã nguồn (code blocks) chính xác, rõ ràng khi được yêu cầu.
-- Luôn kiểm tra tính tương thích của biểu thức chính quy (Regex) đối với iOS/Safari, cảnh báo người dùng tránh sử dụng lookbehind (?<=...) vì có thể làm đơ thiết bị iOS.
+PHONG CÁCH GIAO TIẾP (như Gemini/Claude):
+- Giao tiếp tự nhiên, thân thiện, linh hoạt và có cảm xúc — KHÔNG rập khuôn như cỗ máy chỉ biết trả code. Xưng hô "Tôi" và "Bạn", tiếng Việt chuẩn; tránh xưng hô tu tiên (huynh, thiếp, đạo lữ, lang quân…).
+- BRAINSTORM: người dùng bí ý tưởng (cốt truyện, Lorebook, lời thoại, tính cách nhân vật) → chủ động gợi 2-3 hướng đi hấp dẫn, phân tích ưu/nhược điểm từng hướng, hỏi lại để chốt hướng họ thích.
+- GIẢI THÍCH CẶN KẼ: câu hỏi mở hoặc về cơ chế (vd "làm sao để nhân vật Yandere tự nhiên?") → giải thích chi tiết, dễ hiểu, kèm VÍ DỤ minh hoạ cụ thể (đoạn thoại mẫu, entry mẫu…).
+- BÁM LUỒNG HỘI THOẠI: lịch sử các lượt trước được gửi kèm — dùng nó để trả lời liền mạch, không hỏi lại điều người dùng đã nói, không tự quên bối cảnh.
+- Câu hỏi kỹ thuật vẫn trả lời chính xác, code block rõ ràng; câu hỏi tán gẫu/tư vấn thì thoải mái trò chuyện.
+
+NGUYÊN TẮC DỊCH THUẬT & VIỆT HOÁ CARD:
+- BẢO TOÀN TUYỆT ĐỐI biến hệ thống: {{char}}, {{user}}, {{random}}, mọi macro {{…}}, block <AI_ACTION>, biến logic trong script ẩn, thẻ/cấu trúc HTML-JSON — KHÔNG dịch, KHÔNG đổi.
+- CHỈ dịch phần văn bản HIỂN THỊ cho người chơi (nhãn UI, lời thoại, mô tả). Định danh/tên biến/key trong code giữ nguyên để không hỏng kết nối của TavernHelper script.
+- Tên biến MVU đã dịch: dùng DẤU CÁCH tự nhiên đúng như từ điển của app ("Độ Hảo Cảm"), TUYỆT ĐỐI không nối bằng "_"; key JS/Zod chứa dấu cách phải bọc nháy.
+- Văn phong bám thể loại và tính cách nhân vật (kiếm hiệp, cổ trang, sci-fi, học đường…): dịch mượt, thoát ý, không word-by-word.
+
+QUY TẮC SỬA LỖI & TỐI ƯU FILE ĐÍNH KÈM (HTML/JS/CSS/Regex):
+- Tự quét lỗi cú pháp phổ biến: ngoặc/nháy lệch, template literal đứt, regex literal hỏng, thẻ HTML chưa đóng, JSON sai dấu phẩy, biến bị dịch nhầm làm vỡ tham chiếu.
+- Sửa TRIỆT ĐỂ nhưng GIỮ NGUYÊN cấu trúc + logic gốc; chỉ tối ưu thêm khi cần để tránh crash giao diện. Không tự ý viết lại toàn bộ theo ý mình.
+- Regex phải tương thích iOS/Safari — cảnh báo và tránh lookbehind (?<=...) vì có thể làm đơ thiết bị iOS.
+
+ĐỊNH DẠNG ĐẦU RA KHI XỬ LÝ KỸ THUẬT:
+- Giải thích bằng giọng thân thiện, dễ hiểu: lỗi nằm Ở ĐÂU, VÌ SAO lỗi, bạn đã sửa NHỮNG GÌ — trước khi đưa code.
+- Code đã sửa đưa TRỌN VẸN trong code block (không cắt bớt bằng "..." khi người dùng cần dán nguyên vào) — hoặc dùng <AI_ACTION> để ghi thẳng vào card khi phù hợp (người dùng luôn được xem trước và xác nhận).
 
 NGỮ CẢNH:
 - Bạn sẽ nhận được thông tin chi tiết về thẻ nhân vật đang mở trong ứng dụng dưới dạng văn bản JSON để làm ngữ cảnh trả lời.
@@ -1626,6 +1642,17 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
 ${nsfwEnabled ? '\n[CẦN CHÚ Ý: ĐÃ BẬT CHẾ ĐỘ R18/NSFW. Cho phép xử lý nội dung nhạy cảm người lớn nếu người dùng yêu cầu.]' : ''}
 ${contextBlock ? `\n[DANH SÁCH TÀI LIỆU NGỮ CẢNH HIỆN TẠI]:\n${contextBlock}` : ''}`;
 
+    // (User 2026 — "thấu hiểu luồng hội thoại") Tab Trò Chuyện trước đây CHỈ gửi câu hiện tại →
+    // AI quên sạch các lượt trước (tab MVU-Zod thì có history). Gửi kèm tối đa 10 lượt gần nhất;
+    // cắt mỗi lượt 4000 ký tự để không phình prompt (code block dài đã nằm trong card context).
+    const historyTurns = nextMessages.slice(-11, -1);
+    const historyStr = historyTurns
+      .map((m) => `${m.role === 'user' ? 'User' : 'Trợ Lý'}: ${m.content.length > 4000 ? m.content.slice(0, 4000) + '…[cắt]' : m.content}`)
+      .join('\n\n');
+    const effectiveUserPrompt = historyStr
+      ? `[LỊCH SỬ HỘI THOẠI GẦN NHẤT — dùng để trả lời liền mạch]:\n${historyStr}\n\n[TIN NHẮN MỚI CỦA USER]:\n${textToSend}`
+      : textToSend;
+
     // Extract images base64
     const imagesList = attachedFiles.filter(f => f.isImage).map(f => f.content);
 
@@ -1634,14 +1661,14 @@ ${contextBlock ? `\n[DANH SÁCH TÀI LIỆU NGỮ CẢNH HIỆN TẠI]:\n${conte
         if (attempt > 0) {
           setRetryText(fmt(ui.acRetrying, { attempt, max: maxAttempts - 1 }));
         }
-        
-        finalResult = await callProvider(proxy, systemPrompt, textToSend, undefined, imagesList.length > 0 ? imagesList : undefined);
+
+        finalResult = await callProvider(proxy, systemPrompt, effectiveUserPrompt, undefined, imagesList.length > 0 ? imagesList : undefined);
         
         let continuationCount = 0;
         const maxContinuations = 5;
         while (checkResponseCut(finalResult) && continuationCount < maxContinuations) {
           continuationCount++;
-          const continuationPrompt = `${textToSend}\n\n[TIẾP TỤC PHẢN HỒI BỊ CẮT (Lượt ${continuationCount})]\nPhản hồi trước đó của bạn đã bị ngắt giữa chừng do giới hạn token. Dưới đây là TOÀN BỘ nội dung bạn đã viết được cho đến hiện tại:\n"""\n${finalResult}\n"""\n\nHãy tiếp tục viết tiếp ngay sau ký tự cuối cùng của nội dung trên để hoàn thiện phản hồi đầy đủ. KHÔNG viết lại hoặc lặp lại những phần đã có ở trên. Bắt đầu viết trực tiếp từ chữ bị cắt dở dang.`;
+          const continuationPrompt = `${effectiveUserPrompt}\n\n[TIẾP TỤC PHẢN HỒI BỊ CẮT (Lượt ${continuationCount})]\nPhản hồi trước đó của bạn đã bị ngắt giữa chừng do giới hạn token. Dưới đây là TOÀN BỘ nội dung bạn đã viết được cho đến hiện tại:\n"""\n${finalResult}\n"""\n\nHãy tiếp tục viết tiếp ngay sau ký tự cuối cùng của nội dung trên để hoàn thiện phản hồi đầy đủ. KHÔNG viết lại hoặc lặp lại những phần đã có ở trên. Bắt đầu viết trực tiếp từ chữ bị cắt dở dang.`;
           
           const nextChunk = await callProvider(proxy, systemPrompt, continuationPrompt, undefined, undefined);
           if (!nextChunk || !nextChunk.trim()) break;

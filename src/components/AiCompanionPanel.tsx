@@ -3,6 +3,7 @@ import { useStore } from '../store';
 import { useT, useUi } from '../i18n/useLocale';
 import { fmt } from '../i18n';
 import { callProvider, callProviderHedged, setExtraProviders } from '../utils/apiClient';
+import { splitChatBlocks } from '../utils/chatMarkdown';
 import { safeSetItem } from '../utils/safeStorage';
 import { 
   X, Send, Code2, Copy, Trash2, Upload, Loader2, Settings, Plus, FileText, 
@@ -348,48 +349,27 @@ const LOREBOOK_CONTEXT_MAX_CHARS = 500;
    SIMPLE MARKDOWN & CODE HIGHLIGHT PARSER
    ════════════════════════════════════════════════════════════════════ */
 const MessageContentRenderer = memo(({ content }: { content: string }) => {
-  // Simple custom parser for bold (**text**) and code blocks (```lang code```)
-  const parts = useMemo(() => {
-    if (!content) return [];
-    
-    const elements: React.ReactNode[] = [];
-    const regex = /```(\w*)\n([\s\S]*?)```/g;
-    
-    let lastIndex = 0;
-    let match;
-    let index = 0;
+  // (User 2026 — "code bị văng ra ngoài") Bộ tách khối chuyển sang utils/chatMarkdown (thuần + có
+  // test): fence ``` chỉ tính khi nằm ĐẦU DÒNG, nên code chứa ``` giữa dòng (vd .replace(/```$/,''))
+  // không còn làm đóng fence sớm → nửa sau code không rơi ra ngoài thành text trần gây tràn khung.
+  const parts = useMemo(
+    () =>
+      splitChatBlocks(content).map((b, i) =>
+        b.type === 'code'
+          ? <CodeSection key={`code-${i}`} language={b.language} code={b.code} />
+          : <TextSection key={`text-${i}`} text={b.text} />,
+      ),
+    [content],
+  );
 
-    while ((match = regex.exec(content)) !== null) {
-      const textBefore = content.substring(lastIndex, match.index);
-      const language = match[1] || 'text';
-      const code = match[2];
-
-      if (textBefore) {
-        elements.push(<TextSection key={`text-${index}`} text={textBefore} />);
-        index++;
-      }
-
-      elements.push(<CodeSection key={`code-${index}`} language={language} code={code} />);
-      index++;
-      lastIndex = regex.lastIndex;
-    }
-
-    const remainingText = content.substring(lastIndex);
-    if (remainingText) {
-      elements.push(<TextSection key={`text-${index}`} text={remainingText} />);
-    }
-
-    return elements;
-  }, [content]);
-
-  return <div className="space-y-2">{parts}</div>;
+  return <div className="space-y-2 min-w-0 max-w-full">{parts}</div>;
 });
 
 const TextSection = memo(({ text }: { text: string }) => {
   // Convert basic **bold** to JSX
   const lines = text.split('\n');
   return (
-    <div className="space-y-1">
+    <div className="space-y-1 min-w-0 max-w-full">
       {lines.map((line, lIdx) => {
         const parts = [];
         const boldRegex = /\*\*([\s\S]*?)\*\*/g;
@@ -410,7 +390,14 @@ const TextSection = memo(({ text }: { text: string }) => {
         }
 
         return (
-          <p key={lIdx} className="text-slate-200 text-sm leading-relaxed min-h-[1.2rem]">
+          // (User 2026) `break-words` + overflowWrap:anywhere: chuỗi DÀI KHÔNG CÓ khoảng trắng (URL,
+          // 1 dòng code lọt ra ngoài, base64…) trước đây KHÔNG xuống hàng → kéo giãn bong bóng chat
+          // vượt khung, đè sang cột bên phải. Nay luôn bẻ dòng, không bao giờ tràn.
+          <p
+            key={lIdx}
+            className="text-slate-200 text-sm leading-relaxed min-h-[1.2rem] break-words"
+            style={{ overflowWrap: 'anywhere' }}
+          >
             {parts}
           </p>
         );
@@ -631,10 +618,13 @@ const CodeSection = memo(({ language, code }: { language: string; code: string }
 
   return (
     <>
-      <div className="rounded-xl overflow-hidden my-4 border border-zinc-800 bg-[#09090b] shadow-lg">
-        <div className="bg-[#18181b] px-4 py-2 text-[10px] font-sans font-bold text-slate-400 flex items-center justify-between border-b border-zinc-850">
-          <span className="tracking-wider uppercase text-indigo-400">{language}</span>
-          <div className="flex items-center gap-2">
+      {/* (User 2026) min-w-0 + max-w-full: khối code không bao giờ đẩy phình bong bóng ra ngoài khung. */}
+      <div className="rounded-xl overflow-hidden my-4 border border-zinc-800 bg-[#09090b] shadow-lg min-w-0 max-w-full">
+        {/* Thanh tiêu đề: cho phép XUỐNG HÀNG (flex-wrap) — khung hẹp thì nút rớt xuống dòng dưới,
+            thay vì bị bóp dí/tràn ra ngoài như user phản ánh. */}
+        <div className="bg-[#18181b] px-3 py-2 text-[10px] font-sans font-bold text-slate-400 flex flex-wrap items-center justify-between gap-y-1.5 gap-x-2 border-b border-zinc-850">
+          <span className="tracking-wider uppercase text-indigo-400 shrink-0">{language}</span>
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
             {isHtmlLike && (
               <>
                 <button 
@@ -708,10 +698,10 @@ const CodeSection = memo(({ language, code }: { language: string; code: string }
           </pre>
         )}
 
-        {/* Quick Inject Toolbar */}
-        <div className="bg-[#101014] px-4 py-2 border-t border-zinc-850 flex items-center justify-between text-[11px] text-slate-400">
-          <span>{ui.acQuickAdd}</span>
-          <div className="flex gap-2">
+        {/* Quick Inject Toolbar — (User 2026) cho xuống hàng, không bóp dí nút khi khung hẹp */}
+        <div className="bg-[#101014] px-3 py-2 border-t border-zinc-850 flex flex-wrap items-center justify-between gap-y-1.5 gap-x-2 text-[11px] text-slate-400">
+          <span className="shrink-0">{ui.acQuickAdd}</span>
+          <div className="flex flex-wrap justify-end gap-1.5">
             <button
               onClick={() => setActiveForm(activeForm === 'lorebook' ? 'none' : 'lorebook')}
               className={`px-2 py-0.5 rounded text-[10px] border transition-all ${

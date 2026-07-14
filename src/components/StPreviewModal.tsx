@@ -5,7 +5,8 @@ import { useUi } from '../i18n/useLocale';
 import { X, Eye, AlertTriangle, Columns2 } from 'lucide-react';
 import {
   extractRegexScripts, substituteMacros, applyDisplayRegex, buildPreviewHtml,
-  extractInitvarText, buildLineMap, resolveErrorSource, type PreviewLineRange,
+  extractInitvarText, buildLineMap, resolveErrorSource, extractHelperScriptsForPreview,
+  type PreviewLineRange,
 } from '../utils/stPreview';
 
 interface ScriptErr {
@@ -57,14 +58,17 @@ export default function StPreviewModal({ onClose }: { onClose: () => void }) {
     const withMacros = substituteMacros(current.text, { user: 'User', char: charName });
     const { text: rendered, applied, appliedDetails } = applyDisplayRegex(withMacros, scripts);
     const sideLabel = which === 'translated' ? ui.spTranslated : ui.spOriginal;
+    // (User 2026) Script TavernHelper của card (Norma, Thiên Ý…) — nạp vào preview như 酒馆助手.
+    const helper = extractHelperScriptsForPreview(activeCard);
     // Data test: ưu tiên bản AI tạo (nếu có), không thì lấy [initvar] của card.
     const srcDoc = buildPreviewHtml(rendered, charName, {
       runScripts,
       initvarText: runScripts ? (aiTestData ?? extractInitvarText(activeCard)) : null,
       sideLabel,
+      helperScripts: runScripts ? helper.runnable : undefined,
     });
     const lineMap = buildLineMap(srcDoc, appliedDetails, current.label, current.fieldPath);
-    return { srcDoc, lineMap, applied, messages, sideLabel };
+    return { srcDoc, lineMap, applied, messages, sideLabel, helper };
   };
 
   const translatedSide = useMemo(buildSide.bind(null, 'translated'),
@@ -198,10 +202,16 @@ export default function StPreviewModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        {/* Ghi chú chế độ + regex đã áp */}
+        {/* Ghi chú chế độ + regex đã áp + script card đã nạp */}
         <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginBottom: 8, lineHeight: 1.5 }}>
           {runScripts ? ui.spScriptNote : ui.spStaticNote}
           {activeSide.applied.length > 0 && <> · {ui.spApplied} {activeSide.applied.slice(0, 5).join(', ')}{activeSide.applied.length > 5 ? '…' : ''}</>}
+          {runScripts && activeSide.helper.runnable.length > 0 && (
+            <> · <span style={{ color: '#4ade80' }}>{ui.spHelperRan} {activeSide.helper.runnable.map(s => s.name).join(', ')}</span></>
+          )}
+          {runScripts && activeSide.helper.skipped.length > 0 && (
+            <> · <span title={ui.spHelperSkippedTip}>{ui.spHelperSkipped} {activeSide.helper.skipped.join(', ')}</span></>
+          )}
         </div>
 
         {/* Lỗi script — tra ra field nguồn + nút nhảy tới sửa */}

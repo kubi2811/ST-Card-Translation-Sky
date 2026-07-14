@@ -321,6 +321,9 @@ function buildScriptShim(initvarText: string | null, charName: string, sideLabel
   // zod: template thật merge window.z từ parent — CDN UMD expose Zod
   if (!window.z && window.Zod) { window.z = window.Zod.z || window.Zod; }
 
+  // (User 2026) Expose reporter cho các script CARD tiêm phía sau (bọc try/catch theo TÊN script).
+  window.__stReportErr = reportErr;
+
   // ── Báo lỗi script ra modal (bắt biến bị dịch vỡ) — kèm line để tra ra field nguồn ──
   window.onerror = function (msg, src, line, _col, _err) {
     var isCdn = src && src.indexOf('http') === 0;
@@ -341,6 +344,49 @@ export interface PreviewHtmlOptions {
   initvarText?: string | null;
   /** Nhãn bên (Gốc/Đã dịch) đính vào lỗi script — cho chế độ so 2 bản */
   sideLabel?: string;
+  /** (User 2026) Script TavernHelper của CARD (Norma, Thiên Ý…) cần chạy trong preview. */
+  helperScripts?: { name: string; content: string }[];
+}
+
+/**
+ * (User 2026 — card Long Tộc v8.1) Lấy script TavernHelper của card cho preview.
+ * Trong ST thật, 酒馆助手 nạp các script này TOÀN CỤC (không nằm trong tin nhắn) — Norma vẽ quả cầu
+ * nổi + panel NORMA SYSTEM, Thiên Ý vẽ quả cầu 诺… Preview trước đây chỉ chạy <script> TRONG tin
+ * nhắn nên các UI này không hiện. Phân loại:
+ *  - runnable: IIFE/JS thường → chạy được trong sandbox (đã shim API TavernHelper).
+ *  - skipped: script có top-level `import` (mvu/zod nạp framework từ CDN) — KHÔNG chạy: bundle thật
+ *    cần cả SillyTavern, đè lên shim Mvu là vỡ; logic của chúng đã được stub giả lập đủ cho UI.
+ */
+export function extractHelperScriptsForPreview(card: unknown): {
+  runnable: { name: string; content: string }[];
+  skipped: string[];
+} {
+  const runnable: { name: string; content: string }[] = [];
+  const skipped: string[] = [];
+  const data = (card as { data?: Record<string, unknown> })?.data ?? (card as Record<string, unknown>) ?? {};
+  const ext = (data as { extensions?: Record<string, unknown> }).extensions || {};
+  for (const key of ['tavern_helper', 'TavernHelper', 'TavernHelper_scripts', 'js_slash_runner']) {
+    const raw = ext[key];
+    let scripts: unknown[] = [];
+    if (Array.isArray(raw)) {
+      const tuple = raw.find((it) => Array.isArray(it) && it[0] === 'scripts' && Array.isArray(it[1])) as [string, unknown[]] | undefined;
+      scripts = tuple ? tuple[1] : raw;
+    } else if (raw && typeof raw === 'object' && Array.isArray((raw as { scripts?: unknown[] }).scripts)) {
+      scripts = (raw as { scripts: unknown[] }).scripts;
+    }
+    for (const s of scripts) {
+      if (!s || typeof s !== 'object') continue;
+      const sc = s as { name?: string; content?: string; script?: string; code?: string; enabled?: boolean };
+      const content = sc.content || sc.script || sc.code || '';
+      if (typeof content !== 'string' || !content.trim()) continue;
+      if (sc.enabled === false) continue;
+      const name = sc.name || 'script';
+      if (/^\s*import\b/m.test(content)) skipped.push(name);
+      else runnable.push({ name, content });
+    }
+    if (runnable.length || skipped.length) break; // đã tìm thấy đúng key chứa scripts
+  }
+  return { runnable, skipped };
 }
 
 /**
@@ -367,16 +413,36 @@ export function buildPreviewHtml(message: string, charName: string, opts: Previe
       .replace(/\r?\n/g, '<br>');
   }
 
+  // Trong ST thật, iframe tin nhắn SAME-ORIGIN với ST nên script card thoải mái đọc
+  // window.parent/top (đo layout, tìm mesid…). Sandbox của mình chặn (đúng nguyên tắc an
+  // toàn) → SecurityError chết script ngay. Rewrite các tham chiếu đó trỏ về CHÍNH iframe —
+  // shim đã đặt đủ API TavernHelper lên window nên parent ≈ window là xấp xỉ hợp lý.
+  const rewriteParentRefs = (s: string) => s
+    .replace(/\bwindow\.parent\b/g, 'window')
+    .replace(/\bwindow\.top\b/g, 'window')
+    .replace(/\bparent\.document\b/g, 'document')
+    .replace(/\btop\.document\b/g, 'document');
   if (opts.runScripts) {
-    // Trong ST thật, iframe tin nhắn SAME-ORIGIN với ST nên script card thoải mái đọc
-    // window.parent/top (đo layout, tìm mesid…). Sandbox của mình chặn (đúng nguyên tắc an
-    // toàn) → SecurityError chết script ngay. Rewrite các tham chiếu đó trỏ về CHÍNH iframe —
-    // shim đã đặt đủ API TavernHelper lên window nên parent ≈ window là xấp xỉ hợp lý.
-    body = body
-      .replace(/\bwindow\.parent\b/g, 'window')
-      .replace(/\bwindow\.top\b/g, 'window')
-      .replace(/\bparent\.document\b/g, 'document')
-      .replace(/\btop\.document\b/g, 'document');
+    body = rewriteParentRefs(body);
+  }
+
+  // (User 2026 — card Long Tộc) SCRIPT TAVERNHELPER CỦA CARD (Norma, Thiên Ý…): trong ST thật do
+  // 酒馆助手 nạp toàn cục, KHÔNG nằm trong tin nhắn → phải tiêm riêng vào cuối body để UI (quả cầu
+  // nổi, panel NORMA…) hiện như chơi thật. Mỗi script bọc IIFE + try/catch gắn TÊN script vào lỗi.
+  // `<\/script` phải escape để không cắt cụt srcdoc.
+  let helperScriptTags = '';
+  if (opts.runScripts && opts.helperScripts?.length) {
+    helperScriptTags = opts.helperScripts
+      .map(({ name, content }) => {
+        const safe = rewriteParentRefs(content).replace(/<\/script/gi, '<\\/script');
+        const nameJson = JSON.stringify(name);
+        return `<script>/* card script: ${name.replace(/\*\//g, '')} */
+try { (function () {
+${safe}
+})(); } catch (e) { if (window.__stReportErr) window.__stReportErr('[' + ${nameJson} + '] ' + (e && e.message ? e.message : e), 0); }
+<\/script>`;
+      })
+      .join('\n');
   }
 
   // Môi trường script (chỉ khi runScripts): ĐÚNG bộ thư viện mà template iframe của
@@ -415,6 +481,7 @@ ${buildScriptShim(opts.initvarText ?? null, charName, opts.sideLabel || '')}`
     // Render THẲNG như ST: body = nội dung card. Không bong bóng, không containing-block hack
     // (để position:fixed của card phủ đúng khung iframe như trong ST thật). Vẫn cho cuộn.
     return `${head}<body>${body}
+${helperScriptTags}
 <style>html,body{overflow:auto !important}</style></body></html>`;
   }
 
@@ -424,5 +491,6 @@ ${buildScriptShim(opts.initvarText ?? null, charName, opts.sideLabel || '')}`
     <div style="font-weight:700;color:#a78bfa;margin-bottom:8px;font-size:0.95em">${escapeHtml(charName)}</div>
     <div>${body}</div>
   </div></div>
+${helperScriptTags}
 <style>html,body{overflow:auto !important;height:auto !important;max-height:none !important}</style></body></html>`;
 }

@@ -132,15 +132,83 @@ const renderSafeHtml = (htmlContent: string) => {
               $(this).toggleClass('collapsed');
               $(this).next('.section-content').toggleClass('hidden');
             });
-            
+
             // Log interaction
             console.log('ST Accoridon and Event fallback binders executed.');
           });
+        </script>
+
+        <script>
+          /* (User 2026) TỰ BÁO CHIỀU CAO ra ngoài để iframe giãn ĐÚNG bằng nội dung → KHÔNG còn thanh
+             cuộn RIÊNG trong khung preview (cuộn lồng cuộn rất khó theo dõi). Sandbox không có
+             allow-same-origin nên parent KHÔNG đọc được contentDocument → phải postMessage từ trong ra.
+             Gửi lại mỗi khi DOM/ảnh/accordion đổi kích thước (ResizeObserver + load). */
+          (function () {
+            var lastH = 0, sent = 0;
+            function report() {
+              /* Chốt an toàn: card dùng min-height:100vh sẽ ăn theo chiều cao iframe → iframe cao lên
+                 lại làm 100vh cao lên (vòng lặp phình). Giới hạn 40 lần báo là dừng — đủ cho mọi
+                 layout thật (ảnh/font tải xong, accordion mở), mà không bao giờ chạy loạn. */
+              if (sent > 40) return;
+              var d = document.documentElement, b = document.body;
+              var h = Math.max(
+                b.scrollHeight, b.offsetHeight,
+                d.scrollHeight, d.offsetHeight, d.clientHeight
+              );
+              if (Math.abs(h - lastH) < 2) return;
+              lastH = h;
+              sent++;
+              parent.postMessage({ __rmPreviewHeight: h, id: window.name }, '*');
+            }
+            window.addEventListener('load', report);
+            window.addEventListener('resize', report);
+            document.addEventListener('click', function () { setTimeout(report, 60); }); // accordion mở/đóng
+            if (window.ResizeObserver) new ResizeObserver(report).observe(document.body);
+            setTimeout(report, 0);
+            setTimeout(report, 300);
+          })();
         </script>
       </body>
     </html>
   `;
 };
+
+/**
+ * (User 2026) Iframe preview TỰ GIÃN theo nội dung — bỏ chiều cao cứng 240px + scroll bên trong.
+ * Nhận chiều cao qua postMessage từ srcDoc (sandbox không cho parent đọc contentDocument).
+ * `name` dùng làm ID để 2 khung (Gốc / Đã dịch) không nhận nhầm chiều cao của nhau.
+ */
+function AutoHeightPreview({ name, title, srcDoc }: { name: string; title: string; srcDoc: string }) {
+  const [height, setHeight] = useState(240);
+  useEffect(() => {
+    const onMsg = (ev: MessageEvent) => {
+      const d = ev.data as { __rmPreviewHeight?: number; id?: string } | null;
+      if (!d || typeof d.__rmPreviewHeight !== 'number' || d.id !== name) return;
+      // Trần 4000px: card game khổng lồ vẫn đọc được mà không làm trang dài vô tận.
+      setHeight(Math.min(Math.max(d.__rmPreviewHeight, 80), 4000));
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, [name]);
+  return (
+    <iframe
+      name={name}
+      title={title}
+      srcDoc={srcDoc}
+      sandbox="allow-scripts"
+      scrolling="no"
+      style={{
+        width: '100%',
+        height: `${height}px`,
+        display: 'block',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 'var(--radius-md)',
+        background: '#0f0f12',
+        overflow: 'hidden',
+      }}
+    />
+  );
+}
 
 /* ════════════════════════════════════════════════════════════════════
    TYPES
@@ -981,35 +1049,24 @@ function FieldsTab({
               {row.fieldKey === 'replaceString' && (
                 <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>{ui.rmPreviewLabel}</div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                  {/* (User 2026) 2 khung giãn ĐÚNG bằng nội dung — không còn cuộn riêng bên trong
+                      (đã có cuộn của bảng ngoài rồi; cuộn lồng cuộn rất khó theo dõi). `align-items:
+                      start` để 2 cột cao khác nhau không bị kéo bằng nhau. */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', alignItems: 'start' }}>
                     <div>
                       <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', marginBottom: '2px' }}>Original Preview:</div>
-                      <iframe
+                      <AutoHeightPreview
+                        name={`rmprev-o-${row.path}`}
                         title="Original Preview"
                         srcDoc={renderSafeHtml((row.original || '').replace(/\$[0-9&]+/g, ui.rmSampleContent))}
-                        sandbox="allow-scripts"
-                        style={{
-                          width: '100%',
-                          height: '240px',
-                          border: '1px solid var(--border-subtle)',
-                          borderRadius: 'var(--radius-md)',
-                          background: '#0f0f12',
-                        }}
                       />
                     </div>
                     <div>
                       <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', marginBottom: '2px' }}>Translated Preview:</div>
-                      <iframe
+                      <AutoHeightPreview
+                        name={`rmprev-t-${row.path}`}
                         title="Translated Preview"
                         srcDoc={renderSafeHtml((row.translated || row.original || '').replace(/\$[0-9&]+/g, ui.rmSampleContent))}
-                        sandbox="allow-scripts"
-                        style={{
-                          width: '100%',
-                          height: '240px',
-                          border: '1px solid var(--border-subtle)',
-                          borderRadius: 'var(--radius-md)',
-                          background: '#0f0f12',
-                        }}
                       />
                     </div>
                   </div>

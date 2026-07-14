@@ -312,6 +312,26 @@ function buildScriptShim(initvarText: string | null, charName: string, sideLabel
   window.getCharLorebooks = function () { return { primary: null, additional: [] }; };
   window.getModelList = function () { return Promise.resolve([]); };
 
+  // ── (User 2026 — đối chiếu predefine.js của JS-Slash-Runner thật) Globals script được cấp:
+  // EjsTemplate, TavernHelper, YAML, showdown, toastr, z + getScriptId trả ID iframe thật. ──
+  window.getScriptId = function () { return 'st-preview-script'; };
+  window.getScriptName = function () { return 'st-preview'; };
+  // YAML: bản thật là package yaml (parse/stringify); CDN mình nạp js-yaml (load/dump) → alias.
+  if (!window.YAML && window.jsyaml) {
+    window.YAML = {
+      parse: function (s, o) { return window.jsyaml.load(s, o); },
+      stringify: function (v, o) { return window.jsyaml.dump(v, o); },
+    };
+  }
+  // EjsTemplate (ST-Prompt-Template): stub tối thiểu — render trả nguyên văn để card không crash.
+  if (!window.EjsTemplate) {
+    window.EjsTemplate = {
+      render: function (t) { return Promise.resolve(String(t == null ? '' : t)); },
+      evalTemplate: function (t) { return Promise.resolve(String(t == null ? '' : t)); },
+      getTemplateOptions: function () { return {}; },
+    };
+  }
+
   // ── TavernHelper object: gương của toàn bộ globals (extension cũng làm vậy) ──
   var TH = {};
   '${TH_FUNCTION_NAMES}'.split(',').forEach(function (n) { TH[n] = window[n]; });

@@ -2,7 +2,7 @@ import { splitLorebookBatches } from '../utils/batchSplit';
 import { stripUrlsForCjkCheck } from '../utils/cjk';
 import { useCallback, useRef } from 'react';
 import { useStore } from '../store';
-import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookEntries, ChunkError, ApiError, setExtraProviders, resetProviderPool, computePoolConcurrency, callProvider } from '../utils/apiClient';
+import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookEntries, ChunkError, ApiError, setExtraProviders, resetProviderPool, computePoolConcurrency, callProvider, setNameStyle } from '../utils/apiClient';
 import { extractNameCandidates, buildNameGlossaryPrompt, parseNameGlossaryResponse, mergeGlossary, harvestGlossaryFromFields } from '../utils/nameGlossary';
 import { GLOSSARY_PRESETS } from '../utils/glossaryPresets';
 import { extractTranslatableFields, applyTranslationsToCard, autoTranslateLorebookTriggerKeys, injectNewLorebookEntries, isMvuUpdateField } from '../utils/cardFields';
@@ -1518,6 +1518,7 @@ export function useTranslation() {
     // Nạp pool provider phụ + reset round-robin cho lượt dịch này.
     setExtraProviders(store.providers);
     resetProviderPool();
+    setNameStyle(store.translationConfig.nameStyle); // (User 2026) Kiểu tên riêng → mọi prompt dùng chung
     if (store.providers.filter((p) => p.enabled).length > 0) {
       store.addLog('info', `🔀 Đa provider: ${1 + store.providers.filter((p) => p.enabled).length} provider chạy song song (rải đều).`);
     }
@@ -1584,7 +1585,7 @@ export function useTranslation() {
         const candidates = extractNameCandidates(fields).filter(c => !existingSources.has(c.term));
         if (candidates.length >= 2) {
           store.addLog('info', `📖 Pha 0 — bảng tên riêng: thấy ${candidates.length} tên/thuật ngữ lặp lại, đang dịch bảng tên (1 lượt gọi) để thống nhất toàn card…`);
-          const { system, user } = buildNameGlossaryPrompt(candidates, cfgP0.targetLanguage);
+          const { system, user } = buildNameGlossaryPrompt(candidates, cfgP0.targetLanguage, cfgP0.nameStyle);
           const rawNames = await callProvider(store.proxy, system, user, abortRef.current!.signal, undefined,
             { label: '📖 Bảng tên riêng (Pha 0)', charCount: user.length });
           const nameEntries = parseNameGlossaryResponse(rawNames, candidates);
@@ -3615,6 +3616,7 @@ export function useTranslation() {
     CallMonitor.reset();
     setExtraProviders(store.providers);
     resetProviderPool();
+    setNameStyle(store.translationConfig.nameStyle); // (User 2026) Kiểu tên riêng → mọi prompt dùng chung
 
     store.addLog('info', `🔧 Applying Mod to ${targetFields.length} field(s) [Language: ${effectiveLang}]`);
     store.addLog('info', `📝 Mod instructions: "${modInstructions.slice(0, 100)}${modInstructions.length > 100 ? '...' : ''}"`);

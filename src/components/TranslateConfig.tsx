@@ -6,7 +6,7 @@ import { fmt } from '../i18n';
 import { TARGET_LANGUAGES, SOURCE_LANGUAGES, extractTranslatableFields } from '../utils/cardFields';
 import { getDefaultTranslationPrompt, getModelSuggestions } from '../utils/apiClient';
 import { aiExtractGlossaryTerms } from '../utils/mvuSync';
-import type { LorebookStrategy, FieldGroupConfig, FieldGroup, GlossaryEntry } from '../types/card';
+import type { LorebookStrategy, FieldGroupConfig, FieldGroup, GlossaryEntry, NameStyle } from '../types/card';
 import { Languages, FileJson, BookOpen, Plus, Trash2, Download, Upload, Bot, Loader2, Save, RotateCcw, CheckCircle, Zap } from 'lucide-react';
 import { recommendPreset } from '../utils/presetRecommend';
 import { GLOSSARY_PRESETS } from '../utils/glossaryPresets';
@@ -511,6 +511,26 @@ export default function TranslateConfig() {
               </span>
             </span>
           </label>
+
+          {/* (User 2026) Kiểu tên riêng — Hán-Việt / Romaji-Quốc tế / Giữ nguyên. Tên phương Tây luôn khôi phục. */}
+          <div style={{ marginBottom: '10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '0.75rem', fontWeight: 600, whiteSpace: 'nowrap' }}>{ui.tcNameStyle}</span>
+              <select
+                className="input"
+                value={translationConfig.nameStyle}
+                onChange={(e) => setTranslationConfig({ nameStyle: e.target.value as NameStyle })}
+                style={{ flex: 1, fontSize: '0.75rem', padding: '5px 8px', cursor: 'pointer' }}
+              >
+                <option value="hanviet">{ui.tcNameStyleHanviet}</option>
+                <option value="romaji">{ui.tcNameStyleRomaji}</option>
+                <option value="keep">{ui.tcNameStyleKeep}</option>
+              </select>
+            </div>
+            <span style={{ display: 'block', fontSize: '0.65rem', color: 'var(--text-muted)', lineHeight: 1.45, marginTop: '4px' }}>
+              {ui.tcNameStyleHint}
+            </span>
+          </div>
 
           {/* Glossary entries */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>

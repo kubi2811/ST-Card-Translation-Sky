@@ -1,4 +1,5 @@
 import type { TranslationField, GlossaryEntry } from '../types/card';
+import { buildProperNounRules, type NameStyle } from './masterPrompt';
 
 /**
  * ─── Pha 0: Bảng tên riêng tự động ───
@@ -163,12 +164,14 @@ export function extractNameCandidates(
 export function buildNameGlossaryPrompt(
   candidates: NameCandidate[],
   targetLanguage: string,
+  nameStyle: NameStyle = 'hanviet',
 ): { system: string; user: string } {
   const system = `Bạn là chuyên gia dịch TÊN RIÊNG và THUẬT NGỮ trong thẻ nhân vật (character card) tiếng Trung sang ${targetLanguage}.
 Người dùng gửi danh sách cụm từ XUẤT HIỆN NHIỀU LẦN trong thẻ. Nhiệm vụ của bạn:
 
 1. CHỈ GIỮ tên riêng hoặc thuật ngữ cần cố định bản dịch: tên người, địa danh, tông môn/tổ chức, công pháp/chiêu thức, vật phẩm đặc biệt, xưng hiệu, cảnh giới tu luyện.
-2. Tên người / địa danh / tông môn → ưu tiên âm Hán-Việt nếu ngôn ngữ đích là Tiếng Việt (叶凡 → Diệp Phàm, 青云宗 → Thanh Vân Tông, 长安 → Trường An). Ngôn ngữ đích khác thì phiên âm theo chuẩn của ngôn ngữ đó (tiếng Anh → pinyin).
+2. QUY TẮC PHIÊN ÂM TÊN RIÊNG — TUÂN THỦ NGHIÊM NGẶT:
+${buildProperNounRules(nameStyle)}
 3. Thuật ngữ tu luyện/game → dịch nghĩa chuẩn cộng đồng (金丹 → Kim Đan, 灵气 → linh khí).
 4. Từ thông dụng, động từ, cụm mô tả vô danh → BỎ HẲN khỏi kết quả (không ghi dòng nào).
 5. Cụm = tên riêng + từ thông dụng dính kèm (ví dụ 青云宗弟子) → BỎ nếu phần tên riêng đã có dòng riêng.

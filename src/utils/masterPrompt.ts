@@ -9,7 +9,7 @@
  * endpoints with large context windows (1M+ tokens).
  */
 
-import type { GlossaryEntry } from '../types/card';
+import type { GlossaryEntry, NameStyle } from '../types/card';
 
 /* ─── Quy tắc phiên âm DANH TỪ RIÊNG (dùng CHUNG cho cả 3 chiến lược dịch) ───
    Nguồn: yêu cầu client (PhatSiz). Dùng cho:
@@ -18,11 +18,42 @@ import type { GlossaryEntry } from '../types/card';
      - Chiến lược C (Sync EJS: dịch tên entry/keyword) — utils/ejsSync.ts
    Đặt ở đây (module leaf) để mọi nơi import 1 nguồn duy nhất → luôn nhất quán.
    Lưu ý: quy tắc HÀN (Revised Romanization) là bổ sung mới trước đây bị thiếu. */
-export const PROPER_NOUN_RULES = `PROPER NOUN TRANSLITERATION (names & places only):
+/**
+ * (User yêu cầu 2026) KIỂU TÊN RIÊNG — cách xử lý tên nhân vật/địa danh:
+ *  - 'hanviet' (mặc định VN): tên Trung → Hán-Việt (叶凡→Diệp Phàm).
+ *  - 'romaji'  (Quốc tế): tên NHÂN VẬT → phiên âm quốc tế (Nhật→Romaji, Trung→Pinyin, Hàn→Revised);
+ *              hợp card dùng tên Nhật-IP viết bằng Hán (小白→Shiro). Địa danh/thuật ngữ vẫn Hán-Việt được.
+ *  - 'keep'    (Giữ nguyên): giữ dạng gốc/quốc tế nhất, tối thiểu phiên âm.
+ * DÙ chọn kiểu nào: tên PHƯƠNG TÂY phiên âm sang CJK (威廉→William, 泰坦→Titan) LUÔN khôi phục Latin gốc.
+ */
+export type { NameStyle };
+
+const WESTERN_RESTORE_LINE =
+  '    - WESTERN/FOREIGN NAMES: Non-Chinese names phonetically transcribed into CJK (e.g. 维拉→Vera, 亚瑟→Arthur, 威廉→William, 泰坦→Titan, 塞勒涅→Selene) → ALWAYS restore to the original Latin/English spelling. NEVER read them as Sino-Vietnamese (do NOT produce "Uy Lợi Nhĩ", "Thái Thản", …).';
+
+/** Sinh khối luật PHIÊN ÂM TÊN RIÊNG theo kiểu tên đã chọn. */
+export function buildProperNounRules(nameStyle: NameStyle = 'hanviet'): string {
+  if (nameStyle === 'romaji') {
+    return `PROPER NOUN TRANSLITERATION — INTERNATIONAL/ROMAJI STYLE (names & places only):
+    - CHARACTER/PERSON NAMES → international romanization, NOT Sino-Vietnamese: Japanese-origin → Romaji (田中→Tanaka, if the card uses a Japanese IP name written in Han like 小白 → Shiro); Chinese → Pinyin (叶凡→Ye Fan, 李明→Li Ming); Korean → Revised Romanization (金泰亨→Kim Tae-hyung).
+    - Place names, sects, cultivation ranks, techniques, titles → may keep a natural Sino-Vietnamese reading for readability.
+    - If a card clearly uses Japanese/international IP characters, prefer their well-known international spelling.
+${WESTERN_RESTORE_LINE}`;
+  }
+  if (nameStyle === 'keep') {
+    return `PROPER NOUN TRANSLITERATION — KEEP-ORIGINAL STYLE (names & places only):
+    - Keep proper nouns as close to the original international form as possible; do NOT over-localize. CJK person names → a clean romanization (Japanese→Romaji, Chinese→Pinyin, Korean→Revised), NOT Sino-Vietnamese. Names already in Latin → keep exactly.
+${WESTERN_RESTORE_LINE}`;
+  }
+  // 'hanviet' — mặc định
+  return `PROPER NOUN TRANSLITERATION (names & places only):
     - Chinese proper nouns (names, places) → Sino-Vietnamese reading for names only (e.g. 李明 → Lý Minh). Do NOT use Pinyin.
     - Japanese proper nouns (names, places) → standard Romaji transliteration (e.g. 田中 → Tanaka). Do NOT apply Sino-Vietnamese to Japanese names.
     - Korean proper nouns (names, places) → Standard Revised Romanization of Korean (e.g. 金泰亨 → Kim Tae-hyung, 濟州島 → Đảo Jeju, 仁川 → Incheon). Do NOT apply Sino-Vietnamese to Korean names.
-    - WESTERN/FANTASY NAMES: Non-Chinese names phonetically transcribed into CJK (e.g. 维拉→Vera, 亚瑟→Arthur) → restore to original Latin spelling.`;
+${WESTERN_RESTORE_LINE}`;
+}
+
+export const PROPER_NOUN_RULES = buildProperNounRules('hanviet');
 
 /* ─── Field Type Classification ─── */
 export type TranslationFieldType =
@@ -48,6 +79,8 @@ export interface MasterPromptOptions {
   ragContextBlock?: string;
   /** Entry name dictionary for EJS sync: original entry name → translated name */
   entryNameDictionary?: Record<string, string>;
+  /** (User 2026) Kiểu tên riêng — đổi cách phiên âm tên nhân vật (mặc định 'hanviet'). */
+  nameStyle?: NameStyle;
 }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -152,7 +185,7 @@ A single mismatch = total system crash.`;
    ════════════════════════════════════════════════════════════════════ */
 
 /** Narrative fields: proper nouns, register, pronouns, tone */
-function buildNarrativeRules(sourceLang: string, targetLang: string): string {
+function buildNarrativeRules(sourceLang: string, targetLang: string, nameStyle: NameStyle = 'hanviet'): string {
   const isVietnamese = targetLang.toLowerCase().includes('việt') || targetLang.toLowerCase().includes('vietnamese');
   const isChinese = sourceLang.includes('中') || sourceLang.toLowerCase().includes('chinese');
   const isJapanese = sourceLang.includes('日') || sourceLang.toLowerCase().includes('japanese');
@@ -161,6 +194,14 @@ function buildNarrativeRules(sourceLang: string, targetLang: string): string {
   let rules = `
 TRANSLATION PRINCIPLES (NARRATIVE):
 `;
+
+  // (User 2026) Kiểu tên ≠ Hán-Việt → dùng khối luật quốc tế/giữ nguyên cho MỌI nguồn (đè nhánh chi tiết bên dưới).
+  if (isVietnamese && nameStyle !== 'hanviet') {
+    rules += `
+P1 — ${buildProperNounRules(nameStyle)}
+  - All descriptive text → translate into natural, modern Vietnamese.`;
+    return rules;
+  }
 
   if (isChinese && isVietnamese) {
     rules += `
@@ -923,16 +964,16 @@ export function buildMasterSystemPrompt(options: MasterPromptOptions): string {
   // Layer 2: Field-specific rules
   switch (fieldType) {
     case 'narrative':
-      layers.push(buildNarrativeRules(sourceLang, targetLang));
+      layers.push(buildNarrativeRules(sourceLang, targetLang, options.nameStyle));
       break;
     case 'regex':
       layers.push(buildRegexRules());
-      layers.push(buildNarrativeRules(sourceLang, targetLang)); // Regex replaceString may have narrative
+      layers.push(buildNarrativeRules(sourceLang, targetLang, options.nameStyle)); // Regex replaceString may have narrative
       break;
     case 'lorebook':
       layers.push(buildLorebookRules());
       layers.push(buildEjsRules());
-      layers.push(buildNarrativeRules(sourceLang, targetLang));
+      layers.push(buildNarrativeRules(sourceLang, targetLang, options.nameStyle));
       break;
     case 'ejs_code':
       layers.push(buildEjsRules());
@@ -949,7 +990,7 @@ export function buildMasterSystemPrompt(options: MasterPromptOptions): string {
     case 'mixed':
     default:
       // Include all relevant rules for mixed/unknown content
-      layers.push(buildNarrativeRules(sourceLang, targetLang));
+      layers.push(buildNarrativeRules(sourceLang, targetLang, options.nameStyle));
       layers.push(buildLorebookRules());
       layers.push(buildEjsRules());
       layers.push(buildRegexRules());

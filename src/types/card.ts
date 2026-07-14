@@ -336,6 +336,9 @@ export interface GlossaryEntry {
 
 export type ModPreset = 'none' | 'ntr_to_ntl';
 
+/** (User 2026) Kiểu phiên âm TÊN RIÊNG — xem TranslationConfig.nameStyle + utils/masterPrompt. */
+export type NameStyle = 'hanviet' | 'romaji' | 'keep';
+
 export interface TranslationConfig {
   sourceLanguage: string;
   targetLanguage: string;
@@ -376,6 +379,12 @@ export interface TranslationConfig {
    * glossary → mọi luồng dịch song song dùng chung, tên nhất quán toàn card.
    */
   autoNameGlossary: boolean;
+  /**
+   * (User 2026) KIỂU TÊN RIÊNG khi dịch — ảnh hưởng Pha 0 (bảng tên) + prompt chính:
+   * 'hanviet' (mặc định VN) = tên Trung→Hán-Việt; 'romaji' = tên nhân vật→phiên âm quốc tế
+   * (Nhật→Romaji, Trung→Pinyin); 'keep' = giữ dạng gốc/quốc tế. Tên phương Tây LUÔN khôi phục Latin.
+   */
+  nameStyle: NameStyle;
   enableMvuSync: boolean; // Enable Strategy B (Sync MVU Variables)
   mvuDictionary: Record<string, string>; // Dictionary for Strategy B
   enableRAGContext: boolean; // Enable Cross-field Context RAG for consistency

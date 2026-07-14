@@ -24,7 +24,11 @@ const GROUP_ORDER: Origin[] = ['name', 'harvest', 'preset', 'manual'];
 export default function GlossaryVizPanel() {
   const card = useStore((s) => s.card);
   const glossary = useStore((s) => s.translationConfig.glossary);
+  const nameStyle = useStore((s) => s.translationConfig.nameStyle);
   const ui = useUi() as Record<string, string>;
+  const nameStyleLabel: Record<string, string> = {
+    hanviet: ui.tcNameStyleHanviet, romaji: ui.tcNameStyleRomaji, keep: ui.tcNameStyleKeep,
+  };
   const [expanded, setExpanded] = useState(true);
 
   const groups = useMemo(() => {
@@ -52,6 +56,9 @@ export default function GlossaryVizPanel() {
         <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>{ui.gvTitle}</span>
         <span style={{ padding: '1px 7px', borderRadius: 8, fontSize: '0.62rem', fontWeight: 700, background: 'rgba(124,106,240,0.12)', color: 'var(--accent-primary)' }}>
           {total}
+        </span>
+        <span title={ui.tcNameStyleHint} style={{ padding: '1px 7px', borderRadius: 8, fontSize: '0.6rem', fontWeight: 700, background: 'rgba(56,189,248,0.12)', color: 'var(--accent-secondary)' }}>
+          🔤 {nameStyleLabel[nameStyle] || nameStyle}
         </span>
         <span style={{ marginLeft: 'auto', color: 'var(--text-muted)' }}>{expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span>
       </div>

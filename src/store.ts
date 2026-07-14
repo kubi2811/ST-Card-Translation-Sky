@@ -538,6 +538,8 @@ export const useStore = create<AppState>((set) => ({
     // Pha 0 (bảng tên riêng tự động) mặc định BẬT: chi phí 1 call, đổi lại tên nhân vật
     // nhất quán trên mọi luồng dịch song song. User tắt thì LS nhớ.
     autoNameGlossary: LS.get('st-translator-auto-name-glossary', true),
+    // (User 2026) Kiểu tên riêng — mặc định Hán-Việt (chuẩn VN). LS nhớ lựa chọn.
+    nameStyle: LS.get('st-translator-name-style', 'hanviet') as import('./types/card').NameStyle,
     enableMvuSync: LS.get('st-translator-mvu-sync-enabled', true),
     mvuDictionary: LS.get('st-translator-mvu-dict', {}) as Record<string, string>,
     enableRAGContext: LS.get('st-translator-rag-enabled', true),
@@ -579,6 +581,9 @@ export const useStore = create<AppState>((set) => ({
       const next = { ...s.translationConfig, ...partial };
       if ('glossary' in partial) {
         LS.set('st-translator-glossary', next.glossary);
+      }
+      if ('nameStyle' in partial) {
+        LS.set('st-translator-name-style', next.nameStyle);
       }
       if ('autoNameGlossary' in partial) {
         LS.set('st-translator-auto-name-glossary', next.autoNameGlossary);
@@ -780,6 +785,7 @@ export const useStore = create<AppState>((set) => ({
       exportKeyMode: 'merge' as const,
       glossary: [],
       autoNameGlossary: true,
+      nameStyle: 'hanviet' as import('./types/card').NameStyle,
       enableMvuSync: false,
       mvuDictionary: {},
       enableRAGContext: true,

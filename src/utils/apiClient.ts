@@ -4,10 +4,17 @@ import {
   buildMasterSystemPrompt,
   extractTranslationFromResponse,
   fieldGroupToFieldType,
-  PROPER_NOUN_RULES,
+  buildProperNounRules,
+  type NameStyle,
   type TranslationFieldType,
   type MasterPromptOptions,
 } from './masterPrompt';
+
+// (User 2026) KIỂU TÊN RIÊNG toàn cục — store set trước khi dịch (setNameStyle) để mọi prompt (chính
+// + master) dùng chung, khỏi luồn qua chục chữ ký. Cùng pattern với _extraProviders.
+let _nameStyle: NameStyle = 'hanviet';
+export function setNameStyle(s: NameStyle): void { _nameStyle = s || 'hanviet'; }
+export function getNameStyle(): NameStyle { return _nameStyle; }
 import { LOREBOOK_GENERATION_PROMPT } from './promptBuilder';
 import { extractCJKTokens, reinsertTranslations, surgicalTranslate } from './surgical';
 import { CallMonitor, estimateTokens } from './callMonitor';
@@ -234,7 +241,7 @@ STRICT RULES:
    - Variable placeholders like {{char}}, {{user}}, {{random}}: Keep exactly as-is, do NOT translate.
    - Text inside angle brackets like <角色名>, <设定>: Keep the bracket structure, translate the content inside.
 10. Maintain consistent terminology. If you translate a term one way, use that same translation throughout.
-11. ${PROPER_NOUN_RULES}
+11. ${buildProperNounRules(_nameStyle)}
     - All descriptive text → translate into natural, modern Vietnamese.
     - Keep honorifics as-is or map to Vietnamese equivalents based on context (-san, -chan, -sama).
 12. CRITICAL: The output must contain ONLY the translated text in ${targetLang}. Do NOT include source language text. Do NOT pair original text with translation. Do NOT use arrows (→) or colons (:) to show before/after.
@@ -266,6 +273,7 @@ export function buildSystemPromptForField(
       mvuDictionary,
       glossary,
       customPromptSuffix: customPrompt?.trim() || undefined,
+      nameStyle: _nameStyle,
     });
   }
 

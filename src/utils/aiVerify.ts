@@ -227,6 +227,13 @@ export function extractSystemReferences(card: CharacterCard): SystemReference[] 
 
 /* ═══ Quick local verification (no AI needed) ═══ */
 
+/** (User 2026) Chuẩn hoá 1 EJS expression để so CẤU TRÚC: thay NỘI DUNG mọi chuỗi '…'/"…"/`…` thành
+ *  rỗng + gộp khoảng trắng. Dùng để "Nghiệm thu" không báo SAI khi tên biến/chuỗi so sánh bên trong
+ *  EJS đã được DỊCH có chủ ý (Chiến lược B/C) — expression khác card gốc nhưng KHÔNG mất/vỡ. */
+export function normalizeEjsExpr(name: string): string {
+  return (name || '').replace(/(['"`])(?:[^'"`\\]|\\.)*?\1/g, (_m, q) => `${q}${q}`).replace(/\s+/g, ' ').trim();
+}
+
 export function quickVerify(
   originalCard: CharacterCard,
   translatedCard: CharacterCard
@@ -247,10 +254,14 @@ export function quickVerify(
     transBySource.get(r.source)!.push(r);
   }
 
+  const normEjs = normalizeEjsExpr; // (User 2026) so cấu trúc EJS, bỏ nội dung chuỗi đã dịch
+
   // Check each source location
   for (const [source, origList] of origBySource) {
     const transList = transBySource.get(source) || [];
     const transNames = new Set(transList.map(r => r.name));
+    // Tập EJS expression của bản dịch ở dạng CHUẨN HOÁ (bỏ nội dung chuỗi) — để bắt "cùng cấu trúc".
+    const transEjsNorm = new Set(transList.filter(r => r.type === 'ejs').map(r => normEjs(r.name)));
 
     for (const ref of origList) {
       // Check if a variable/macro/data-var reference is missing in the translation
@@ -296,16 +307,20 @@ export function quickVerify(
         }
         // EJS templates
         else if (ref.type === 'ejs') {
-          issues.push({
-            id: crypto.randomUUID(),
-            severity: 'error',
-            location: source,
-            description: `EJS template expression missing: <% ${ref.name.slice(0, 40)} %>`,
-            original: `<% ${ref.name} %>`,
-            current: '(missing)',
-            suggestion: `Restore the EJS template expression`,
-            autoFixable: false,
-          });
+          // (User 2026) Chỉ báo THIẾU khi CẤU TRÚC expression cũng mất. Nếu bản dịch có expression
+          // CÙNG cấu trúc (chỉ khác NỘI DUNG chuỗi vì tên biến/so sánh đã dịch) → KHÔNG phải lỗi.
+          if (!transEjsNorm.has(normEjs(ref.name))) {
+            issues.push({
+              id: crypto.randomUUID(),
+              severity: 'error',
+              location: source,
+              description: `EJS template expression missing: <% ${ref.name.slice(0, 40)} %>`,
+              original: `<% ${ref.name} %>`,
+              current: '(missing)',
+              suggestion: `Restore the EJS template expression`,
+              autoFixable: false,
+            });
+          }
         }
       }
     }

@@ -907,8 +907,20 @@ export function canonicalizeMvuVarName(name: string): string {
   // ASCII thuần (không dấu tiếng Việt/CJK) ⇒ có thể là identifier code ⇒ KHÔNG đụng (giữ `_`).
   if (!/[^\x00-\x7F]/.test(unquoted)) return name;
   if (PROTECTED_CODE_KEYWORDS.has(unquoted) || PROTECTED_CODE_KEYWORDS.has(unquoted.toLowerCase())) return name;
-  // Bỏ `_`/`-` (word-separator) → space; gộp space thừa.
-  const cleaned = unquoted.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  // (User 2026) Bỏ `_`/`-` (word-separator) → space theo QUY TẮC TOKEN: chỉ đổi khi MỌI mảnh 2 bên
+  // đều có chữ non-ASCII ("Thế_lực" → "Thế lực"). Có mảnh ASCII thuần ("场景_sfw", "隐藏_evt_01") ⇒
+  // biến mixed code ⇒ GIỮ separator (đổi là vỡ getvar path). Gộp space thừa như cũ.
+  const cleaned = unquoted
+    .split(/\s+/)
+    .map((w) => {
+      if (!/[_-]/.test(w)) return w;
+      const parts = w.split(/[_-]+/).filter(Boolean);
+      if (parts.length >= 2 && parts.every((p) => /[^\x00-\x7F]/.test(p))) return parts.join(' ');
+      return w;
+    })
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   return cleaned || name;
 }
 

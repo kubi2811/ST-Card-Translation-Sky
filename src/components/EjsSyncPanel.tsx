@@ -2,11 +2,11 @@ import React, { useState, useMemo } from 'react';
 import { useStore } from '../store';
 import { useT, useUi } from '../i18n/useLocale';
 import { fmt } from '../i18n';
-import { detectEjsCard, extractEjsEntryNames, extractEjsKeywords, extractAllDecorators, aiTranslateEjsEntries, enforceEjsDictConsistency } from '../utils/ejsSync';
+import { detectEjsCard, extractEjsEntryNames, extractEjsKeywords, extractAllDecorators, aiTranslateEjsEntries, enforceEjsDictConsistency, autoFixEjsEntryNames, autoFixEjsKeywords, enforceEjsCovariance, enforceEjsKeywordCasing, autoFixEjsKeywordsExtended } from '../utils/ejsSync';
 import { Settings, Plus, Trash2, Wand2, Loader2, Search, Download, Upload, Shield, Zap, Hash, BookOpen, Eye } from 'lucide-react';
 
 export default function EjsSyncPanel() {
-  const { card, translationConfig, setTranslationConfig, proxy, addToast } = useStore();
+  const { card, translationConfig, setTranslationConfig, proxy, addToast, fields, updateField, addLog, saveTranslationCache } = useStore();
   const t = useT();
   const [isExpanded, setIsExpanded] = useState(false);
   const [newKey, setNewKey] = useState('');
@@ -82,6 +82,54 @@ export default function EjsSyncPanel() {
 
   const updateKeyword = (key: string, value: string) => {
     setTranslationConfig({ ejsKeywordDict: { ...ejsKeywordDict, [key]: value } });
+  };
+
+  // ─── (User 2026) ÁP từ điển vào bản dịch (non-AI) ───
+  // Sau khi user EDIT dict trong panel: quét mọi field đã dịch, chạy lại đủ 5 pass ép dict
+  // (entry name, keyword trong khối, covariance, casing, keyword ngoài khối) → bản dịch đồng
+  // nhất theo dict MỚI mà không tốn call AI. Dùng cả cho card cũ import lại (câu hỏi #4 user).
+  const applyDictToTranslation = () => {
+    const kwDict = ejsKeywordDict;
+    const enDict = ejsEntryNameDict;
+    if (Object.keys(kwDict).length === 0 && Object.keys(enDict).length === 0) {
+      addToast('info', ui.esApplyNoDict);
+      return;
+    }
+    let changedFields = 0;
+    let totalFixes = 0;
+    for (const f of fields) {
+      if (f.status !== 'done' || !f.translated) continue;
+      let text = f.translated;
+      let fixes = 0;
+      if (Object.keys(enDict).length > 0) {
+        const r1 = autoFixEjsEntryNames(text, enDict);
+        text = r1.text; fixes += r1.fixes.length;
+      }
+      if (Object.keys(kwDict).length > 0) {
+        const r2 = autoFixEjsKeywords(text, kwDict);
+        text = r2.text; fixes += r2.fixes.length;
+      }
+      const r3 = enforceEjsCovariance(text, enDict, kwDict);
+      text = r3.text; fixes += r3.fixes.length;
+      const r4 = enforceEjsKeywordCasing(text, enDict, kwDict);
+      text = r4.text; fixes += r4.fixes.length;
+      if (Object.keys(kwDict).length > 0) {
+        const r5 = autoFixEjsKeywordsExtended(text, kwDict);
+        text = r5.text; fixes += r5.fixes.length;
+      }
+      if (text !== f.translated) {
+        updateField(f.path, { translated: text });
+        changedFields++;
+        totalFixes += Math.max(fixes, 1);
+        addLog('info', `📥 EJS dict → "${f.label}": ${fixes} chỗ`);
+      }
+    }
+    if (changedFields > 0) {
+      saveTranslationCache();
+      addToast('success', fmt(ui.esApplyDone, { fields: changedFields, fixes: totalFixes }));
+    } else {
+      addToast('info', ui.esApplyNone);
+    }
   };
 
   // ─── Auto Extract + AI Translate ───
@@ -278,24 +326,38 @@ export default function EjsSyncPanel() {
             <button className="btn btn-sm" onClick={importDict} title="Import dictionaries">
               <Upload size={13} />
             </button>
-            {/* (User 2026) Đồng nhất từ điển EJS — non-AI: làm sạch value + gom cụm gần-giống về 1 dạng */}
+            {/* (User 2026) Đồng nhất từ điển EJS — non-AI: làm sạch value + gom cụm gần-giống về 1 dạng.
+                Keyword dict thêm PRUNE theo quy luật (bỏ văn xuôi/mảnh code/identifier lỡ vào từ scan cũ)
+                + báo ĐỤNG ĐỘ (2 key → cùng 1 value). Entry name KHÔNG prune (tên dài/[prefix] hợp lệ). */}
             <button
               className="btn btn-sm"
               title={ui.esUnifyTip}
               style={{ color: '#4ade80', borderColor: 'rgba(34,197,94,0.3)' }}
               onClick={() => {
-                const kwRes = enforceEjsDictConsistency(ejsKeywordDict);
+                const kwRes = enforceEjsDictConsistency(ejsKeywordDict, { pruneInvalidKeywords: true });
                 const enRes = enforceEjsDictConsistency(ejsEntryNameDict);
                 const total = kwRes.fixes.length + enRes.fixes.length;
                 if (total > 0) {
                   setTranslationConfig({ ejsKeywordDict: kwRes.fixedDict, ejsEntryNameDict: enRes.fixedDict });
                   addToast('success', fmt(ui.esUnifyDone, { count: total }));
+                  // Đưa chi tiết (prune/đụng độ) ra console cho user soi khi cần
+                  console.log('[EJS Đồng nhất]', [...kwRes.fixes, ...enRes.fixes]);
                 } else {
                   addToast('info', ui.esUnifyNone);
                 }
               }}
             >
               🔗 {ui.esUnify}
+            </button>
+            {/* (User 2026) ÁP từ điển vào bản dịch — non-AI: sau khi EDIT dict trong panel (input sửa
+                trực tiếp được), bấm nút này để quét lại MỌI field đã dịch và ép theo dict mới. */}
+            <button
+              className="btn btn-sm"
+              title={ui.esApplyTip}
+              style={{ color: '#38bdf8', borderColor: 'rgba(56,189,248,0.3)' }}
+              onClick={applyDictToTranslation}
+            >
+              📥 {ui.esApply}
             </button>
           </div>
 

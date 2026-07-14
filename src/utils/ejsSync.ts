@@ -353,6 +353,33 @@ export function extractEjsEntryNames(card: CharacterCard): EjsEntryRef[] {
  * Deep extract keywords from EJS blocks: string comparisons, alias arrays,
  * decorator triggers, and define() names.
  */
+/**
+ * (User 2026 \u2014 "qu\u00e9t keywords kh\u00f4ng theo quy lu\u1eadt g\u00ec") QUY LU\u1eacT keyword h\u1ee3p l\u1ec7 \u2014 1 ngu\u1ed3n duy nh\u1ea5t,
+ * d\u00f9ng cho C\u1ea2 scan (addKeyword) l\u1eabn \u0110\u1ed3ng nh\u1ea5t t\u1eeb \u0111i\u1ec3n (prune entry r\u00e1c \u0111\u00e3 l\u1ee1 v\u00e0o dict).
+ * Keyword = chu\u1ed7i NG\u1eaeN ki\u1ec3u \u0111\u1ecbnh danh d\u00f9ng trong LOGIC game (t\u00ean tr\u1ea1ng th\u00e1i/phe/quan h\u1ec7/t\u1eeb kho\u00e1 so s\u00e1nh).
+ * KH\u00d4NG ph\u1ea3i keyword:
+ *  - V\u0102N XU\u00d4I: d\u00e0i >32 k\u00fd t\u1ef1, ho\u1eb7c ch\u1ee9a d\u1ea5u c\u00e2u c\u00e2u-v\u0103n (\u3002\uff01\uff1f\uff1b\uff0c, xu\u1ed1ng d\u00f2ng) \u2014 \u0111\u00e2y l\u00e0 VALUE m\u00f4 t\u1ea3,
+ *    \u0111\u01b0\u1ee3c d\u1ecbch theo ng\u1eef c\u1ea3nh b\u00ecnh th\u01b0\u1eddng, nh\u00e9t v\u00e0o dict ch\u1ec9 ph\u00e1 (bug 78/309 entry l\u00e0 nguy\u00ean \u0111o\u1ea1n v\u0103n).
+ *  - M\u1ea2NH CODE: ch\u1ee9a ${ <% %> => == && || </ <tag>, ngo\u1eb7c {}(), d\u1ea5u ; = ` \u2014 thay c\u00e1c m\u1ea3nh n\u00e0y qua
+ *    covariance l\u00e0 V\u1ee0 code (bug `'${item.id === profile.id ? '`, `,\n    `).
+ *  - Token CSS/k\u1ef9 thu\u1eadt: m\u00e0u #hex, var(--x), s\u1ed1 thu\u1ea7n.
+ *  - IDENTIFIER ASCII thu\u1ea7n (stat_data, sfw_keywords, east_asia_1629): l\u00e0 T\u00caN BI\u1ebeN code \u2014 kh\u00f4ng \u0111\u01b0\u1ee3c
+ *    d\u1ecbch (bug AI d\u1ecbch `sfw_keywords` \u2192 `t\u1eeb_kh\u00f3a_sfw` r\u1ed3i dict \u00e9p v\u00e0o code). Kh\u00f4ng v\u00e0o dict = gi\u1eef nguy\u00ean.
+ */
+export function isValidEjsKeywordKey(keyword: string): boolean {
+  if (!keyword || typeof keyword !== 'string') return false;
+  const k = keyword.trim();
+  if (k.length < 2 || k.length > 32) return false;
+  if (/[\n\r]/.test(k)) return false;
+  if (/[\u3002\uff01\uff1f\uff1b\uff0c\u3001,;]/.test(k)) return false;                       // d\u1ea5u c\u00e2u v\u0103n xu\u00f4i (CN + ASCII)
+  if (/\$\{|<%|%>|=>|==|&&|\|\||<\/|[{}()<>=`]/.test(k)) return false; // m\u1ea3nh code
+  if (/^#[0-9a-fA-F]{3,8}$/.test(k)) return false;                    // m\u00e0u CSS
+  if (/^\d+(?:\.\d+)?$/.test(k)) return false;                        // s\u1ed1 thu\u1ea7n
+  if (/^[A-Za-z_$][A-Za-z0-9_$-]*$/.test(k)) return false;            // identifier ASCII thu\u1ea7n
+  if (!/[\p{L}\p{N}]/u.test(k)) return false;                         // to\u00e0n k\u00fd hi\u1ec7u
+  return true;
+}
+
 export function extractEjsKeywords(card: CharacterCard): EjsKeyword[] {
   const allTexts = collectAllTexts(card);
   const keywords: EjsKeyword[] = [];
@@ -361,13 +388,8 @@ export function extractEjsKeywords(card: CharacterCard): EjsKeyword[] {
   const addKeyword = (keyword: string, type: EjsKeyword['type'], foundIn: string, context?: string) => {
     const key = `${keyword}::${type}`;
     if (seen.has(key)) return;
-    // Skip very short strings, pure numbers, common code tokens
-    if (keyword.length < 2) return;
-    if (/^\d+$/.test(keyword)) return;
-    if (/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(keyword) && keyword.length < 4) return;
-    // Only collect CJK or long strings (likely translatable)
-    const hasCJK = /[\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f\uff00-\uffef\uac00-\ud7af\u3040-\u30ff]/.test(keyword);
-    if (!hasCJK && keyword.length < 6) return;
+    // (User 2026) 1 c\u1ed5ng QUY LU\u1eacT duy nh\u1ea5t \u2014 l\u1ecdc v\u0103n xu\u00f4i/m\u1ea3nh code/CSS/identifier ASCII (xem isValidEjsKeywordKey)
+    if (!isValidEjsKeywordKey(keyword)) return;
 
     seen.add(key);
     keywords.push({ keyword, type, foundIn, context });
@@ -379,26 +401,28 @@ export function extractEjsKeywords(card: CharacterCard): EjsKeyword[] {
     const ejsBlocks = text.match(/<%[\s\S]*?%>/g) || [];
     for (const block of ejsBlocks) {
       // if (xxx === 'keyword') or if (xxx == 'keyword')
+      // (User 2026) Nháy mở/đóng phải CÙNG LOẠI (backreference \1) — trước đây `['"\`]…['"\`]` cho phép
+      // mở ` đóng ' → nuốt nguyên mảnh template literal (`'${item.id === profile.id ? '`) làm keyword rác.
       const comparisonPatterns = [
-        /[=!]==?\s*['"`]([^'"`]{2,})['"`]/g,
-        /['"`]([^'"`]{2,})['"`]\s*[=!]==?/g,
+        /[=!]==?\s*(['"`])([^'"`]{2,})\1/g,
+        /(['"`])([^'"`]{2,})\1\s*[=!]==?/g,
         // .includes('keyword')
-        /\.includes\s*\(\s*['"`]([^'"`]{2,})['"`]\s*\)/g,
+        /\.includes\s*\(\s*(['"`])([^'"`]{2,})\1\s*\)/g,
         // .indexOf('keyword')
-        /\.indexOf\s*\(\s*['"`]([^'"`]{2,})['"`]\s*\)/g,
+        /\.indexOf\s*\(\s*(['"`])([^'"`]{2,})\1\s*\)/g,
         // .match('pattern') or .match(/pattern/)
-        /\.match\s*\(\s*['"`]([^'"`]{2,})['"`]\s*\)/g,
+        /\.match\s*\(\s*(['"`])([^'"`]{2,})\1\s*\)/g,
         // .startsWith('keyword') / .endsWith('keyword')
-        /\.(?:startsWith|endsWith)\s*\(\s*['"`]([^'"`]{2,})['"`]\s*\)/g,
+        /\.(?:startsWith|endsWith)\s*\(\s*(['"`])([^'"`]{2,})\1\s*\)/g,
         // switch case: case 'value':
-        /case\s+['"`]([^'"`]{2,})['"`]\s*:/g,
+        /case\s+(['"`])([^'"`]{2,})\1\s*:/g,
       ];
 
       for (const pattern of comparisonPatterns) {
         pattern.lastIndex = 0;
         let m: RegExpExecArray | null;
         while ((m = pattern.exec(block)) !== null) {
-          addKeyword(m[1], 'comparison', source, block.slice(Math.max(0, m.index - 40), m.index + m[0].length + 40));
+          addKeyword(m[2], 'comparison', source, block.slice(Math.max(0, m.index - 40), m.index + m[0].length + 40));
         }
       }
     }
@@ -410,8 +434,6 @@ export function extractEjsKeywords(card: CharacterCard): EjsKeyword[] {
       /(?:var|let|const)\s+\w+\s*=\s*\[([^\]]{10,})\]/g,
       // name: ['...', '...'] (in object literal)
       /\w+\s*:\s*\[([^\]]{10,})\]/g,
-      // push('...')
-      /\.push\s*\(\s*['"`]([^'"`]{2,})['"`]\s*\)/g,
     ];
 
     for (const pattern of arrayPatterns) {
@@ -419,14 +441,23 @@ export function extractEjsKeywords(card: CharacterCard): EjsKeyword[] {
       let m: RegExpExecArray | null;
       while ((m = pattern.exec(text)) !== null) {
         if (m[1]) {
-          // Extract individual strings from the array
-          const stringPattern = /['"`]([^'"`]{2,})['"`]/g;
+          // Extract individual strings from the array — nháy đóng phải CÙNG LOẠI nháy mở (backreference),
+          // nếu không chuỗi 1 ký tự bị bỏ qua rồi match "lệch pha" nuốt cả dấu phẩy giữa 2 phần tử (`,\n    `).
+          const stringPattern = /(['"`])([^'"`]+)\1/g;
           let s: RegExpExecArray | null;
           while ((s = stringPattern.exec(m[1])) !== null) {
-            addKeyword(s[1], 'alias', source, m[0].slice(0, 100));
+            addKeyword(s[2], 'alias', source, m[0].slice(0, 100));
           }
         }
       }
+    }
+
+    // push('...') — tách riêng vì capture group khác các pattern mảng ở trên
+    const pushPattern = /\.push\s*\(\s*(['"`])([^'"`]{2,})\1\s*\)/g;
+    pushPattern.lastIndex = 0;
+    let pm: RegExpExecArray | null;
+    while ((pm = pushPattern.exec(text)) !== null) {
+      addKeyword(pm[2], 'alias', source, pm[0].slice(0, 100));
     }
 
     // ═══ 3. Decorator regex triggers ═══
@@ -451,15 +482,18 @@ export function extractEjsKeywords(card: CharacterCard): EjsKeyword[] {
 
     // ═══ 5. Deep scan: object key-value pairs with CJK values (alias dictionaries) ═══
     // Pattern: 'key': 'CJK value' or "key": "CJK value" inside objects
-    const objKvPattern = /['"`]([^'"`]{2,})['"`]\s*:\s*['"`]([^'"`]{2,})['"`]/g;
+    // (User 2026) Nh\u00e1y b\u1eaft c\u1eb7p C\u00d9NG LO\u1ea0I (backreference). VALUE v\u1eabn \u0111\u01b0a qua addKeyword nh\u01b0ng quy lu\u1eadt
+    // s\u1ebd l\u1ecdc: value m\u00f4 t\u1ea3 d\u00e0i = V\u0102N XU\u00d4I (d\u1ecbch theo ng\u1eef c\u1ea3nh) \u2014 g\u1ed1c bug 78/309 entry dict l\u00e0 nguy\u00ean
+    // \u0111o\u1ea1n v\u0103n 90+ k\u00fd t\u1ef1 l\u1ea5y t\u1eeb value c\u1ee7a object c\u1eeda h\u00e0ng/nh\u00e2n v\u1eadt.
+    const objKvPattern = /(['"`])([^'"`]{2,})\1\s*:\s*(['"`])([^'"`]{2,})\3/g;
     for (const block of ejsBlocks) {
       objKvPattern.lastIndex = 0;
       let kv: RegExpExecArray | null;
       while ((kv = objKvPattern.exec(block)) !== null) {
-        const hasCJKKey = /[\u4e00-\u9fff\u3400-\u4dbf]/.test(kv[1]);
-        const hasCJKVal = /[\u4e00-\u9fff\u3400-\u4dbf]/.test(kv[2]);
-        if (hasCJKKey) addKeyword(kv[1], 'alias', source, kv[0]);
-        if (hasCJKVal) addKeyword(kv[2], 'alias', source, kv[0]);
+        const hasCJKKey = /[\u4e00-\u9fff\u3400-\u4dbf]/.test(kv[2]);
+        const hasCJKVal = /[\u4e00-\u9fff\u3400-\u4dbf]/.test(kv[4]);
+        if (hasCJKKey) addKeyword(kv[2], 'alias', source, kv[0].slice(0, 80));
+        if (hasCJKVal) addKeyword(kv[4], 'alias', source, kv[0].slice(0, 80));
       }
     }
 
@@ -470,8 +504,9 @@ export function extractEjsKeywords(card: CharacterCard): EjsKeyword[] {
       templatePattern.lastIndex = 0;
       let tl: RegExpExecArray | null;
       while ((tl = templatePattern.exec(block)) !== null) {
-        // Extract only the CJK segments (not the whole template literal)
-        const cjkSegments = tl[1].match(/[\u4e00-\u9fff\u3400-\u4dbf\uff00-\uffef]{2,}/g);
+        // Ch\u1ec9 l\u1ea5y C\u1ee4M CH\u1eee CJK (kh\u00f4ng l\u1ea5y c\u1ea3 template literal). KH\u00d4NG g\u1ed9p d\u1ea3i \uff00-\uffef n\u1eefa \u2014 d\u1ea5u c\u00e2u
+        // \uff0c\u3002\uff01\uff1f n\u1eb1m trong d\u1ea3i \u0111\u00f3 n\u00ean "c\u1ee5m" nu\u1ed1t nguy\u00ean c\u00e2u v\u0103n d\u00e0i th\u00e0nh keyword r\u00e1c. + tr\u1ea7n 32.
+        const cjkSegments = tl[1].match(/[\u4e00-\u9fff\u3400-\u4dbf]{2,32}/g);
         if (cjkSegments) {
           for (const seg of cjkSegments) {
             addKeyword(seg, 'comparison', source, tl[0].slice(0, 80));
@@ -482,11 +517,11 @@ export function extractEjsKeywords(card: CharacterCard): EjsKeyword[] {
 
     // ═══ 7. Deep scan: condition/value strings in getvar comparisons ═══
     // getvar('var_name') === 'CJK value'
-    const getvarCompPattern = /getvar\s*\(\s*['"`][^'"`]*['"`](?:\s*,\s*\{[^}]*\})?\s*\)\s*[=!]==?\s*['"`]([^'"`]{2,})['"`]/g;
+    const getvarCompPattern = /getvar\s*\(\s*['"`][^'"`]*['"`](?:\s*,\s*\{[^}]*\})?\s*\)\s*[=!]==?\s*(['"`])([^'"`]{2,})\1/g;
     getvarCompPattern.lastIndex = 0;
     let gvc: RegExpExecArray | null;
     while ((gvc = getvarCompPattern.exec(text)) !== null) {
-      addKeyword(gvc[1], 'comparison', source, gvc[0]);
+      addKeyword(gvc[2], 'comparison', source, gvc[0]);
     }
 
     // ═══ 8. getvar() dotted path CJK segments ═══
@@ -509,11 +544,11 @@ export function extractEjsKeywords(card: CharacterCard): EjsKeyword[] {
     // ═══ 9. .includes() keywords in full text (not just EJS blocks) ═══
     // Catches patterns like: _p.includes('kinh nguyệt'), _p.includes('mang thai')
     // These appear in EJS blocks but the full-text scan ensures nothing is missed
-    const includesFullTextPattern = /\.includes\s*\(\s*['"`]([^'"`]{2,})['"`]\s*\)/g;
+    const includesFullTextPattern = /\.includes\s*\(\s*(['"`])([^'"`]{2,})\1\s*\)/g;
     includesFullTextPattern.lastIndex = 0;
     let incl: RegExpExecArray | null;
     while ((incl = includesFullTextPattern.exec(text)) !== null) {
-      addKeyword(incl[1], 'comparison', source, incl[0]);
+      addKeyword(incl[2], 'comparison', source, incl[0]);
     }
   }
 
@@ -1387,6 +1422,19 @@ export function canonicalizeEjsValue(value: string): string {
   let v = value.replace(/[\u0000-\u001F\u200B-\u200D\uFEFF]/g, ''); // control + zero-width
   v = v.replace(/^["'「『`\s]+|["'」』`\s]+$/g, '');
   v = v.replace(/\s+/g, ' ').trim();
+  // (User 2026) ĐỒNG NHẤT SEPARATOR `_`/`-`: AI lúc trả "Thế_lực" lúc "Thế lực" → biến không đồng bộ.
+  // Quy tắc TOKEN an toàn: chỉ đổi _/- thành space khi MỌI mảnh 2 bên đều có chữ non-ASCII (từ tiếng
+  // Việt/CJK ⇒ _ là word-separator AI chèn bậy). Có mảnh ASCII thuần (mvu, sfw, update…) ⇒ identifier
+  // code ([mvu_update], stat_data, từ_khóa_sfw) ⇒ GIỮ NGUYÊN, không phá prefix chức năng.
+  v = v
+    .split(' ')
+    .map((w) => {
+      if (!/[_-]/.test(w)) return w;
+      const parts = w.split(/[_-]+/).filter(Boolean);
+      if (parts.length >= 2 && parts.every((p) => /[^\x00-\x7F]/.test(p))) return parts.join(' ');
+      return w;
+    })
+    .join(' ');
   return v || value;
 }
 
@@ -1397,10 +1445,18 @@ export function canonicalizeEjsValue(value: string): string {
  */
 export function enforceEjsDictConsistency(
   dict: Record<string, string>,
+  opts?: { pruneInvalidKeywords?: boolean },
 ): { fixedDict: Record<string, string>; fixes: string[] } {
   const fixes: string[] = [];
   const fixedDict: Record<string, string> = {};
   for (const [k, v] of Object.entries(dict || {})) {
+    // (User 2026 — "quét keywords không theo quy luật gì") PRUNE entry rác đã lỡ vào dict từ các bản
+    // scan cũ: nguyên đoạn văn, mảnh code (${…?), identifier ASCII bị dịch (sfw_keywords→từ_khóa_sfw)…
+    // Chỉ áp cho KEYWORD dict (opts.pruneInvalidKeywords) — entry NAME dài/có [prefix] là hợp lệ.
+    if (opts?.pruneInvalidKeywords && !isValidEjsKeywordKey(k)) {
+      fixes.push(`"${k.slice(0, 40)}${k.length > 40 ? '…' : ''}" — BỎ khỏi từ điển (không phải keyword: văn xuôi/mảnh code/identifier)`);
+      continue;
+    }
     const clean = canonicalizeEjsValue(v);
     fixedDict[k] = clean;
     if (clean !== v) fixes.push(`"${k}": "${v}" → "${clean}" (làm sạch)`);
@@ -1430,6 +1486,20 @@ export function enforceEjsDictConsistency(
     if (canon && canon !== v) {
       fixedDict[k] = canon;
       fixes.push(`"${k}": "${v}" → "${canon}" (đồng nhất cụm)`);
+    }
+  }
+  // (User 2026) BÁO ĐỤNG ĐỘ: ≥2 key GỐC khác nhau dịch ra CÙNG 1 value (vd 父女 và 父子 đều → "Cha
+  // con") ⇒ logic game so sánh 2 keyword đó hết phân biệt được. KHÔNG tự đổi (đổi là lệch bản dịch đã
+  // áp) — báo để user sửa tay trong panel (input sửa được).
+  const byValue = new Map<string, string[]>();
+  for (const [k, v] of Object.entries(fixedDict)) {
+    if (!v || v === k) continue;
+    if (!byValue.has(v)) byValue.set(v, []);
+    byValue.get(v)!.push(k);
+  }
+  for (const [v, keys] of byValue) {
+    if (keys.length > 1) {
+      fixes.push(`⚠ ĐỤNG ĐỘ: ${keys.length} key khác nhau (${keys.slice(0, 3).map(k => `"${k}"`).join(', ')}) cùng dịch thành "${v}" — game sẽ không phân biệt được, hãy sửa tay cho khác nhau.`);
     }
   }
   return { fixedDict, fixes };

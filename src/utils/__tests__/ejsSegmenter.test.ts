@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { segmentEjs, reassembleEjs, isEjsProseField, collectProseToTranslate, hasResidualCjkInProse, maskEjsCode, unmaskEjsCode } from '../ejsSegmenter';
+import { segmentEjs, reassembleEjs, isEjsProseField, collectProseToTranslate, hasResidualCjkInProse, maskEjsCode, unmaskEjsCode, countEjsBlocks } from '../ejsSegmenter';
 
 /**
  * (User 2026) Surgical EJS: chẻ CODE/PROSE để dịch entry EJS không còn nửa vời / vỡ code.
@@ -100,5 +100,49 @@ describe('maskEjsCode / unmaskEjsCode — surgical dịch prose (Đợt 1b)', ()
   it('text đã chứa "__ejs_" → KHÔNG mask (tránh nhầm)', () => {
     const t = 'giá trị __ejs_x lạ <% code %>';
     expect(maskEjsCode(t).codes.length).toBe(0);
+  });
+});
+
+/**
+ * (User 2026 — bug entry9 Mafia: 21 khối → chỉ còn 19 khi xuất) `restored === codes.length` là BẪY:
+ * AI có thể NHÂN BẢN token này + LÀM RƠI token khác → tổng match vẫn khớp nhưng CODE bị mất/đúp.
+ * `ok` (mỗi index đúng 1 lần) mới là điều kiện an toàn. + countEjsBlocks cho guard toàn vẹn.
+ */
+describe('unmaskEjsCode — ok/missing/dup (chống nhân bản + rơi token cùng lúc)', () => {
+  it('khôi phục đủ, không đúp → ok=true, missing/dup rỗng', () => {
+    const codes = ['<% a %>', '<% b %>', '<% c %>'];
+    const r = unmaskEjsCode('{{__ejs_0__}}x{{__ejs_1__}}y{{__ejs_2__}}', codes);
+    expect(r.ok).toBe(true);
+    expect(r.missing).toEqual([]);
+    expect(r.dup).toEqual([]);
+    expect(r.text).toBe('<% a %>x<% b %>y<% c %>');
+  });
+
+  it('BẪY: nhân bản token 0 + rơi token 2 → restored===length NHƯNG ok=false', () => {
+    const codes = ['<% a %>', '<% b %>', '<% c %>'];
+    // AI đúp {{__ejs_0__}} (×2) và bỏ hẳn {{__ejs_2__}} → tổng 3 match = codes.length
+    const r = unmaskEjsCode('{{__ejs_0__}}{{__ejs_0__}}{{__ejs_1__}}', codes);
+    expect(r.restored).toBe(3);          // đếm match: vẫn == length → cửa cũ lọt
+    expect(r.ok).toBe(false);            // nhưng KHÔNG an toàn
+    expect(r.missing).toEqual([2]);
+    expect(r.dup).toEqual([0]);
+  });
+
+  it('rơi 1 token → ok=false, missing chứa index đó', () => {
+    const codes = ['<% a %>', '<% b %>'];
+    const r = unmaskEjsCode('{{__ejs_0__}} chỉ còn 1', codes);
+    expect(r.ok).toBe(false);
+    expect(r.missing).toEqual([1]);
+  });
+});
+
+describe('countEjsBlocks — guard toàn vẹn khối', () => {
+  it('đếm đúng số <%…%> mọi biến thể, đa dòng', () => {
+    expect(countEjsBlocks('<%_ a \n b %> giữa <%= c %> cuối <%- d %>')).toBe(3);
+  });
+  it('không có khối → 0; rỗng/không phải string → 0', () => {
+    expect(countEjsBlocks('chỉ văn bản')).toBe(0);
+    expect(countEjsBlocks('')).toBe(0);
+    expect(countEjsBlocks(undefined as unknown as string)).toBe(0);
   });
 });

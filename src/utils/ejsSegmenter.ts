@@ -104,16 +104,38 @@ export function maskEjsCode(text: string): { masked: string; codes: string[] } {
 }
 
 /**
- * Khôi phục CODE: thay `{{__ejs_N__}}` bằng code gốc. Trả về `restored` = số token khôi phục được để
- * caller KIỂM: nếu restored !== codes.length ⇒ AI đã làm hỏng/rơi token ⇒ nên bỏ mask, dịch cách thường.
+ * Khôi phục CODE: thay `{{__ejs_N__}}` bằng code gốc.
+ * Trả:
+ *  - `restored` = tổng số token khôi phục (đếm MATCH — giữ để tương thích).
+ *  - `ok` = mỗi index 0..codes.length-1 xuất hiện ĐÚNG 1 LẦN (không rơi, không nhân bản).
+ *    ⚠ Chỉ dựa `restored === codes.length` là BẪY: AI có thể NHÂN BẢN token này + LÀM RƠI token khác
+ *    → tổng match vẫn khớp nhưng code bị mất/đúp. `ok` mới là điều kiện an toàn để dùng bản unmask.
+ *  - `missing` / `dup` = danh sách index rơi / bị lặp (để log gỡ lỗi).
  */
-export function unmaskEjsCode(translated: string, codes: string[]): { text: string; restored: number } {
-  if (typeof translated !== 'string') return { text: translated, restored: 0 };
+export function unmaskEjsCode(
+  translated: string,
+  codes: string[],
+): { text: string; restored: number; ok: boolean; missing: number[]; dup: number[] } {
+  if (typeof translated !== 'string') return { text: translated, restored: 0, ok: codes.length === 0, missing: [], dup: [] };
   let restored = 0;
+  const seen = new Array<number>(codes.length).fill(0);
   const text = translated.replace(EJS_MASK_RE, (m, n) => {
     const i = Number(n);
-    if (i >= 0 && i < codes.length) { restored++; return codes[i]; }
+    if (i >= 0 && i < codes.length) { restored++; seen[i]++; return codes[i]; }
     return m;
   });
-  return { text, restored };
+  const missing: number[] = [];
+  const dup: number[] = [];
+  for (let i = 0; i < codes.length; i++) {
+    if (seen[i] === 0) missing.push(i);
+    else if (seen[i] > 1) dup.push(i);
+  }
+  const ok = missing.length === 0 && dup.length === 0;
+  return { text, restored, ok, missing, dup };
+}
+
+/** Đếm số khối EJS `<%…%>` trong text (dùng cho guard toàn vẹn: dịch xong không được mất khối nào). */
+export function countEjsBlocks(text: string): number {
+  if (typeof text !== 'string' || !text) return 0;
+  return (text.match(/<%[\s\S]*?%>/g) || []).length;
 }

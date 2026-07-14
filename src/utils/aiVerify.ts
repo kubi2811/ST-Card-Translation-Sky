@@ -262,6 +262,12 @@ export function quickVerify(
     const transNames = new Set(transList.map(r => r.name));
     // Tập EJS expression của bản dịch ở dạng CHUẨN HOÁ (bỏ nội dung chuỗi) — để bắt "cùng cấu trúc".
     const transEjsNorm = new Set(transList.filter(r => r.type === 'ejs').map(r => normEjs(r.name)));
+    // (User 2026) SỐ khối EJS gốc vs dịch của field này — tín hiệu GỐC "có mất code hay không".
+    // Nếu số khối KHÔNG giảm ⇒ không mất khối nào ⇒ mọi "expression khác" chỉ là do CHUỖI được dịch
+    // / định dạng đổi (Chiến lược B/C) ⇒ KHÔNG báo "missing" (chống dương-tính-giả hàng loạt).
+    const origEjsCount = origList.filter(r => r.type === 'ejs').length;
+    const transEjsCount = transList.filter(r => r.type === 'ejs').length;
+    const ejsBlockLost = transEjsCount < origEjsCount;
 
     for (const ref of origList) {
       // Check if a variable/macro/data-var reference is missing in the translation
@@ -307,9 +313,10 @@ export function quickVerify(
         }
         // EJS templates
         else if (ref.type === 'ejs') {
-          // (User 2026) Chỉ báo THIẾU khi CẤU TRÚC expression cũng mất. Nếu bản dịch có expression
-          // CÙNG cấu trúc (chỉ khác NỘI DUNG chuỗi vì tên biến/so sánh đã dịch) → KHÔNG phải lỗi.
-          if (!transEjsNorm.has(normEjs(ref.name))) {
+          // (User 2026) Chỉ báo THIẾU khi field NÀY THỰC SỰ MẤT khối EJS (số khối dịch < gốc) VÀ cấu
+          // trúc expression cũng biến mất. Field cùng số khối → code còn đủ, khác biệt chỉ do chuỗi đã
+          // dịch/định dạng → KHÔNG báo (nếu không "Nghiệm thu" ra hàng chục lỗi ma như user gặp).
+          if (ejsBlockLost && !transEjsNorm.has(normEjs(ref.name))) {
             issues.push({
               id: crypto.randomUUID(),
               severity: 'error',

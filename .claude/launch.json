@@ -2,10 +2,34 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "hub",
+      "name": "hub-dich-card",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "port": 5173
+    },
+    {
+      "name": "tao-card",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "tao-card", "run", "dev"],
+      "port": 5174
+    },
+    {
+      "name": "preset-tool",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "preset-tool", "run", "dev"],
+      "port": 5175
+    },
+    {
+      "name": "mod-card",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "mod-card", "run", "dev"],
+      "port": 5176
+    },
+    {
+      "name": "crawler-trich-card",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "crawler", "run", "dev"],
+      "port": 5177
     }
   ]
 }

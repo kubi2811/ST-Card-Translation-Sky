@@ -9,6 +9,7 @@ import { cardToWorldbook } from '../utils/worldbookParser';
 import { setNestedValue } from '../utils/cardFields';
 import { scanFieldsHealth, buildTranslationReport, type HealthSeverity } from '../utils/cardHealth';
 import { verifyFields, quickVerify, type FieldIssue, type VerifyIssue } from '../utils/aiVerify';
+import { countEjsBlocks } from '../utils/ejsSegmenter';
 import type { ExportKeyMode } from '../types/card';
 
 /** 1 dòng vấn đề trong báo cáo GỘP của "🩺 Kiểm tra tổng" (3 nguồn về chung 1 shape). */
@@ -28,7 +29,7 @@ const KEY_MODE_OPTIONS: { value: ExportKeyMode; labelKey: 'epKeyModeMerge' | 'ep
 ];
 
 export default function ExportPanel() {
-  const { card, fields, cardFileName, originalImage, _pngArrayBuffer, translationConfig, setTranslationConfig, phase, saveTranslationCache, locale, contentType, originalWorldbook, setJumpToFieldPath } = useStore();
+  const { card, fields, cardFileName, originalImage, _pngArrayBuffer, translationConfig, setTranslationConfig, phase, saveTranslationCache, locale, contentType, originalWorldbook, setJumpToFieldPath, updateField, addLog } = useStore();
   const { getExportCard } = useTranslation();
   const t = useT();
   const ui = useUi();
@@ -62,6 +63,32 @@ export default function ExportPanel() {
     } finally {
       setIsChecking(false);
     }
+  };
+
+  // ═══ (User 2026) SỬA NHANH entry EJS VỠ (non-AI) — vá card ĐANG mở mà không cần dịch lại ═══
+  // Entry lớn bị chunk → AI rơi khối <%…%> → xuất ra card ST chạy LỖI (tag mismatch). Nút này quét
+  // mọi field 'done' mà SỐ khối <%…%> của bản dịch KHÁC bản gốc → REVERT field đó về bản gốc (code
+  // Trung vẫn chạy, an toàn tuyệt đối). Từ v1.99.4 lỗi này được chặn NGAY khi dịch; nút để chữa card cũ.
+  const brokenEjsFields = useMemo(
+    () => fields.filter(f =>
+      f.status === 'done' && f.translated && f.original.includes('<%') &&
+      countEjsBlocks(f.original) > 0 && countEjsBlocks(f.translated) !== countEjsBlocks(f.original)
+    ),
+    [fields],
+  );
+  const [repairMsg, setRepairMsg] = useState('');
+  const repairBrokenEjs = () => {
+    let reverted = 0;
+    for (const f of brokenEjsFields) {
+      updateField(f.path, { translated: f.original });
+      addLog('info', `🔧 EJS: revert "${f.label}" về bản gốc (${countEjsBlocks(f.translated)}/${countEjsBlocks(f.original)} khối <%…%> → khôi phục đủ, không vỡ JS).`);
+      reverted++;
+    }
+    saveTranslationCache();
+    setRepairMsg(reverted > 0
+      ? fmt(ui.epEjsRepairDone, { count: reverted })
+      : ui.epEjsRepairNone);
+    void runTotalCheck();
   };
 
   // Gộp 3 nguồn vấn đề (sức khoẻ + kiểm sâu + đối chiếu card) thành 1 danh sách, nặng trước.
@@ -441,6 +468,26 @@ export default function ExportPanel() {
               time: new Date(deepCheck.at).toLocaleTimeString(),
             })}
           </div>
+        )}
+
+        {/* 🔧 Sửa nhanh entry EJS VỠ (mất khối <%…%>) → revert về gốc, non-AI, tức thì */}
+        {brokenEjsFields.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', margin: '4px 0 8px', padding: '6px 8px', background: 'rgba(240,100,100,0.08)', border: '1px solid rgba(240,100,100,0.28)', borderRadius: 'var(--radius-sm)' }}>
+            <AlertTriangle size={13} style={{ color: 'var(--accent-danger)', flexShrink: 0 }} />
+            <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', flex: 1, minWidth: '160px' }}>
+              {fmt(ui.epEjsRepairWarn, { count: brokenEjsFields.length })}
+            </span>
+            <button
+              onClick={repairBrokenEjs}
+              title={ui.epEjsRepairTip}
+              style={{ padding: '4px 10px', fontSize: '0.7rem', fontWeight: 700, cursor: 'pointer', color: '#fff', background: 'var(--accent-danger)', border: 'none', borderRadius: 'var(--radius-sm)', flexShrink: 0 }}
+            >
+              {ui.epEjsRepairBtn}
+            </button>
+          </div>
+        )}
+        {repairMsg && (
+          <div style={{ fontSize: '0.68rem', color: 'var(--accent-success)', marginBottom: '6px' }}>{repairMsg}</div>
         )}
 
         {/* Chỉ số nhanh */}

@@ -18,7 +18,7 @@ import { surgicalTranslate } from '../utils/surgical';
 import { parsePatchOutput, applyPatches, validatePatchResult } from '../utils/patchEngine';
 import { injectMvuZodSystem } from '../utils/mvuGenerator';
 import { detectEjsCard, extractEjsEntryNames, extractEjsKeywords, aiTranslateEjsEntries, validateEjsSync, autoFixEjsEntryNames, autoFixEjsKeywords, enforceEjsEntryName, enforceEjsCovariance, enforceEjsKeywordCasing, autoFixEjsKeywordsExtended, enforceEjsDictConsistency } from '../utils/ejsSync';
-import { isEjsProseField, maskEjsCode, unmaskEjsCode } from '../utils/ejsSegmenter';
+import { isEjsProseField, maskEjsCode, unmaskEjsCode, countEjsBlocks } from '../utils/ejsSegmenter';
 import { getActivePresetPromptContent } from '../utils/presetParser';
 import { CallMonitor } from '../utils/callMonitor';
 import { runWorkerPool } from '../utils/runWorkerPool';
@@ -491,11 +491,13 @@ export function useTranslation() {
       // ═══ (Đợt 1b) BỎ MASK EJS: khôi phục code đã che. Đủ token → dùng bản dịch (CJK-trong-code do
       // covariance lo sau). Thiếu token (AI làm rơi) → giữ bản GỐC để KHÔNG vỡ code + cảnh báo. ═══
       if (ejsMaskCodes.length > 0 && translated) {
-        const { text: unmasked, restored } = unmaskEjsCode(translated, ejsMaskCodes);
-        if (restored === ejsMaskCodes.length) {
+        const { text: unmasked, ok, missing, dup } = unmaskEjsCode(translated, ejsMaskCodes);
+        // `ok` = MỖI token khôi phục ĐÚNG 1 lần. Chỉ so tổng số (restored===length) là BẪY: AI có thể
+        // NHÂN BẢN token này + LÀM RƠI token khác → tổng khớp nhưng code mất/đúp. Dùng `ok` mới an toàn.
+        if (ok) {
           translated = unmasked;
         } else {
-          store.addLog('warning', `🧩 EJS surgical: AI làm rơi ${ejsMaskCodes.length - restored}/${ejsMaskCodes.length} token code ở ${field.label} — giữ bản gốc, không vỡ code (thử dịch lại field này).`);
+          store.addLog('warning', `🧩 EJS surgical: token code KHÔNG khớp ở ${field.label} (rơi ${missing.length}, đúp ${dup.length}) — giữ bản gốc, không vỡ code (thử dịch lại field này).`);
           translated = field.original;
         }
       }
@@ -871,6 +873,30 @@ export function useTranslation() {
           } else {
             store.addLog('warning', `Translation still short for ${field.label}: ${translated.length}/${field.original.length} chars. Accepting result.`);
           }
+        }
+      }
+
+      // ═══ (User 2026) GUARD TOÀN VẸN KHỐI EJS — chống "html broken / EJS tag mismatch" khi xuất ═══
+      // Dù đi đường surgical, MVU hay dịch cả khối (entry lớn bị chunk → AI rơi khối ở mối nối), nếu SỐ
+      // khối <%…%> của bản dịch KHÁC bản gốc thì JS trong SillyTavern sẽ VỠ (mismatch block). Xử lý:
+      //  1) còn lượt retry → DỊCH LẠI field (đa số lỗi rơi khối là ngẫu nhiên, dịch lại là khớp);
+      //  2) hết retry → GIỮ NGUYÊN bản gốc field (code Trung vẫn CHẠY được — comment/chuỗi bên trong là
+      //     nội bộ, người chơi không đọc) + cảnh báo rõ. THÀ 1 entry logic tiếng Trung còn hơn card lỗi.
+      if (translated && field.original.includes('<%')) {
+        const origBlocks = countEjsBlocks(field.original);
+        const transBlocks = countEjsBlocks(translated);
+        if (origBlocks > 0 && transBlocks !== origBlocks) {
+          if (freshRetries() < (store.proxy.maxRetries || 3)) {
+            store.updateField(field.path, { retries: freshRetries() + 1 });
+            store.addLog('retry', `⚠️ EJS lệch khối: ${field.label} có ${transBlocks}/${origBlocks} khối <%…%> → dịch lại để không vỡ JS…`);
+            await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
+            return 'retry';
+          }
+          store.addLog('warning',
+            `⚠️ EJS toàn vẹn: ${field.label} vẫn ${transBlocks}/${origBlocks} khối <%…%> sau retry → GIỮ NGUYÊN ` +
+            `bản gốc field này để KHÔNG vỡ JS khi xuất. Hãy dịch lại riêng entry này.`
+          );
+          translated = field.original;
         }
       }
 
@@ -1353,6 +1379,21 @@ export function useTranslation() {
         if (translated && (batchFields[j].group === 'regex' || batchFields[j].group === 'tavern_helper')) {
           translated = normalizeSmartQuotesInCode(translated);
           translated = fixNestedQuoteBracketPaths(translated);
+        }
+
+        // ═══ (User 2026) GUARD TOÀN VẸN KHỐI EJS (đường BATCH) — nếu bản dịch LỆCH số khối <%…%> so với
+        // gốc → JS vỡ khi xuất. Batch không retry per-field → GIỮ NGUYÊN bản gốc field này (an toàn) +
+        // cảnh báo rõ để dịch lại riêng. (Đường single-field đã có guard + retry ở translateSingleField.)
+        if (translated && batchFields[j].original.includes('<%')) {
+          const oB = countEjsBlocks(batchFields[j].original);
+          const tB = countEjsBlocks(translated);
+          if (oB > 0 && tB !== oB) {
+            store.addLog('warning',
+              `⚠️ EJS toàn vẹn: ${batchFields[j].label} có ${tB}/${oB} khối <%…%> (lệch ${tB - oB}) → GIỮ NGUYÊN ` +
+              `bản gốc field này để KHÔNG vỡ JS khi xuất. Hãy dịch lại riêng entry này.`
+            );
+            translated = batchFields[j].original;
+          }
         }
 
         store.updateField(batchFields[j].path, { status: 'done', translated, retries: retryCount });

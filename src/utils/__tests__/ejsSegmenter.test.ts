@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { segmentEjs, reassembleEjs, isEjsProseField, collectProseToTranslate, hasResidualCjkInProse } from '../ejsSegmenter';
+import { segmentEjs, reassembleEjs, isEjsProseField, collectProseToTranslate, hasResidualCjkInProse, maskEjsCode, unmaskEjsCode } from '../ejsSegmenter';
 
 /**
  * (User 2026) Surgical EJS: chẻ CODE/PROSE để dịch entry EJS không còn nửa vời / vỡ code.
@@ -62,5 +62,43 @@ describe('collectProseToTranslate + residual', () => {
     expect(hasResidualCjkInProse(segs)).toBe(false);
     // code vẫn giữ CJK bên trong (đúng — không đụng)
     expect(reassembleEjs(segs)).toContain('<% keep中文 %>');
+  });
+});
+
+describe('maskEjsCode / unmaskEjsCode — surgical dịch prose (Đợt 1b)', () => {
+  const src = 'note: "该操作在" <% if (isPrep) { %> 阶段 <%- j({"op":"replace","path":"/A/战斗"}) %> 结束';
+
+  it('mask che MỌI code + macro, chỉ để prose; unmask khôi phục nguyên vẹn (chưa dịch)', () => {
+    const { masked, codes } = maskEjsCode(src);
+    expect(codes.length).toBe(2);                           // 2 khối <%…%>
+    expect(masked).not.toContain('<%');                     // code đã bị che
+    expect(masked).toContain('{{__ejs_0__}}');
+    const { text, restored } = unmaskEjsCode(masked, codes);
+    expect(restored).toBe(codes.length);
+    expect(text).toBe(src);                                 // round-trip
+  });
+
+  it('mô phỏng AI dịch prose (giữ nguyên token) → unmask ra bản KHÔNG lẫn Hán trong prose, code y nguyên', () => {
+    const { masked, codes } = maskEjsCode(src);
+    // AI dịch: thay CJK ở PROSE, GIỮ token {{__ejs_N__}}
+    const aiOut = masked.replace(/该操作在/g, 'Thao tác này ở').replace(/结束/g, 'kết thúc');
+    const { text, restored } = unmaskEjsCode(aiOut, codes);
+    expect(restored).toBe(codes.length);
+    // code CJK bên trong vẫn còn (do covariance/dict lo sau), prose đã Việt hoá
+    expect(text).toContain('Thao tác này ở');
+    expect(text).toContain('kết thúc');
+    expect(text).toContain('<%- j({"op":"replace","path":"/A/战斗"}) %>'); // code nguyên vẹn
+  });
+
+  it('AI làm RƠI token → restored < codes.length (caller sẽ fallback giữ gốc)', () => {
+    const { masked, codes } = maskEjsCode(src);
+    const broken = masked.replace('{{__ejs_1__}}', ''); // rơi 1 token
+    const { restored } = unmaskEjsCode(broken, codes);
+    expect(restored).toBeLessThan(codes.length);
+  });
+
+  it('text đã chứa "__ejs_" → KHÔNG mask (tránh nhầm)', () => {
+    const t = 'giá trị __ejs_x lạ <% code %>';
+    expect(maskEjsCode(t).codes.length).toBe(0);
   });
 });

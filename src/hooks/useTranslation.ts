@@ -18,6 +18,7 @@ import { surgicalTranslate } from '../utils/surgical';
 import { parsePatchOutput, applyPatches, validatePatchResult } from '../utils/patchEngine';
 import { injectMvuZodSystem } from '../utils/mvuGenerator';
 import { detectEjsCard, extractEjsEntryNames, extractEjsKeywords, aiTranslateEjsEntries, validateEjsSync, autoFixEjsEntryNames, autoFixEjsKeywords, enforceEjsEntryName, enforceEjsCovariance, enforceEjsKeywordCasing, autoFixEjsKeywordsExtended, enforceEjsDictConsistency } from '../utils/ejsSync';
+import { isEjsProseField, maskEjsCode, unmaskEjsCode } from '../utils/ejsSegmenter';
 import { getActivePresetPromptContent } from '../utils/presetParser';
 import { CallMonitor } from '../utils/callMonitor';
 import { runWorkerPool } from '../utils/runWorkerPool';
@@ -356,7 +357,27 @@ export function useTranslation() {
       let usedSurgical = false;
       let surgicalFallback = false;
 
+      // ═══ (User 2026 — Đợt 1b) SURGICAL EJS: entry lorebook-EJS (prose + <%…%>) → MASK toàn bộ CODE
+      // thành token {{__ejs_N__}}, chỉ gửi PROSE cho AI → hết "dịch nửa vời / vỡ code". CJK trong code
+      // do từ điển EJS (covariance) lo sau. Chỉ áp khi bật Chiến lược C + đúng loại entry. ═══
+      const useEjsSurgical =
+        store.translationConfig.enableEjsSync &&
+        field.group === 'lorebook' &&
+        field.entryType !== 'initvar' && field.entryType !== 'controller' && field.entryType !== 'mvu_logic' &&
+        isEjsProseField(field.original);
+      let ejsMaskCodes: string[] = [];
+      let ejsTextToTranslate = field.original;
+      if (useEjsSurgical) {
+        const masked = maskEjsCode(field.original);
+        if (masked.codes.length > 0) {
+          ejsMaskCodes = masked.codes;
+          ejsTextToTranslate = masked.masked;
+          store.addLog('active', `🧩 EJS surgical: che ${masked.codes.length} khối code, chỉ dịch phần chữ cho ${field.label}…`);
+        }
+      }
+
       const isEligibleForSurgical = (() => {
+        if (useEjsSurgical) return false; // EJS surgical (mask code) lo — bỏ surgical CJK-token generic
         if (!store.translationConfig.surgicalMode) return false;
         if (field.group === 'regex' || field.group === 'tavern_helper') return true;
         if (field.group === 'lorebook') {
@@ -417,7 +438,7 @@ export function useTranslation() {
         }
 
         translated = await translateText(
-          field.original,
+          ejsTextToTranslate,
           field.label,
           effectiveProxy,
           store.translationConfig.targetLanguage,
@@ -462,6 +483,18 @@ export function useTranslation() {
           // theo ngưỡng ký tự (xem laneOrder). Retry đi lại đúng model theo độ dài entry.
           false
         );
+      }
+
+      // ═══ (Đợt 1b) BỎ MASK EJS: khôi phục code đã che. Đủ token → dùng bản dịch (CJK-trong-code do
+      // covariance lo sau). Thiếu token (AI làm rơi) → giữ bản GỐC để KHÔNG vỡ code + cảnh báo. ═══
+      if (ejsMaskCodes.length > 0 && translated) {
+        const { text: unmasked, restored } = unmaskEjsCode(translated, ejsMaskCodes);
+        if (restored === ejsMaskCodes.length) {
+          translated = unmasked;
+        } else {
+          store.addLog('warning', `🧩 EJS surgical: AI làm rơi ${ejsMaskCodes.length - restored}/${ejsMaskCodes.length} token code ở ${field.label} — giữ bản gốc, không vỡ code (thử dịch lại field này).`);
+          translated = field.original;
+        }
       }
 
       if (translated && field.group === 'tavern_helper') {

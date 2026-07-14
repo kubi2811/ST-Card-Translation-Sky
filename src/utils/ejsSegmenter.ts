@@ -77,3 +77,43 @@ export function collectProseToTranslate(segments: EjsSegment[]): { indices: numb
 export function hasResidualCjkInProse(segments: EjsSegment[]): boolean {
   return segments.some((s) => s.type === 'prose' && CJK_RE.test(s.text));
 }
+
+// Token MASK cho khối CODE — dạng `{{__ejs_N__}}` (giống macro ST) để AI GIỮ NGUYÊN (prompt đã dặn
+// bảo toàn {{…}}). Chỉ số N để unmask khôi phục đúng code gốc.
+const EJS_MASK = (i: number) => `{{__ejs_${i}__}}`;
+const EJS_MASK_RE = /\{\{__ejs_(\d+)__\}\}/g;
+
+/**
+ * (User 2026 — Đợt 1b) MASK toàn bộ CODE (khối EJS `<%…%>`, macro `{{…}}`, URL — kể cả CJK BÊN TRONG
+ * code) thành token `{{__ejs_N__}}`, CHỈ để lại PROSE. Gửi `masked` cho AI dịch → AI không thấy/không
+ * đụng code ⇒ hết "dịch nửa vời / vỡ code". CJK trong code do từ điển EJS (covariance) lo sau đó.
+ * Nếu text đã lỡ chứa chuỗi `__ejs_` (cực hiếm) → không mask để tránh nhầm khi unmask.
+ */
+export function maskEjsCode(text: string): { masked: string; codes: string[] } {
+  if (typeof text !== 'string' || !text || text.includes('__ejs_')) {
+    return { masked: text || '', codes: [] };
+  }
+  const segs = segmentEjs(text);
+  const codes: string[] = [];
+  let masked = '';
+  for (const s of segs) {
+    if (s.type === 'code') { masked += EJS_MASK(codes.length); codes.push(s.text); }
+    else masked += s.text;
+  }
+  return { masked, codes };
+}
+
+/**
+ * Khôi phục CODE: thay `{{__ejs_N__}}` bằng code gốc. Trả về `restored` = số token khôi phục được để
+ * caller KIỂM: nếu restored !== codes.length ⇒ AI đã làm hỏng/rơi token ⇒ nên bỏ mask, dịch cách thường.
+ */
+export function unmaskEjsCode(translated: string, codes: string[]): { text: string; restored: number } {
+  if (typeof translated !== 'string') return { text: translated, restored: 0 };
+  let restored = 0;
+  const text = translated.replace(EJS_MASK_RE, (m, n) => {
+    const i = Number(n);
+    if (i >= 0 && i < codes.length) { restored++; return codes[i]; }
+    return m;
+  });
+  return { text, restored };
+}

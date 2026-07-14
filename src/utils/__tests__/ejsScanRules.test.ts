@@ -92,9 +92,12 @@ describe('canonicalizeEjsValue — đồng nhất separator _/- theo quy tắc T
     expect(canonicalizeEjsValue('Thế_lực')).toBe('Thế lực');
     expect(canonicalizeEjsValue('Khái-quát_thế_lực')).toBe('Khái quát thế lực');
   });
-  it('có mảnh ASCII thuần (identifier/prefix chức năng) → GIỮ NGUYÊN separator', () => {
+  it('identifier/prefix chức năng → GIỮ NGUYÊN separator; từ Việt-có-dấu → space (bug #8)', () => {
     expect(canonicalizeEjsValue('[mvu_update] Định dạng đầu ra')).toBe('[mvu_update] Định dạng đầu ra');
-    expect(canonicalizeEjsValue('từ_khóa_sfw')).toBe('từ_khóa_sfw');
+    // (bug #8) quy tắc cũ giữ 'từ_khóa_sfw' vì mảnh 'sfw' ASCII — nhưng chính kiểu "mảnh ASCII lẫn
+    // từ Việt" (Lưu_Tam_Bảo, Tình_Cảm_Với_User) là lỗ hổng làm underscore tràn vào lorebook.
+    // Quy tắc mới: cả từ đều chữ Latin + có dấu → về space. Entry rác này thực tế đã bị prune trước đó.
+    expect(canonicalizeEjsValue('từ_khóa_sfw')).toBe('từ khóa sfw');
     expect(canonicalizeEjsValue('stat_data')).toBe('stat_data');
   });
 });

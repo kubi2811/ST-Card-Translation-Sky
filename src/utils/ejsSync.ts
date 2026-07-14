@@ -10,6 +10,7 @@
 
 import type { CharacterCard, TranslationField, ProxySettings } from '../types/card';
 import { callProvider } from './apiClient';
+import { unifyVarWordSeparators } from './mvuSync';
 
 /**
  * Parse JSON from AI response, handling markdown code blocks and surrounding text.
@@ -1422,19 +1423,11 @@ export function canonicalizeEjsValue(value: string): string {
   let v = value.replace(/[\u0000-\u001F\u200B-\u200D\uFEFF]/g, ''); // control + zero-width
   v = v.replace(/^["'「『`\s]+|["'」』`\s]+$/g, '');
   v = v.replace(/\s+/g, ' ').trim();
-  // (User 2026) ĐỒNG NHẤT SEPARATOR `_`/`-`: AI lúc trả "Thế_lực" lúc "Thế lực" → biến không đồng bộ.
-  // Quy tắc TOKEN an toàn: chỉ đổi _/- thành space khi MỌI mảnh 2 bên đều có chữ non-ASCII (từ tiếng
-  // Việt/CJK ⇒ _ là word-separator AI chèn bậy). Có mảnh ASCII thuần (mvu, sfw, update…) ⇒ identifier
-  // code ([mvu_update], stat_data, từ_khóa_sfw) ⇒ GIỮ NGUYÊN, không phá prefix chức năng.
-  v = v
-    .split(' ')
-    .map((w) => {
-      if (!/[_-]/.test(w)) return w;
-      const parts = w.split(/[_-]+/).filter(Boolean);
-      if (parts.length >= 2 && parts.every((p) => /[^\x00-\x7F]/.test(p))) return parts.join(' ');
-      return w;
-    })
-    .join(' ');
+  // (User 2026 — bug #8) ĐỒNG NHẤT SEPARATOR `_`/`-` dùng CHUNG quy tắc với MVU (unifyVarWordSeparators):
+  // từ Việt-có-dấu nối `_` → space (kể cả khi có mảnh ASCII như "Tam"/"Bi"/"User" — quy tắc cũ đòi mọi
+  // mảnh non-ASCII nên Lưu_Tam_Bảo lọt lưới); identifier thật (stat_data, [mvu_update], 场景_sfw,
+  // evt_01) giữ nguyên.
+  v = v.split(' ').map(unifyVarWordSeparators).join(' ');
   return v || value;
 }
 

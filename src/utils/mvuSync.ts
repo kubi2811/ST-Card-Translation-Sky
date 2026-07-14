@@ -321,6 +321,33 @@ export function syncMvuVariables(
  *     + fixZodSyntaxErrors (bọc nháy key có space cho khỏi vỡ Zod).
  * Trả về thẻ mới + dict đã chuẩn + số field đã đổi.
  */
+/**
+ * (User 2026 — bug #8) SWEEP DICT-LESS: quét text, đổi mọi TỪ TIẾNG VIỆT-CÓ-DẤU bị nối bằng `_`/`-`
+ * về dạng space theo unifyVarWordSeparators (Lưu_Tam_Bảo → Lưu Tam Bảo), rồi BỌC NHÁY các object key
+ * JS/Zod không nháy vừa bị đổi thành có space (tránh SyntaxError). KHÔNG cần từ điển — chữa được card
+ * đã nhiễm import vào (dict trống). Identifier thật (stat_data, evt_01, 场景_sfw, URL ASCII) không
+ * dính vì quy tắc từ-Việt-có-dấu; đổi ĐỒNG LOẠT mọi chỗ nên card underscore-nhất-quán vẫn nhất quán.
+ */
+export function unifyVietnameseUnderscoresInText(text: string): { text: string; count: number } {
+  if (typeof text !== 'string' || !text) return { text, count: 0 };
+  let count = 0;
+  let out = text.replace(
+    /[$_]?[A-Za-zÀ-ỹĐđ][A-Za-zÀ-ỹĐđ0-9]*(?:[_-]+[A-Za-zÀ-ỹĐđ0-9][A-Za-zÀ-ỹĐđ0-9]*)+[_-]*|[A-Za-zÀ-ỹĐđ]+[_-]+(?=[\s,:'"\)\]\}]|$)/g,
+    (w) => {
+      if (!LATIN_DIACRITIC_RE.test(w)) return w; // từ thuần ASCII (stat_data, sfw_keywords) → giữ
+      const u = unifyVarWordSeparators(w).replace(/[_-]+$/, (m) => (LATIN_DIACRITIC_RE.test(w) && !/\d/.test(w) ? '' : m));
+      if (u !== w) count++;
+      return u;
+    },
+  );
+  // Bọc nháy key JS/Zod không nháy giờ CÓ space (sau `{`/`,`): { Giới Hạn Từ Bi: → { 'Giới Hạn Từ Bi':
+  out = out.replace(
+    /([{,]\s*)([A-Za-zÀ-ỹĐđ][A-Za-zÀ-ỹĐđ0-9]*(?: [A-Za-zÀ-ỹĐđ0-9]+)+)(\s*:)(?!:)/g,
+    (m, prefix, key, colon) => (LATIN_DIACRITIC_RE.test(key) ? `${prefix}'${key}'${colon}` : m),
+  );
+  return { text: out, count };
+}
+
 export function recanonicalizeMvuInCard(
   card: CharacterCard,
   mvuDictionary: Record<string, string>,
@@ -331,7 +358,9 @@ export function recanonicalizeMvuInCard(
 
   const enforceCode = (text: unknown): string => {
     if (typeof text !== 'string' || !text) return text as string;
-    let t = enforceInitvarCovariance(text, fixedDict, false).text;
+    // (bug #8) Sweep dict-less TRƯỚC — gom mọi biến thể `_` về space, kể cả khi dict trống/thiếu.
+    let t = unifyVietnameseUnderscoresInText(text).text;
+    t = enforceInitvarCovariance(t, fixedDict, false).text;
     t = enforceVariableCasing(t, fixedDict).text;
     t = fixZodSyntaxErrors(t);
     if (t !== text) fixCount++;
@@ -400,7 +429,9 @@ export function recanonicalizeMvuInFields(
       f.group === 'regex' || f.group === 'tavern_helper';
     const isLbNarr = f.group === 'lorebook' && !isCode;
     if (!isCode && !isLbNarr) return f;
-    let t = enforceInitvarCovariance(f.translated, fixedDict, isLbNarr).text;
+    // (bug #8) Sweep dict-less TRƯỚC — Lưu_Tam_Bảo → Lưu Tam Bảo kể cả khi dict trống/thiếu key.
+    let t = unifyVietnameseUnderscoresInText(f.translated).text;
+    t = enforceInitvarCovariance(t, fixedDict, isLbNarr).text;
     t = enforceVariableCasing(t, fixedDict).text;
     if (isCode) t = fixZodSyntaxErrors(t);
     if (t === f.translated) return f;
@@ -699,14 +730,17 @@ export function enforceVariableCasing(
 
   const fixes: { found: string; replaced: string }[] = [];
 
-  // Build case-insensitive lookup: lowercased translated value → canonical translated value
+  // (User 2026 — bug #8) Khoá tra cứu CHUẨN HOÁ: lowercase + gộp mọi `_`/`-`/space về 1 space.
+  // Trước chỉ lowercase → "Giới_Hạn_Từ_Bi" không khớp dict "Giới Hạn Từ Bi" nên casing/separator
+  // lệch dict KHÔNG được ép lại. Giờ mọi biến thể separator đều quy về đúng dạng trong từ điển.
+  const normVar = (s: string) => s.toLowerCase().replace(/[\s_-]+/g, ' ').trim();
   const canonicalMap = new Map<string, string>();
   for (const [, trans] of Object.entries(mvuDictionary)) {
     if (trans && trans.trim()) {
-      const lower = trans.toLowerCase();
-      // If there are multiple entries with same lowercase form, prefer longer one
-      if (!canonicalMap.has(lower) || trans.length > (canonicalMap.get(lower)?.length || 0)) {
-        canonicalMap.set(lower, trans);
+      const norm = normVar(trans);
+      // If there are multiple entries with same normalized form, prefer longer one
+      if (!canonicalMap.has(norm) || trans.length > (canonicalMap.get(norm)?.length || 0)) {
+        canonicalMap.set(norm, trans);
       }
     }
   }
@@ -720,11 +754,10 @@ export function enforceVariableCasing(
   const escapeRegExp = (str: string) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const safeReplacement = (str: string) => str.replace(/\$/g, '$$$$');
 
-  // Helper: check if a variable name needs casing fix
+  // Helper: check if a variable name needs casing/separator fix
   const getCasingFix = (varName: string): string | null => {
     if (!varName || varName.length < 2) return null;
-    const lower = varName.toLowerCase();
-    const canonical = canonicalMap.get(lower);
+    const canonical = canonicalMap.get(normVar(varName));
     if (canonical && canonical !== varName) {
       return canonical;
     }
@@ -842,7 +875,29 @@ export function enforceVariableCasing(
       if (!fixes.some(f => f.found === key.trim())) {
         fixes.push({ found: key.trim(), replaced: canonical });
       }
+      // (User 2026 — bug #8) Key cũ KHÔNG space (identifier kiểu Giới_Hạn_Từ_Bi — có thể đang là
+      // object key JS/Zod không nháy) mà canonical CÓ space → phải BỌC NHÁY ('Giới Hạn Từ Bi':)
+      // — hợp lệ ở CẢ JS lẫn YAML, không đoán ngữ cảnh. Key có nháy sẵn thì giữ nháy như cũ.
+      if (!q1 && !/\s/.test(key.trim()) && /\s/.test(canonical)) {
+        return `${indent}'${canonical}'${colon}`;
+      }
       return `${indent}${q1}${canonical}${q2}${colon}`;
+    }
+    return match;
+  });
+
+  // ─── Pass 6b: object key JS/Zod KHÔNG nháy đứng sau `{` hoặc `,` (không ở đầu dòng) ───
+  // (User 2026 — bug #8) `z.object({ Giới_Hạn_Từ_Bi: z.number() })` — Pass 6 chỉ bắt đầu dòng nên
+  // key inline bị bỏ sót. Bắt key sau `{`/`,`, tra dict (chuẩn hoá separator) → thay bằng dạng dict,
+  // BỌC NHÁY nếu có space. `(?!:)` để không đụng macro `{{getvar::…}}`.
+  const jsKeyRegex = /([{,]\s*)([A-Za-zÀ-ỹĐđ_$][\w$À-ỹĐđ-]*)(\s*:)(?!:)/g;
+  result = result.replace(jsKeyRegex, (match, prefix, key, colon) => {
+    const canonical = getCasingFix(key);
+    if (canonical) {
+      if (!fixes.some(f => f.found === key)) {
+        fixes.push({ found: key, replaced: canonical });
+      }
+      return /\s/.test(canonical) ? `${prefix}'${canonical}'${colon}` : `${prefix}${canonical}${colon}`;
     }
     return match;
   });
@@ -924,21 +979,43 @@ export function canonicalizeMvuVarName(name: string): string {
   // ASCII thuần (không dấu tiếng Việt/CJK) ⇒ có thể là identifier code ⇒ KHÔNG đụng (giữ `_`).
   if (!/[^\x00-\x7F]/.test(unquoted)) return name;
   if (PROTECTED_CODE_KEYWORDS.has(unquoted) || PROTECTED_CODE_KEYWORDS.has(unquoted.toLowerCase())) return name;
-  // (User 2026) Bỏ `_`/`-` (word-separator) → space theo QUY TẮC TOKEN: chỉ đổi khi MỌI mảnh 2 bên
-  // đều có chữ non-ASCII ("Thế_lực" → "Thế lực"). Có mảnh ASCII thuần ("场景_sfw", "隐藏_evt_01") ⇒
-  // biến mixed code ⇒ GIỮ separator (đổi là vỡ getvar path). Gộp space thừa như cũ.
   const cleaned = unquoted
     .split(/\s+/)
-    .map((w) => {
-      if (!/[_-]/.test(w)) return w;
-      const parts = w.split(/[_-]+/).filter(Boolean);
-      if (parts.length >= 2 && parts.every((p) => /[^\x00-\x7F]/.test(p))) return parts.join(' ');
-      return w;
-    })
+    .map(unifyVarWordSeparators)
     .join(' ')
     .replace(/\s+/g, ' ')
     .trim();
   return cleaned || name;
+}
+
+/* Chữ Latin CÓ DẤU (tiếng Việt) — dấu hiệu "từ tự nhiên", không phải identifier code. */
+const LATIN_DIACRITIC_RE = /[À-ỹĐđ]/;
+const CJK_PART_RE = /^[぀-ヿ㐀-䶿一-鿿가-힯]+$/;
+const LATIN_PART_RE = /^[A-Za-zÀ-ỹĐđ]+$/;
+
+/**
+ * (User 2026 — bug #8: `Lưu_Tam_Bảo`, `Giới_Hạn_Từ_Bi` lọt lưới) Đồng nhất separator `_`/`-` → space
+ * cho MỘT từ (không chứa khoảng trắng). Quy tắc cũ đòi "MỌI mảnh đều non-ASCII" nên từ Việt thuần-ASCII
+ * ("Tam", "Bi", "User", "Tin"…) làm cả từ bị bỏ qua → underscore sống sót tràn vào lorebook. Quy tắc mới:
+ *  - Giữ nguyên marker MVU đầu từ (`_` readonly / `$` hidden).
+ *  - Mảnh nào có CHỮ SỐ → giữ nguyên (enum "阶段 1_静谧", id "evt_01").
+ *  - MỌI mảnh đều CJK → nối space (武_力 → 武 力).
+ *  - MỌI mảnh đều chữ Latin VÀ cả từ có ≥1 ký tự CÓ DẤU → từ tiếng Việt bị AI nối `_` → nối space
+ *    (Lưu_Tam_Bảo → Lưu Tam Bảo, Tình_Cảm_Với_User → Tình Cảm Với User, Tô Yến Hề_ → bỏ `_` cuối).
+ *  - Còn lại (mixed CJK+ASCII như 场景_sfw, ASCII thuần như stat_data, có ký hiệu như [mvu_update])
+ *    → identifier code → GIỮ NGUYÊN.
+ */
+export function unifyVarWordSeparators(word: string): string {
+  if (!/[_-]/.test(word)) return word;
+  const marker = word.startsWith('_') || word.startsWith('$') ? word[0] : '';
+  const core = marker ? word.slice(1) : word;
+  const parts = core.split(/[_-]+/).filter(Boolean);
+  if (parts.length === 0) return word;
+  if (parts.some((p) => /\d/.test(p))) return word;
+  const allCjk = parts.every((p) => CJK_PART_RE.test(p));
+  const allLatin = parts.every((p) => LATIN_PART_RE.test(p));
+  if (allCjk || (allLatin && LATIN_DIACRITIC_RE.test(core))) return marker + parts.join(' ');
+  return word;
 }
 
 /**
@@ -2008,8 +2085,8 @@ function generateCjkHint(key: string): string | null {
 
 /**
  * Gọi AI để dịch tên biến MVU/Zod thành tên biến tương ứng trong ngôn ngữ đích.
- * Quy tắc: Tên biến dịch phải dùng underscore thay space, giữ format code-friendly.
- * VD: "好感度" → "Do_Hao_Cam", "攻击力" → "Suc_Tan_Cong"
+ * (v1.99.9) Quy tắc: tên biến dùng DẤU CÁCH tự nhiên, giữ dấu tiếng Việt.
+ * VD: "好感度" → "Độ Hảo Cảm", "攻击力" → "Sức Tấn Công". KHÔNG dùng underscore.
  */
 /**
  * Bảo toàn prefix chức năng của biến MVU (guide MVU_ZOD mvu-11):
@@ -2027,17 +2104,16 @@ export function restoreVariablePrefixes(dict: Record<string, string>): void {
 }
 
 /**
- * (Fix bug #4 — card AI1.1) Tên biến MVU dịch ra KHÔNG ĐƯỢC chứa khoảng trắng khi tên gốc
- * không có: tên biến xuất hiện ở vị trí OBJECT KEY KHÔNG QUOTE trong script Zod/JS
- * (`叙事:` hợp lệ vì CJK là identifier, nhưng `Tự Sự:` là SyntaxError) → schema chết →
- * framework MVU báo "card không hỗ trợ". Thay whitespace bằng '_' (chữ có dấu tiếng Việt
- * vẫn là identifier hợp lệ: `Tự_Sự:` OK). Tên gốc CÓ space (enum value như "阶段 1_静谧"
- * luôn nằm trong quotes) thì giữ nguyên bản dịch.
+ * (User 2026 — bug #8 ĐẢO CHIỀU fix bug #4 cũ) TRƯỚC ĐÂY hàm này ÉP `_` thay space (chống SyntaxError
+ * khi tên làm object key KHÔNG quote trong Zod/JS). Nhưng nó ĐÁNH NHAU với canonicalizeMvuVarName +
+ * promptBuilder rule 21 (đều chuẩn SPACE) → từ điển lúc `Độ_Hảo_Cảm` lúc `Độ Hảo Cảm` → initvar/lorebook
+ * TRỘN 2 kiểu, biến lệch nhau, card user vỡ (bugNeedFix/8: 272 chỗ nhiễm `_`).
+ * CHUẨN DUY NHẤT từ v1.99.9: tên biến dùng DẤU CÁCH tự nhiên ("Độ Hảo Cảm") — khớp UI người chơi thấy.
+ * Chỗ key JS/Zod không quote do enforceVariableCasing/unify tự BỌC NHÁY ('Độ Hảo Cảm': hợp lệ cả JS lẫn
+ * YAML); guard cú pháp JS (v1.99.7) làm lưới đỡ cuối. Hàm giữ tên cũ để không phải sửa 4 caller.
  */
-export function sanitizeMvuVarName(originalKey: string, translated: string): string {
-  const t = translated.trim();
-  if (/\s/.test(originalKey)) return t; // gốc có space ⇒ giá trị trong quotes ⇒ giữ nguyên
-  return t.replace(/\s+/g, '_');
+export function sanitizeMvuVarName(_originalKey: string, translated: string): string {
+  return canonicalizeMvuVarName(translated.trim());
 }
 
 export async function aiTranslateMvuKeys(
@@ -2085,7 +2161,7 @@ You are a variable name translator for SillyTavern character cards.
 Your job: translate variable names from the source language to ${targetLang}.
 
 STRICT RULES:
-1. Variable names MUST NOT contain spaces — join words with underscore '_' (e.g. Vietnamese: Độ_Hảo_Cảm, Sức_Tấn_Công). Names are used as UNQUOTED object keys in JavaScript/Zod schemas; a space breaks the script. Keep diacritics. CONSISTENCY: same variable = identical string everywhere. EXCEPTION: if the SOURCE key itself contains spaces (compound enum values), mirror its spacing.
+1. Variable names use NATURAL SPACES between words (e.g. Vietnamese: "Độ Hảo Cảm", "Sức Tấn Công"). NEVER join words with underscore '_' — do NOT output "Độ_Hảo_Cảm". Keep diacritics. If the SOURCE key contains '_' or spaces, mirror the source's separators exactly. CONSISTENCY: same variable = identical string everywhere. (When a translated name is used as a JavaScript/Zod object key, it must be wrapped in quotes: 'Độ Hảo Cảm': — the tool enforces this automatically.)
 2. Keep the names SHORT but meaningful (2-4 words max).
 3. Be CONSISTENT: similar concepts MUST have similar naming patterns.
    - All emotion/feeling variables should follow the same pattern (e.g. Mức X, Độ X)
@@ -2097,11 +2173,11 @@ STRICT RULES:
    Follow user custom rules if provided (custom prompt overrides these defaults).
 8. Keep numeric suffixes and prefixes intact (e.g. \"攻击力2\" → \"Sức Tấn Công 2\").
 9. For Vietnamese specifically:
-   - Use Title Case with diacritics, words joined by '_': Hảo_Cảm, Thể_Lực, Trí_Tuệ
+   - Use Title Case with diacritics, words separated by SPACES: "Hảo Cảm", "Thể Lực", "Trí Tuệ" (NEVER "Hảo_Cảm")
    - Each word should be properly capitalized
    - Translate based on MEANING, not character-by-character. Examples:
-     武力 = Võ_Lực (martial force), 魅力 = Sức_Hút (charm/charisma), 体力 = Thể_Lực (stamina)
-     描述 = Mô_Tả (description), 说明 = Giải_Thích (explanation)
+     武力 = Võ Lực (martial force), 魅力 = Sức Hút (charm/charisma), 体力 = Thể Lực (stamina)
+     描述 = Mô Tả (description), 说明 = Giải Thích (explanation)
 10. The translated names must be covariant with the Zod Schema — matching the field structure and semantics.
 11. COMPOUND ENUM VALUES: Some keys are compound enum values with structure like "Phase N_Name" (e.g. "阶段 1_静谧", "阶段 2_心动"). Translate the ENTIRE compound value as one unit: "阶段 1_静谧" → "Giai đoạn 1_Tĩnh lặng". Keep the separator character (underscore) and numbering intact. These values appear in z.enum([...]), .prefault('...'), .default('...'), and YAML values — they MUST all be the same translated string.
 12. ██ UNIQUE TRANSLATIONS — ABSOLUTELY CRITICAL ██

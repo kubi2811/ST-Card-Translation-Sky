@@ -142,7 +142,7 @@ Lorebook entries are injected into prompts when trigger keywords match.
 Structure: { keys: [...], secondary_keys: [...], content: "...", constant: bool, selective: bool, position: "..." }
 The 'content' field is what you translate. It may contain:
   - Pure narrative prose (translate normally)
-  - YAML-like structured data (key: value format — translate values, preserve key names with underscores)
+  - YAML-like structured data (key: value format — translate keys per the variable dictionary using NATURAL SPACES; NEVER replace spaces with underscores; only keep '_' if the SOURCE key has it)
   - [initvar] blocks with {{setvar::NAME::VALUE}} macros
   - MVU controller logic with heavy EJS and Zod schemas
   - Mixed code+prose (most dangerous — scan carefully)

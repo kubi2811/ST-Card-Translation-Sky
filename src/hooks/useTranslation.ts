@@ -6,7 +6,7 @@ import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookE
 import { extractNameCandidates, buildNameGlossaryPrompt, parseNameGlossaryResponse, mergeGlossary, harvestGlossaryFromFields } from '../utils/nameGlossary';
 import { GLOSSARY_PRESETS } from '../utils/glossaryPresets';
 import { extractTranslatableFields, applyTranslationsToCard, autoTranslateLorebookTriggerKeys, injectNewLorebookEntries, isMvuUpdateField } from '../utils/cardFields';
-import { syncMvuVariables, postProcessRegexHtml, normalizeSmartQuotesInCode, fixNestedQuoteBracketPaths, fixBrokenLodashPaths, fixDotNotationPaths, extractPotentialMvuKeyStrings, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, enforceInitvarCovariance, extractMappingFromTranslatedInitvar, enforceExactConsistency, enforceVariableCasing, fixZodSyntaxErrors, validateDictionaryConflicts, aiResolveMvuConflicts, recanonicalizeMvuInFields } from '../utils/mvuSync';
+import { syncMvuVariables, postProcessRegexHtml, normalizeSmartQuotesInCode, fixNestedQuoteBracketPaths, fixBrokenLodashPaths, fixDotNotationPaths, extractPotentialMvuKeyStrings, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, enforceInitvarCovariance, extractMappingFromTranslatedInitvar, enforceExactConsistency, enforceVariableCasing, fixZodSyntaxErrors, validateDictionaryConflicts, aiResolveMvuConflicts, recanonicalizeMvuInFields, unifyVietnameseUnderscoresInText } from '../utils/mvuSync';
 import { shouldSkipTranslation, detectLanguage, detectResidualCjk } from '../utils/langDetect';
 import { clearRAGCache } from '../utils/ragContext';
 import { storeTranslation, lookupTranslationMemory } from '../utils/translationMemory';
@@ -533,6 +533,16 @@ export function useTranslation() {
         const isLorebookNarrative = field.group === 'lorebook' && !isCodeLike;
         const isCodeOrLogic = isCodeLike || isLorebookNarrative;
         if (isCodeOrLogic) {
+          // (User 2026 — bug #8) SWEEP dict-less TRƯỚC covariance: AI thi thoảng nối từ Việt bằng `_`
+          // (Lưu_Tam_Bảo) dù prompt cấm → gom về space + bọc nháy key JS ngay tại đây, kể cả biến
+          // KHÔNG có trong dict. Covariance/casing (dict-driven) chạy sau chốt đúng dạng từ điển.
+          {
+            const uni = unifyVietnameseUnderscoresInText(translated);
+            if (uni.count > 0) {
+              translated = uni.text;
+              store.addLog('info', `🔧 Đồng nhất ${uni.count} biến nối "_" → dấu cách trong ${field.label}`);
+            }
+          }
 
           const covariance = enforceInitvarCovariance(translated, currentMvuDict, isLorebookNarrative);
           if (covariance.fixes.length > 0) {
@@ -1257,6 +1267,14 @@ export function useTranslation() {
           const isBfLorebookNarrative = bf.group === 'lorebook' && !isBfCodeLike;
           const isBfCodeOrLogic = isBfCodeLike || isBfLorebookNarrative;
           if (isBfCodeOrLogic) {
+            // (User 2026 — bug #8) SWEEP dict-less như đường single: gom biến Việt nối `_` về space.
+            {
+              const uni = unifyVietnameseUnderscoresInText(translated);
+              if (uni.count > 0) {
+                translated = uni.text;
+                store.addLog('info', `🔧 Đồng nhất ${uni.count} biến nối "_" → dấu cách trong ${bf.label}`);
+              }
+            }
 
             const covariance = enforceInitvarCovariance(translated, mvuDict, isBfLorebookNarrative);
             if (covariance.fixes.length > 0) {

@@ -288,7 +288,7 @@ STRICT RULES:
 7. Maintain the same tone and style of the original text.
 8. DO NOT translate text that is already in ${targetLang} (leave it exactly as is).
 9. FORMATTING RULES for structured text:
-   - If text uses YAML-like structure (lines with "key:" format), keep underscores ONLY in the KEY part (before the colon). The VALUE part (after the colon) is normal text — do NOT add underscores.
+   - If text uses YAML-like structure (lines with "key:" format): translate KEYS with NATURAL SPACES between words (e.g. "Giới Hạn Từ Bi:"), exactly matching the variable dictionary if one is provided. NEVER replace spaces with underscores — do NOT invent forms like "Giới_Hạn_Từ_Bi". Only keep an underscore if the SOURCE key itself contains one. The VALUE part (after the colon) is normal text.
    - XML/HTML tag names and attributes: Keep exactly as-is (e.g., <Sabercharacter>, <user_setting>).
    - Regular prose/narrative text: Write naturally WITHOUT underscores. Underscores are NOT needed in flowing text or dialogue.
    - Variable placeholders like {{char}}, {{user}}, {{random}}: Keep exactly as-is, do NOT translate.

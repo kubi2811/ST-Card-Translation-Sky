@@ -398,11 +398,19 @@ export function recanonicalizeMvuInCard(
     }
 
     // Lorebook entries (initvar / update-rules / controller)
+    // (bug #8) Quét CẢ comment (tên entry hiển thị — "Quy_Tắc_Cập_Nhật_Biến") + keys (trigger
+    // keyword) chứ không riêng content — card user còn 30 chỗ `_` trong comment + 2 trong keys.
     if (data.character_book?.entries) {
-      data.character_book.entries = data.character_book.entries.map((e) => ({
-        ...e,
-        content: enforceCode(e.content),
-      }));
+      data.character_book.entries = data.character_book.entries.map((e) => {
+        const next = { ...e, content: enforceCode(e.content) };
+        if (typeof (next as { comment?: unknown }).comment === 'string') {
+          (next as { comment: string }).comment = unifyVietnameseUnderscoresInText((next as { comment: string }).comment).text;
+        }
+        if (Array.isArray(next.keys)) {
+          next.keys = next.keys.map((k) => (typeof k === 'string' ? unifyVietnameseUnderscoresInText(k).text : k));
+        }
+        return next;
+      });
     }
   }
 
@@ -427,7 +435,8 @@ export function recanonicalizeMvuInFields(
     const isCode =
       f.entryType === 'initvar' || f.entryType === 'controller' || f.entryType === 'mvu_logic' ||
       f.group === 'regex' || f.group === 'tavern_helper';
-    const isLbNarr = f.group === 'lorebook' && !isCode;
+    // (bug #8) Gồm cả lorebook_keys — trigger keyword nhiễm `_` khi export sẽ đè lên card đã sửa.
+    const isLbNarr = (f.group === 'lorebook' || f.group === 'lorebook_keys') && !isCode;
     if (!isCode && !isLbNarr) return f;
     // (bug #8) Sweep dict-less TRƯỚC — Lưu_Tam_Bảo → Lưu Tam Bảo kể cả khi dict trống/thiếu key.
     let t = unifyVietnameseUnderscoresInText(f.translated).text;

@@ -61,6 +61,7 @@ const ui: UiKeys = {
   // ─── App.tsx (sidebar) ───
   appCompareCards: '🔀 So Sánh Card',
   appRegexManager: '⚡ Regex Manager',
+  appLazySlow: '⏳ Đang tải bảng… Nếu bạn đang DỊCH, trình duyệt phải nhường lượt kết nối cho các lượt gọi AI (tối đa 6 kết nối/trang) nên bảng tải chậm hơn bình thường. Cứ đợi thêm chút — hoặc bấm Dừng dịch rồi mở lại là vào ngay.',
   appAiCompanion: '🔮 Trợ Lý AI',
 
   // ─── FileUpload ───

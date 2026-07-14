@@ -14,16 +14,45 @@ import PostTranslateGuideModal from './components/PostTranslateGuideModal';
 import GlossaryVizPanel from './components/GlossaryVizPanel';
 import { APP_VERSION, APP_VERSION_NOTE } from './version';
 
-// Lazy-load heavy components — only loaded after card is imported
-const FieldEditor = lazy(() => import('./components/FieldEditor'));
-const ExportPanel = lazy(() => import('./components/ExportPanel'));
-const VerifyPanel = lazy(() => import('./components/VerifyPanel'));
+// Lazy-load heavy components — only loaded after card is imported.
+// (User 2026) MỖI import() = 1 request HTTP tới CÙNG ORIGIN với call AI (/api-proxy/…). Trình duyệt
+// chỉ cho ~6 kết nối đồng thời/host (HTTP/1.1) → khi ĐANG DỊCH (pool mở hàng chục call LLM, mỗi call
+// treo tới hàng phút, có cái 524) thì request tải chunk XẾP HÀNG mãi không tới lượt ⇒ Suspense quay
+// vô tận (bug user: bấm Regex Manager lúc đang dịch → load không vào). Cách chữa: gọi sẵn các
+// import() này lúc app RẢNH (xem warmupLazyChunks bên dưới) → lúc cần mở panel thì chunk đã có trong
+// bộ nhớ, KHÔNG cần request nào nữa, mở tức thì dù đang dịch.
+const importFieldEditor = () => import('./components/FieldEditor');
+const importExportPanel = () => import('./components/ExportPanel');
+const importVerifyPanel = () => import('./components/VerifyPanel');
+const importEjsCreatorPanel = () => import('./components/EjsCreatorPanel');
+const importRegexManagerPanel = () => import('./components/RegexManagerPanel');
+const importAiCompanionPanel = () => import('./components/AiCompanionPanel');
+const importPresetPromptViewer = () => import('./components/PresetPromptViewer');
+const importCompareCardsPanel = () => import('./components/CompareCardsPanel');
 
-const EjsCreatorPanel = lazy(() => import('./components/EjsCreatorPanel'));
-const RegexManagerPanel = lazy(() => import('./components/RegexManagerPanel'));
-const AiCompanionPanel = lazy(() => import('./components/AiCompanionPanel'));
-const PresetPromptViewer = lazy(() => import('./components/PresetPromptViewer'));
-const CompareCardsPanel = lazy(() => import('./components/CompareCardsPanel'));
+const FieldEditor = lazy(importFieldEditor);
+const ExportPanel = lazy(importExportPanel);
+const VerifyPanel = lazy(importVerifyPanel);
+const EjsCreatorPanel = lazy(importEjsCreatorPanel);
+const RegexManagerPanel = lazy(importRegexManagerPanel);
+const AiCompanionPanel = lazy(importAiCompanionPanel);
+const PresetPromptViewer = lazy(importPresetPromptViewer);
+const CompareCardsPanel = lazy(importCompareCardsPanel);
+
+/** Nạp trước MỌI chunk lazy khi trình duyệt rảnh — chạy 1 lần, nuốt lỗi (mạng hỏng thì Suspense lo). */
+let warmedUp = false;
+function warmupLazyChunks() {
+  if (warmedUp) return;
+  warmedUp = true;
+  const loaders = [
+    importFieldEditor, importExportPanel, importVerifyPanel, importEjsCreatorPanel,
+    importRegexManagerPanel, importAiCompanionPanel, importPresetPromptViewer, importCompareCardsPanel,
+  ];
+  const run = () => { for (const load of loaders) load().catch(() => { warmedUp = false; }); };
+  const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void }).requestIdleCallback;
+  if (ric) ric(run, { timeout: 3000 });
+  else setTimeout(run, 1200);
+}
 
 export default function App() {
   const { toasts, removeToast, card, jumpToFieldPath } = useStore();
@@ -34,6 +63,11 @@ export default function App() {
   const [showAiCompanion, setShowAiCompanion] = useState(false);
   const [showPresetViewer, setShowPresetViewer] = useState(false);
   const [showCompare, setShowCompare] = useState(false);
+
+  // (User 2026) Nạp trước chunk các panel nặng NGAY khi app rảnh — trước khi user bấm Dịch. Sau đó
+  // mở Regex Manager / Trợ Lý AI / EJS Creator lúc đang dịch là tức thì, không phải chờ 1 khe kết nối
+  // trống giữa hàng chục call LLM (bug "quay quài" của user).
+  useEffect(() => { warmupLazyChunks(); }, []);
 
   // Flush translation progress to the project folder when the tab is closed/hidden, so an
   // accidental close within the auto-save window doesn't lose the last few seconds of work.
@@ -417,6 +451,15 @@ function Step({ num, text }: { num: number; text: string }) {
 
 /** Skeleton placeholder shown while lazy components load */
 function LazyFallback() {
+  // (User 2026) Nếu chunk phải tải NGAY GIỮA lúc đang dịch (vd user F5 giữa chừng nên chưa kịp
+  // warm-up), request bị xếp sau hàng chục call LLM → chờ lâu. Sau 6s nói rõ lý do + cách xử lý,
+  // thay vì để user nhìn vòng xoay vô nghĩa.
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const id = setTimeout(() => setSlow(true), 6000);
+    return () => clearTimeout(id);
+  }, []);
+  const ui = useUi();
   return (
     <div
       className="card"
@@ -424,8 +467,10 @@ function LazyFallback() {
         padding: '20px',
         minHeight: '80px',
         display: 'flex',
+        flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
+        gap: '10px',
       }}
     >
       <div
@@ -438,6 +483,11 @@ function LazyFallback() {
           animation: 'spin 0.8s linear infinite',
         }}
       />
+      {slow && (
+        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textAlign: 'center', maxWidth: '420px', lineHeight: 1.5 }}>
+          {ui.appLazySlow}
+        </div>
+      )}
     </div>
   );
 }

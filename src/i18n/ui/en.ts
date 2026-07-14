@@ -59,6 +59,7 @@ const ui = {
   // ─── App.tsx (sidebar) ───
   appCompareCards: '🔀 Compare Cards',
   appRegexManager: '⚡ Regex Manager',
+  appLazySlow: '⏳ Loading panel… If a translation is RUNNING, the browser must share its connection slots with the AI calls (max 6 per page), so the panel loads slower than usual. Just wait a moment — or hit Stop and reopen it for an instant load.',
   appAiCompanion: '🔮 AI Assistant',
 
   // ─── FileUpload ───

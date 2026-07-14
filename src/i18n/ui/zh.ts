@@ -57,6 +57,7 @@ const ui: UiKeys = {
   // ─── App.tsx (侧边栏) ───
   appCompareCards: '🔀 对比角色卡',
   appRegexManager: '⚡ Regex 管理器',
+  appLazySlow: '⏳ 正在加载面板… 如果正在翻译，浏览器需要把连接名额让给 AI 请求（每页最多 6 个连接），所以面板加载会比平时慢。请稍等片刻 — 或点停止翻译后重新打开即可秒开。',
   appAiCompanion: '🔮 AI 助手',
 
   // ─── FileUpload ───

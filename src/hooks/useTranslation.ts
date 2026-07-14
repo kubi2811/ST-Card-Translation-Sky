@@ -17,7 +17,7 @@ import { buildEffectivePrompt } from '../utils/promptBuilder';
 import { surgicalTranslate } from '../utils/surgical';
 import { parsePatchOutput, applyPatches, validatePatchResult } from '../utils/patchEngine';
 import { injectMvuZodSystem } from '../utils/mvuGenerator';
-import { detectEjsCard, extractEjsEntryNames, extractEjsKeywords, aiTranslateEjsEntries, validateEjsSync, autoFixEjsEntryNames, autoFixEjsKeywords, enforceEjsEntryName, enforceEjsCovariance, enforceEjsKeywordCasing, autoFixEjsKeywordsExtended } from '../utils/ejsSync';
+import { detectEjsCard, extractEjsEntryNames, extractEjsKeywords, aiTranslateEjsEntries, validateEjsSync, autoFixEjsEntryNames, autoFixEjsKeywords, enforceEjsEntryName, enforceEjsCovariance, enforceEjsKeywordCasing, autoFixEjsKeywordsExtended, enforceEjsDictConsistency } from '../utils/ejsSync';
 import { getActivePresetPromptContent } from '../utils/presetParser';
 import { CallMonitor } from '../utils/callMonitor';
 import { runWorkerPool } from '../utils/runWorkerPool';
@@ -2532,6 +2532,31 @@ export function useTranslation() {
         }
       }
     } catch { /* harvest chỉ tăng cường — lỗi thì bỏ qua */ }
+
+    // ═══ (User 2026) SWEEP CUỐI: ĐỒNG NHẤT TỪ ĐIỂN EJS (Chiến lược C) ═══
+    // Làm sạch value (bỏ dấu/ký tự lạ, gộp hoa-thường) + gom cụm gần-giống → 1 dạng, rồi ENFORCE LẠI
+    // mọi field code/lorebook với dict đã sạch → hết cảnh cùng keyword ra nhiều dạng gây EJS/MVU gãy.
+    if (store.translationConfig.enableEjsSync) {
+      try {
+        const kwRaw = useStore.getState().translationConfig.ejsKeywordDict || {};
+        const enRaw = useStore.getState().translationConfig.ejsEntryNameDict || {};
+        const kwRes = enforceEjsDictConsistency(kwRaw);
+        const enRes = enforceEjsDictConsistency(enRaw);
+        if (kwRes.fixes.length > 0 || enRes.fixes.length > 0) {
+          store.setTranslationConfig({ ejsKeywordDict: kwRes.fixedDict, ejsEntryNameDict: enRes.fixedDict });
+        }
+        const cleanKw = kwRes.fixedDict, cleanEn = enRes.fixedDict;
+        let swept = 0;
+        for (const f of useStore.getState().fields) {
+          if (f.status !== 'done' || typeof f.translated !== 'string' || !f.translated) continue;
+          if (f.group !== 'lorebook' && f.group !== 'tavern_helper' && f.group !== 'regex') continue;
+          let t = enforceEjsCovariance(f.translated, cleanEn, cleanKw).text;
+          t = enforceEjsKeywordCasing(t, cleanEn, cleanKw).text;
+          if (t !== f.translated) { store.updateField(f.path, { translated: t }); swept++; }
+        }
+        if (swept > 0) store.addLog('success', `🔗 Đồng nhất từ điển EJS: chuẩn hoá ${swept} field về 1 dạng thống nhất (bỏ dấu lạ / hoa-thường lệch).`);
+      } catch { /* sweep chỉ tăng cường — lỗi thì bỏ qua */ }
+    }
 
     runningRef.current = false;
     store.setPhase('done');

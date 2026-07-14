@@ -1377,6 +1377,64 @@ export function enforceEjsKeywordCasing(
  *
  * Use this AFTER autoFixEjsKeywords() for complete coverage.
  */
+
+/**
+ * (User 2026) Làm sạch 1 GIÁ TRỊ từ điển EJS: bỏ nháy/khoảng trắng bao ngoài + ký tự điều khiển/
+ * zero-width + gộp khoảng trắng. GIỮ nội dung & hoa/thường có nghĩa (casing do enforceEjsKeywordCasing lo).
+ */
+export function canonicalizeEjsValue(value: string): string {
+  if (!value || typeof value !== 'string') return value;
+  let v = value.replace(/[\u0000-\u001F\u200B-\u200D\uFEFF]/g, ''); // control + zero-width
+  v = v.replace(/^["'「『`\s]+|["'」』`\s]+$/g, '');
+  v = v.replace(/\s+/g, ' ').trim();
+  return v || value;
+}
+
+/**
+ * (User 2026) ĐỒNG NHẤT từ điển EJS — mirror `enforceExactConsistency` (MVU). (1) làm sạch mọi value;
+ * (2) gom cụm value gần-giống (chuẩn hoá: lower + bỏ khoảng trắng/gạch) → chọn 1 dạng canonical (phổ
+ * biến nhất, hoà thì dài nhất); (3) gán canonical cho mọi key. Hết "thêm dấu / ký tự lạ / hoa-thường lệch".
+ */
+export function enforceEjsDictConsistency(
+  dict: Record<string, string>,
+): { fixedDict: Record<string, string>; fixes: string[] } {
+  const fixes: string[] = [];
+  const fixedDict: Record<string, string> = {};
+  for (const [k, v] of Object.entries(dict || {})) {
+    const clean = canonicalizeEjsValue(v);
+    fixedDict[k] = clean;
+    if (clean !== v) fixes.push(`"${k}": "${v}" → "${clean}" (làm sạch)`);
+  }
+  const norm = (s: string) => s.toLowerCase().replace(/[\s_-]+/g, '');
+  const clusters = new Map<string, string[]>();
+  for (const v of Object.values(fixedDict)) {
+    if (!v) continue;
+    const nk = norm(v);
+    if (!clusters.has(nk)) clusters.set(nk, []);
+    clusters.get(nk)!.push(v);
+  }
+  const canonicalOf = new Map<string, string>();
+  for (const [nk, vals] of clusters) {
+    const freq = new Map<string, number>();
+    for (const v of vals) freq.set(v, (freq.get(v) || 0) + 1);
+    let best = vals[0];
+    for (const [v, c] of freq) {
+      const bc = freq.get(best) || 0;
+      if (c > bc || (c === bc && v.length > best.length)) best = v;
+    }
+    canonicalOf.set(nk, best);
+  }
+  for (const [k, v] of Object.entries(fixedDict)) {
+    if (!v) continue;
+    const canon = canonicalOf.get(norm(v));
+    if (canon && canon !== v) {
+      fixedDict[k] = canon;
+      fixes.push(`"${k}": "${v}" → "${canon}" (đồng nhất cụm)`);
+    }
+  }
+  return { fixedDict, fixes };
+}
+
 export function autoFixEjsKeywordsExtended(
   translated: string,
   ejsKeywordDict: Record<string, string>,

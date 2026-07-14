@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useStore } from '../store';
 import { useT, useUi } from '../i18n/useLocale';
 import { fmt } from '../i18n';
-import { detectEjsCard, extractEjsEntryNames, extractEjsKeywords, extractAllDecorators, aiTranslateEjsEntries } from '../utils/ejsSync';
+import { detectEjsCard, extractEjsEntryNames, extractEjsKeywords, extractAllDecorators, aiTranslateEjsEntries, enforceEjsDictConsistency } from '../utils/ejsSync';
 import { Settings, Plus, Trash2, Wand2, Loader2, Search, Download, Upload, Shield, Zap, Hash, BookOpen, Eye } from 'lucide-react';
 
 export default function EjsSyncPanel() {
@@ -277,6 +277,25 @@ export default function EjsSyncPanel() {
             </button>
             <button className="btn btn-sm" onClick={importDict} title="Import dictionaries">
               <Upload size={13} />
+            </button>
+            {/* (User 2026) Đồng nhất từ điển EJS — non-AI: làm sạch value + gom cụm gần-giống về 1 dạng */}
+            <button
+              className="btn btn-sm"
+              title={ui.esUnifyTip}
+              style={{ color: '#4ade80', borderColor: 'rgba(34,197,94,0.3)' }}
+              onClick={() => {
+                const kwRes = enforceEjsDictConsistency(ejsKeywordDict);
+                const enRes = enforceEjsDictConsistency(ejsEntryNameDict);
+                const total = kwRes.fixes.length + enRes.fixes.length;
+                if (total > 0) {
+                  setTranslationConfig({ ejsKeywordDict: kwRes.fixedDict, ejsEntryNameDict: enRes.fixedDict });
+                  addToast('success', fmt(ui.esUnifyDone, { count: total }));
+                } else {
+                  addToast('info', ui.esUnifyNone);
+                }
+              }}
+            >
+              🔗 {ui.esUnify}
             </button>
           </div>
 

@@ -13,7 +13,8 @@ import {
   validateDictionaryConflicts,
   aiResolveMvuConflicts,
   recanonicalizeMvuInCard,
-  recanonicalizeMvuInFields
+  recanonicalizeMvuInFields,
+  enforceVariableCasing
 } from '../utils/mvuSync';
 import { isMvuCard, getMvuZodSummary } from '../utils/mvuDetector';
 import { 
@@ -632,12 +633,26 @@ export default function MvuSyncPanel() {
     // 2. Card (bản đã bake / thẻ import dịch trước bản vá) — dùng dict đã làm sạch ở bước 1
     const cardRes = recanonicalizeMvuInCard(card, fieldRes.dictionary);
     const cleanDict = cardRes.dictionary;
-    const total = fieldRes.fixCount + cardRes.fixCount;
+    // 3. (User 2026 — "biến không đồng nhất") ÉP HOA/THƯỜNG theo dict vào TEXT các field đã dịch:
+    // recanonicalize chỉ lo _/-/space; còn "Tiến trình" vs "Tiến Trình" (Kiểm tra tổng báo mvu
+    // inconsistent) do casing lệch dict — enforceVariableCasing vốn chỉ chạy LÚC dịch, giờ chạy cả
+    // ở nút này để card đã dịch xong/import lại cũng gom về đúng 1 dạng.
+    let casingFixes = 0;
+    const casedFields = fieldRes.fields.map((f) => {
+      if (f.status !== 'done' || !f.translated) return f;
+      const r = enforceVariableCasing(f.translated, cleanDict);
+      if (r.fixes.length > 0 && r.text !== f.translated) {
+        casingFixes += r.fixes.length;
+        return { ...f, translated: r.text };
+      }
+      return f;
+    });
+    const total = fieldRes.fixCount + cardRes.fixCount + casingFixes;
     const dictChanged = JSON.stringify(cleanDict) !== JSON.stringify(dict);
     if (total > 0 || dictChanged) {
       pushDictionaryHistory(dict);
       setTranslationConfig({ mvuDictionary: cleanDict });
-      if (fieldRes.fixCount > 0) setFields(fieldRes.fields);
+      if (fieldRes.fixCount > 0 || casingFixes > 0) setFields(casedFields);
       if (cardRes.fixCount > 0) updateCard(cardRes.card);
       addToast('success', fmt(ui.msUnifyDone, { count: total }));
     } else {

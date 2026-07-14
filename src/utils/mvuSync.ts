@@ -784,6 +784,23 @@ export function enforceVariableCasing(
     return match;
   });
 
+  // ─── Pass 3b: MẢNG path ['KEY 1', 'KEY 2'] — dạng _.get(stat, ['Tiến trình', 'Giai đoạn']) ───
+  // Pass 3 chỉ khớp mảng 1 phần tử (['KEY']) vì đòi `]` ngay sau nháy đóng; card MVU thật dùng
+  // mảng nhiều segment → casing lệch dict không được vá (nguồn 8 cảnh báo "mvu inconsistent" ở
+  // Kiểm tra tổng). Khớp từng chuỗi đứng giữa `[`/`,` và `,`/`]`; chỉ đổi khi khác casing với dict
+  // (getCasingFix) nên không đụng mảng chuỗi thường.
+  const arraySegRegex = /([[,]\s*)(['"])([^'"]+)\2(?=\s*[,\]])/g;
+  result = result.replace(arraySegRegex, (match, prefix, quote, inner) => {
+    const canonical = getCasingFix(inner);
+    if (canonical) {
+      if (!fixes.some(f => f.found === inner)) {
+        fixes.push({ found: inner, replaced: canonical });
+      }
+      return `${prefix}${quote}${canonical}${quote}`;
+    }
+    return match;
+  });
+
   // ─── Pass 4: EJS function calls getvar('KEY') / setvar('KEY', ...) ───
   const ejsRegex = /((?:getvar|setvar|addvar|getglobalvar|setglobalvar|addglobalvar|getVariable|setVariable)\s*\(\s*['"])([^'"]+)(['"])/g;
   result = result.replace(ejsRegex, (match, prefix, inner, suffix) => {

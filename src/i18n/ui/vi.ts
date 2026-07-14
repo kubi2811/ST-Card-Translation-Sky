@@ -794,6 +794,8 @@ const ui: UiKeys = {
   acUndone: 'Đã hoàn tác thao tác cuối',
   acUndoErr: 'Lỗi khi hoàn tác',
   acRetrying: 'Đang thử gửi lại yêu cầu ({attempt}/{max})...',
+  acHedgeNote: '⚡ Lượt gọi này chậm (>30s) → đã bắn thêm 1 bản trên KEY/PROVIDER khác, lấy bản nào xong trước.',
+  acContinuing: '✍️ Câu trả lời dài, đang viết tiếp phần bị cắt ({n}/{max})…',
   acNoApiResponse: 'Không có phản hồi từ máy chủ API.',
   acApiErrMsg: '❌ **Lỗi gọi API:** `{msg}`\n\nHãy kiểm tra lại API Key, Endpoint hoặc trạng thái kết nối mạng của bạn.',
   acActionsRejectedMsg: '\n\n---\n❌ **Actions đã bị từ chối bởi người dùng.**',

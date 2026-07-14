@@ -24,6 +24,7 @@ interface TokenUsageSink { input?: number; output?: number; cached?: number }
 // chunkText tách sang ./chunking (Đợt tách monolith). Import để dùng nội bộ + RE-EXPORT
 // để các file khác vẫn `import { chunkText } from './apiClient'` như cũ (không phải sửa importer).
 import { chunkText } from './chunking';
+import { hedgedRace } from './hedge';
 export { chunkText };
 
 /* ─── Error types ─── */
@@ -143,6 +144,48 @@ export function ejsMarkersIntact(orig: string, trans: string): boolean {
 /** Chunk có marker EJS cần guard không (khối `<%…%>` hoặc token mask `{{__ejs_N__}}`). */
 export function hasEjsMarkers(s: string): boolean {
   return typeof s === 'string' && (/<%[\s\S]*?%>/.test(s) || /\{\{__ejs_\d+__\}\}/.test(s));
+}
+
+/**
+ * (User 2026 — "Trợ Lý AI lâu quá, có xoay key/hedge như bên dịch không?") HEDGE DÙNG CHUNG cho MỌI
+ * lượt gọi 1-shot (Trợ Lý AI, tạo data test, sinh entry…). Trước đây hedge CHỈ có trong translateText
+ * nên các tính năng khác gặp lane treo (proxy nghẽn / key bị bóp) là ngồi chờ vô hạn.
+ *
+ * Cách chạy: bắn bản A; nếu quá `hedgeAfterMs` mà A chưa xong → bắn thêm bản B — pickLane tự chọn
+ * LANE KHÁC (key khác / provider khác, né lane đang lỗi) → lấy bản nào XONG TRƯỚC, HUỶ bản còn lại.
+ * Chỉ bắn thêm 1 lần và chỉ khi vượt ngưỡng ⇒ call bình thường KHÔNG tốn đôi. A lỗi TRƯỚC ngưỡng thì
+ * ném luôn cho tầng trên retry (khỏi hedge vô ích).
+ */
+export async function callProviderHedged(
+  config: ProxySettings,
+  system: string,
+  user: string,
+  opts?: {
+    signal?: AbortSignal;
+    images?: string[];
+    meta?: { label?: string; charCount?: number; preferSecondary?: boolean };
+    /** Quá ngưỡng này (ms) mà chưa xong → bắn bản dự phòng trên lane khác. Mặc định 30s. */
+    hedgeAfterMs?: number;
+    /** Gọi khi bản dự phòng được bắn — để UI báo "đang thử lane khác". */
+    onHedge?: () => void;
+  },
+): Promise<string> {
+  const hedgeAfterMs = opts?.hedgeAfterMs ?? 30_000;
+  return hedgedRace<string>(
+    () => {
+      const ctrl = new AbortController();
+      const linked = opts?.signal ? AbortSignal.any([opts.signal, ctrl.signal]) : ctrl.signal;
+      return {
+        p: callProvider(config, system, user, linked, opts?.images, opts?.meta),
+        abort: (reason) => ctrl.abort(reason),
+      };
+    },
+    hedgeAfterMs,
+    () => {
+      console.log(`[callProviderHedged] ${opts?.meta?.label || 'call'} > ${hedgeAfterMs / 1000}s → bắn bản dự phòng trên lane khác`);
+      opts?.onHedge?.();
+    },
+  );
 }
 
 /** Chunk gốc có phải CODE không (đủ dòng mang dấu hiệu code để guard cấu trúc). */

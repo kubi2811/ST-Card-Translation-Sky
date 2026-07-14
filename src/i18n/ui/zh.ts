@@ -777,6 +777,8 @@ const ui: UiKeys = {
   acUndone: '已撤销上一步操作',
   acUndoErr: '撤销时出错',
   acRetrying: '正在重试请求（{attempt}/{max}）……',
+  acHedgeNote: '⚡ 本次调用较慢（>30 秒）→ 已在另一个密钥/供应商上发起备用请求，谁先完成用谁的。',
+  acContinuing: '✍️ 回答较长，正在续写被截断的部分（{n}/{max}）……',
   acNoApiResponse: 'API 服务器没有响应。',
   acApiErrMsg: '❌ **API 调用失败：** `{msg}`\n\n请检查 API Key、Endpoint 或网络连接状态。',
   acActionsRejectedMsg: '\n\n---\n❌ **用户拒绝了这些 Actions。**',

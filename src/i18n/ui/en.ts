@@ -782,6 +782,8 @@ const ui = {
   acUndone: 'Undid the last action',
   acUndoErr: 'Error while undoing',
   acRetrying: 'Retrying the request ({attempt}/{max})...',
+  acHedgeNote: '⚡ This call is slow (>30s) → fired a backup on ANOTHER key/provider; whichever finishes first wins.',
+  acContinuing: '✍️ Long answer — writing the cut-off part ({n}/{max})…',
   acNoApiResponse: 'No response from the API server.',
   acApiErrMsg: '❌ **API call failed:** `{msg}`\n\nCheck your API Key, Endpoint, or network connection.',
   acActionsRejectedMsg: '\n\n---\n❌ **Actions were rejected by the user.**',

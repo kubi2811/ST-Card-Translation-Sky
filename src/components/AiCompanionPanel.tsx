@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback, memo } from '
 import { useStore } from '../store';
 import { useT, useUi } from '../i18n/useLocale';
 import { fmt } from '../i18n';
-import { callProvider } from '../utils/apiClient';
+import { callProvider, callProviderHedged, setExtraProviders } from '../utils/apiClient';
 import { safeSetItem } from '../utils/safeStorage';
 import { 
   X, Send, Code2, Copy, Trash2, Upload, Loader2, Settings, Plus, FileText, 
@@ -1019,6 +1019,8 @@ const MessageList = memo(({
   messages,
   isGenerating,
   retryText,
+  elapsedSec,
+  hedged,
   messagesEndRef,
   handleConfirmActions,
   handleRejectActions,
@@ -1030,6 +1032,10 @@ const MessageList = memo(({
   messages: Message[];
   isGenerating: boolean;
   retryText: string;
+  /** (User 2026) Số giây đã chờ — cho user biết còn sống, không phải treo. */
+  elapsedSec: number;
+  /** Đã bắn bản dự phòng sang lane/key khác vì lượt gọi quá chậm. */
+  hedged: boolean;
   messagesEndRef: React.RefObject<HTMLDivElement | null>;
   handleConfirmActions: (actions: AiAction[]) => void;
   handleRejectActions: () => void;
@@ -1330,7 +1336,16 @@ const MessageList = memo(({
           <div className="flex flex-col gap-1.5 py-2">
             <div className="flex items-center gap-2 text-indigo-400 text-sm font-medium">
               <Loader2 size={14} className="animate-spin" /> {ui.acThinking}
+              {/* (User 2026) Đồng hồ chờ — trước đây chỉ có spinner câm nên user tưởng treo. */}
+              {elapsedSec > 0 && (
+                <span className="text-[11px] font-mono text-indigo-300/70">{elapsedSec}s</span>
+              )}
             </div>
+            {hedged && (
+              <div className="text-[10px] text-amber-400 font-mono pl-5">
+                {ui.acHedgeNote}
+              </div>
+            )}
             {retryText && (
               <div className="text-[10px] text-amber-500 font-mono pl-5 animate-pulse">
                 {retryText}
@@ -1348,7 +1363,8 @@ const MessageList = memo(({
    MAIN COMPONENT
    ════════════════════════════════════════════════════════════════════ */
 export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
-  const { card, proxy, updateCard, addToast } = useStore();
+  // (User 2026) `providers` = các provider PHỤ — bơm vào pool để Trợ Lý AI cũng xoay lane như Dịch Card.
+  const { card, proxy, providers, updateCard, addToast } = useStore();
   const ui = useUi();
   
   // ─── Local Storage States ───
@@ -1379,6 +1395,13 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
   const [isGenerating, setIsGenerating] = useState(false);
   const [retryText, setRetryText] = useState('');
   const [uploadError, setUploadError] = useState('');
+  // (User 2026) Guard GỬI TRÙNG: `isGenerating` là state React (cập nhật BẤT ĐỒNG BỘ) — bấm Enter 2
+  // lần thật nhanh thì cả 2 lần đều đọc được giá trị CŨ (false) và cùng lọt qua ⇒ gửi 2 tin nhắn y
+  // hệt (đúng như ảnh user gửi). Ref cập nhật NGAY nên chặn được.
+  const sendingRef = useRef(false);
+  // Đồng hồ chờ + cờ đã bắn bản dự phòng (hedge) — cho user thấy tiến độ thay vì spinner câm.
+  const [elapsedSec, setElapsedSec] = useState(0);
+  const [hedged, setHedged] = useState(false);
 
   // ─── Tab State ───
   const [activeTab, setActiveTab] = useState<'chat' | 'sandbox' | 'presets' | 'mvu-zod'>('chat');
@@ -1617,10 +1640,11 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
 
   const handleSend = async (forcedCommand?: string) => {
     const textToSend = forcedCommand || inputValue;
-    if (!textToSend.trim() || isGenerating) return;
+    if (!textToSend.trim() || isGenerating || sendingRef.current) return;
+    sendingRef.current = true; // chặn NGAY (state React cập nhật sau → Enter đúp lọt lưới)
 
-    const userMsg: Message = { 
-      role: 'user', 
+    const userMsg: Message = {
+      role: 'user',
       content: textToSend,
       isCommand: !!forcedCommand
     };
@@ -1630,6 +1654,16 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
     if (!forcedCommand) setInputValue('');
     setIsGenerating(true);
     setRetryText('');
+
+    // (User 2026 — "Trợ Lý AI lâu quá, có xoay key/hedge như bên dịch không?") Trước đây Trợ Lý chỉ
+    // dùng provider #1 vì KHÔNG bơm provider phụ vào pool (chỉ Dịch Card gọi setExtraProviders) →
+    // provider rảnh ngồi không, gặp key bị bóp là chờ dài. Nay bơm ĐỦ pool: callProvider tự xoay
+    // lane (key/provider round-robin, né lane 429 đang nghỉ 15s).
+    setExtraProviders(providers);
+    setHedged(false);
+    setElapsedSec(0);
+    const startedAt = Date.now();
+    const tick = setInterval(() => setElapsedSec(Math.round((Date.now() - startedAt) / 1000)), 1000);
 
     const maxAttempts = autoRetry ? 3 : 1;
     let attempt = 0;
@@ -1662,18 +1696,32 @@ ${contextBlock ? `\n[DANH SÁCH TÀI LIỆU NGỮ CẢNH HIỆN TẠI]:\n${conte
           setRetryText(fmt(ui.acRetrying, { attempt, max: maxAttempts - 1 }));
         }
 
-        finalResult = await callProvider(proxy, systemPrompt, effectiveUserPrompt, undefined, imagesList.length > 0 ? imagesList : undefined);
-        
+        // (User 2026) HEDGE: quá 30s mà lane chưa trả lời (proxy nghẽn/key bị bóp) → tự bắn thêm 1
+        // bản trên LANE KHÁC (key/provider khác), lấy bản nào xong trước, huỷ bản còn lại. Đúng cơ
+        // chế Dịch Card đang dùng, trước đây Trợ Lý AI KHÔNG có nên gặp lane treo là chờ vô hạn.
+        finalResult = await callProviderHedged(proxy, systemPrompt, effectiveUserPrompt, {
+          images: imagesList.length > 0 ? imagesList : undefined,
+          meta: { label: 'Trợ Lý AI' },
+          hedgeAfterMs: 30_000,
+          onHedge: () => setHedged(true),
+        });
+
         let continuationCount = 0;
         const maxContinuations = 5;
         while (checkResponseCut(finalResult) && continuationCount < maxContinuations) {
           continuationCount++;
+          setRetryText(fmt(ui.acContinuing, { n: continuationCount, max: maxContinuations }));
           const continuationPrompt = `${effectiveUserPrompt}\n\n[TIẾP TỤC PHẢN HỒI BỊ CẮT (Lượt ${continuationCount})]\nPhản hồi trước đó của bạn đã bị ngắt giữa chừng do giới hạn token. Dưới đây là TOÀN BỘ nội dung bạn đã viết được cho đến hiện tại:\n"""\n${finalResult}\n"""\n\nHãy tiếp tục viết tiếp ngay sau ký tự cuối cùng của nội dung trên để hoàn thiện phản hồi đầy đủ. KHÔNG viết lại hoặc lặp lại những phần đã có ở trên. Bắt đầu viết trực tiếp từ chữ bị cắt dở dang.`;
-          
-          const nextChunk = await callProvider(proxy, systemPrompt, continuationPrompt, undefined, undefined);
+
+          const nextChunk = await callProviderHedged(proxy, systemPrompt, continuationPrompt, {
+            meta: { label: `Trợ Lý AI (viết tiếp ${continuationCount})` },
+            hedgeAfterMs: 30_000,
+            onHedge: () => setHedged(true),
+          });
           if (!nextChunk || !nextChunk.trim()) break;
           finalResult += (nextChunk.startsWith('```') && finalResult.endsWith('```') ? '\n' : '') + nextChunk;
         }
+        setRetryText('');
         
         success = true;
         break;
@@ -1710,6 +1758,8 @@ ${contextBlock ? `\n[DANH SÁCH TÀI LIỆU NGỮ CẢNH HIỆN TẠI]:\n${conte
           setMessages([...nextMessages, msgWithView]);
           setIsGenerating(false);
           setRetryText('');
+          clearInterval(tick);
+          sendingRef.current = false; // mở khoá để lượt tự-gửi tiếp theo chạy được
           // Auto-send the view content back to AI as follow-up
           setTimeout(() => {
             handleSend(`[VIEW_FULL_REGEX KẾT QUẢ]:\n${viewFeedback}\n\nDựa trên nội dung đầy đủ ở trên, hãy tiếp tục xử lý yêu cầu trước đó của tôi.`);
@@ -1764,8 +1814,11 @@ ${contextBlock ? `\n[DANH SÁCH TÀI LIỆU NGỮ CẢNH HIỆN TẠI]:\n${conte
       }]);
     }
 
+    clearInterval(tick);
+    sendingRef.current = false;
     setIsGenerating(false);
     setRetryText('');
+    setHedged(false);
   };
 
   // ─── Confirm pending actions ───
@@ -2044,10 +2097,12 @@ try {
             {/* ══════ LEFT COLUMN: CHAT ══════ */}
             <div className="companion-chat-area">
               {/* Message Log */}
-              <MessageList 
-                messages={messages} 
-                isGenerating={isGenerating} 
-                retryText={retryText} 
+              <MessageList
+                messages={messages}
+                isGenerating={isGenerating}
+                retryText={retryText}
+                elapsedSec={elapsedSec}
+                hedged={hedged}
                 messagesEndRef={messagesEndRef}
                 handleConfirmActions={handleConfirmActions}
                 handleRejectActions={handleRejectActions}

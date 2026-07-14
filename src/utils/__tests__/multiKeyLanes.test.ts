@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { flattenLanes, laneKeyForTest, laneKeyToPanelForTest, type PoolProvider } from '../apiClient';
+import { flattenLanes, laneKeyForTest, laneKeyToPanelForTest, maskKey, type PoolProvider } from '../apiClient';
 
 /**
  * (User yêu cầu 2026) BUG: nhét ≥2 key vào 1 provider bị "treo / chỉ dùng 1 key".
@@ -69,5 +69,20 @@ describe('khoá lane per-key: bucket riêng nhưng gộp đúng cho UI', () => {
     const dflt = laneKeyToPanelForTest(laneKeyForTest('default', 0, 'pro'));
     const other = laneKeyToPanelForTest(laneKeyForTest('p2', 0, 'pro'));
     expect(dflt).not.toBe(other);
+  });
+});
+
+describe('maskKey — che key an toàn để log lỗi key nào sai', () => {
+  it('key dài → giữ 6 đầu + 4 cuối, che giữa; đủ đối chiếu, không lộ nguyên', () => {
+    const masked = maskKey('sk-proj-ABCDEFGHIJKLMNOP-1234');
+    expect(masked).toBe('sk-pro…1234');
+    expect(masked).not.toContain('GHIJKLMNOP'); // giữa bị che
+  });
+  it('key ngắn → che nhiều hơn (3 đầu + 2 cuối)', () => {
+    expect(maskKey('shortkey')).toBe('sho…ey');
+  });
+  it('rỗng → "(rỗng)"', () => {
+    expect(maskKey('')).toBe('(rỗng)');
+    expect(maskKey('   ')).toBe('(rỗng)');
   });
 });

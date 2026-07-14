@@ -1166,6 +1166,15 @@ export function getUniqueKeyCount(config: { apiKey: string; apiKeys: string[] })
   return getUniqueKeys(config).length || 1;
 }
 
+/** (User 2026) Che API key để HIỂN THỊ trong log an toàn: giữ 6 ký tự đầu + 4 cuối, giữa thay `…`.
+ *  Đủ để user ĐỐI CHIẾU & gỡ đúng key sai, không lộ nguyên key. */
+export function maskKey(key: string): string {
+  const k = (key || '').trim();
+  if (!k) return '(rỗng)';
+  if (k.length <= 12) return k.slice(0, 3) + '…' + k.slice(-2);
+  return k.slice(0, 6) + '…' + k.slice(-4);
+}
+
 // (User yêu cầu 2026) ĐA KEY = N LANE ĐỘC LẬP. Trước đây key xoay vòng chung 1 con trỏ + CHUNG
 // 1 rate-bucket/cooling theo (provider,model) → 1 key dính 429 làm cả provider nghỉ 15s ("treo/
 // như chỉ 1 key"). Nay MỖI (provider, keyIndex) là 1 lane riêng: bucket RPM riêng + cooling riêng
@@ -1487,6 +1496,14 @@ export async function callProvider(
     // Lỗi do người dùng hủy (abort) thì KHÔNG tính.
     const msg = err instanceof Error ? err.message : String(err);
     const isAbort = /abort|cancel/i.test(msg);
+    // (User 2026) Lỗi KEY SAI (401/403) → GHI RÕ KEY NÀO để user gỡ đúng: nhãn Key #N/total (đa key) +
+    // preview key đã che + tên provider. Không lặp lại nếu message đã có "Key #".
+    const status = err instanceof ApiError ? (err.statusCode || 0) : 0;
+    if ((status === 401 || status === 403) && lane.key && !/Key #|key:.*…/.test(msg)) {
+      const keyTag = keyTotal > 1 ? `Key #${keyIndex + 1}/${keyTotal}` : 'Key';
+      const provTag = lane.providerId === 'default' ? '' : `[${lane.providerId}] `;
+      throw new ApiError(`${msg} — ${provTag}${keyTag} sai/hết hạn (key: ${maskKey(lane.key)}) → gỡ key này ra`, status);
+    }
     const isTransient = (err instanceof ApiError && (err.retryable || (err.statusCode || 0) === 429 || (err.statusCode || 0) >= 500))
       || /timeout|timed out|fetch failed|failed to fetch|network|econnreset|\b5\d\d\b/i.test(msg);
     if (!isAbort && isTransient) recordLaneFailure(laneRlKey);

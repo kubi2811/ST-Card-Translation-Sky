@@ -360,9 +360,12 @@ export function useTranslation() {
       // ═══ (User 2026 — Đợt 1b) SURGICAL EJS: entry lorebook-EJS (prose + <%…%>) → MASK toàn bộ CODE
       // thành token {{__ejs_N__}}, chỉ gửi PROSE cho AI → hết "dịch nửa vời / vỡ code". CJK trong code
       // do từ điển EJS (covariance) lo sau. Chỉ áp khi bật Chiến lược C + đúng loại entry. ═══
+      // Áp cho field CÓ khối EJS + prose-CJK (isEjsProseField là gate thật) ở lorebook HOẶC tavern_helper
+      // (script TavernHelper dạng template EJS — nơi entry rule/note/action lỗi "dịch nửa vời" hay nằm).
+      // KHÔNG áp cho entryType schema/initvar/controller/mvu_logic (đã có đường riêng của MVU).
       const useEjsSurgical =
         store.translationConfig.enableEjsSync &&
-        field.group === 'lorebook' &&
+        (field.group === 'lorebook' || field.group === 'tavern_helper') &&
         field.entryType !== 'initvar' && field.entryType !== 'controller' && field.entryType !== 'mvu_logic' &&
         isEjsProseField(field.original);
       let ejsMaskCodes: string[] = [];

@@ -276,6 +276,15 @@ PHONG CÁCH GIAO TIẾP (như Gemini/Claude):
 - BÁM LUỒNG HỘI THOẠI: lịch sử các lượt trước được gửi kèm — dùng nó để trả lời liền mạch, không hỏi lại điều người dùng đã nói, không tự quên bối cảnh.
 - Câu hỏi kỹ thuật vẫn trả lời chính xác, code block rõ ràng; câu hỏi tán gẫu/tư vấn thì thoải mái trò chuyện.
 
+KỶ LUẬT XỬ LÝ DỮ LIỆU LỚN & PHÂN MẢNH (CHUNKING):
+- File Lorebook/Card/JSON lớn được app tự chia thành nhiều PHẦN, dán nhãn "[TỆP ĐÍNH KÈM: tên (PHẦN i/N)]". Khi gặp nhãn này: xử lý DỨT ĐIỂM TRỌN VẸN từng phần một. TUYỆT ĐỐI KHÔNG tự ý tóm tắt, KHÔNG cắt bớt nội dung để tiết kiệm token, KHÔNG bỏ sót mục nào.
+- ĐỒNG BỘ 1:1 (Strict Synchronization): đầu vào có bao nhiêu mục (items/dòng/keys) thì đầu ra phải trả về CHÍNH XÁC bấy nhiêu mục. Số dòng và cấu trúc phân cấp trước/sau khi dịch phải khớp 100% — không xô lệch, không gộp các dòng lại với nhau.
+- Nếu dữ liệu quá dài có nguy cơ đứt gãy giữa chừng (câu trả lời bị cắt), CHỦ ĐỘNG cảnh báo và đề xuất phương án chia nhỏ hợp lý (vd "gửi phần 1 trước, tôi dịch xong bạn gửi phần 2") TRƯỚC KHI bắt tay vào dịch.
+- Nếu phát hiện file gửi lên đã LỖI CÚ PHÁP từ trước (JSON/YAML/JS vỡ sẵn), báo rõ lỗi nằm đâu và hỏi người dùng muốn sửa lỗi trước hay cứ dịch nguyên trạng.
+- TÍNH NHẤT QUÁN XUYÊN SUỐT: khi xử lý nhiều phần/nhiều đợt, tự lập và BÁM một bảng thuật ngữ (tên riêng, xưng hô, địa danh) ngay từ phần đầu; các phần sau phải dùng ĐÚNG các thuật ngữ đó để phần 1 và phần cuối đồng nhất văn phong, không "râu ông nọ cắm cằm bà kia". Nếu lịch sử hội thoại đã có bảng thuật ngữ thì tái dùng, không tự đổi.
+- BẢO TOÀN CẤU TRÚC CODE & JSON TUYỆT ĐỐI khi dịch dữ liệu có cấu trúc: CHỈ dịch giá trị chuỗi văn bản (values). TUYỆT ĐỐI KHÔNG dịch/đổi: keys, tên biến, thẻ HTML/Markdown, regex, và các dấu { } [ ] " " , — thiếu 1 dấu phẩy/nháy là hỏng cả file. KHÔNG thêm văn bản thừa, lời bình hay giải thích vào BÊN TRONG khối JSON/code trả về.
+- Kết quả DỊCH THUẬT luôn nằm trong code block chuẩn (\`\`\`json / \`\`\`yaml …) để copy/paste không lỗi format; phần giải thích viết BÊN NGOÀI code block.
+
 NGUYÊN TẮC DỊCH THUẬT & VIỆT HOÁ CARD:
 - BẢO TOÀN TUYỆT ĐỐI biến hệ thống: {{char}}, {{user}}, {{random}}, mọi macro {{…}}, block <AI_ACTION>, biến logic trong script ẩn, thẻ/cấu trúc HTML-JSON — KHÔNG dịch, KHÔNG đổi.
 - CHỈ dịch phần văn bản HIỂN THỊ cho người chơi (nhãn UI, lời thoại, mô tả). Định danh/tên biến/key trong code giữ nguyên để không hỏng kết nối của TavernHelper script.
@@ -3366,7 +3375,8 @@ QUY TẮC BẮT BUỘC:
 - Initvar JSON: Sử dụng block mã ngôn ngữ \`\`\`json.
 - Variable Rules: Sử dụng block mã ngôn ngữ \`\`\`xml hoặc \`\`\`html.
 2. Tránh ghi chú thích quá nhiều ngoài mã nguồn bên trong block mã, để khi bấm áp dụng, mã nguồn được đưa vào editor sạch sẽ và không gây lỗi cú pháp.
-3. LUÔN LUÔN trả về Zod Schema và Variable Rules ĐẦY ĐỦ, HOÀN CHỈNH. Tuyệt đối không cắt bớt bằng các ký tự đại diện (như "...", "// code giữ nguyên", v.v.).`;
+3. LUÔN LUÔN trả về Zod Schema và Variable Rules ĐẦY ĐỦ, HOÀN CHỈNH. Tuyệt đối không cắt bớt bằng các ký tự đại diện (như "...", "// code giữ nguyên", v.v.).
+4. Tệp đính kèm dán nhãn "(PHẦN i/N)" là 1 phần của file lớn đã được app chia nhỏ: xử lý TRỌN VẸN phần đó, KHÔNG tóm tắt/cắt bớt; số mục vào/ra phải khớp 1:1.`;
 
       // Build history
       const historyStr = nextMessages.slice(-10)

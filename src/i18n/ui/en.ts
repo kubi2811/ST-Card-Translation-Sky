@@ -793,6 +793,8 @@ const ui = {
   acImgReadErr: 'Error reading the image file.',
   acAttachedMsg: '📁 **Attached {kind} successfully:** {names}.',
   acFileSplitNote: '🧩 File **{name}** is large ({chars} chars) so it was auto-split into **{parts} PARTS** (no characters lost). I will read all parts; if you only need one part, remove (🗑) the others to keep the call light.',
+  acRagToggle: 'RAG memory',
+  acRagToggleDesc: 'Automatically retrieves RELEVANT passages from the lorebook / attachments / knowledge base and feeds them to the AI with source labels (source: file › entry) — grounded answers, less hallucination. Turn off to use basic context only.',
   acAttachTotalWarn: '⚠️ Total attachment size is {total} chars — heavy for a single call. Better to process one part at a time (remove parts you do not need yet) to avoid mid-response truncation.',
   acPartBadgeTip: 'Large file auto-split into parts — no data lost. Remove parts you do not need yet to keep calls light.',
   acKindImage: 'images/documents',

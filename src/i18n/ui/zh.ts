@@ -788,6 +788,8 @@ const ui: UiKeys = {
   acImgReadErr: '读取图片文件出错。',
   acAttachedMsg: '📁 **已成功附上{kind}：** {names}。',
   acFileSplitNote: '🧩 文件 **{name}** 较大（{chars} 字符），已自动拆分为 **{parts} 个部分**（不丢失任何字符）。我会读取全部部分；如只需处理某一部分，可删除（🗑）其余部分以减轻负担。',
+  acRagToggle: 'RAG 记忆',
+  acRagToggleDesc: '自动从世界书/附件/知识库中检索相关片段，并附来源标签（来源：文件 › 条目）提供给 AI——回答有依据、减少幻觉。关闭则仅使用基础上下文。',
   acAttachTotalWarn: '⚠️ 附件总量已达 {total} 字符——单次调用较重。建议逐个部分处理（先删除暂不需要的部分），以免回复中途被截断。',
   acPartBadgeTip: '大文件已自动拆分为多个部分——数据不丢失。删除暂不需要的部分可让调用更轻。',
   acKindImage: '图片/文档',

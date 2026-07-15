@@ -805,6 +805,8 @@ const ui: UiKeys = {
   acImgReadErr: 'Lỗi đọc file ảnh.',
   acAttachedMsg: '📁 **Đã đính kèm {kind} thành công:** {names}.',
   acFileSplitNote: '🧩 File **{name}** khá lớn ({chars} ký tự) nên đã tự chia thành **{parts} PHẦN** (không mất ký tự nào). Mình sẽ đọc đủ tất cả các phần; nếu chỉ cần xử lý 1 phần, bạn gỡ (🗑) các phần còn lại để nhẹ hơn nhé.',
+  acRagToggle: 'Trí nhớ RAG',
+  acRagToggleDesc: 'Tự tìm các đoạn LIÊN QUAN trong lorebook/file đính kèm/kho kiến thức rồi đưa cho AI kèm nhãn nguồn (nguồn: file › mục) — trả lời bám tài liệu, giảm bịa. Tắt nếu muốn AI chỉ dùng ngữ cảnh cơ bản.',
   acAttachTotalWarn: '⚠️ Tổng dung lượng đính kèm đang là {total} ký tự — khá nặng cho 1 lượt gọi. Nên xử lý dứt điểm từng phần một (gỡ bớt các phần chưa cần) để tránh đứt gãy giữa chừng.',
   acPartBadgeTip: 'File lớn được tự chia thành nhiều phần — không mất dữ liệu. Gỡ bớt phần chưa cần để lượt gọi nhẹ hơn.',
   acKindImage: 'ảnh/tài liệu',

@@ -10,7 +10,7 @@ import {
   X, Send, Code2, Copy, Trash2, Upload, Loader2, Settings, Plus, FileText, 
   Sparkles, Check, Download, AlertCircle, RefreshCw, Eye, Flame, RotateCcw,
   Maximize, Minimize, Play, Languages, ChevronDown, ChevronRight, AlertTriangle, Regex,
-  ArrowRight, CheckCircle2, Shield, Zap, Undo2
+  ArrowRight, CheckCircle2, Shield, Zap, Undo2, Search
 } from 'lucide-react';
 import type { TranslationField, CharacterBookEntry, RegexScript, TavernHelperScript } from '../types/card';
 import { 
@@ -1384,6 +1384,9 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
     } catch { return []; }
   });
 
+  // (P1 roadmap) RAG trí nhớ: bật mặc định; index dựng lười lúc idle, query lúc gửi.
+  const [ragEnabled, setRagEnabled] = useState(() => localStorage.getItem('ai_assistant_rag') !== '0');
+  const ragIndexRef = useRef<import('../utils/ragEngine').RagIndex | null>(null);
   const [nsfwEnabled, setNsfwEnabled] = useState(() => {
     return localStorage.getItem('ai_assistant_nsfw') === 'true';
   });
@@ -1448,6 +1451,48 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
         .catch(e => console.warn('[memory] init lỗi (bỏ qua):', e));
     });
   }, []);
+
+  useEffect(() => { safeSetItem('ai_assistant_rag', ragEnabled ? '1' : '0'); }, [ragEnabled]);
+
+  // (P1 roadmap) Dựng chỉ mục RAG khi card/attachment đổi — idle, không chặn UI. Nguồn: attachment
+  // (kèm nhãn PHẦN i/N), lorebook của card (FULL — context thường chỉ có preview cắt ngắn), kho
+  // kiến thức MVU. Mỗi chunk giữ source grounding để AI trích nguồn.
+  useEffect(() => {
+    if (!ragEnabled) { ragIndexRef.current = null; return; }
+    let cancelled = false;
+    const idle = (cb: () => void) =>
+      'requestIdleCallback' in window ? (window as any).requestIdleCallback(cb, { timeout: 8000 }) : setTimeout(cb, 3000);
+    idle(async () => {
+      try {
+        const [{ RagIndex }, { chunkSemantic }] = await Promise.all([
+          import('../utils/ragEngine'), import('../utils/semanticChunker'),
+        ]);
+        const idx = new RagIndex();
+        const now = Date.now();
+        const cardKey = (card?.data?.name || card?.name || '') as string;
+        const push = (text: string, source: import('../utils/memoryStore').MemorySource, kind: import('../utils/memoryStore').MemoryKind = 'doc_chunk') => {
+          if (!text || !text.trim()) return;
+          for (const c of chunkSemantic(text)) {
+            idx.add({
+              id: `${source.fileName || source.path || source.origin}#${c.index}`,
+              kind, text: c.text, source, cardKey: source.origin === 'card' ? cardKey : '',
+              createdAt: now, updatedAt: now, accessCount: 0, lastAccessAt: now, version: 1,
+            });
+          }
+        };
+        attachedFiles.filter(f => !f.isImage).forEach(f =>
+          push(f.content, { origin: 'attachment', fileName: f.name, part: f.part ? `PHẦN ${f.part.index}/${f.part.total}` : undefined }));
+        const entries: any[] = (card as any)?.data?.character_book?.entries || [];
+        entries.forEach((e, i) => { if (e?.content) push(String(e.content), { origin: 'card', path: `lorebook[${i}].content` }); });
+        MVU_KNOWLEDGE_BASE.forEach(d => push(d.content, { origin: 'docs', fileName: d.title }));
+        if (!cancelled) {
+          ragIndexRef.current = idx;
+          console.log(`[RAG] chỉ mục sẵn sàng: ${idx.size()} chunk`);
+        }
+      } catch (e) { console.warn('[RAG] dựng chỉ mục lỗi (bỏ qua):', e); }
+    });
+    return () => { cancelled = true; };
+  }, [card, attachedFiles, ragEnabled]);
 
   // Compute sandbox result
   const sandboxResult = useMemo(() => {
@@ -1692,10 +1737,22 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
     let finalResult = '';
     let lastError: any = null;
 
+    // (P1 roadmap) RAG: truy vấn hybrid (exact glossary > keyword > vector) trên chỉ mục đã dựng
+    // lúc idle — top-5 kèm NHÃN NGUỒN, AI bị buộc trích dẫn (nguồn: …) khi dùng.
+    let ragBlock = '';
+    if (ragEnabled && ragIndexRef.current) {
+      try {
+        const { buildRagContextBlock } = await import('../utils/ragEngine');
+        const cardKey = (card?.data?.name || (card as any)?.name || '') as string;
+        ragBlock = buildRagContextBlock(ragIndexRef.current.query(textToSend, { topK: 5, cardKey }));
+      } catch (e) { console.warn('[RAG] query lỗi (bỏ qua):', e); }
+    }
+
     // Build effective prompt
     const systemPrompt = `${SYSTEM_INSTRUCTION}
 ${nsfwEnabled ? '\n[CẦN CHÚ Ý: ĐÃ BẬT CHẾ ĐỘ R18/NSFW. Cho phép xử lý nội dung nhạy cảm người lớn nếu người dùng yêu cầu.]' : ''}
-${contextBlock ? `\n[DANH SÁCH TÀI LIỆU NGỮ CẢNH HIỆN TẠI]:\n${contextBlock}` : ''}`;
+${contextBlock ? `\n[DANH SÁCH TÀI LIỆU NGỮ CẢNH HIỆN TẠI]:\n${contextBlock}` : ''}
+${ragBlock ? `\n${ragBlock}` : ''}`;
 
     // (User 2026 — "thấu hiểu luồng hội thoại") Tab Trò Chuyện trước đây CHỈ gửi câu hiện tại →
     // AI quên sạch các lượt trước (tab MVU-Zod thì có history). Gửi kèm tối đa 10 lượt gần nhất;
@@ -2305,6 +2362,25 @@ try {
 
               {/* Settings Card */}
               <div className="p-4 space-y-4">
+                {/* (P1) RAG Memory Toggle */}
+                <div className="bg-zinc-900/30 border border-zinc-800/60 rounded-xl p-3 flex flex-col gap-2">
+                  <label className="flex items-center justify-between cursor-pointer group select-none">
+                    <span className="flex items-center gap-1.5 text-[10px] uppercase font-bold text-slate-400 group-hover:text-indigo-400 transition-colors">
+                      <Search size={12} className="opacity-70 group-hover:opacity-100" />
+                      {ui.acRagToggle}
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={ragEnabled}
+                      onChange={e => setRagEnabled(e.target.checked)}
+                      className="accent-indigo-500 w-3.5 h-3.5 cursor-pointer"
+                    />
+                  </label>
+                  <div className="text-[9px] text-slate-500 leading-relaxed">
+                    {ui.acRagToggleDesc}
+                  </div>
+                </div>
+
                 {/* NSFW Toggle */}
                 <div className="bg-zinc-900/30 border border-zinc-800/60 rounded-xl p-3 flex flex-col gap-2">
                   <label className="flex items-center justify-between cursor-pointer group select-none">

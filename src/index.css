@@ -981,6 +981,18 @@ input[type="range"]::-webkit-slider-thumb {
   overflow-x: auto;
 }
 
+/* (P3) shiki highlight: shiki tự sinh <pre class="shiki"> có nền riêng — chỉnh cho khớp khung code */
+.shiki-wrap pre.shiki {
+  margin: 0;
+  padding: 16px;
+  background: transparent !important; /* nền dùng của khung ngoài (#09090b) */
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+.shiki-wrap code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
 .companion-message-wrapper.user .companion-message-bubble {
   background: var(--bg-elevated);
   border: 1px solid var(--border-default);

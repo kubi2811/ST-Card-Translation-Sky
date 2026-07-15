@@ -425,6 +425,27 @@ const CodeSection = memo(({ language, code }: { language: string; code: string }
   const [showPreview, setShowPreview] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
+  // (P3 roadmap) Code intelligence: shiki highlight (lazy, fallback pre trơn) + chẩn đoán cú pháp
+  const [highlightedHtml, setHighlightedHtml] = useState<string | null>(null);
+  const [diag, setDiag] = useState<import('../utils/codeIntel').CodeDiagnostic | null>(null);
+  useEffect(() => {
+    let alive = true;
+    import('../utils/codeIntel').then(async ci => {
+      const d = ci.diagnoseCode(code, language);
+      if (alive) setDiag(d);
+      const html = await ci.highlightCode(code, language);
+      if (alive) setHighlightedHtml(html);
+    }).catch(() => { /* highlight/chẩn đoán lỗi → giữ pre trơn */ });
+    return () => { alive = false; };
+  }, [code, language]);
+
+  const handleAiFix = async () => {
+    if (!diag) return;
+    const { buildFixPrompt } = await import('../utils/codeIntel');
+    // CodeSection nằm sâu trong cây memo — bắn CustomEvent cho panel chính xử lý gửi
+    window.dispatchEvent(new CustomEvent('ai-companion-send', { detail: buildFixPrompt(code, language, diag) }));
+  };
+
   // Quick Inject Forms State
   const [activeForm, setActiveForm] = useState<'none' | 'lorebook' | 'regex' | 'tavern_helper'>('none');
   const [lbKeys, setLbKeys] = useState('');
@@ -705,9 +726,34 @@ const CodeSection = memo(({ language, code }: { language: string; code: string }
             </div>
           )
         ) : (
-          <pre className="p-4 overflow-x-auto text-xs font-mono text-slate-300 leading-relaxed max-h-[400px] custom-scrollbar">
-            <code>{code}</code>
-          </pre>
+          <>
+            {/* (P3) Banner chẩn đoán cú pháp + nút AI sửa đưa đúng dòng lỗi vào prompt */}
+            {diag && (
+              <div className="flex flex-wrap items-center justify-between gap-1.5 px-3 py-1.5 bg-amber-500/10 border-b border-amber-500/20 text-[10px] text-amber-300">
+                <span className="break-words" style={{ overflowWrap: 'anywhere' }}>
+                  ⚠ {diag.line ? fmt(ui.acDiagLine, { line: diag.line }) : ui.acDiagNoLine}: {diag.message.slice(0, 160)}
+                </span>
+                <button
+                  onClick={handleAiFix}
+                  className="px-2 py-0.5 rounded text-[9px] font-bold border bg-amber-500/15 border-amber-500/30 hover:bg-amber-500/25 text-amber-200 flex-shrink-0"
+                  title={ui.acDiagFixTip}
+                >
+                  🔧 {ui.acDiagFix}
+                </button>
+              </div>
+            )}
+            {highlightedHtml ? (
+              <div
+                className="shiki-wrap p-0 overflow-x-auto text-xs leading-relaxed max-h-[400px] custom-scrollbar"
+                // shiki tự escape token — an toàn
+                dangerouslySetInnerHTML={{ __html: highlightedHtml }}
+              />
+            ) : (
+              <pre className="p-4 overflow-x-auto text-xs font-mono text-slate-300 leading-relaxed max-h-[400px] custom-scrollbar">
+                <code>{code}</code>
+              </pre>
+            )}
+          </>
         )}
 
         {/* Quick Inject Toolbar — (User 2026) cho xuống hàng, không bóp dí nút khi khung hẹp */}
@@ -1455,6 +1501,18 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
   }, []);
 
   useEffect(() => { safeSetItem('ai_assistant_rag', ragEnabled ? '1' : '0'); }, [ragEnabled]);
+
+  // (P3 roadmap) Nút "🔧 AI sửa" trong khối code (CodeSection nằm sâu trong cây memo) bắn
+  // CustomEvent — panel chính nhận và gửi như 1 lệnh chat.
+  useEffect(() => {
+    const onFix = (e: Event) => {
+      const prompt = (e as CustomEvent<string>).detail;
+      if (prompt) void handleSend(prompt);
+    };
+    window.addEventListener('ai-companion-send', onFix);
+    return () => window.removeEventListener('ai-companion-send', onFix);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, isGenerating, card, ragEnabled]);
 
   // (P1 roadmap) Dựng chỉ mục RAG khi card/attachment đổi — idle, không chặn UI. Nguồn: attachment
   // (kèm nhãn PHẦN i/N), lorebook của card (FULL — context thường chỉ có preview cắt ngắn), kho

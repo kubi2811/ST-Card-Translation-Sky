@@ -805,6 +805,7 @@ const ui: UiKeys = {
   acImgReadErr: 'Lỗi đọc file ảnh.',
   acAttachedMsg: '📁 **Đã đính kèm {kind} thành công:** {names}.',
   acFileSplitNote: '🧩 File **{name}** khá lớn ({chars} ký tự) nên đã tự chia thành **{parts} PHẦN** (không mất ký tự nào). Mình sẽ đọc đủ tất cả các phần; nếu chỉ cần xử lý 1 phần, bạn gỡ (🗑) các phần còn lại để nhẹ hơn nhé.',
+  acActionBlocked: '{n} action bị lớp bảo vệ chặn (ngoài phạm vi sub-agent hoặc sai schema) — không thực thi:',
   acDiagLine: 'Lỗi cú pháp gần dòng {line}',
   acDiagNoLine: 'Lỗi cú pháp',
   acDiagFix: 'AI sửa',

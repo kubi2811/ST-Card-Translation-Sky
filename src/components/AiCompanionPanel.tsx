@@ -1815,8 +1815,16 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
       } catch (e) { console.warn('[RAG] query lỗi (bỏ qua):', e); }
     }
 
+    // (P4 roadmap) Orchestrator: route intent → sub-agent (persona + whitelist action). Mơ hồ thì
+    // về 'general' đủ quyền như cũ — routing chỉ THU HẸP khi rõ ràng, zero regression.
+    const orch = await import('../utils/agentOrchestrator');
+    const agentId = orch.routeIntent(textToSend);
+    const agentDef = orch.AGENT_DEFS[agentId];
+    if (agentId !== 'general') console.log(`[Orchestrator] route → ${agentDef.label}`);
+
     // Build effective prompt
     const systemPrompt = `${SYSTEM_INSTRUCTION}
+${agentDef.personaPrompt ? `\n${agentDef.personaPrompt}` : ''}
 ${nsfwEnabled ? '\n[CẦN CHÚ Ý: ĐÃ BẬT CHẾ ĐỘ R18/NSFW. Cho phép xử lý nội dung nhạy cảm người lớn nếu người dùng yêu cầu.]' : ''}
 ${contextBlock ? `\n[DANH SÁCH TÀI LIỆU NGỮ CẢNH HIỆN TẠI]:\n${contextBlock}` : ''}
 ${ragBlock ? `\n${ragBlock}` : ''}`;
@@ -1892,7 +1900,18 @@ ${ragBlock ? `\n${ragBlock}` : ''}`;
 
     if (success) {
       // ─── Parse AI Actions from response ───
-      const { textContent, actions: parsedActions } = parseAiActions(finalResult);
+      // (P4) Lớp bảo vệ: action ngoài WHITELIST của sub-agent hoặc params sai SCHEMA zod bị chặn
+      // TRƯỚC khi vào cả đường auto-execute lẫn đường confirm — thu nhỏ blast-radius.
+      const parsed0 = parseAiActions(finalResult);
+      let textContent = parsed0.textContent;
+      const actionChecks = parsed0.actions.map(a => ({ a, chk: orch.validateAgentAction(agentId, a.action, (a as any).params || {}) }));
+      const blockedActions = actionChecks.filter(c => !c.chk.ok);
+      const parsedActions = actionChecks.filter(c => c.chk.ok).map(c => c.a);
+      if (blockedActions.length > 0) {
+        textContent += `\n\n🛡️ ${fmt(ui.acActionBlocked, { n: blockedActions.length })}\n` +
+          blockedActions.map(b => `• ${b.a.action}: ${b.chk.reason}`).join('\n');
+        console.warn('[Orchestrator] chặn action:', blockedActions.map(b => b.a.action).join(', '));
+      }
 
       if (parsedActions.length > 0 && card) {
         // Handle VIEW_FULL_REGEX immediately (auto-execute, feed back to AI)
@@ -2070,53 +2089,29 @@ ${ragBlock ? `\n${ragBlock}` : ''}`;
   const handleRunPendingScript = useCallback(() => {
     if (!pendingScript) return;
     try {
-      // Run in sandboxed iframe
-      const iframe = document.createElement('iframe');
-      iframe.sandbox.add('allow-scripts');
-      iframe.style.display = 'none';
-      document.body.appendChild(iframe);
-
-      const scriptCode = pendingScript.code;
-      const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
-      if (iframeDoc) {
-        iframeDoc.open();
-        iframeDoc.write(`<script>
-try {
-  const __output = [];
-  const console = { log: (...args) => __output.push(args.join(' ')), error: (...args) => __output.push('ERROR: ' + args.join(' ')) };
-  ${scriptCode}
-  parent.postMessage({ type: 'script-result', output: __output.join('\\n') }, '*');
-} catch(e) {
-  parent.postMessage({ type: 'script-result', output: 'ERROR: ' + e.message }, '*');
-}
-</script>`);
-        iframeDoc.close();
-      }
-
-      const handler = (event: MessageEvent) => {
-        if (event.data?.type === 'script-result') {
-          setScriptOutput(event.data.output || '(no output)');
-          window.removeEventListener('message', handler);
-          document.body.removeChild(iframe);
+      // (P4 roadmap) QuickJS-WASM thay iframe allow-scripts: iframe cũ vẫn GỌI MẠNG được (fetch) —
+      // QuickJS là interpreter kín tuyệt đối: không fetch/DOM/storage, interrupt CPU 5s, RAM 64MB,
+      // dữ liệu card đưa vào là BẢN SAO qua global `input` (sửa gì cũng không lan ra app).
+      setScriptOutput('⏳ …');
+      void (async () => {
+        try {
+          const { runInSandbox } = await import('../utils/scriptSandbox');
+          const cardCopy = card ? JSON.parse(JSON.stringify(card)) : undefined;
+          const r = await runInSandbox(pendingScript.code, { timeoutMs: 5000, input: cardCopy });
+          setScriptOutput(r.ok
+            ? `${r.output}\n\n— ✅ sandbox QuickJS · ${r.durationMs}ms`
+            : `❌ ${r.error || 'Script lỗi'}\n${r.output}`);
+        } catch (e: any) {
+          setScriptOutput('❌ ' + (e?.message || String(e)));
         }
-      };
-      window.addEventListener('message', handler);
-
-      // Timeout safety
-      setTimeout(() => {
-        window.removeEventListener('message', handler);
-        if (iframe.parentNode) {
-          document.body.removeChild(iframe);
-          setScriptOutput('⏱️ Script timed out after 10s');
-        }
-      }, 10000);
+      })();
 
       addToast('success', ui.acRunningScript);
     } catch (err: any) {
       setScriptOutput(`ERROR: ${err.message}`);
     }
     setPendingScript(null);
-  }, [pendingScript, addToast]);
+  }, [pendingScript, addToast, card]);
 
   const handleRejectScript = useCallback(() => {
     setPendingScript(null);

@@ -4,6 +4,7 @@ import { useT, useUi } from '../i18n/useLocale';
 import { fmt } from '../i18n';
 import { callProvider, callProviderHedged, setExtraProviders } from '../utils/apiClient';
 import { splitChatBlocks } from '../utils/chatMarkdown';
+import { splitAttachmentContent, attachmentLabel, ATTACH_TOTAL_WARN } from '../utils/attachmentParts';
 import { safeSetItem } from '../utils/safeStorage';
 import { 
   X, Send, Code2, Copy, Trash2, Upload, Loader2, Settings, Plus, FileText, 
@@ -45,6 +46,8 @@ interface AttachedFile {
   size: number;
   content: string;
   isImage?: boolean;
+  /** (Bug 23) File lớn được chẻ thành nhiều phần — phần thứ mấy / tổng số (1-based). */
+  part?: { index: number; total: number };
 }
 
 /** Pending script awaiting user confirmation */
@@ -1611,11 +1614,14 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
       }
     }
     
-    // 2. Extra attached files
+    // 2. Extra attached files — (Bug 23) file lớn đã chẻ phần: dán nhãn PHẦN i/N để AI biết đây là
+    // 1 phần của file lớn hơn, phải xử lý TRỌN VẸN phần này (kỷ luật chunking trong SYSTEM_INSTRUCTION).
     if (attachedFiles.length > 0) {
       attachedFiles.forEach(f => {
         if (f.isImage) {
           context += `[TỆP ĐÍNH KÈM: ${f.name} (Hình ảnh đính kèm)]\n---\n\n`;
+        } else if (f.part) {
+          context += `[TỆP ĐÍNH KÈM: ${attachmentLabel(f.name, f.part)} — đây là 1 PHẦN của file lớn đã được chia; xử lý TRỌN VẸN phần này, KHÔNG tóm tắt/cắt bớt]:\n${f.content}\n---\n\n`;
         } else {
           context += `[TỆP ĐÍNH KÈM: ${f.name}]:\n${f.content}\n---\n\n`;
         }
@@ -1949,33 +1955,38 @@ try {
 
     setUploadError('');
     try {
-      const loaded = await Promise.all(selectedFiles.map(async file => {
+      // (Bug 23 — "chỉ đọc được ~100k ký tự rồi cắt cụt") Trước đây slice(0,100000) NGAY Ở ĐÂY →
+      // dữ liệu sau 100k mất vĩnh viễn. Nay giữ TRỌN file; file lớn tự chẻ thành các PHẦN (ranh
+      // giới dòng, không mất ký tự) — mỗi phần 1 chip, gỡ được riêng, AI xử lý dứt điểm từng phần.
+      const loaded: AttachedFile[] = [];
+      let splitNotes: string[] = [];
+      for (const file of selectedFiles) {
         const isImage = file.type.startsWith('image/');
-        let content = '';
         if (isImage) {
-          content = await new Promise<string>((resolve, reject) => {
+          const content = await new Promise<string>((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = () => resolve(reader.result as string);
             reader.onerror = () => reject(new Error(ui.acImgReadErr));
             reader.readAsDataURL(file);
           });
+          loaded.push({ name: file.name, size: file.size, content, isImage: true });
         } else {
-          content = await file.text();
-          content = content.slice(0, 100000); // limit size to prevent context overflow
+          const full = await file.text();
+          const parts = splitAttachmentContent(full);
+          for (const p of parts) {
+            loaded.push({ name: file.name, size: file.size, content: p.content, part: p.part });
+          }
+          if (parts.length > 1) splitNotes.push(fmt(ui.acFileSplitNote, { name: file.name, chars: full.length.toLocaleString(), parts: parts.length }));
         }
-        return {
-          name: file.name,
-          size: file.size,
-          content,
-          isImage
-        };
-      }));
+      }
 
-      setAttachedFiles(prev => [...prev, ...loaded]);
-      setMessages(prev => [...prev, { 
-        role: 'assistant', 
-        content: fmt(ui.acAttachedMsg, { kind: loaded.some(f => f.isImage) ? ui.acKindImage : ui.acKindDoc, names: selectedFiles.map(f => f.name).join(', ') }) 
-      }]);
+      const nextAll = [...attachedFiles, ...loaded];
+      setAttachedFiles(nextAll);
+      const totalChars = nextAll.filter(f => !f.isImage).reduce((s, f) => s + f.content.length, 0);
+      let note = fmt(ui.acAttachedMsg, { kind: loaded.some(f => f.isImage) ? ui.acKindImage : ui.acKindDoc, names: selectedFiles.map(f => f.name).join(', ') });
+      if (splitNotes.length > 0) note += '\n' + splitNotes.join('\n');
+      if (totalChars > ATTACH_TOTAL_WARN) note += '\n' + fmt(ui.acAttachTotalWarn, { total: totalChars.toLocaleString() });
+      setMessages(prev => [...prev, { role: 'assistant', content: note }]);
     } catch (err: any) {
       setUploadError(err.message || ui.acAttachErr);
     } finally {
@@ -2221,11 +2232,16 @@ try {
                           ) : (
                             <FileText size={12} className="text-indigo-400 flex-shrink-0" />
                           )}
-                          <span className="text-[10px] font-mono truncate text-slate-300" title={file.name}>
+                          <span className="text-[10px] font-mono truncate text-slate-300" title={attachmentLabel(file.name, file.part)}>
                             {file.name}
                           </span>
+                          {file.part && (
+                            <span className="text-[9px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded px-1 flex-shrink-0" title={ui.acPartBadgeTip}>
+                              {file.part.index}/{file.part.total}
+                            </span>
+                          )}
                         </div>
-                        <button 
+                        <button
                           onClick={() => handleRemoveFile(idx)}
                           className="opacity-0 group-hover:opacity-100 p-1 text-rose-500 transition-all hover:bg-rose-500/10 rounded"
                         >
@@ -2922,28 +2938,25 @@ function MvuZodTab() {
 
     setMvuUploadError('');
     try {
-      const loaded = await Promise.all(selectedFiles.map(async file => {
+      // (Bug 23) Giống tab Chat: KHÔNG cắt 100k nữa — file lớn chẻ thành PHẦN, không mất ký tự.
+      const loaded: AttachedFile[] = [];
+      for (const file of selectedFiles) {
         const isImage = file.type.startsWith('image/');
-        let content = '';
         if (isImage) {
-          content = await new Promise<string>((resolve, reject) => {
+          const content = await new Promise<string>((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = () => resolve(reader.result as string);
             reader.onerror = () => reject(new Error(ui.acImgReadErr));
             reader.readAsDataURL(file);
           });
+          loaded.push({ name: file.name, size: file.size, content, isImage: true });
         } else {
-          content = await file.text();
-          content = content.slice(0, 100000);
+          const full = await file.text();
+          for (const p of splitAttachmentContent(full)) {
+            loaded.push({ name: file.name, size: file.size, content: p.content, part: p.part });
+          }
         }
-        return {
-          name: file.name,
-          size: file.size,
-          content,
-          isImage
-        };
-      }));
-
+      }
       setMvuAttachedFiles(prev => [...prev, ...loaded]);
     } catch (err: any) {
       setMvuUploadError(err.message || ui.acAttachErr);
@@ -3320,10 +3333,10 @@ Tin nhắn đầu: ${card.data?.first_mes || ''}`;
           combinedDocs.map(doc => `--- TÀI LIỆU: ${doc.title} ---\n${doc.content}`).join('\n\n') + '\n---';
       }
 
-      // Tệp đính kèm văn bản
+      // Tệp đính kèm văn bản — (Bug 23) nhãn PHẦN i/N cho file lớn đã chẻ
       const textFilesCtx = mvuAttachedFiles
         .filter(f => !f.isImage)
-        .map(f => `[TỆP ĐÍNH KÈM VĂN BẢN: ${f.name}]:\n${f.content}\n---\n`)
+        .map(f => `[TỆP ĐÍNH KÈM VĂN BẢN: ${attachmentLabel(f.name, f.part)}]:\n${f.content}\n---\n`)
         .join('\n');
 
       const systemPrompt = `Bạn là chuyên gia thiết kế hệ thống thẻ nhân vật MVU-Zod (Magical Variable Update + Zod Schema validation) cho SillyTavern.
@@ -4496,10 +4509,15 @@ QUY TẮC BẮT BUỘC:
                     ) : (
                       <FileText size={10} className="text-indigo-400" />
                     )}
-                    <span style={{ maxWidth: '80px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={file.name}>
+                    <span style={{ maxWidth: '80px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={attachmentLabel(file.name, file.part)}>
                       {file.name}
                     </span>
-                    <button 
+                    {file.part && (
+                      <span style={{ fontSize: '8px', fontWeight: 700, color: '#fbbf24' }} title={ui.acPartBadgeTip}>
+                        {file.part.index}/{file.part.total}
+                      </span>
+                    )}
+                    <button
                       onClick={() => handleRemoveMvuFile(idx)}
                       style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', padding: 0, marginLeft: '2px' }}
                     >

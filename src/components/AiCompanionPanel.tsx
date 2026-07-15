@@ -1387,6 +1387,8 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
   // (P1 roadmap) RAG trí nhớ: bật mặc định; index dựng lười lúc idle, query lúc gửi.
   const [ragEnabled, setRagEnabled] = useState(() => localStorage.getItem('ai_assistant_rag') !== '0');
   const ragIndexRef = useRef<import('../utils/ragEngine').RagIndex | null>(null);
+  // (P2 roadmap) Panel 🧠 Ký ức: xem/pin/xoá/sao lưu kho trí nhớ dài hạn
+  const [showMemoryPanel, setShowMemoryPanel] = useState(false);
   const [nsfwEnabled, setNsfwEnabled] = useState(() => {
     return localStorage.getItem('ai_assistant_nsfw') === 'true';
   });
@@ -1485,6 +1487,13 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
         const entries: any[] = (card as any)?.data?.character_book?.entries || [];
         entries.forEach((e, i) => { if (e?.content) push(String(e.content), { origin: 'card', path: `lorebook[${i}].content` }); });
         MVU_KNOWLEDGE_BASE.forEach(d => push(d.content, { origin: 'docs', fileName: d.title }));
+        // (P2) Ký ức ĐỘNG từ kho dài hạn (fact/preference/glossary đã trích các phiên trước) —
+        // RAG đọc cả tĩnh lẫn động, xếp hạng thêm decay để ký ức nguội tự lùi.
+        try {
+          const memStore = await import('../utils/memoryStore');
+          const mems = await memStore.listMemories({ limit: 500 });
+          for (const m of mems) idx.add(m);
+        } catch { /* kho ký ức lỗi không chặn RAG tĩnh */ }
         if (!cancelled) {
           ragIndexRef.current = idx;
           console.log(`[RAG] chỉ mục sẵn sàng: ${idx.size()} chunk`);
@@ -1784,20 +1793,30 @@ ${ragBlock ? `\n${ragBlock}` : ''}`;
           onHedge: () => setHedged(true),
         });
 
-        let continuationCount = 0;
-        const maxContinuations = 5;
-        while (checkResponseCut(finalResult) && continuationCount < maxContinuations) {
-          continuationCount++;
-          setRetryText(fmt(ui.acContinuing, { n: continuationCount, max: maxContinuations }));
-          const continuationPrompt = `${effectiveUserPrompt}\n\n[TIẾP TỤC PHẢN HỒI BỊ CẮT (Lượt ${continuationCount})]\nPhản hồi trước đó của bạn đã bị ngắt giữa chừng do giới hạn token. Dưới đây là TOÀN BỘ nội dung bạn đã viết được cho đến hiện tại:\n"""\n${finalResult}\n"""\n\nHãy tiếp tục viết tiếp ngay sau ký tự cuối cùng của nội dung trên để hoàn thiện phản hồi đầy đủ. KHÔNG viết lại hoặc lặp lại những phần đã có ở trên. Bắt đầu viết trực tiếp từ chữ bị cắt dở dang.`;
-
-          const nextChunk = await callProviderHedged(proxy, systemPrompt, continuationPrompt, {
-            meta: { label: `Trợ Lý AI (viết tiếp ${continuationCount})` },
-            hedgeAfterMs: 30_000,
-            onHedge: () => setHedged(true),
-          });
-          if (!nextChunk || !nextChunk.trim()) break;
-          finalResult += (nextChunk.startsWith('```') && finalResult.endsWith('```') ? '\n' : '') + nextChunk;
+        // (P2 roadmap) LoopController thay continuation cũ: mỏ neo ĐUÔI thay vì gửi cả bài (đỡ
+        // phình token), GHÉP khử phần AI lỡ lặp, dừng rõ ràng (complete/8 vòng/ngân sách/dậm chân).
+        {
+          const loop = await import('../utils/loopController');
+          const loopState = { round: 0, startedAt: Date.now(), stalls: 0 };
+          let stopReason = loop.shouldStop(finalResult, loopState);
+          while (stopReason === null) {
+            loopState.round++;
+            setRetryText(fmt(ui.acContinuing, { n: loopState.round, max: loop.DEFAULT_LOOP_BUDGET.maxRounds }));
+            const continuationPrompt = loop.buildContinuationPrompt(effectiveUserPrompt, finalResult, loopState.round);
+            const nextChunk = await callProviderHedged(proxy, systemPrompt, continuationPrompt, {
+              meta: { label: `Trợ Lý AI (viết tiếp ${loopState.round})` },
+              hedgeAfterMs: 30_000,
+              onHedge: () => setHedged(true),
+            });
+            const st = loop.stitchContinuation(finalResult, nextChunk || '');
+            finalResult = st.stitched;
+            if (st.overlapCut > 0) console.log(`[Loop] vòng ${loopState.round}: cắt ${st.overlapCut} ký tự AI lặp lại`);
+            loopState.stalls = st.addedChars < loop.STALL_MIN_ADDED ? loopState.stalls + 1 : 0;
+            stopReason = loop.shouldStop(finalResult, loopState);
+          }
+          if (stopReason !== 'complete' && loopState.round > 0) {
+            console.warn(`[Loop] dừng sớm (${stopReason}) sau ${loopState.round} vòng — phản hồi có thể chưa trọn, user bấm "Tiếp tục" để viết thêm`);
+          }
         }
         setRetryText('');
         
@@ -1897,6 +1916,39 @@ ${ragBlock ? `\n${ragBlock}` : ''}`;
     setIsGenerating(false);
     setRetryText('');
     setHedged(false);
+
+    // (P2 roadmap) Trích ký ức tự động sau lượt thành công — throttle 90s, model PHỤ (flash),
+    // chạy nền, lỗi nuốt hẳn (không được ảnh hưởng chat). Ký ức có source.turnId để truy vết.
+    if (success && ragEnabled) {
+      void (async () => {
+        try {
+          const last = Number(localStorage.getItem('ai_mem_last_extract') || 0);
+          if (Date.now() - last < 90_000) return;
+          localStorage.setItem('ai_mem_last_extract', String(Date.now()));
+          const recentTurns = nextMessages.slice(-6)
+            .map(m => `${m.role === 'user' ? 'User' : 'Trợ Lý'}: ${m.content.slice(0, 800)}`)
+            .join('\n');
+          const sys = 'Bạn là bộ trích xuất ký ức. Từ đoạn hội thoại, trích TỐI ĐA 3 thông tin BỀN VỮNG đáng nhớ cho các phiên sau: sở thích/quy ước của user (kind "preference"), fact về dự án/card (kind "fact"), thuật ngữ đã chốt dạng "A → B" (kind "glossary"). Trả về DUY NHẤT một JSON array: [{"kind":"fact|preference|glossary","text":"..."}]. Không có gì đáng nhớ → trả [].';
+          const raw = await callProvider(proxy, sys, recentTurns, undefined, undefined, { label: 'Trích ký ức', preferSecondary: true } as any);
+          const jsonStr = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+          const arr = JSON.parse(jsonStr) as { kind: string; text: string }[];
+          if (!Array.isArray(arr) || arr.length === 0) return;
+          const memStore = await import('../utils/memoryStore');
+          const now = Date.now();
+          const cardKey = (card?.data?.name || (card as any)?.name || '') as string;
+          for (const f of arr.slice(0, 3)) {
+            if (!f?.text?.trim()) continue;
+            const kind = (['fact', 'preference', 'glossary'].includes(f.kind) ? f.kind : 'fact') as import('../utils/memoryStore').MemoryKind;
+            await memStore.putMemory({
+              id: memStore.newMemoryId(), kind, text: f.text.trim(),
+              source: { origin: 'chat', turnId: `turn-${nextMessages.length}` }, cardKey,
+              createdAt: now, updatedAt: now, accessCount: 0, lastAccessAt: now, version: 1,
+            });
+          }
+          console.log(`[memory] đã lưu ${Math.min(arr.length, 3)} ký ức từ hội thoại`);
+        } catch { /* nền — nuốt lỗi */ }
+      })();
+    }
   };
 
   // ─── Confirm pending actions ───
@@ -2112,8 +2164,15 @@ try {
           </div>
           
           <div className="flex items-center gap-3">
+            <button
+              onClick={() => setShowMemoryPanel(true)}
+              className="btn btn-ghost btn-xs text-indigo-300 hover:bg-indigo-500/10"
+              title={ui.acMemBtnTip}
+            >
+              🧠 {ui.acMemTitle}
+            </button>
             {activeTab === 'chat' && messages.length > 0 && (
-              <button 
+              <button
                 onClick={handleClearChat}
                 className="btn btn-ghost btn-xs text-rose-400 hover:bg-rose-500/10"
               >
@@ -2504,6 +2563,131 @@ try {
           </div>
         )}
 
+      </div>
+
+      {/* (P2 roadmap) Panel Ký ức — xem/pin/xoá/sao lưu kho trí nhớ dài hạn */}
+      {showMemoryPanel && <MemoryPanelModal onClose={() => setShowMemoryPanel(false)} />}
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   (P2 roadmap) PANEL KÝ ỨC — kho trí nhớ dài hạn IndexedDB
+   ════════════════════════════════════════════════════════════════════ */
+function MemoryPanelModal({ onClose }: { onClose: () => void }) {
+  const ui = useUi();
+  const [mems, setMems] = useState<import('../utils/memoryStore').MemoryRecord[]>([]);
+  const [conflictCount, setConflictCount] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const importRef = useRef<HTMLInputElement>(null);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const m = await import('../utils/memoryStore');
+      setMems(await m.listMemories({ limit: 300 }));
+      const conflicts = await m.memoryDb().conflicts.toArray();
+      setConflictCount(conflicts.filter(c => !c.resolved).length);
+    } catch (e) { console.warn('[memory] load lỗi:', e); }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { void reload(); }, [reload]);
+
+  const togglePin = async (rec: import('../utils/memoryStore').MemoryRecord) => {
+    const m = await import('../utils/memoryStore');
+    await m.putMemory({ ...rec, pinned: !rec.pinned, version: rec.version + 1 });
+    void reload();
+  };
+  const del = async (id: string) => {
+    const m = await import('../utils/memoryStore');
+    await m.deleteMemory(id);
+    void reload();
+  };
+  const doExport = async () => {
+    const m = await import('../utils/memoryStore');
+    const json = await m.exportMemories();
+    const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = `tro-ly-ai-ky-uc-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click(); URL.revokeObjectURL(url);
+  };
+  const doImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    try {
+      const m = await import('../utils/memoryStore');
+      await m.importMemories(await f.text());
+      void reload();
+    } catch (err: any) { alert(err.message || 'Import lỗi'); }
+    if (importRef.current) importRef.current.value = '';
+  };
+
+  const KIND_COLOR: Record<string, string> = {
+    fact: 'text-sky-300 bg-sky-500/10 border-sky-500/20',
+    preference: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20',
+    glossary: 'text-amber-300 bg-amber-500/10 border-amber-500/20',
+    tm: 'text-purple-300 bg-purple-500/10 border-purple-500/20',
+    doc_chunk: 'text-slate-300 bg-slate-500/10 border-slate-500/20',
+    chat_summary: 'text-slate-300 bg-slate-500/10 border-slate-500/20',
+  };
+
+  return (
+    <div className="fixed inset-0 z-[70] bg-black/60 flex items-center justify-center p-6" onClick={onClose}>
+      <div
+        className="bg-[#0b0b0f] border border-zinc-800 rounded-2xl w-full max-w-2xl max-h-[80vh] flex flex-col shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="px-4 py-3 border-b border-zinc-800 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="font-bold text-sm text-slate-200">🧠 {ui.acMemTitle}</span>
+            <span className="text-[10px] text-slate-500">{fmt(ui.acMemCount, { n: mems.length })}</span>
+            {conflictCount > 0 && (
+              <span className="text-[10px] text-amber-400" title={ui.acMemConflictTip}>⚠ {fmt(ui.acMemConflicts, { n: conflictCount })}</span>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button onClick={doExport} className="px-2 py-0.5 rounded text-[10px] border bg-zinc-800/40 border-zinc-700 hover:bg-zinc-700/50 text-slate-300" title={ui.acMemExportTip}>
+              <Download size={10} className="inline mr-1" />{ui.acMemExport}
+            </button>
+            <button onClick={() => importRef.current?.click()} className="px-2 py-0.5 rounded text-[10px] border bg-zinc-800/40 border-zinc-700 hover:bg-zinc-700/50 text-slate-300" title={ui.acMemImportTip}>
+              <Upload size={10} className="inline mr-1" />{ui.acMemImport}
+            </button>
+            <input type="file" accept=".json" className="hidden" ref={importRef} onChange={doImport} />
+            <button onClick={onClose} className="p-1 hover:bg-zinc-800 rounded text-slate-400 hover:text-white"><X size={14} /></button>
+          </div>
+        </div>
+        <div className="text-[9px] text-slate-500 px-4 py-1.5 border-b border-zinc-850">{ui.acMemDesc}</div>
+        <div className="flex-1 overflow-y-auto p-3 space-y-1.5 custom-scrollbar">
+          {loading ? (
+            <div className="text-center py-8 text-slate-500 text-xs"><Loader2 size={16} className="animate-spin inline mr-2" />…</div>
+          ) : mems.length === 0 ? (
+            <div className="text-center py-8 text-slate-500 text-xs">{ui.acMemEmpty}</div>
+          ) : (
+            mems.map(m => (
+              <div key={m.id} className="flex items-start gap-2 bg-zinc-900/50 border border-zinc-800/70 rounded-lg px-2.5 py-1.5 group">
+                <span className={`text-[8px] font-bold border rounded px-1 mt-0.5 flex-shrink-0 uppercase ${KIND_COLOR[m.kind] || KIND_COLOR.doc_chunk}`}>{m.kind}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[11px] text-slate-200 break-words" style={{ overflowWrap: 'anywhere' }}>
+                    {m.text.length > 220 ? m.text.slice(0, 220) + '…' : m.text}
+                  </div>
+                  <div className="text-[8px] text-slate-500 mt-0.5">
+                    {m.source.fileName ? `${m.source.fileName}${m.source.part ? ` (${m.source.part})` : ''}` : m.source.path || m.source.origin}
+                    {m.cardKey ? ` · ${m.cardKey}` : ''}
+                  </div>
+                </div>
+                <button onClick={() => togglePin(m)} title={ui.acMemPinTip}
+                  className={`text-[11px] px-1 rounded flex-shrink-0 ${m.pinned ? 'text-amber-300' : 'text-slate-600 opacity-0 group-hover:opacity-100'} hover:bg-zinc-800`}>
+                  {m.pinned ? '📌' : '📍'}
+                </button>
+                <button onClick={() => del(m.id)} title={ui.acMemDelTip}
+                  className="opacity-0 group-hover:opacity-100 p-0.5 text-rose-500 hover:bg-rose-500/10 rounded flex-shrink-0">
+                  <Trash2 size={11} />
+                </button>
+              </div>
+            ))
+          )}
+        </div>
       </div>
     </div>
   );
@@ -3487,15 +3671,20 @@ QUY TẮC BẮT BUỘC:
         mvuImagesList.length > 0 ? mvuImagesList : undefined
       );
       
-      let continuationCount = 0;
-      const maxContinuations = 5;
-      while (checkResponseCut(response) && continuationCount < maxContinuations) {
-        continuationCount++;
-        const continuationPrompt = `${initialUserPrompt}\n\n[TIẾP TỤC PHẢN HỒI BỊ CẮT (Lượt ${continuationCount})]\nPhản hồi trước đó của bạn đã bị ngắt giữa chừng do giới hạn token. Dưới đây là TOÀN BỘ nội dung bạn đã viết được cho đến hiện tại:\n"""\n${response}\n"""\n\nHãy tiếp tục viết tiếp ngay sau ký tự cuối cùng của nội dung trên để hoàn thiện phản hồi đầy đủ. KHÔNG viết lại hoặc lặp lại những phần đã có ở trên. Bắt đầu viết trực tiếp từ chữ bị cắt dở dang.`;
-        
-        const nextChunk = await callProvider(proxy, systemPrompt, continuationPrompt, undefined, undefined);
-        if (!nextChunk || !nextChunk.trim()) break;
-        response += (nextChunk.startsWith('```') && response.endsWith('```') ? '\n' : '') + nextChunk;
+      // (P2 roadmap) LoopController — cùng cơ chế tab Chat: mỏ neo đuôi + khử lặp + dừng rõ ràng.
+      {
+        const loop = await import('../utils/loopController');
+        const loopState = { round: 0, startedAt: Date.now(), stalls: 0 };
+        let stopReason = loop.shouldStop(response, loopState);
+        while (stopReason === null) {
+          loopState.round++;
+          const continuationPrompt = loop.buildContinuationPrompt(initialUserPrompt, response, loopState.round);
+          const nextChunk = await callProvider(proxy, systemPrompt, continuationPrompt, undefined, undefined);
+          const st = loop.stitchContinuation(response, nextChunk || '');
+          response = st.stitched;
+          loopState.stalls = st.addedChars < loop.STALL_MIN_ADDED ? loopState.stalls + 1 : 0;
+          stopReason = loop.shouldStop(response, loopState);
+        }
       }
       
       setMvuMessages([...nextMessages, { role: 'assistant', content: response }]);
@@ -4694,39 +4883,5 @@ QUY TẮC BẮT BUỘC:
 }
 
 
-// Helper to check if AI response was truncated mid-generation
-const checkResponseCut = (text: string): boolean => {
-  const trimmed = text.trim();
-  if (!trimmed) return false;
-  
-  // 1. Kiểm tra codeblocks markdown lẻ
-  const backticks = (trimmed.match(/\`\`\`/g) || []).length;
-  if (backticks % 2 !== 0) return true;
-
-  // 2. Kiểm tra XML tag chưa đóng
-  const xmlTags = ['Variable_rules', 'thought_process', 'translation'];
-  for (const tag of xmlTags) {
-    const openCount = (trimmed.match(new RegExp(`<${tag}>`, 'g')) || []).length;
-    const closeCount = (trimmed.match(new RegExp(`</${tag}>`, 'g')) || []).length;
-    if (openCount > closeCount) return true;
-  }
-
-  // 3. Kiểm tra dấu ngoặc nhọn/vuông chưa đóng
-  if (trimmed.includes('{') || trimmed.includes('[')) {
-    let openBraces = (trimmed.match(/\\{/g) || []).length;
-    let closeBraces = (trimmed.match(/\\}/g) || []).length;
-    let openBrackets = (trimmed.match(/\[/g) || []).length;
-    let closeBrackets = (trimmed.match(/\]/g) || []).length;
-    if (openBraces > closeBraces || openBrackets > closeBrackets) return true;
-  }
-
-  // 4. Nếu kết thúc không có dấu câu hợp lệ ở cuối văn bản dài
-  if (trimmed.length > 1000) {
-    const lastChar = trimmed.slice(-1);
-    if (!['.', '!', '?', '>', '}', ']', '\`', '"', "'", '”', '»'].includes(lastChar)) {
-      return true;
-    }
-  }
-
-  return false;
-};
+// (P2 roadmap) checkResponseCut cũ đã chuyển thành detectCut trong utils/loopController.ts
+// (thuần + test) — cả 2 vòng continuation (Chat + MVU-Zod) giờ dùng LoopController.

@@ -1619,7 +1619,14 @@ function sleep(ms: number): Promise<void> {
 // Also handles Expert Mode XML responses (<thought_process>/<translation> tags)
 // When isChunkedPart=true, arrow cleanup is SKIPPED because chunks are fragments that
 // may legitimately contain → characters (CSS, code, mapping notations).
-function cleanTranslationResponse(original: string, translated: string, isExpertMode?: boolean, isChunkedPart?: boolean): string {
+/** Tỷ lệ ký tự CJK (Trung/Nhật/Hàn) trong chuỗi — dùng phân biệt "echo bản gốc" vs "bản dịch". */
+function cjkRatio(s: string): number {
+  if (!s) return 0;
+  const cjk = (s.match(/[一-鿿぀-ヿ가-힯]/g) || []).length;
+  return cjk / s.length;
+}
+
+export function cleanTranslationResponse(original: string, translated: string, isExpertMode?: boolean, isChunkedPart?: boolean): string {
   if (!translated || !translated.trim()) return translated;
 
   // ═══ EXPERT MODE: Extract <translation> content from XML response ═══
@@ -1723,10 +1730,23 @@ function cleanTranslationResponse(original: string, translated: string, isExpert
   // SKIP for chunked parts — chunks are text fragments where → is often legitimate content.
   // This hallucination mostly happens on short texts. For very long texts (>2000 chars),
   // it's almost certainly a legitimate arrow in the code/regex.
-  if (original.length < 2000 && !isChunkedPart) {
+  //
+  // (Bug 21 — lorebook YAML "SEX NOTE" mất TOÀN BỘ khúc đầu) 2 lỗ hổng chết người đã vá:
+  // 1) GỐC CÓ SẴN MŨI TÊN: dòng "1. 写下名字+回想容貌 → 40秒倒计时开始" là NỘI DUNG — bản dịch giữ
+  //    → là ĐÚNG. Heuristic cũ vẫn split cả bản dịch tại →, rồi…
+  // 2) calculateOverlap MÙ CJK: split(/\W+/) vứt sạch chữ Hán ⇒ aWords của bản gốc Trung chỉ còn
+  //    vài token ASCII (rule_name, sex, note, version…) — các token này được GIỮ NGUYÊN trong bản
+  //    dịch (YAML key + tên riêng) ⇒ overlap 6/6 = 1.0 > 0.5 ⇒ tưởng nửa trái là "echo bản gốc"
+  //    → VỨT TRỌN nửa trái bản dịch. Đúng hiện tượng user thấy: bản dịch bắt đầu từ "Bắt đầu đếm
+  //    ngược 40 giây" (phần sau mũi tên), mất rule_name/version/định nghĩa/điều kiện phía trên.
+  // FIX: (a) bản GỐC có mũi tên ⇒ mũi tên là nội dung hợp lệ, BỎ QUA toàn bộ Pattern 1;
+  //      (b) chỉ coi nửa trái là "echo bản gốc" khi nó GIỐNG bản gốc về mặt CJK: gốc nhiều CJK mà
+  //          nửa trái gần như KHÔNG có CJK ⇒ nửa trái là BẢN DỊCH, cấm cắt.
+  const arrowSeparators = ['→', '➜', '➡', '⇒', '->'];
+  const origHasArrow = arrowSeparators.some(s => original.includes(s));
+  if (original.length < 2000 && !isChunkedPart && !origHasArrow) {
     // Check if the response contains the original text with an arrow separator
     // Split by various arrow characters
-    const arrowSeparators = ['→', '➜', '➡', '⇒', '->'];
     for (const sep of arrowSeparators) {
       if (cleaned.includes(sep)) {
         // Split by the separator and check if the left side looks like original text
@@ -1737,8 +1757,11 @@ function cleanTranslationResponse(original: string, translated: string, isExpert
           // If left side significantly overlaps with the original, take only the right side
           // BUT only if the right side is substantial (at least 10% of the original length)
           if (leftTrimmed.length > 0 && rightTrimmed.length > 0 && rightTrimmed.length >= original.length * 0.1) {
+            // (Bug 21b) Echo bản gốc phải GIỐNG gốc cả về CJK: gốc ≥15% CJK mà nửa trái <5% CJK
+            // nghĩa là nửa trái đã là BẢN DỊCH (tiếng Việt) — không phải echo, cấm cắt.
+            const leftLooksLikeSourceEcho = cjkRatio(original) < 0.15 || cjkRatio(leftTrimmed) >= 0.05;
             const overlapRatio = calculateOverlap(original, leftTrimmed);
-            if (overlapRatio > 0.5) { // Raised threshold from 0.3 to 0.5 to be less aggressive
+            if (overlapRatio > 0.5 && leftLooksLikeSourceEcho) {
               cleaned = rightTrimmed;
             }
           }
@@ -1752,7 +1775,9 @@ function cleanTranslationResponse(original: string, translated: string, isExpert
             for (const s of arrowSeparators) {
               if (processedLine.includes(s)) {
                 const lineParts = processedLine.split(s);
-                if (lineParts.length === 2 && lineParts[1].trim().length > 0) {
+                // (Bug 21b) Chỉ cắt "gốc → dịch" theo DÒNG khi nửa trái thật sự là echo CJK —
+                // dòng dịch thuần Việt có mũi tên là nội dung, giữ nguyên.
+                if (lineParts.length === 2 && lineParts[1].trim().length > 0 && cjkRatio(lineParts[0]) >= 0.05) {
                   processedLine = lineParts[1].trim();
                   break;
                 }
@@ -1768,7 +1793,8 @@ function cleanTranslationResponse(original: string, translated: string, isExpert
 
   // Pattern 2: Backtick-wrapped pairs like `original` → `translation`
   // Also skip for chunked parts to avoid stripping legitimate content
-  if (!isChunkedPart) {
+  // (Bug 21) + skip khi bản GỐC có mũi tên (mũi tên là nội dung, vd sơ đồ tiến trình A → B → C).
+  if (!isChunkedPart && !origHasArrow) {
     cleaned = cleaned.replace(/`[^`]+`\s*[→➜➡⇒]\s*`([^`]+)`/g, '$1');
     cleaned = cleaned.replace(/`[^`]+`\s*->\s*`([^`]+)`/g, '$1');
   }

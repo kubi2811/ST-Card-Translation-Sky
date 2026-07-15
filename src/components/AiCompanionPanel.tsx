@@ -1433,6 +1433,22 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
     safeSetItem('regex_custom_presets', JSON.stringify(customPresets));
   }, [customPresets]);
 
+  // (P0 roadmap) Kho ký ức IndexedDB: xin persist (chống trình duyệt tự dọn) + migrate localStorage
+  // 1 lần — chạy lúc idle, lỗi không được chặn panel.
+  useEffect(() => {
+    const idle = (cb: () => void) =>
+      'requestIdleCallback' in window ? (window as any).requestIdleCallback(cb, { timeout: 5000 }) : setTimeout(cb, 2000);
+    idle(() => {
+      import('../utils/memoryStore')
+        .then(async m => {
+          await m.requestPersistentStorage();
+          const n = await m.migrateFromLocalStorage();
+          if (n > 0) console.log(`[memory] đã migrate ${n} bản ghi tóm lược từ localStorage → IndexedDB`);
+        })
+        .catch(e => console.warn('[memory] init lỗi (bỏ qua):', e));
+    });
+  }, []);
+
   // Compute sandbox result
   const sandboxResult = useMemo(() => {
     if (!sandboxFind) return { result: sandboxInput };

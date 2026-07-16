@@ -622,6 +622,32 @@ export function reinsertTranslations(original: string, tokens: CJKToken[]): stri
  * blocks is unchanged.  A mismatch indicates a property was corrupted or
  * removed during translation.
  */
+/**
+ * (User 2026 — bugNeedFix/31 BUG A) Phát hiện ĐỤNG ĐỘ ĐỊNH DANH: ≥2 token nguồn KHÁC NHAU nhưng
+ * dịch ra CÙNG 1 giá trị — với token là khóa/định danh code (isObjectKey/isDotNotation/isIdentifier)
+ * thì đây là LỖI LOGIC (vd 女性角色 & 男性角色 đều → "Nhân Vật Nam" ⇒ tường Nữ đọc nhầm data Nam;
+ * hoặc 2 khóa ảnh trùng ⇒ tra nhầm ảnh). Trả về các nhóm đụng độ để dịch lại cho khác nhau.
+ */
+export function detectSurgicalIdentifierCollisions(
+  tokens: CJKToken[],
+): { translated: string; sources: string[] }[] {
+  const byTrans = new Map<string, Set<string>>();
+  for (const t of tokens) {
+    const isIdent = t.isObjectKey || t.isDotNotation || t.isIdentifier || t.isCssClass || t.isHtmlAttr;
+    if (!isIdent) continue;
+    const src = t.text.trim();
+    const trg = (t.translated || '').trim();
+    if (!trg || trg === src) continue; // chưa dịch / giữ nguyên CJK → bỏ
+    if (!byTrans.has(trg)) byTrans.set(trg, new Set());
+    byTrans.get(trg)!.add(src);
+  }
+  const out: { translated: string; sources: string[] }[] = [];
+  for (const [trg, srcs] of byTrans) {
+    if (srcs.size > 1) out.push({ translated: trg, sources: [...srcs] });
+  }
+  return out;
+}
+
 export function verifySurgicalResult(original: string, translated: string): boolean {
   const countChar = (str: string, ch: string): number => {
     let c = 0;
@@ -788,7 +814,13 @@ function applyBatchTranslations(
     // Clean up LLM syntax reflections before performing safety checks
     // 1. Strip leading key-value identifier prefix (e.g. desc: 'translation' -> 'translation')
     t = t.replace(/^[a-zA-Z_$][a-zA-Z0-9_$]*\s*[:=]\s*/, '');
-    
+
+    // 1b. (User 2026 — bugNeedFix/31 BUG B) LLM hay biến các mục JSON object thành DANH SÁCH và
+    // thêm ký tự đầu dòng "-"/"*"/"•"/"+" vào bản dịch của KEY: "秦鱼" → "- Tần Ngư". Key có "- " ở
+    // đầu làm hỏng tra cứu (IMAGE_CONFIG[tên] không khớp) ⇒ mất ảnh. Định danh/khóa KHÔNG BAO GIỜ
+    // hợp lệ khi bắt đầu bằng ký tự đầu dòng — strip sạch.
+    t = t.replace(/^[-*•+]\s+/, '');
+
     // 2. Strip leading/trailing quotes, commas, semicolons, and spaces
     t = t.replace(/^['"`\s]+|['"`\s,;]+$/g, '');
 
@@ -998,6 +1030,8 @@ CRITICAL RULES:
 7. Translate 无/無/没有 as the correct "none/nothing/empty" word in ${targetLang} (e.g. "Không" or "Không có" in Vietnamese). NEVER translate it as a date, month, or number.
 8. CSS property names (gap, flex, display, margin, padding, border, color, width, height, font, background, grid, position, opacity, overflow, transform, transition, cursor, etc.) MUST NEVER appear in your translations — they are code, not prose.
 9. [CRITICAL CONTEXT RULE]: The [context: ...] provides surrounding text ONLY for you to understand the situation. DO NOT translate the context! DO NOT output the context! Your output MUST strictly be the translation of the exact CJK text alone. If you output the context or any HTML tags, the system will crash!
+10. [UNIQUENESS] Items are object KEYS / data-path IDENTIFIERS used for lookups. DIFFERENT source items MUST get DIFFERENT translations — especially opposite pairs: 男=Nam vs 女=Nữ, 上=Trên vs 下=Dưới, 内=Trong vs 外=Ngoài. NEVER collapse two distinct sources into the same translation (it silently breaks the game logic). The SAME source item must always get the SAME translation.
+11. [NO LIST MARKERS] These are code identifiers, NOT a bullet list. NEVER prefix a translation with "-", "*", "•" or "+". A key like "秦鱼" → "Tần Ngư", never "- Tần Ngư".
 ${langRules}${glossaryPrompt}${mvuPrompt}` +
     (customPrompt ? `\n\nUSER DIRECTIVES & RAG CONTEXT:\n${customPrompt}` : '') +
     (customSchema ? `\n\nSCHEMA CONTEXT:\n${customSchema}` : '') +
@@ -1322,6 +1356,41 @@ CRITICAL RULES:
           t.translated = translationMap.get(trimmed);
           writeDebugLog(`[surgicalTranslate] Propagated translation for: "${trimmed}" → "${t.translated}"`);
         }
+      }
+    }
+
+    // ── Step 9b: (bugNeedFix/31 BUG A) Giải quyết ĐỤNG ĐỘ ĐỊNH DANH ──────────
+    // ≥2 khóa/định danh nguồn KHÁC NHAU dịch ra CÙNG 1 giá trị (vd 女性角色 & 男性角色 → "Nhân Vật
+    // Nam") ⇒ logic tra nhầm object. Gọi AI dịch LẠI đúng các nguồn đụng độ cho khác nhau + đồng bộ
+    // lại translationMap để mọi token cùng nguồn ăn theo. Lỗi/không có key thì bỏ qua (không chặn).
+    const collisions = detectSurgicalIdentifierCollisions(tokens.filter(t => t.translated?.trim()));
+    if (collisions.length > 0 && !signal?.aborted) {
+      const conflictSources = [...new Set(collisions.flatMap(c => c.sources))];
+      console.warn(`[surgicalTranslate] ĐỤNG ĐỘ định danh: ${collisions.length} nhóm — dịch lại ${conflictSources.length} nguồn`, collisions);
+      try {
+        const sys = `Bạn là chuyên gia dịch ĐỊNH DANH/KHÓA trong code sang ${targetLang}.
+Các mục dưới đây trước đó bị dịch TRÙNG NHAU (nhiều nguồn khác nhau ra cùng một bản dịch) — điều này làm HỎNG logic vì code dùng chúng để tra cứu object. Dịch LẠI mỗi mục thành một tên DUY NHẤT, KHÁC NHAU, đúng nghĩa. Chú ý cặp đối lập (男=Nam/女=Nữ, 上=Trên/下=Dưới…) phải khác nhau rõ.
+CHỈ trả về JSON object ánh xạ nguyên bản gốc → bản dịch mới: {"源":"dịch"}. Không markdown, không giải thích, KHÔNG thêm ký tự đầu dòng.`;
+        const user = `Dịch lại (mỗi mục 1 tên DUY NHẤT):\n${conflictSources.map((s, i) => `${i + 1}. "${s}"`).join('\n')}`;
+        const raw = await callProvider(config, sys, user, signal, undefined, { label: `Sửa đụng độ định danh (${conflictSources.length})` });
+        let fixMap: Record<string, string> = {};
+        try {
+          const m = raw.match(/\{[\s\S]*\}/);
+          if (m) fixMap = JSON.parse(m[0]);
+        } catch { /* AI trả sai JSON → bỏ pass này, giữ bản cũ */ }
+        const usedTargets = new Set(tokens.map(t => (t.translated || '').trim()).filter(Boolean));
+        for (const src of conflictSources) {
+          let val = (fixMap[src] || '').trim().replace(/^[-*•+]\s+/, '');
+          if (!val || /[一-鿿]/.test(val)) continue; // AI trả rỗng/còn CJK → giữ nguyên
+          // đảm bảo DUY NHẤT: nếu vẫn trùng, thêm hậu tố phân biệt (đường thoát an toàn)
+          let uniq = val, n = 2;
+          while (usedTargets.has(uniq) && ![...tokens].some(t => t.text.trim() === src && t.translated?.trim() === uniq)) { uniq = `${val} ${n++}`; }
+          usedTargets.add(uniq);
+          for (const t of tokens) if (t.text.trim() === src) t.translated = uniq;
+        }
+      } catch (err: any) {
+        if (err?.name === 'AbortError' || signal?.aborted) throw err;
+        console.error('[surgicalTranslate] Sửa đụng độ thất bại (bỏ qua):', err?.message);
       }
     }
 

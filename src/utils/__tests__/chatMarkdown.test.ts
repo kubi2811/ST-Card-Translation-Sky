@@ -6,6 +6,29 @@ import { splitChatBlocks } from '../chatMarkdown';
  * ``` nào kể cả GIỮA DÒNG → code của trợ lý (loại thao tác chính markdown) bị cắt đôi, nửa sau render
  * thành text trần không khung/không wrap ⇒ tràn khỏi bong bóng chat.
  */
+describe('splitChatBlocks — nhận fence mở giữa dòng, không nhầm ``` trong code', () => {
+  it('BUG B (ảnh user): fence mở GIỮA DÒNG (sau câu dẫn + emoji) → code vào KHUNG, không đổ ra text', () => {
+    const content = 'Bây giờ bạn gửi tiếp Phần 3/4 nhé! ✨ 🖼️ ```javascript\nconsole.log("x");\ntry {\n  return 1;\n}\n```\nHết.';
+    const blocks = splitChatBlocks(content);
+    expect(blocks.map(b => b.type)).toEqual(['text', 'code', 'text']);
+    const code = blocks[1] as { type: 'code'; code: string; language: string };
+    expect(code.language).toBe('javascript');
+    expect(code.code).toContain('console.log("x");');
+    expect(code.code).toContain('return 1;');
+    // câu dẫn trước fence vẫn là TEXT (không lọt vào code)
+    expect((blocks[0] as { text: string }).text).toContain('Phần 3/4');
+    expect((blocks[2] as { text: string }).text).toContain('Hết.');
+  });
+
+  it('BUG B với html/yaml mở giữa dòng cũng vào khung', () => {
+    const html = splitChatBlocks('Bản dịch: ```html\n<div>Xin chào</div>\n```');
+    expect(html.map(b => b.type)).toEqual(['text', 'code']);
+    expect((html[1] as { language: string }).language).toBe('html');
+    const yaml = splitChatBlocks('Kết quả 👉 ```yaml\nname: Long\nhp: 100\n```');
+    expect((yaml.find(b => b.type === 'code') as { language: string }).language).toBe('yaml');
+  });
+});
+
 describe('splitChatBlocks — fence chỉ tính khi ở ĐẦU DÒNG', () => {
   it('BUG THẬT: code chứa ``` GIỮA DÒNG (replace(/```$/)) KHÔNG làm đóng fence sớm', () => {
     const content = [

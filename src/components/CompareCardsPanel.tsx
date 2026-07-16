@@ -13,7 +13,7 @@ import {
   Search, AlertTriangle, FileJson, Image as ImageIcon, Columns3,
 } from 'lucide-react';
 import { useStore } from '../store';
-import { parseCardFile, type ParsedCard } from '../utils/parseCardFile';
+import { parseCardFile, parseCardJsonText, type ParsedCard } from '../utils/parseCardFile';
 import { buildCompareGroups, valuesDiffer, planMerge, type MergePlan } from '../utils/compareCards';
 import { extractTranslatableFields, setNestedValue, DEFAULT_FIELD_GROUPS } from '../utils/cardFields';
 import { embedCharaToPNG } from '../utils/pngHandler';
@@ -81,6 +81,23 @@ export function CompareCardsPanel({ onClose }: Props) {
       addToast('error', e instanceof Error ? e.message : String(e));
     }
   }, [addToast, patchSlot]);
+
+  // ─── Nạp 1 slot từ JSON DÁN trực tiếp (không cần file — dùng khi tạo card từ WB) ───
+  const importJsonText = useCallback((id: SlotId, text: string) => {
+    setMerge(null);
+    try {
+      const parsed = parseCardJsonText(text);
+      const fields = extractTranslatableFields(parsed.card, ALL_GROUP_IDS);
+      const valueByPath = new Map(fields.map((f) => [f.path, f.original]));
+      patchSlot(id, { parsed, fields, valueByPath, edits: {} });
+      const slotDef = SLOT_ORDER.find((s) => s.id === id);
+      addToast('success', fmt(ui.ccToastLoaded, { name: slotDef ? ui[slotDef.nameKey] : '', count: fields.length }));
+      return true;
+    } catch (e) {
+      addToast('error', e instanceof Error ? e.message : String(e));
+      return false;
+    }
+  }, [addToast, patchSlot, ui]);
 
   const removeSlot = useCallback((id: SlotId) => {
     const dirty = Object.keys(slots[id].edits).length;
@@ -304,7 +321,7 @@ export function CompareCardsPanel({ onClose }: Props) {
         <div style={{ padding: '10px 12px', fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 600, alignSelf: 'center' }}>ENTRY</div>
         {SLOT_ORDER.map((s) => (
           <SlotHeader key={s.id} slotDef={s} slot={slots[s.id]}
-            onImport={(f) => importFile(s.id, f)} onRemove={() => removeSlot(s.id)}
+            onImport={(f) => importFile(s.id, f)} onPasteJson={(txt) => importJsonText(s.id, txt)} onRemove={() => removeSlot(s.id)}
             onSaveAll={() => saveAll(s.id)} onExportJson={() => exportJson(s.id)} onExportPng={() => exportPng(s.id)} />
         ))}
       </div>
@@ -368,30 +385,63 @@ export function CompareCardsPanel({ onClose }: Props) {
 }
 
 // ─── Column header with import + actions ───
-function SlotHeader({ slotDef, slot, onImport, onRemove, onSaveAll, onExportJson, onExportPng }: {
+function SlotHeader({ slotDef, slot, onImport, onPasteJson, onRemove, onSaveAll, onExportJson, onExportPng }: {
   slotDef: { id: SlotId; nameKey: 'ccSlotRaw' | 'ccSlotTranslated' | 'ccSlotFinal'; color: string };
   slot: Slot;
-  onImport: (f: File) => void; onRemove: () => void;
+  onImport: (f: File) => void; onPasteJson: (text: string) => boolean; onRemove: () => void;
   onSaveAll: () => void; onExportJson: () => void; onExportPng: () => void;
 }) {
   const ui = useUi();
   const inputRef = useRef<HTMLInputElement>(null);
   const [drag, setDrag] = useState(false);
+  const [pasting, setPasting] = useState(false); // đang mở ô dán JSON
+  const [pasteText, setPasteText] = useState('');
   const dirty = Object.keys(slot.edits).length;
 
   if (!slot.parsed) {
+    if (pasting) {
+      // (User 2026) Dán JSON trực tiếp — dùng khi tạo card từ worldbook / copy JSON, không có file.
+      return (
+        <div style={{ margin: '8px', padding: '8px', border: `1.5px solid ${slotDef.color}`, borderRadius: 'var(--radius-md)' }}>
+          <div style={{ fontWeight: 700, fontSize: '0.72rem', color: slotDef.color, marginBottom: 4 }}>{ui.ccPasteTitle}</div>
+          <textarea
+            autoFocus value={pasteText} onChange={(e) => setPasteText(e.target.value)}
+            placeholder={ui.ccPastePh}
+            style={{ width: '100%', height: 120, fontSize: '0.66rem', fontFamily: 'monospace', resize: 'vertical', padding: '6px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-default)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+          />
+          <div style={{ display: 'flex', gap: 5, marginTop: 6 }}>
+            <button
+              onClick={() => { if (onPasteJson(pasteText)) { setPasting(false); setPasteText(''); } }}
+              disabled={!pasteText.trim()}
+              style={{ flex: 1, padding: '4px', fontSize: '0.66rem', borderRadius: 'var(--radius-sm)', border: 'none', background: pasteText.trim() ? slotDef.color : 'var(--bg-elevated)', color: pasteText.trim() ? '#fff' : 'var(--text-muted)', cursor: pasteText.trim() ? 'pointer' : 'default', fontWeight: 600 }}>
+              {ui.ccPasteLoad}
+            </button>
+            <button onClick={() => { setPasting(false); setPasteText(''); }}
+              style={{ padding: '4px 8px', fontSize: '0.66rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-default)', background: 'var(--bg-primary)', color: 'var(--text-muted)', cursor: 'pointer' }}>
+              {ui.ccPasteCancel}
+            </button>
+          </div>
+        </div>
+      );
+    }
     return (
-      <div
-        onClick={() => inputRef.current?.click()}
-        onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
-        onDragLeave={() => setDrag(false)}
-        onDrop={(e) => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files?.[0]; if (f) onImport(f); }}
-        style={{ margin: '8px', padding: '14px 10px', border: `1.5px dashed ${drag ? slotDef.color : 'var(--border-default)'}`, borderRadius: 'var(--radius-md)', textAlign: 'center', cursor: 'pointer', background: drag ? 'rgba(124,106,240,0.06)' : 'transparent' }}>
-        <Upload size={16} color={slotDef.color} />
-        <div style={{ fontWeight: 700, fontSize: '0.76rem', marginTop: '4px', color: slotDef.color }}>{ui[slotDef.nameKey]}</div>
-        <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)' }}>{ui.ccDropHint}</div>
-        <input ref={inputRef} type="file" accept=".json,.png" style={{ display: 'none' }}
-          onChange={(e) => { const f = e.target.files?.[0]; if (f) onImport(f); e.currentTarget.value = ''; }} />
+      <div style={{ margin: '8px' }}>
+        <div
+          onClick={() => inputRef.current?.click()}
+          onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+          onDragLeave={() => setDrag(false)}
+          onDrop={(e) => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files?.[0]; if (f) onImport(f); }}
+          style={{ padding: '14px 10px', border: `1.5px dashed ${drag ? slotDef.color : 'var(--border-default)'}`, borderRadius: 'var(--radius-md)', textAlign: 'center', cursor: 'pointer', background: drag ? 'rgba(124,106,240,0.06)' : 'transparent' }}>
+          <Upload size={16} color={slotDef.color} />
+          <div style={{ fontWeight: 700, fontSize: '0.76rem', marginTop: '4px', color: slotDef.color }}>{ui[slotDef.nameKey]}</div>
+          <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)' }}>{ui.ccDropHint}</div>
+          <input ref={inputRef} type="file" accept=".json,.png" style={{ display: 'none' }}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) onImport(f); e.currentTarget.value = ''; }} />
+        </div>
+        <button onClick={() => setPasting(true)} title={ui.ccPasteTip}
+          style={{ width: '100%', marginTop: 5, padding: '5px', fontSize: '0.64rem', borderRadius: 'var(--radius-sm)', border: '1px dashed var(--border-default)', background: 'var(--bg-primary)', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+          <FileJson size={11} /> {ui.ccPasteJsonBtn}
+        </button>
       </div>
     );
   }

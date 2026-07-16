@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useStore } from '../store';
 import { useT, useUi } from '../i18n/useLocale';
 import { fmt } from '../i18n';
-import { detectEjsCard, extractEjsEntryNames, extractEjsKeywords, extractAllDecorators, aiTranslateEjsEntries, enforceEjsDictConsistency, autoFixEjsEntryNames, autoFixEjsKeywords, enforceEjsCovariance, enforceEjsKeywordCasing, autoFixEjsKeywordsExtended } from '../utils/ejsSync';
+import { detectEjsCard, extractEjsEntryNames, extractEjsKeywords, extractAllDecorators, aiTranslateEjsEntries, enforceEjsDictConsistency, autoFixEjsEntryNames, autoFixEjsKeywords, enforceEjsCovariance, enforceEjsKeywordCasing, autoFixEjsKeywordsExtended, detectEjsConflicts, aiResolveEjsConflicts } from '../utils/ejsSync';
 import { Settings, Plus, Trash2, Wand2, Loader2, Search, Download, Upload, Shield, Zap, Hash, BookOpen, Eye } from 'lucide-react';
 
 export default function EjsSyncPanel() {
@@ -13,6 +13,7 @@ export default function EjsSyncPanel() {
   const [newValue, setNewValue] = useState('');
   const [activeTab, setActiveTab] = useState<'entries' | 'keywords' | 'decorators'>('entries');
   const [isAutoTranslating, setIsAutoTranslating] = useState(false);
+  const [isResolvingConflicts, setIsResolvingConflicts] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const ui = useUi();
 
@@ -161,19 +162,58 @@ export default function EjsSyncPanel() {
         translationConfig.ejsTranslationPrompt,
       );
 
-      const mergedEntries = { ...ejsEntryNameDict, ...entryTranslations };
-      const mergedKws = { ...ejsKeywordDict, ...keywordTranslations };
-
-      setTranslationConfig({ ejsEntryNameDict: mergedEntries, ejsKeywordDict: mergedKws });
+      let mergedEntries = { ...ejsEntryNameDict, ...entryTranslations };
+      let mergedKws = { ...ejsKeywordDict, ...keywordTranslations };
 
       const addedE = Object.keys(entryTranslations).length;
       const addedK = Object.keys(keywordTranslations).length;
-      addToast('success', fmt(ui.esTranslated, { entries: addedE, keywords: addedK }));
+
+      // (User 2026) TỰ ĐỘNG bắt "khác từ nhưng dịch ra cùng nghĩa" (vd 父女 & 父子 → "Cha con")
+      // ngay sau khi dịch — port cơ chế dedup của Chiến lược B: gọi AI dịch lại đúng các key đụng độ.
+      let dedupNote = '';
+      const preConflicts = [...detectEjsConflicts(mergedEntries), ...detectEjsConflicts(mergedKws)];
+      if (preConflicts.length > 0) {
+        const res = await aiResolveEjsConflicts(
+          mergedEntries, mergedKws, translationConfig.targetLanguage, proxy,
+          undefined, ejsContext, translationConfig.ejsTranslationPrompt,
+        );
+        mergedEntries = res.fixedEntryDict;
+        mergedKws = res.fixedKeywordDict;
+        if (res.fixedCount > 0) dedupNote = ' · ' + fmt(ui.esDedupFixed, { count: res.fixedCount });
+      }
+
+      setTranslationConfig({ ejsEntryNameDict: mergedEntries, ejsKeywordDict: mergedKws });
+      addToast('success', fmt(ui.esTranslated, { entries: addedE, keywords: addedK }) + dedupNote);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       addToast('error', `AI translate failed: ${msg}`);
     } finally {
       setIsAutoTranslating(false);
+    }
+  };
+
+  // ─── AI sửa dịch trùng nghĩa (nút tay — dùng cho từ điển đã dịch trước / import lại) ───
+  const resolveConflicts = async () => {
+    const conflicts = [...detectEjsConflicts(ejsEntryNameDict), ...detectEjsConflicts(ejsKeywordDict)];
+    if (conflicts.length === 0) {
+      addToast('info', ui.esDedupNone);
+      return;
+    }
+    setIsResolvingConflicts(true);
+    try {
+      const ejsContext = (card.data?.character_book?.entries || [])
+        .filter((e: any) => e.content && /<%[\s\S]*?%>/.test(e.content))
+        .map((e: any) => e.content).join('\n\n').slice(0, 3000);
+      const res = await aiResolveEjsConflicts(
+        ejsEntryNameDict, ejsKeywordDict, translationConfig.targetLanguage, proxy,
+        undefined, ejsContext, translationConfig.ejsTranslationPrompt,
+      );
+      setTranslationConfig({ ejsEntryNameDict: res.fixedEntryDict, ejsKeywordDict: res.fixedKeywordDict });
+      addToast(res.fixedCount > 0 ? 'success' : 'info', fmt(ui.esDedupFixed, { count: res.fixedCount }));
+    } catch (err) {
+      addToast('error', `AI dedup failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsResolvingConflicts(false);
     }
   };
 
@@ -349,6 +389,28 @@ export default function EjsSyncPanel() {
             >
               🔗 {ui.esUnify}
             </button>
+            {/* (User 2026) AI SỬA DỊCH TRÙNG NGHĨA — port cơ chế dedup của Chiến lược B: khi ≥2 key
+                gốc khác nhau ra CÙNG 1 bản dịch (vd 父女 & 父子 → "Cha con"), gọi AI dịch lại đúng
+                các key đó cho khác nhau. Badge = số nhóm đụng độ đang có. */}
+            {(() => {
+              const nConflicts = detectEjsConflicts(ejsEntryNameDict).length + detectEjsConflicts(ejsKeywordDict).length;
+              return (
+                <button
+                  className="btn btn-sm"
+                  title={ui.esDedupTip}
+                  disabled={isResolvingConflicts}
+                  style={{ color: nConflicts > 0 ? '#f59e0b' : '#9ca3af', borderColor: nConflicts > 0 ? 'rgba(245,158,11,0.4)' : 'rgba(120,120,120,0.3)' }}
+                  onClick={resolveConflicts}
+                >
+                  {isResolvingConflicts ? <Loader2 size={13} className="spin" /> : '🔍'} {ui.esDedup}
+                  {nConflicts > 0 && (
+                    <span style={{ marginLeft: 4, fontSize: 10, fontWeight: 700, background: 'rgba(245,158,11,0.2)', border: '1px solid rgba(245,158,11,0.4)', borderRadius: 4, padding: '0 4px' }}>
+                      {nConflicts}
+                    </span>
+                  )}
+                </button>
+              );
+            })()}
             {/* (User 2026) ÁP từ điển vào bản dịch — non-AI: sau khi EDIT dict trong panel (input sửa
                 trực tiếp được), bấm nút này để quét lại MỌI field đã dịch và ép theo dict mới. */}
             <button

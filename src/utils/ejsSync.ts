@@ -1498,6 +1498,147 @@ export function enforceEjsDictConsistency(
   return { fixedDict, fixes };
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+   AI DỊCH LẠI KHI DỊCH TRÙNG NGHĨA (mirror aiResolveMvuConflicts của Chiến lược B)
+   ═══════════════════════════════════════════════════════════════════
+   (User 2026) "khác từ nhưng dịch ra cùng nghĩa" — vd 父女 và 父子 đều → "Cha con",
+   青龙 và 苍龙 đều → "Thanh Long". Với EJS, keyword dùng để SO SÁNH/kích hoạt và entry name
+   dùng trong getwi(): 2 nguồn khác nhau mà ra CÙNG 1 tên thì logic game hết phân biệt được.
+   enforceEjsDictConsistency chỉ BÁO (không dám tự đổi vì sợ lệch bản dịch đã áp); hàm này gọi
+   AI DỊCH LẠI đúng các key đụng độ với prompt buộc mỗi key 1 tên DUY NHẤT + đúng nghĩa. */
+
+export interface EjsConflict {
+  /** 'entry_name' | 'keyword' — biết ghi lại vào dict nào. */
+  type: 'entry_name' | 'keyword';
+  /** Giá trị bản dịch bị trùng. */
+  value: string;
+  /** Các key gốc KHÁC NHAU cùng dịch ra `value`. */
+  keys: string[];
+}
+
+/** Tìm các bản dịch trùng: ≥2 key GỐC khác nhau → CÙNG 1 value (bỏ map identity k===v). */
+export function detectEjsConflicts(dict: Record<string, string>): { value: string; keys: string[] }[] {
+  const byValue = new Map<string, string[]>();
+  for (const [k, v] of Object.entries(dict || {})) {
+    if (!v) continue;
+    const nv = v.trim();
+    if (!nv || nv === k) continue;
+    if (!byValue.has(nv)) byValue.set(nv, []);
+    byValue.get(nv)!.push(k);
+  }
+  return [...byValue.entries()]
+    .filter(([, keys]) => keys.length > 1)
+    .map(([value, keys]) => ({ value, keys }));
+}
+
+/**
+ * Gọi AI dịch lại các key bị dịch trùng nghĩa trong TỪ ĐIỂN EJS (entry name + keyword).
+ * Trả về dict đã sửa + số key đã dịch lại + danh sách đụng độ phát hiện.
+ * Đường thoát an toàn: key nào AI vẫn trả về trùng → tự thêm hậu tố "(gốc)" để ép duy nhất.
+ */
+export async function aiResolveEjsConflicts(
+  entryNameDict: Record<string, string>,
+  keywordDict: Record<string, string>,
+  targetLang: string,
+  proxy: ProxySettings,
+  signal?: AbortSignal,
+  cardContext?: string,
+  customPrompt?: string,
+): Promise<{
+  fixedEntryDict: Record<string, string>;
+  fixedKeywordDict: Record<string, string>;
+  fixedCount: number;
+  conflicts: EjsConflict[];
+}> {
+  const fixedEntryDict = { ...entryNameDict };
+  const fixedKeywordDict = { ...keywordDict };
+
+  const conflicts: EjsConflict[] = [
+    ...detectEjsConflicts(entryNameDict).map(c => ({ type: 'entry_name' as const, ...c })),
+    ...detectEjsConflicts(keywordDict).map(c => ({ type: 'keyword' as const, ...c })),
+  ];
+  if (conflicts.length === 0) {
+    return { fixedEntryDict, fixedKeywordDict, fixedCount: 0, conflicts };
+  }
+
+  // Gom mọi key đụng độ (kèm type để ghi lại đúng dict). 1 key có thể xuất hiện 1 lần.
+  const conflictItems: { key: string; type: 'entry_name' | 'keyword' }[] = [];
+  const seen = new Set<string>();
+  for (const c of conflicts) {
+    for (const k of c.keys) {
+      const id = `${c.type}:${k}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      conflictItems.push({ key: k, type: c.type });
+    }
+  }
+
+  const conflictList = conflicts
+    .map(c => `  ⚠️ [${c.type}] ${c.keys.map(k => `"${k}"`).join(', ')} đều bị dịch thành "${c.value}" — nhưng chúng là các khái niệm KHÁC NHAU! Mỗi cái cần MỘT tên riêng biệt.`)
+    .join('\n');
+
+  const contextBlock = cardContext ? `\n\nNGỮ CẢNH (mã EJS của card để tham khảo nghĩa):\n${cardContext.slice(0, 2500)}` : '';
+  const customBlock = customPrompt?.trim()
+    ? `\n\n═══ QUY TẮC DỊCH RIÊNG CỦA NGƯỜI DÙNG (ƯU TIÊN CAO NHẤT) ═══\n${customPrompt.trim()}\n═══ HẾT QUY TẮC RIÊNG ═══`
+    : '';
+
+  const system = `Bạn là chuyên gia dịch thuật cho thẻ nhân vật SillyTavern dùng EJS.
+Trước đó bạn đã dịch một số tên/keyword, nhưng NHIỀU nguồn gốc KHÁC NHAU lại ra CÙNG một bản dịch.
+Đây là LỖI NGHIÊM TRỌNG: keyword EJS dùng để SO SÁNH/kích hoạt và entry name dùng trong getwi() — hai thứ khác nhau mà trùng tên thì logic game sẽ không phân biệt được và hỏng.
+
+Dịch LẠI mỗi mục dưới đây thành một tên DUY NHẤT, KHÁC NHAU, và ĐÚNG NGHĨA. Chú ý phân biệt nghĩa thật của từng chữ Hán/Nhật/Hàn (vd 父女 = cha-con GÁI ≠ 父子 = cha-con TRAI; 青龙 = Thanh Long ≠ 苍龙 = Thương Long).
+- Danh từ riêng Trung → Hán Việt; Nhật → Romaji; Hàn → Romanization chuẩn. KHÔNG dịch tiếng Anh.
+- Tên phương Tây phiên qua CJK → khôi phục chữ Latinh gốc.${customBlock}${contextBlock}
+
+ĐỊNH DẠNG ĐẦU RA — JSON object ánh xạ nguyên bản gốc → bản dịch MỚI, gồm ĐỦ mọi mục:
+{ "nguyên bản 1": "bản dịch mới 1", "nguyên bản 2": "bản dịch mới 2" }
+Chỉ xuất JSON, không markdown, không giải thích.`;
+
+  const user = `CÁC ĐỤNG ĐỘ CẦN SỬA:
+${conflictList}
+
+Dịch lại các mục sau, mỗi mục PHẢI có bản dịch DUY NHẤT và khác nhau:
+${conflictItems.map((it, i) => `${i + 1}. [${it.type}] "${it.key}"`).join('\n')}`;
+
+  try {
+    const requestTimeout = (proxy as any).requestTimeout || 300000;
+    const timeoutController = new AbortController();
+    const timeoutId = setTimeout(() => timeoutController.abort('EJS dedup timeout'), requestTimeout * 2);
+    const fetchSignal = signal ? AbortSignal.any([signal, timeoutController.signal]) : timeoutController.signal;
+
+    const responseText = await callProvider(proxy, system, user, fetchSignal, undefined, { label: `EJS sửa dịch trùng (${conflictItems.length} mục)` });
+    clearTimeout(timeoutId);
+
+    const parsed = parseJsonFromAi(responseText);
+    const fixedMap: Record<string, any> = parsed.translations || parsed;
+
+    // Áp bản dịch mới; đảm bảo DUY NHẤT trong PHẠM VI từng dict (entry vs keyword tách namespace).
+    const usedEntry = new Set(Object.entries(fixedEntryDict).filter(([k, v]) => v && !conflictItems.some(c => c.type === 'entry_name' && c.key === k)).map(([, v]) => v.trim()));
+    const usedKw = new Set(Object.entries(fixedKeywordDict).filter(([k, v]) => v && !conflictItems.some(c => c.type === 'keyword' && c.key === k)).map(([, v]) => v.trim()));
+    let fixedCount = 0;
+    for (const it of conflictItems) {
+      const raw = fixedMap?.[it.key];
+      if (typeof raw !== 'string' || !raw.trim()) continue;
+      let val = canonicalizeEjsValue(raw.trim());
+      const used = it.type === 'entry_name' ? usedEntry : usedKw;
+      if (used.has(val)) {
+        // Vẫn trùng → ép duy nhất bằng hậu tố gốc (đường thoát an toàn)
+        val = canonicalizeEjsValue(`${val} (${it.key})`);
+      }
+      used.add(val);
+      if (it.type === 'entry_name') fixedEntryDict[it.key] = val;
+      else fixedKeywordDict[it.key] = val;
+      fixedCount++;
+    }
+
+    return { fixedEntryDict, fixedKeywordDict, fixedCount, conflicts };
+  } catch (err: any) {
+    if (err?.name === 'AbortError' || signal?.aborted) throw err;
+    console.error('[EJS Sync] Dịch lại đụng độ thất bại:', err?.message);
+    return { fixedEntryDict, fixedKeywordDict, fixedCount: 0, conflicts };
+  }
+}
+
 export function autoFixEjsKeywordsExtended(
   translated: string,
   ejsKeywordDict: Record<string, string>,

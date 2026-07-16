@@ -9,14 +9,11 @@ import uiZh from '../ui/zh';
 
 const placeholders = (s: string) => (s.match(/\{[a-zA-Z]+\}/g) || []).sort();
 
-describe('i18n — HỢP ĐỒNG "Tiếng Việt = giao diện hôm nay"', () => {
-  // Bất biến sống còn: mặc định cũ của app là locale='en'. Nếu ai đó đổi resolveLocale('vi')
-  // thành 'vi', 237 nhánh `isVi ? ... : ...` + 293 label sẽ lật sang tiếng Việt ⇒ đổi UI của
-  // user cũ. Test này chặn đúng điều đó.
-  it("resolveLocale('vi') phải là 'en' — KHÔNG được đổi nếu chưa hỏi user", () => {
-    expect(resolveLocale('vi')).toBe('en');
-  });
-  it("resolveLocale('en') = 'en', resolveLocale('zh') = 'zh'", () => {
+describe('i18n — mỗi ngôn ngữ dùng đúng bộ chuỗi của mình', () => {
+  // (User 2026-07) TRƯỚC ĐÂY map vi→en cố ý (giữ bộ mặt tiếng Anh cho user cũ). User phản ánh
+  // "chọn tiếng Việt mà giao diện còn nhiều chỗ tiếng Anh" → đổi để VI dùng locales/vi.ts.
+  it("resolveLocale trả ĐÚNG ngôn ngữ đang chọn (vi→vi, en→en, zh→zh)", () => {
+    expect(resolveLocale('vi')).toBe('vi');
     expect(resolveLocale('en')).toBe('en');
     expect(resolveLocale('zh')).toBe('zh');
   });
@@ -28,10 +25,10 @@ describe('i18n — HỢP ĐỒNG "Tiếng Việt = giao diện hôm nay"', () =>
 describe('i18n — boot thật: loadI18n() rồi getT()/getUi()', () => {
   // Chạy đúng chuỗi khởi động của main.tsx: dynamic import phải resolve được, nếu không app
   // sẽ TRẮNG MÀN HÌNH. Test này chặn kiểu hỏng đó.
-  it("uiLang 'vi' → nạp bộ EN (đúng giao diện hôm nay) + ui tiếng Việt", async () => {
+  it("uiLang 'vi' → nạp bộ locales TIẾNG VIỆT + ui tiếng Việt", async () => {
     await loadI18n('vi');
-    expect(getT().apiConfiguration).toBe('API Configuration'); // y hệt trước khi có i18n
-    expect(getT().characterCard).toBe('Character Card');
+    expect(getT().apiConfiguration).toBe(vi.apiConfiguration); // dùng đúng vi.ts, không phải en
+    expect(getT().characterCard).toBe(vi.characterCard);
     expect(getUi().toolbarReload).toBe('Tải lại');
     expect(getUi().railTranslate).toBe('Dịch Card');
   });
@@ -42,7 +39,7 @@ describe('i18n — boot thật: loadI18n() rồi getT()/getUi()', () => {
     expect(getUi().toolbarReload).toBe('重新载入');
   });
 
-  it("uiLang 'en' → giống 'vi' ở bộ locales (cùng map sang en), khác ở bộ ui", async () => {
+  it("uiLang 'en' → nạp bộ locales tiếng Anh + ui tiếng Anh", async () => {
     await loadI18n('en');
     expect(getT().apiConfiguration).toBe('API Configuration');
     expect(getUi().toolbarReload).toBe('Reload');

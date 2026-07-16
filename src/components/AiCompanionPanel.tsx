@@ -1502,6 +1502,13 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
 
   useEffect(() => { safeSetItem('ai_assistant_rag', ragEnabled ? '1' : '0'); }, [ragEnabled]);
 
+  // (User 2026) Đã bỏ đóng-khi-click-ngoài → thêm phím Esc để đóng nhanh khi cần.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
   // (P3 roadmap) Nút "🔧 AI sửa" trong khối code (CodeSection nằm sâu trong cây memo) bắn
   // CustomEvent — panel chính nhận và gửi như 1 lệnh chat.
   useEffect(() => {
@@ -2195,8 +2202,10 @@ ${ragBlock ? `\n${ragBlock}` : ''}`;
   };
 
   return (
-    <div className="companion-modal-overlay" onClick={onClose}>
-      <div className="companion-modal" onClick={e => e.stopPropagation()}>
+    // (User 2026) BỎ đóng-khi-click-ra-ngoài: trước đây lỡ tay bấm nền là mất cả cuộc hội thoại
+    // đang gõ dở. Nay chỉ đóng bằng nút X (hoặc phím Esc). Overlay không còn onClick={onClose}.
+    <div className="companion-modal-overlay">
+      <div className="companion-modal">
         
         {/* ══════ COMMON MODAL HEADER ══════ */}
         <div className="companion-chat-header">

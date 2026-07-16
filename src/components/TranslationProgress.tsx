@@ -784,7 +784,7 @@ function TranslationPanel() {
       {isIdle && totalFields > 0 && (
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: '14px', padding: '8px 10px', background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 'var(--radius-sm)' }}>
           <Ban size={13} style={{ color: '#fbbf24', flexShrink: 0, marginTop: 1 }} />
-          <span>{ui.tpManualHint1} <b>{ui.tpManualHint2}</b> {ui.tpManualHint3} <b>Field Editor</b> {ui.tpManualHint4}</span>
+          <span>{ui.tpManualHint1} <b>{ui.tpManualHint2}</b> {ui.tpManualHint3} <b>{t.fieldEditor}</b> {ui.tpManualHint4}</span>
         </div>
       )}
 

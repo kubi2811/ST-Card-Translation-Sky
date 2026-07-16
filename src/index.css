@@ -870,8 +870,9 @@ input[type="range"]::-webkit-slider-thumb {
   background: var(--bg-secondary);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-xl);
-  width: min(96vw, 1200px);
-  height: min(90vh, 850px);
+  /* (User 2026) Mở rộng khung chat Trợ Lý AI — rộng & cao hơn để đọc code/hội thoại thoải mái. */
+  width: min(98vw, 1600px);
+  height: min(94vh, 960px);
   display: flex;
   flex-direction: column;
   overflow: hidden;

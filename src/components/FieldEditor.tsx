@@ -6,6 +6,7 @@ import { fmt } from '../i18n';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { FieldGroup, TranslationField, TranslationStatus } from '../types/card';
 import { RotateCcw, AlertTriangle, CheckCircle2, Clock, ArrowLeftRight, BarChart3, Ban, Search, X, Copy, Check, Eye, Wand2, Zap, Brain, Download } from 'lucide-react';
+import { countCjkText } from '../utils/cjk';
 
 const RAGDebugPanel = lazy(() => import('./RAGDebugPanel'));
 
@@ -91,9 +92,44 @@ function CharRatio({ original, translated }: { original: string; translated: str
   );
 }
 
+/**
+ * (User 2026) Badge CẢNH BÁO TỰ ĐỘNG "còn chữ Hán chưa dịch" — hiện NGAY trên field đã DONE khi
+ * bản dịch còn sót nhiều CJK (vd schema Zod báo done nhưng biến/nhãn vẫn tiếng Trung). Trước đây
+ * chỉ nút "Kiểm Tra Field" mới bắt (không tự động), nên user tưởng đã dịch xong. Ngưỡng khớp
+ * verifyFields: origCJK>3 và (tỉ lệ >15% HOẶC >10 ký tự CJK còn lại). Bấm badge = nhảy tới field.
+ */
+function ResidualCjkBadge({ original, translated, t }: { original: string; translated: string; t: Record<string, string> }) {
+  const info = useMemo(() => {
+    if (!translated) return null;
+    const origCJK = countCjkText(original);
+    const transCJK = countCjkText(translated);
+    if (origCJK <= 3 || transCJK === 0) return null;
+    const ratio = transCJK / origCJK;
+    // Chỉ cảnh báo khi thật sự đáng ngờ (bỏ qua 1-2 ký tự lẻ như tên riêng giữ nguyên cố ý)
+    if (ratio <= 0.15 && transCJK <= 10) return null;
+    return { transCJK, pct: Math.round(ratio * 100) };
+  }, [original, translated]);
+
+  if (!info) return null;
+  return (
+    <span
+      title={fmt(t.residualCjkTip, { n: info.transCJK, pct: info.pct })}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: '3px',
+        fontSize: '0.6rem', padding: '1px 5px', borderRadius: 'var(--radius-sm)',
+        background: 'rgba(231,76,60,0.15)', color: 'var(--accent-danger)',
+        fontWeight: 700, border: '1px solid rgba(231,76,60,0.35)',
+      }}
+    >
+      <AlertTriangle size={9} /> {fmt(t.residualCjkBadge, { n: info.transCJK })}
+    </span>
+  );
+}
+
 /** Simple inline diff view — highlights additions/deletions */
 function DiffView({ original, translated }: { original: string; translated: string }) {
-  if (!translated) return <span style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '0.75rem' }}>No translation</span>;
+  const t = useT();
+  if (!translated) return <span style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '0.75rem' }}>{t.noTranslation}</span>;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '0.78rem', lineHeight: 1.5 }}>
@@ -103,7 +139,7 @@ function DiffView({ original, translated }: { original: string; translated: stri
           fontSize: '0.55rem', fontWeight: 700, color: 'var(--accent-danger)',
           textTransform: 'uppercase', letterSpacing: '0.05em',
         }}>
-          Original
+          {t.original}
         </span>
         <div style={{ position: 'absolute', top: '0px', right: '4px', zIndex: 10 }}>
           <CopyButton text={original} />
@@ -130,7 +166,7 @@ function DiffView({ original, translated }: { original: string; translated: stri
           fontSize: '0.55rem', fontWeight: 700, color: 'var(--accent-success)',
           textTransform: 'uppercase', letterSpacing: '0.05em',
         }}>
-          Translated
+          {t.translated}
         </span>
         <div
           style={{
@@ -206,6 +242,7 @@ function ChunkStatusAndResume({
 }) {
   const { proxy, translationConfig } = useStore();
   const ui = useUi();
+  const t = useT();
   const [expanded, setExpanded] = useState(false);
 
   // Ngưỡng chia chunk THỰC TẾ = 15.000 ký tự (khớp chunkText ở apiClient). Nguồn tin cậy nhất là
@@ -340,12 +377,12 @@ function ChunkStatusAndResume({
                     overflowY: 'auto',
                     color: 'var(--text-secondary)'
                   }}>
-                    {raw || <span style={{ fontStyle: 'italic', color: 'var(--text-muted)' }}>Empty</span>}
+                    {raw || <span style={{ fontStyle: 'italic', color: 'var(--text-muted)' }}>{t.emptyField}</span>}
                   </div>
                 </div>
                 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                  <span style={{ fontSize: '0.52rem', textTransform: 'uppercase', color: isDone ? 'var(--accent-success)' : 'var(--text-muted)' }}>Translated</span>
+                  <span style={{ fontSize: '0.52rem', textTransform: 'uppercase', color: isDone ? 'var(--accent-success)' : 'var(--text-muted)' }}>{t.translated}</span>
                   <div style={{
                     padding: '4px',
                     background: isDone ? 'rgba(76,175,80,0.04)' : 'rgba(0,0,0,0.2)',
@@ -871,6 +908,7 @@ const VirtualFieldTableRow = memo(({
               {field.surgicalResult && <SurgicalResultBadge result={field.surgicalResult} />}
               {field.reusedFrom && <ReusedBadge source={field.reusedFrom} />}
               <CharRatio original={field.original} translated={field.translated} />
+              {field.status === 'done' && <ResidualCjkBadge original={field.original} translated={field.translated} t={t} />}
             </div>
             {field.error && (
               <div
@@ -1649,7 +1687,7 @@ export default function FieldEditor() {
             )}
             {modEnabled ? t.modFieldEditor : t.fieldEditor}
             <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 400 }}>
-              ({filteredFields.length} fields)
+              ({filteredFields.length} {t.fields})
             </span>
           </h3>
           {/* Search box */}
@@ -1721,7 +1759,7 @@ export default function FieldEditor() {
                 transition: 'all 0.15s',
               }}
             >
-              Table
+              {t.viewTable}
             </button>
             <button
               onClick={() => setViewMode('diff')}
@@ -1741,7 +1779,7 @@ export default function FieldEditor() {
               }}
             >
               <ArrowLeftRight size={11} />
-              Diff
+              {t.viewDiff}
             </button>
           </div>
         </div>

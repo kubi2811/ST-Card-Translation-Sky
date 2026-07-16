@@ -51,13 +51,12 @@ export function setUiLang(lang: UiLang): void {
 /**
  * uiLang → locale cho bộ từ điển CŨ (`locales/*`).
  *
- * ⚠️ `'vi' → 'en'` LÀ CỐ Ý, KHÔNG PHẢI LỖI:
- * Mặc định cũ của app là `locale='en'`, nên hôm nay các label đi qua i18n hiển thị TIẾNG ANH
- * ("API Configuration", "Expert Mode"…) và 237 nhánh `isVi ? viText : enText` cũng rơi vào
- * nhánh TIẾNG ANH. User cũ đã quen đúng bộ mặt đó. Map vi→en giữ giao diện Y HỆT hiện tại.
- * (Muốn bật tiếng Việt đầy đủ về sau: đổi đúng dòng này thành `ui === 'vi' ? 'vi' : ...`.)
+ * (User 2026-07) TRƯỚC ĐÂY map `vi → 'en'` cố ý (user cũ quen bộ mặt tiếng Anh) — nhưng nay user
+ * phản ánh "đã chọn tiếng Việt mà giao diện còn nhiều chỗ tiếng Anh". Đó chính là do bộ CŨ (~293
+ * key: Field Editor, cột Bản gốc/Bản dịch, Kiểm Tra Field…) bị ép về tiếng Anh. `locales/vi.ts` đã
+ * có SẴN đủ 293 key tiếng Việt nhưng bị bỏ qua. Nay trả về đúng ngôn ngữ đang chọn → VI dùng vi.ts.
  */
-export const resolveLocale = (ui: UiLang): Locale => (ui === 'zh' ? 'zh' : 'en');
+export const resolveLocale = (ui: UiLang): Locale => ui;
 
 // Mỗi loader = 1 chunk riêng do Vite tách; chỉ chunk của ngôn ngữ đang dùng được tải về.
 const legacyLoaders: Record<Locale, () => Promise<{ default: TranslationKeys }>> = {

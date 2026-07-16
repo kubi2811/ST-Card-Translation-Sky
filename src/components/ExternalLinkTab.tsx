@@ -5,6 +5,7 @@ import { Code2, Play, Loader2, Trash2, CheckCircle2, Copy, Check, X, Globe } fro
 import { publishToGithub } from '../utils/githubApi';
 import { safeSetItem } from '../utils/safeStorage';
 import { useUi } from '../i18n/useLocale';
+import HeavyScriptMode from './HeavyScriptMode';
 
 const renderSafeHtml = (htmlContent: string) => {
   return `
@@ -29,6 +30,7 @@ export default function ExternalLinkTab() {
   
   const [input, setInput] = useState(() => localStorage.getItem('custom-external-input') || '');
   const [copied, setCopied] = useState(false);
+  const [heavyOutput, setHeavyOutput] = useState(''); // bản ghép của chế độ Script Nặng
 
   // GitHub state
   const [ghToken, setGhToken] = useState(() => localStorage.getItem('gh-token') || '');
@@ -51,7 +53,8 @@ export default function ExternalLinkTab() {
   
   const isTranslating = field?.status === 'translating';
   const hasError = field?.status === 'error';
-  const output = field?.translated || '';
+  // Ưu tiên bản ghép của chế độ Script Nặng (nếu có) — dùng cho preview/publish/output.
+  const output = heavyOutput || field?.translated || '';
 
   const handleTranslate = async () => {
     if (!input.trim()) return;
@@ -127,6 +130,10 @@ export default function ExternalLinkTab() {
           {input && !isTranslating && <button className="btn btn-ghost" onClick={() => setInput('')}><Trash2 size={12} /> {ui.eltClear}</button>}
         </div>
         {hasError && <div style={{ padding: '8px 12px', borderRadius: 'var(--radius-md)', background: 'rgba(255,82,82,0.08)', border: '1px solid rgba(255,82,82,0.2)', color: 'var(--accent-danger)', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '6px' }}><X size={14} /> {ui.eltErrPrefix} {field?.error}</div>}
+
+        {/* (User 2026) Script Nặng (Chia Phần) — tự hiện khi script vượt ngưỡng an toàn */}
+        <HeavyScriptMode source={input} onMerged={setHeavyOutput} />
+
         {output && (
           <div style={{ position: 'relative', marginTop: '8px' }}>
             <label style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--accent-success)', textTransform: 'uppercase', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}><Check size={12} /> {ui.eltResultLabel}</label>

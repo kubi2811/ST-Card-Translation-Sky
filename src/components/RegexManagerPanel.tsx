@@ -475,6 +475,24 @@ export default function RegexManagerPanel({ onClose, isFullscreen }: { onClose: 
     addToast('success', fmt(ui.rmApplied, { count: applied }));
   };
 
+  // ─── (bugNeedFix/35) Bật/tắt regex trong SillyTavern (cờ `disabled`) ───
+  // User muốn NHÌN THẤY regex nào đang bật/tắt (giống danh sách ST) rồi tự quyết dịch sao. Bấm chip để
+  // đảo cờ `disabled` ghi thẳng vào card (KHÔNG ảnh hưởng việc dịch — dịch vẫn xử lý tất cả regex).
+  const toggleScriptDisabled = useCallback((idx: number, e: React.MouseEvent) => {
+    e.stopPropagation(); // đừng đổi script đang chọn khi bấm chip
+    if (!card) return;
+    const newCard = JSON.parse(JSON.stringify(card));
+    const rs = newCard.data?.extensions?.regex_scripts;
+    if (!rs || !rs[idx]) return;
+    rs[idx].disabled = !rs[idx].disabled;
+    updateCard(newCard);
+    const name = rs[idx].scriptName || `Script ${idx + 1}`;
+    addToast('info', fmt(rs[idx].disabled ? ui.rmToggleOff : ui.rmToggleOn, { name }));
+  }, [card, updateCard, addToast, ui]);
+
+  // Thống kê bật/tắt để hiện ở thanh dưới.
+  const enabledCount = useMemo(() => scripts.filter(s => !s.disabled).length, [scripts]);
+
   // ─── Cancel translation ───
   const handleCancel = () => {
     cancelTranslation();
@@ -582,7 +600,9 @@ export default function RegexManagerPanel({ onClose, isFullscreen }: { onClose: 
                 {ui.rmNoRegex}
               </div>
             ) : (
-              scripts.map((script, idx) => (
+              scripts.map((script, idx) => {
+                const isOff = !!script.disabled;
+                return (
                 <button
                   key={idx}
                   onClick={() => setSelectedScriptIdx(idx)}
@@ -601,16 +621,61 @@ export default function RegexManagerPanel({ onClose, isFullscreen }: { onClose: 
                     display: 'flex',
                     alignItems: 'center',
                     gap: '8px',
+                    opacity: isOff ? 0.55 : 1,
                   }}
                 >
+                  {/* (bugNeedFix/35) Chip bật/tắt: nhìn thấy trạng thái + bấm để đảo cờ trong SillyTavern */}
+                  <span
+                    role="switch"
+                    aria-checked={!isOff}
+                    title={ui.rmToggleHint}
+                    onClick={(e) => toggleScriptDisabled(idx, e)}
+                    style={{
+                      flexShrink: 0,
+                      width: '26px',
+                      height: '15px',
+                      borderRadius: '999px',
+                      background: isOff ? 'var(--bg-input, rgba(255,255,255,0.12))' : 'var(--accent-primary)',
+                      border: '1px solid var(--border-default)',
+                      position: 'relative',
+                      cursor: 'pointer',
+                      transition: 'background 0.15s',
+                    }}
+                  >
+                    <span style={{
+                      position: 'absolute',
+                      top: '1px',
+                      left: isOff ? '1px' : '12px',
+                      width: '11px',
+                      height: '11px',
+                      borderRadius: '50%',
+                      background: '#fff',
+                      transition: 'left 0.15s',
+                    }} />
+                  </span>
                   <Regex size={12} style={{ flexShrink: 0, opacity: 0.5 }} />
                   <span style={{
                     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    textDecoration: isOff ? 'line-through' : 'none',
+                    flex: 1,
                   }}>
                     {script.scriptName || `Script ${idx + 1}`}
                   </span>
+                  {isOff && (
+                    <span style={{
+                      flexShrink: 0,
+                      fontSize: '0.6rem',
+                      fontWeight: 700,
+                      letterSpacing: '0.04em',
+                      color: 'var(--text-muted)',
+                      border: '1px solid var(--border-subtle)',
+                      borderRadius: '4px',
+                      padding: '1px 4px',
+                    }}>{ui.rmStatusOff}</span>
+                  )}
                 </button>
-              ))
+                );
+              })
             )}
           </div>
 
@@ -625,6 +690,9 @@ export default function RegexManagerPanel({ onClose, isFullscreen }: { onClose: 
               justifyContent: 'space-between',
             }}>
               <span>{fmt(ui.rmDoneCount, { done: doneCount, total: totalCount })}</span>
+              <span style={{ color: 'var(--text-muted)' }} title={ui.rmToggleHint}>
+                {fmt(ui.rmOnOffSummary, { on: enabledCount, off: scripts.length - enabledCount })}
+              </span>
               {errorCount > 0 && <span style={{ color: 'var(--accent-danger)' }}>{fmt(ui.rmErrCount, { count: errorCount })}</span>}
             </div>
           )}

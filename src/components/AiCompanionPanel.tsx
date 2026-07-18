@@ -2688,15 +2688,28 @@ function MemoryPanelModal({ onClose }: { onClose: () => void }) {
 
   useEffect(() => { void reload(); }, [reload]);
 
+  // (bugNeedFix — Ký ức) Cập nhật LẠC QUAN tại chỗ thay vì reload() cả danh sách. reload() bật
+  // loading=true → thay cả mảng → khung cuộn TỤT VỀ ĐẦU (đúng lỗi user "xoá 1 mục nhảy về đầu trang").
+  // Sửa 1 mục thì chỉ vá đúng mục đó trong state, giữ nguyên vị trí cuộn.
   const togglePin = async (rec: import('../utils/memoryStore').MemoryRecord) => {
     const m = await import('../utils/memoryStore');
-    await m.putMemory({ ...rec, pinned: !rec.pinned, version: rec.version + 1 });
-    void reload();
+    const updated = { ...rec, pinned: !rec.pinned, version: rec.version + 1 };
+    await m.putMemory(updated);
+    setMems(prev => prev.map(x => x.id === rec.id ? updated : x));
   };
   const del = async (id: string) => {
     const m = await import('../utils/memoryStore');
     await m.deleteMemory(id);
-    void reload();
+    setMems(prev => prev.filter(x => x.id !== id)); // bỏ đúng 1 dòng, KHÔNG reload → cuộn không nhảy
+  };
+  const clearAll = async () => {
+    if (mems.length === 0) return;
+    if (!window.confirm(fmt(ui.acMemClearConfirm, { n: mems.length }))) return;
+    const m = await import('../utils/memoryStore');
+    const n = await m.clearAllMemories();
+    setMems([]);
+    setConflictCount(0);
+    alert(fmt(ui.acMemCleared, { n }));
   };
   const doExport = async () => {
     const m = await import('../utils/memoryStore');
@@ -2748,6 +2761,11 @@ function MemoryPanelModal({ onClose }: { onClose: () => void }) {
               <Upload size={10} className="inline mr-1" />{ui.acMemImport}
             </button>
             <input type="file" accept=".json" className="hidden" ref={importRef} onChange={doImport} />
+            <button onClick={clearAll} disabled={mems.length === 0}
+              className="px-2 py-0.5 rounded text-[10px] border bg-rose-500/10 border-rose-500/30 hover:bg-rose-500/20 text-rose-300 disabled:opacity-40 disabled:cursor-not-allowed"
+              title={ui.acMemClearAllTip}>
+              <Trash2 size={10} className="inline mr-1" />{ui.acMemClearAll}
+            </button>
             <button onClick={onClose} className="p-1 hover:bg-zinc-800 rounded text-slate-400 hover:text-white"><X size={14} /></button>
           </div>
         </div>

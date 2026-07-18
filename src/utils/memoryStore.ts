@@ -93,7 +93,9 @@ function channel(): BroadcastChannel | null {
   return _channel;
 }
 
-export type MemorySyncMsg = { type: 'put' | 'delete'; id: string; version?: number };
+export type MemorySyncMsg =
+  | { type: 'put' | 'delete'; id: string; version?: number }
+  | { type: 'clear'; id?: undefined };
 
 /** Đăng ký nghe thay đổi từ tab khác (invalidate cache RAM). Trả về hàm huỷ. */
 export function onMemorySync(fn: (msg: MemorySyncMsg) => void): () => void {
@@ -160,6 +162,18 @@ export async function deleteMemory(id: string, db = memoryDb()): Promise<void> {
     await db.vectors.delete(id);
   });
   channel()?.postMessage({ type: 'delete', id } satisfies MemorySyncMsg);
+}
+
+/** (bugNeedFix — Ký ức) Xoá TẤT CẢ bản ghi trí nhớ (+ vector). Trả về số bản ghi đã xoá. */
+export async function clearAllMemories(db = memoryDb()): Promise<number> {
+  const n = await withWriteLock(async () => {
+    const count = await db.memories.count();
+    await db.memories.clear();
+    await db.vectors.clear();
+    return count;
+  });
+  channel()?.postMessage({ type: 'clear' } satisfies MemorySyncMsg);
+  return n;
 }
 
 export async function listMemories(

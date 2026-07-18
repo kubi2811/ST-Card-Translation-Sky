@@ -1,5 +1,6 @@
-import { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect, useState, memo, useMemo } from 'react';
 import { useStore } from '../store';
+import { useThrottledStore } from '../hooks/useThrottledStore';
 import { useTranslation } from '../hooks/useTranslation';
 import { useT, useUi } from '../i18n/useLocale';
 import type { LogFilter, LogEntry, LogPhase } from '../types/card';
@@ -66,7 +67,10 @@ function ElapsedTime({ color = 'var(--text-secondary)' }: { color?: string }) {
 }
 
 function LogFilterBar() {
-  const { logFilter, setLogFilter, logs, clearLogs } = useStore();
+  const logFilter = useStore((s) => s.logFilter);
+  const setLogFilter = useStore((s) => s.setLogFilter);
+  const clearLogs = useStore((s) => s.clearLogs);
+  const logs = useThrottledStore((s) => s.logs, 140); // đếm badge theo bộ lọc — throttle như LogPanel
   const t = useT();
   const LOG_FILTERS: { value: LogFilter; label: string; color: string }[] = [
     { value: 'all', label: t.all, color: 'var(--text-secondary)' },
@@ -135,17 +139,22 @@ function LevelTag({ level }: { level: LogEntry['level'] }) {
   );
 }
 
-function LogRow({ log }: { log: LogEntry }) {
+// (bugNeedFix/36) memo: dịch card lớn bơm hàng nghìn dòng log — LogRow không memo thì mỗi addLog
+// reconcile lại cả ~300 dòng đang hiện. memo + key ổn định (log.id) → chỉ vẽ dòng mới.
+const LogRow = memo(function LogRow({ log }: { log: LogEntry }) {
   return (
     <div className={`log-entry log-${log.level}`}>
       <LevelTag level={log.level} />
       <span>{log.message}</span>
     </div>
   );
-}
+});
 
 function LogPanel() {
-  const { logs, logFilter } = useStore();
+  // (bugNeedFix/36) Throttle logs: khi dịch card lớn addLog nổ hàng nghìn lần → nếu subscribe trực
+  // tiếp thì panel re-render mỗi dòng (filter+group+vẽ 300 dòng). Gộp ~8 lần/giây là đủ mượt.
+  const logs = useThrottledStore((s) => s.logs, 140);
+  const logFilter = useStore((s) => s.logFilter);
   const ui = useUi();
   const [collapsed, setCollapsed] = useState<Set<LogPhase>>(() => new Set());
   const boxRef = useRef<HTMLDivElement>(null);
@@ -160,23 +169,22 @@ function LogPanel() {
     if (el && stickRef.current) el.scrollTop = el.scrollHeight;
   }, [logs.length, logFilter]);
 
+  // Lọc + gom nhóm chỉ tính lại khi logs (đã throttle) hoặc bộ lọc đổi.
+  const { visibleLogs, isTruncated, groups, showGroups, total } = useMemo(() => {
+    const filtered = logs.filter((log) => logFilter === 'all' || log.level === logFilter);
+    const visible = filtered.slice(-300);
+    const grps: { phase: LogPhase; logs: LogEntry[] }[] = [];
+    for (const log of visible) {
+      const phase: LogPhase = log.phase || 'other';
+      const last = grps[grps.length - 1];
+      if (last && last.phase === phase) last.logs.push(log);
+      else grps.push({ phase, logs: [log] });
+    }
+    const distinct = new Set(grps.map((g) => g.phase));
+    return { visibleLogs: visible, isTruncated: filtered.length > 300, groups: grps, showGroups: distinct.size > 1, total: filtered.length };
+  }, [logs, logFilter]);
+
   if (logs.length === 0) return null;
-
-  const filteredLogs = logs.filter((log) => logFilter === 'all' || log.level === logFilter);
-  const visibleLogs = filteredLogs.slice(-300);
-  const isTruncated = filteredLogs.length > 300;
-
-  // Gom các dòng LIỀN NHAU cùng giai đoạn thành 1 nhóm gấp/mở được.
-  const groups: { phase: LogPhase; logs: LogEntry[] }[] = [];
-  for (const log of visibleLogs) {
-    const phase: LogPhase = log.phase || 'other';
-    const last = groups[groups.length - 1];
-    if (last && last.phase === phase) last.logs.push(log);
-    else groups.push({ phase, logs: [log] });
-  }
-  // Chỉ hiện tiêu đề nhóm khi thực sự có nhiều giai đoạn (ca đơn giản → phẳng như cũ).
-  const distinctPhases = new Set(groups.map((g) => g.phase));
-  const showGroups = distinctPhases.size > 1;
 
   const toggle = (p: LogPhase) =>
     setCollapsed((prev) => {
@@ -208,7 +216,7 @@ function LogPanel() {
             fontStyle: 'italic',
             background: 'rgba(255,255,255,0.01)',
           }}>
-            Showing last 300 logs (total: {filteredLogs.length})
+            Showing last 300 logs (total: {total})
           </div>
         )}
 
@@ -249,7 +257,11 @@ function LogPanel() {
 // ═══════════════════════════════════════════════
 
 function ModModePanel() {
-  const { fields, phase, logs, startTime, translationConfig } = useStore();
+  // (bugNeedFix/36) như TranslationPanel: throttle `fields`, selector hẹp phần còn lại, bỏ `logs` thừa.
+  const fields = useThrottledStore((s) => s.fields, 150);
+  const phase = useStore((s) => s.phase);
+  const startTime = useStore((s) => s.startTime);
+  const translationConfig = useStore((s) => s.translationConfig);
   const ui = useUi();
   const { applyModToAllFields, continueMod, retryAllErrors, cancelTranslation, pauseTranslation, resumeTranslation, generateModLorebook } = useTranslation();
   const t = useT();
@@ -585,7 +597,15 @@ function ModModePanel() {
 // ═══════════════════════════════════════════════
 
 function TranslationPanel() {
-  const { fields, phase, logs, startTime, translationConfig, preprocessProgress, deleteCurrentCardCache } = useStore();
+  // (bugNeedFix/36) `fields` throttle (đổi hàng nghìn lần lúc dịch); các mảnh còn lại là selector hẹp
+  // (chỉ re-render khi CHÍNH mảnh đó đổi) — trước đây `useStore()` không selector nên mọi write re-render.
+  // Bỏ `logs` (destructure THỪA — panel không dùng, LogPanel tự đọc store) để khỏi re-render mỗi addLog.
+  const fields = useThrottledStore((s) => s.fields, 150);
+  const phase = useStore((s) => s.phase);
+  const startTime = useStore((s) => s.startTime);
+  const translationConfig = useStore((s) => s.translationConfig);
+  const preprocessProgress = useThrottledStore((s) => s.preprocessProgress, 150);
+  const deleteCurrentCardCache = useStore((s) => s.deleteCurrentCardCache);
   const ui = useUi();
   const { startTranslation, continueTranslation, pauseTranslation, resumeTranslation, cancelTranslation, retryAllErrors, prepareFields } = useTranslation();
   const t = useT();

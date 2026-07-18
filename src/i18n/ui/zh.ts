@@ -612,6 +612,7 @@ const ui: UiKeys = {
   msNoResolve: '没有发现改动，或无法自动解决。',
   msResolveErr: '解决冲突时出错：{msg}',
   msImported: '已导入 {count} 个键。',
+  msRowCapHint: '仅显示前 {shown}/{total} 行——在搜索框输入可查看其余（翻译时仍会使用全部键）。',
   msImportBad: 'JSON 文件不合法。',
   msDeleted: '已删除 {count} 个键。',
   msReset: '已重置 {count} 个键。',

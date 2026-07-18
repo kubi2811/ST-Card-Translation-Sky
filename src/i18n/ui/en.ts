@@ -616,6 +616,7 @@ const ui = {
   msNoResolve: 'No changes found or could not resolve automatically.',
   msResolveErr: 'Conflict resolution error: {msg}',
   msImported: 'Imported {count} keys.',
+  msRowCapHint: 'Showing first {shown}/{total} — type in the search box to find the rest (all keys are still used when translating).',
   msImportBad: 'Invalid JSON file.',
   msDeleted: 'Deleted {count} keys.',
   msReset: 'Reset {count} keys.',

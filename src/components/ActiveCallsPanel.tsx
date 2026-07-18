@@ -1,5 +1,6 @@
 import { useSyncExternalStore, useEffect, useState } from 'react';
 import { useStore } from '../store';
+import { useThrottledStore } from '../hooks/useThrottledStore';
 import { CallMonitor } from '../utils/callMonitor';
 import { getRateLimitUsage, getUniqueKeyCount, getLaneFailures } from '../utils/apiClient';
 import { Cpu, KeyRound, Activity, Gauge } from 'lucide-react';
@@ -9,7 +10,12 @@ import { fmt } from '../i18n';
 /** Live panel: which model is translating which entry, how many threads are
  *  running concurrently, and the combined RPM capacity across all API keys. */
 export default function ActiveCallsPanel() {
-  const { proxy, phase, fields, providers } = useStore();
+  // (bugNeedFix/36) selector hẹp + throttle `fields` (chỉ dùng để tính % tổng) — trước đây `useStore()`
+  // không selector nên panel re-render mỗi updateField/addLog trong lúc dịch card lớn.
+  const proxy = useStore((s) => s.proxy);
+  const phase = useStore((s) => s.phase);
+  const providers = useStore((s) => s.providers);
+  const fields = useThrottledStore((s) => s.fields, 200);
   const ui = useUi();
 
   const activeCalls = useSyncExternalStore(CallMonitor.subscribe, CallMonitor.getSnapshot);

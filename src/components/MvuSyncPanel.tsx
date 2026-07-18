@@ -39,6 +39,11 @@ import {
   ChevronRight
 } from 'lucide-react';
 
+// (bugNeedFix/5) Trần số DÒNG render mỗi nhóm từ điển. Dict MVU có thể vài nghìn biến; render hết
+// thành DOM khiến mở tab Chiến lược B / import dict đơ 10-50s. Phần vượt trần vẫn nằm trong dict
+// (dịch dùng đủ), user gõ ô tìm kiếm để lọc tới đúng biến cần sửa.
+const GROUP_ROW_CAP = 150;
+
 export default function MvuSyncPanel() {
   const { 
     card,
@@ -1145,10 +1150,12 @@ export default function MvuSyncPanel() {
                     </div>
                   </div>
 
-                  {/* Group Content */}
+                  {/* Group Content — (bugNeedFix/5) CAP số dòng render/nhóm: dict lớn (import cả nghìn
+                      biến) mà render HẾT thành DOM → treo 10-50s khi mở tab. Chỉ vẽ GROUP_ROW_CAP dòng
+                      đầu; phần còn lại vẫn nằm trong dict (dịch dùng đủ), tìm qua ô search. */}
                   {!isCollapsed && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', paddingLeft: '8px', marginTop: '2px' }}>
-                      {entries.map(([k, v]) => {
+                      {entries.slice(0, GROUP_ROW_CAP).map(([k, v]) => {
                         const keyInfo = keyInfoMap.get(k);
                         const isSelected = selectedKeys.has(k);
                         const confidence = mvuKeyMetadata[k]?.confidence;
@@ -1232,12 +1239,17 @@ export default function MvuSyncPanel() {
                           </div>
                         );
                       })}
+                      {entries.length > GROUP_ROW_CAP && (
+                        <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)', fontStyle: 'italic', padding: '4px 2px' }}>
+                          {fmt(ui.msRowCapHint, { shown: GROUP_ROW_CAP, total: entries.length })}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
               );
             })}
-            
+
             {filteredEntries.length === 0 && dictEntries.length > 0 && (
               <div style={{ textAlign: 'center', padding: '16px', color: 'var(--text-muted)', fontSize: '0.75rem' }}>
                 {ui.msNoResults}

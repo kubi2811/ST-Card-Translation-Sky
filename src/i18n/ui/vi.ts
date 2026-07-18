@@ -627,6 +627,7 @@ const ui: UiKeys = {
   msNoResolve: 'No changes found or could not resolve automatically.',
   msResolveErr: 'Conflict resolution error: {msg}',
   msImported: 'Imported {count} keys.',
+  msRowCapHint: 'Đang hiện {shown}/{total} dòng đầu — gõ vào ô tìm kiếm để thấy phần còn lại (mọi key vẫn được dùng khi dịch).',
   msImportBad: 'Invalid JSON file.',
   msDeleted: 'Deleted {count} keys.',
   msReset: 'Reset {count} keys.',

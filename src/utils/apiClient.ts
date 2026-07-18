@@ -168,6 +168,12 @@ export async function callProviderHedged(
     hedgeAfterMs?: number;
     /** Gọi khi bản dự phòng được bắn — để UI báo "đang thử lane khác". */
     onHedge?: () => void;
+    /**
+     * (User 2026 — bugNeedFix/4) TIMEOUT CỨNG cho TỪNG lane: quá ngưỡng này mà lane chưa trả lời thì
+     * ABORT lane đó (dù màn sleep làm fetch treo). Không đặt → dùng timeout nội mặc định (5 phút) →
+     * Trợ Lý AI treo hàng chục phút. Đặt ~120s cho gọi tương tác để hỏng-nhanh + retry/hedge sớm.
+     */
+    hardTimeoutMs?: number;
   },
 ): Promise<string> {
   const hedgeAfterMs = opts?.hedgeAfterMs ?? 30_000;
@@ -175,9 +181,20 @@ export async function callProviderHedged(
     () => {
       const ctrl = new AbortController();
       const linked = opts?.signal ? AbortSignal.any([opts.signal, ctrl.signal]) : ctrl.signal;
+      // Timeout cứng mỗi lane: hết giờ → abort chính lane này (hedgedRace coi như 1 bản hỏng → bản kia
+      // /retry tiếp). clear khi lane settle để không abort nhầm.
+      let hardTimer: ReturnType<typeof setTimeout> | null = null;
+      if (opts?.hardTimeoutMs && opts.hardTimeoutMs > 0) {
+        hardTimer = setTimeout(
+          () => ctrl.abort(new DOMException(`hard-timeout ${opts.hardTimeoutMs}ms`, 'AbortError')),
+          opts.hardTimeoutMs,
+        );
+      }
+      const p = callProvider(config, system, user, linked, opts?.images, opts?.meta)
+        .finally(() => { if (hardTimer) clearTimeout(hardTimer); });
       return {
-        p: callProvider(config, system, user, linked, opts?.images, opts?.meta),
-        abort: (reason) => ctrl.abort(reason),
+        p,
+        abort: (reason) => { if (hardTimer) clearTimeout(hardTimer); ctrl.abort(reason); },
       };
     },
     hedgeAfterMs,

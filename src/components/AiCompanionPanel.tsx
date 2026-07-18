@@ -10,7 +10,7 @@ import {
   X, Send, Code2, Copy, Trash2, Upload, Loader2, Settings, Plus, FileText, 
   Sparkles, Check, Download, AlertCircle, RefreshCw, Eye, Flame, RotateCcw,
   Maximize, Minimize, Play, Languages, ChevronDown, ChevronRight, AlertTriangle, Regex,
-  ArrowRight, CheckCircle2, Shield, Zap, Undo2, Search
+  ArrowRight, CheckCircle2, Shield, Zap, Undo2, Search, Square
 } from 'lucide-react';
 import type { TranslationField, CharacterBookEntry, RegexScript, TavernHelperScript } from '../types/card';
 import { 
@@ -1452,6 +1452,10 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
   // lần thật nhanh thì cả 2 lần đều đọc được giá trị CŨ (false) và cùng lọt qua ⇒ gửi 2 tin nhắn y
   // hệt (đúng như ảnh user gửi). Ref cập nhật NGAY nên chặn được.
   const sendingRef = useRef(false);
+  // (User 2026 — bugNeedFix/4) Cho phép DỪNG hẳn lượt đang chạy: 1 AbortController/lượt, nút Dừng gọi
+  // abort → mọi call (chính + viết-tiếp) văng AbortError → thoát vòng, không retry. Kèm timeout cứng
+  // mỗi call (đề phòng màn sleep làm fetch treo vô hạn).
+  const companionAbortRef = useRef<AbortController | null>(null);
   // Đồng hồ chờ + cờ đã bắn bản dự phòng (hedge) — cho user thấy tiến độ thay vì spinner câm.
   const [elapsedSec, setElapsedSec] = useState(0);
   const [hedged, setHedged] = useState(false);
@@ -1810,6 +1814,11 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
   // ─── Send message logic ───
     
 
+  // (bugNeedFix/4) DỪNG hẳn lượt đang chạy: abort controller → mọi call văng AbortError → thoát vòng.
+  const handleStop = () => {
+    companionAbortRef.current?.abort(new DOMException('user-stop', 'AbortError'));
+  };
+
   const handleSend = async (forcedCommand?: string) => {
     const textToSend = forcedCommand || inputValue;
     if (!textToSend.trim() || isGenerating || sendingRef.current) return;
@@ -1834,6 +1843,9 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
     setExtraProviders(providers);
     setHedged(false);
     setElapsedSec(0);
+    // (bugNeedFix/4) 1 controller/lượt — nút Dừng abort nó; signal truyền xuống mọi call.
+    const abortCtrl = new AbortController();
+    companionAbortRef.current = abortCtrl;
     const startedAt = Date.now();
     const tick = setInterval(() => setElapsedSec(Math.round((Date.now() - startedAt) / 1000)), 1000);
 
@@ -1895,6 +1907,8 @@ ${ragBlock ? `\n${ragBlock}` : ''}`;
           images: imagesList.length > 0 ? imagesList : undefined,
           meta: { label: 'Trợ Lý AI' },
           hedgeAfterMs: 30_000,
+          hardTimeoutMs: 120_000,
+          signal: abortCtrl.signal,
           onHedge: () => setHedged(true),
         });
 
@@ -1911,6 +1925,8 @@ ${ragBlock ? `\n${ragBlock}` : ''}`;
             const nextChunk = await callProviderHedged(proxy, systemPrompt, continuationPrompt, {
               meta: { label: `Trợ Lý AI (viết tiếp ${loopState.round})` },
               hedgeAfterMs: 30_000,
+              hardTimeoutMs: 120_000,
+              signal: abortCtrl.signal,
               onHedge: () => setHedged(true),
             });
             const st = loop.stitchContinuation(finalResult, nextChunk || '');
@@ -1929,6 +1945,13 @@ ${ragBlock ? `\n${ragBlock}` : ''}`;
         break;
       } catch (err: any) {
         lastError = err;
+        // (bugNeedFix/4) CHỈ user bấm DỪNG (abortCtrl bị huỷ) mới THOÁT hẳn không retry. Timeout cứng
+        // 1 lane (abort nội bộ trong hedge, abortCtrl CHƯA huỷ) → vẫn cho retry để thử lane/kết nối mới
+        // (đúng ca màn sleep: khi bừng dậy, request cũ chết → thử lại là xong).
+        if (abortCtrl.signal.aborted) {
+          lastError = new Error('__ABORTED__');
+          break;
+        }
         attempt++;
         if (attempt < maxAttempts) {
           const backoff = 1500 * attempt + Math.floor(Math.random() * 500);
@@ -2019,15 +2042,19 @@ ${ragBlock ? `\n${ragBlock}` : ''}`;
       } else {
         setMessages([...nextMessages, { role: 'assistant', content: finalResult }]);
       }
+    } else if (lastError?.message === '__ABORTED__') {
+      // (bugNeedFix/4) User bấm Dừng — báo nhẹ nhàng, KHÔNG phải lỗi.
+      setMessages([...nextMessages, { role: 'assistant', content: ui.acStopped }]);
     } else {
       const errMsg = lastError?.message || ui.acNoApiResponse;
-      setMessages([...nextMessages, { 
-        role: 'assistant', 
-        content: fmt(ui.acApiErrMsg, { msg: errMsg }) 
+      setMessages([...nextMessages, {
+        role: 'assistant',
+        content: fmt(ui.acApiErrMsg, { msg: errMsg })
       }]);
     }
 
     clearInterval(tick);
+    companionAbortRef.current = null; // (bugNeedFix/4) dọn controller của lượt này
     sendingRef.current = false;
     setIsGenerating(false);
     setRetryText('');
@@ -2384,13 +2411,24 @@ ${ragBlock ? `\n${ragBlock}` : ''}`;
                       >
                         {ui.acCommandBtn}
                       </button>
-                      <button
-                        onClick={() => handleSend()}
-                        disabled={!inputValue.trim() || isGenerating}
-                        className="bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg px-3.5 py-1.5 font-bold text-xs flex items-center gap-1 shadow-md active:scale-95 transition-all"
-                      >
-                        {ui.acSend} <Send size={12} />
-                      </button>
+                      {/* (bugNeedFix/4) Đang chạy → nút DỪNG (huỷ hẳn request); rảnh → nút Gửi. */}
+                      {isGenerating ? (
+                        <button
+                          onClick={handleStop}
+                          title={ui.acStopTip}
+                          className="bg-rose-600 hover:bg-rose-500 text-white rounded-lg px-3.5 py-1.5 font-bold text-xs flex items-center gap-1 shadow-md active:scale-95 transition-all"
+                        >
+                          {ui.acStopBtn} <Square size={11} fill="currentColor" />
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleSend()}
+                          disabled={!inputValue.trim()}
+                          className="bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg px-3.5 py-1.5 font-bold text-xs flex items-center gap-1 shadow-md active:scale-95 transition-all"
+                        >
+                          {ui.acSend} <Send size={12} />
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>

@@ -96,12 +96,24 @@ let _providerCursor = 0;
 export function resetProviderPool(): void { _providerCursor = 0; }
 
 const _usableProfile = (p: ProxyProfile) => !!(p.apiKey?.trim() && p.selectedModel?.trim());
+
+// (User 2026 — lỗi "[502] ECONNREFUSED 127.0.0.1:7861") Provider KHÔNG KẾT NỐI ĐƯỢC (server local
+// tắt / URL sai) được cho NGHỈ 60s để pool round-robin né nó — hết còn cảnh 1 profile chết kéo sập
+// call dù pool còn provider sống. Hết hạn tự thử lại (user bật server lên là chạy tiếp).
+const _deadUntil = new Map<string, number>();
+function markProfileDead(id: string): void { _deadUntil.set(id, Date.now() + 60_000); }
+const _isDead = (p: ProxyProfile) => (_deadUntil.get(p.id) ?? 0) > Date.now();
+
 function buildPool(active: ProxyProfile): ProxyProfile[] {
   const map = new Map<string, ProxyProfile>();
   if (_usableProfile(active)) map.set(active.id, active);
   for (const p of _poolProfiles) if (p.inPool && _usableProfile(p)) map.set(p.id, p);
   const pool = [...map.values()];
-  return pool.length ? pool : [active];
+  if (!pool.length) return [active];
+  // Né provider đang "nghỉ ốm" (ECONNREFUSED gần đây); nếu TẤT CẢ đều chết thì vẫn trả pool đầy đủ
+  // (để lỗi hiện ra rõ ràng thay vì im lặng).
+  const alive = pool.filter(p => !_isDead(p));
+  return alive.length ? alive : pool;
 }
 /** #11 — Số luồng song song đề xuất = TỔNG ngân sách RPM toàn pool: mỗi provider (active + inPool),
  *  mỗi API key đóng góp (primaryRpm + secondaryRpm nếu bật). callAI đã tự gate nhịp RPM (RPMLimiter)
@@ -131,13 +143,6 @@ function pickPoolProfile(active: ProxyProfile): ProxyProfile {
  */
 export async function callAI(options: AICallOptions): Promise<AICallResult> {
   const { params, messages, signal, useSecondary } = options;
-  // Đa provider: chọn provider từ pool (round-robin) cho call này. 1 provider ⇒ chính nó.
-  const profile = pickPoolProfile(options.profile);
-  const base = profile.baseUrl.replace(/\/+$/, '');
-
-  const keys = parseApiKeys(profile.apiKey);
-  const tier = useSecondary && profile.enableSecondaryModel ? 's' : 'p';
-  const rpm = tier === 's' ? (profile.secondaryRpm ?? 10) : (profile.primaryRpm ?? 5);
 
   // Retry lỗi TẠM THỜI (timeout/mạng/429/5xx/overload) — KHÔNG phụ thuộc số key (api kẹt thì cứ thử lại).
   // Nhiều key ⇒ mỗi lần xoay key khác; 1 key ⇒ thử lại chính key đó (hang thường là tạm thời).
@@ -146,6 +151,16 @@ export async function callAI(options: AICallOptions): Promise<AICallResult> {
 
   for (let a = 0; a < attempts; a++) {
     if (signal?.aborted) throw signal.reason || new Error('Aborted');
+
+    // (User 2026 — fix "AI Inference 502 ECONNREFUSED") Chọn provider MỖI attempt thay vì 1 lần TRƯỚC
+    // vòng retry: trước đây cả 4 lần retry đâm đúng 1 provider chết (vd local LLM 127.0.0.1:7861 đã
+    // tắt) dù pool còn provider sống. Nay retry tự xoay sang provider khác (provider chết bị
+    // markProfileDead nên pool né luôn).
+    const profile = pickPoolProfile(options.profile);
+    const base = profile.baseUrl.replace(/\/+$/, '');
+    const keys = parseApiKeys(profile.apiKey);
+    const tier = useSecondary && profile.enableSecondaryModel ? 's' : 'p';
+    const rpm = tier === 's' ? (profile.secondaryRpm ?? 10) : (profile.primaryRpm ?? 5);
 
     const key = keys.length ? keys[(rrCounter++) % keys.length] : profile.apiKey;
     // Rate-limit RIÊNG cho từng (provider + key + tier) → nhiều key/provider = nhiều luồng thật.
@@ -182,14 +197,28 @@ export async function callAI(options: AICallOptions): Promise<AICallResult> {
     } catch (err) {
       lastErr = err;
       const msg = err instanceof Error ? err.message : String(err);
-      const retriable = /\b(408|409|425|429|500|502|503|504|509|520|521|522|523|524|529)\b/.test(msg)
+      // (User 2026) KHÔNG KẾT NỐI ĐƯỢC endpoint (ECONNREFUSED qua cors-proxy = server local tắt /
+      // Base URL sai): cho provider này nghỉ 60s (pool né) + đổi thông báo RÕ NGHĨA thay vì
+      // "[502] Bad Gateway: Proxy error" khó hiểu.
+      const connRefused = /econnrefused|err_connection_refused|proxy error: connect/i.test(msg);
+      if (connRefused) {
+        markProfileDead(profile.id);
+        lastErr = new Error(
+          `Không kết nối được provider "${profile.label}" (${base || 'chưa có Base URL'}) — server đã tắt hoặc Base URL sai. ` +
+          `Vào Cài đặt → AI Profile để sửa; nếu đây là server local (vd 127.0.0.1) hãy bật nó lên, hoặc bỏ tick "dùng trong pool" để không gọi vào nữa.` +
+          `\nChi tiết: ${msg}`,
+        );
+      }
+      const retriable = connRefused
+        || /\b(408|409|425|429|500|502|503|504|509|520|521|522|523|524|529)\b/.test(msg)
         || /rate.?limit|overloaded|quá tải|timeout|quá hạn|vượt quá .* giây|failed to fetch|load failed|network|econnreset|fetch failed|socket hang up|the operation was aborted due to timeout/i.test(msg);
-      // Lỗi tạm thời (api kẹt/timeout/5xx) → chờ backoff rồi thử lại (không cần nhiều key).
+      // Lỗi tạm thời (api kẹt/timeout/5xx/provider chết) → backoff rồi thử lại — lần sau pickPoolProfile
+      // sẽ xoay sang provider còn sống.
       if (a < attempts - 1 && retriable && !signal?.aborted) {
-        await new Promise(r => setTimeout(r, Math.min(1200 * (a + 1), 8000)));
+        await new Promise(r => setTimeout(r, connRefused ? 150 : Math.min(1200 * (a + 1), 8000)));
         continue;
       }
-      throw err;
+      throw lastErr;
     } finally {
       clearTimeout(timeoutId);
       if (signal) signal.removeEventListener('abort', onAbort);

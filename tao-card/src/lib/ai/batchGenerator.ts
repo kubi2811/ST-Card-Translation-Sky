@@ -24,6 +24,8 @@ export interface BatchGenConfig {
   topicPrompt: string;
   useCardContext: boolean;
   totalEntries: number;
+  /** (User 2026) SÀN entry: chưa đạt thì nối batch bù (0/undefined = không ép, hành vi cũ). */
+  minEntries?: number;
   entriesPerBatch: number;
   defaultPosition: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
   defaultDepth?: number;
@@ -566,7 +568,11 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
     ctx.card.data.character_book.entries = [];
   }
   
-  const totalBatches = Math.ceil(config.totalEntries / config.entriesPerBatch);
+  // (User 2026 — min/max entry) totalEntries là TRẦN; minEntries là SÀN — chưa đạt sàn thì nối batch
+  // bù ở cuối (let vì có thể tăng). Trần an toàn 2× kế hoạch để không lặp vô hạn khi AI trả rỗng mãi.
+  let totalBatches = Math.ceil(config.totalEntries / config.entriesPerBatch);
+  const plannedBatches = totalBatches;
+  const wantMin = Math.max(0, Math.min(config.minEntries ?? 0, config.totalEntries));
   // #11 — Số luồng song song = tổng ngân sách RPM toàn pool (mỗi provider × key × RPM chính+phụ).
   // RPM limiter (chốt-giờ-bắt-đầu) ở client.ts đảm bảo không vượt trần 429 dù luồng cao.
   const concurrency = Math.max(1, Math.min(computePoolConcurrency(ctx.profile), totalBatches));
@@ -753,8 +759,22 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
     }
 
     if (consecutiveErrors >= config.maxConsecutiveErrors) break;
+
+    // (User 2026 — SÀN entry) Sắp hết batch kế hoạch mà CHƯA đạt tối thiểu (AI trả thiếu / trùng bị
+    // loại) → nối thêm batch bù. Trần an toàn = 2× kế hoạch để không lặp vô hạn khi AI cạn ý.
+    if (wantMin > 0 && roundStart + concurrency > totalBatches && created < wantMin && !ctx.stopped) {
+      const safetyCap = plannedBatches * 2;
+      const needed = Math.ceil((wantMin - created) / config.entriesPerBatch);
+      const nextTotal = Math.min(totalBatches + needed, safetyCap);
+      if (nextTotal > totalBatches) {
+        ctx.log(`➕ Mới ${created}/${wantMin} entries tối thiểu → nối thêm ${nextTotal - totalBatches} batch bù (trần an toàn ${safetyCap}).`);
+        totalBatches = nextTotal;
+      } else if (created < wantMin) {
+        ctx.log(`⚠️ Đã chạm trần an toàn ${safetyCap} batch mà chưa đạt tối thiểu ${wantMin} — dừng để không lặp vô hạn.`);
+      }
+    }
   }
 
   ctx.onProgress({ batch: totalBatches, totalBatches, created, total: config.totalEntries, status: ctx.stopped ? 'stopped' : 'done' });
-  ctx.log(`\n🏁 Hoàn thành: ${created}/${config.totalEntries} entries đã tạo.`);
+  ctx.log(`\n🏁 Hoàn thành: ${created}/${config.totalEntries} entries đã tạo${wantMin > 0 ? ` (tối thiểu yêu cầu: ${wantMin})` : ''}.`);
 }

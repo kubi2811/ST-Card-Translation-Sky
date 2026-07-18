@@ -195,7 +195,10 @@ export function AutoCreatorPage() {
 
             {step === 'lorebook' && (
               <>
-                <SliderControl label={ui.acTotalEntries} value={stepConfigs.lorebook.totalEntries} min={5} max={100} step={5} onChange={(v) => store.updateStepConfig('lorebook', { totalEntries: v })} disabled={store.isRunning} />
+                {/* (User 2026) totalEntries = TỐI ĐA; minEntries = TỐI THIỂU (0 = không ép sàn).
+                    AI trả thiếu/trùng bị loại → pipeline tự nối batch bù tới khi đạt tối thiểu. */}
+                <SliderControl label={`${ui.acTotalEntries} (tối đa)`} value={stepConfigs.lorebook.totalEntries} min={5} max={100} step={5} onChange={(v) => store.updateStepConfig('lorebook', { totalEntries: v, minEntries: Math.min(stepConfigs.lorebook.minEntries ?? 0, v) })} disabled={store.isRunning} />
+                <SliderControl label="Entry tối thiểu (0 = không ép)" value={stepConfigs.lorebook.minEntries ?? 0} min={0} max={stepConfigs.lorebook.totalEntries} step={5} onChange={(v) => store.updateStepConfig('lorebook', { minEntries: v })} disabled={store.isRunning} />
                 <SliderControl label="Entries / Batch" value={stepConfigs.lorebook.entriesPerBatch} min={1} max={10} onChange={(v) => store.updateStepConfig('lorebook', { entriesPerBatch: v })} disabled={store.isRunning} />
                 <SliderControl label={ui.acConcurrentBatches} value={stepConfigs.lorebook.concurrentBatches} min={1} max={5} onChange={(v) => store.updateStepConfig('lorebook', { concurrentBatches: v })} disabled={store.isRunning} />
                 <label className="flex items-center gap-2"><input type="checkbox" checked={stepConfigs.lorebook.useWebSearch} onChange={(e) => store.updateStepConfig('lorebook', { useWebSearch: e.target.checked })} disabled={store.isRunning} /> Web Search (RAG)</label>

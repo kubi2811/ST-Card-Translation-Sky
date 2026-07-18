@@ -42,7 +42,12 @@ export type WorldviewPath = 'real_background' | 'small_world' | 'large_world';
 
 // ═══ Config từng bước (user tùy chỉnh) ═══
 export interface LorebookStepConfig {
-  totalEntries: number;        // Tổng số entry muốn tạo (5-100, default 20)
+  totalEntries: number;        // Tổng số entry muốn tạo (5-100, default 20) — đóng vai trò TRẦN (tối đa)
+  /**
+   * (User 2026) SÀN số entry: pipeline tiếp tục chạy batch bù cho tới khi đạt ÍT NHẤT chừng này entry
+   * (AI đôi khi trả thiếu). 0/undefined = không ép sàn (hành vi cũ). Luôn ≤ totalEntries.
+   */
+  minEntries?: number;
   entriesPerBatch: number;     // Entries mỗi batch (1-10, default 5)
   concurrentBatches: number;   // Batch song song (1-5, default 1)
   category: EntryCategory;     // Loại entry

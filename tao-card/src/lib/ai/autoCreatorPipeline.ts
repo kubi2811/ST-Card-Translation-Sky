@@ -276,6 +276,7 @@ BẠN PHẢI TẬN DỤNG TỐI ĐA dung lượng này để tạo ra nội dung
         topicPrompt,
         useCardContext: true,
         totalEntries: lbConfig.totalEntries,
+        minEntries: lbConfig.minEntries,
         entriesPerBatch: lbConfig.entriesPerBatch,
         concurrentBatches: lbConfig.concurrentBatches,
         defaultPosition: 0,

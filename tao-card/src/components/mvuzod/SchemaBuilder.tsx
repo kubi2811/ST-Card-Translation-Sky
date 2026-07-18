@@ -670,7 +670,14 @@ function SchemaSourcePanel({
   const [scanProgress, setScanProgress] = useState<{ current: number; total: number; results: string[] } | null>(null);
   const cancelRef = useRef(false);
 
-  const entryCount = entries.length;
+  // (User 2026) CHỌN ENTRY RIÊNG LẺ để quét: card 100+ nhân vật thì quét cả 100 entry NPC vô nghĩa —
+  // cho tick bỏ những entry không giúp gì cho schema. Mặc định quét TẤT CẢ (loại trừ theo id, entry
+  // mới của card mới tự động được gồm).
+  const [excludedIds, setExcludedIds] = useState<Set<number>>(new Set());
+  const [showEntryPicker, setShowEntryPicker] = useState(false);
+  const scanEntries = useMemo(() => entries.filter(e => !excludedIds.has(e.id)), [entries, excludedIds]);
+
+  const entryCount = scanEntries.length;
   const canAnalyze = entryCount >= 1;
 
   // Core AI call for a subset of entries
@@ -797,14 +804,14 @@ CHỈ trả về JSON, KHÔNG giải thích.`;
       let finalText: string;
 
       if (scanMode === 'all') {
-        // ─── Mode 1: Quét tất cả cùng lúc ───
-        finalText = await callAIForEntries(entries, `Quét tất cả (${entries.length})`);
+        // ─── Mode 1: Quét tất cả (các entry ĐÃ CHỌN) cùng lúc ───
+        finalText = await callAIForEntries(scanEntries, `Quét tất cả (${scanEntries.length})`);
       } else {
-        // ─── Mode 2 & 3: Quét từng entry hoặc theo batch ───
+        // ─── Mode 2 & 3: Quét từng entry hoặc theo batch (trên các entry ĐÃ CHỌN) ───
         const chunkSize = scanMode === 'single' ? 1 : batchSize;
-        const chunks: (typeof entries)[] = [];
-        for (let i = 0; i < entries.length; i += chunkSize) {
-          chunks.push(entries.slice(i, i + chunkSize));
+        const chunks: (typeof scanEntries)[] = [];
+        for (let i = 0; i < scanEntries.length; i += chunkSize) {
+          chunks.push(scanEntries.slice(i, i + chunkSize));
         }
 
         const concurrency = scanMode === 'single' ? parallelCount : parallelCount;
@@ -897,13 +904,13 @@ CHỈ trả về JSON, KHÔNG giải thích.`;
       setScanProgress(null);
       cancelRef.current = false;
     }
-  }, [entries, onApplyInferred, scanMode, batchSize, parallelCount, callAIForEntries, mergeSchemas]);
+  }, [scanEntries, onApplyInferred, scanMode, batchSize, parallelCount, callAIForEntries, mergeSchemas]);
 
   const handleStaticAnalyze = useCallback(async () => {
-    const report = analyzeLorebookForSchema(entries as LorebookEntry[]);
+    const report = analyzeLorebookForSchema(scanEntries as LorebookEntry[]);
     const minimal = buildMinimalSchemaFromReport(report);
     await onApplyInferred(minimal);
-  }, [entries, onApplyInferred]);
+  }, [scanEntries, onApplyInferred]);
 
   const handleCancel = useCallback(() => {
     cancelRef.current = true;
@@ -1001,7 +1008,7 @@ CHỈ trả về JSON, KHÔNG giải thích.`;
         </div>
       )}
 
-      {/* Lorebook status */}
+      {/* Lorebook status + (User 2026) nút chọn entry riêng lẻ */}
       <div className={cn(
         'rounded-lg p-3 border',
         entryCount >= 20 ? 'bg-emerald-500/5 border-emerald-500/20' :
@@ -1011,8 +1018,68 @@ CHỈ trả về JSON, KHÔNG giải thích.`;
         <div className="flex items-center gap-2 text-xs">
           {entryCount >= 20 ? <CheckCircle className="w-3.5 h-3.5 text-emerald-400" /> :
            <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />}
-          <span className="font-medium">{entryCount} entries trong Lorebook</span>
+          <span className="font-medium">
+            {excludedIds.size > 0
+              ? `${entryCount}/${entries.length} entries được chọn để quét`
+              : `${entryCount} entries trong Lorebook`}
+          </span>
+          <button
+            onClick={() => setShowEntryPicker(v => !v)}
+            className="ml-auto px-2 py-0.5 rounded border border-border bg-background/60 text-[10px]
+              text-muted-foreground hover:border-primary/30 hover:text-primary transition-colors"
+            title="Chọn entry nào được đưa vào quét (card nhiều NPC thì bỏ bớt entry nhân vật cho nhanh + đỡ nhiễu)"
+          >
+            🎯 Chọn entry {showEntryPicker ? '▴' : '▾'}
+          </button>
         </div>
+
+        {/* (User 2026) Danh sách tick chọn entry — card 100 NPC thì quét cả 100 entry nhân vật vừa
+            chậm vừa vô ích cho schema; cho user tự chọn entry nào đáng quét. */}
+        {showEntryPicker && (
+          <div className="mt-2 border-t border-border/50 pt-2">
+            <div className="flex items-center gap-2 mb-1.5">
+              <button
+                onClick={() => setExcludedIds(new Set())}
+                className="px-2 py-0.5 rounded border border-border text-[10px] text-muted-foreground hover:text-primary hover:border-primary/30"
+              >Chọn hết</button>
+              <button
+                onClick={() => setExcludedIds(new Set(entries.map(e => e.id)))}
+                className="px-2 py-0.5 rounded border border-border text-[10px] text-muted-foreground hover:text-primary hover:border-primary/30"
+              >Bỏ hết</button>
+              <span className="text-[9px] text-muted-foreground ml-auto">
+                {entryCount}/{entries.length} sẽ được quét
+              </span>
+            </div>
+            <div className="max-h-48 overflow-y-auto space-y-0.5 pr-1">
+              {entries.map((e, i) => {
+                const checked = !excludedIds.has(e.id);
+                return (
+                  <label
+                    key={`${e.id}-${i}`}
+                    className="flex items-center gap-2 px-1.5 py-1 rounded hover:bg-primary/5 cursor-pointer text-[11px]"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        setExcludedIds(prev => {
+                          const next = new Set(prev);
+                          if (checked) next.add(e.id); else next.delete(e.id);
+                          return next;
+                        });
+                      }}
+                      className="accent-[var(--primary,#f59e0b)]"
+                    />
+                    <span className={cn('truncate', !checked && 'opacity-40 line-through')}>
+                      {e.comment || e.keys.slice(0, 3).join(', ') || `Entry #${e.id}`}
+                    </span>
+                    <span className="ml-auto text-[9px] text-muted-foreground shrink-0">{(e.content || '').length.toLocaleString()} ký tự</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* AI Inference */}

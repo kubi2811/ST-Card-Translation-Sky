@@ -125,34 +125,16 @@ ADDITIONAL RULES FOR JAVASCRIPT/TAVERNHELPER SCRIPT CONTENT:
 22. BRACKET NOTATION: If translated keys/variable names contain spaces (e.g., "Hệ Thống"), you MUST use bracket notation in JS: obj['Hệ Thống'] NOT obj.Hệ Thống. Use data['key']['subkey'] for nested access.
 23. HTML id SAFETY: HTML id attributes MUST be ASCII-only with no spaces. Use camelCase: id="tab-NhaO" NOT id="tab-Nhà Ở". Put readable text in visible content only. Same ASCII id in data-target and CSS selectors.
 24. lodash _.get() SAFETY: Do NOT use _.get(obj, 'key with spaces.subkey') — use bracket notation or array path: _.get(obj, ['Key With Spaces', 'SubKey']).
-25. safeString HELPER — INJECT ONCE AT TOP OF SCHEMA SCRIPT:
-    If the script defines a Zod schema (z.object({...})), you MUST inject the following helper function at the TOP of the script (BEFORE any z.object call), then use safeString() in place of z.string() for ALL string-type fields in the schema:
-
-    \`\`\`
-    const safeString = () => z.preprocess(
-      (val) => {
-        if (val === null || val === undefined) return '';
-        if (typeof val === 'string') return val;
-        if (typeof val === 'object') {
-          try { return JSON.stringify(val); } catch { return String(val); }
-        }
-        return String(val);
-      },
-      z.string()
-    );
-    \`\`\`
-
-    THEN replace every z.string() field with safeString():
-      BEFORE: z.object({ "Tên": z.string().prefault("..."), ... })
-      AFTER:  z.object({ "Tên": safeString().prefault("..."), ... })
-
-    WHY: SillyTavern's MVU engine sometimes feeds truncated Objects instead of Strings to Zod validation when the AI output is cut mid-sentence. Without this wrapper, Zod throws a type error and the entire state update fails silently. safeString() uses z.preprocess() to silently recover these broken Objects back into valid strings.
-    RULES:
-    - Inject safeString EXACTLY ONCE at the top, BEFORE any schema definition.
-    - Use safeString() for ALL z.string() fields in z.object schemas.
-    - Do NOT use safeString() for z.number(), z.boolean(), z.enum(), or z.array() — only z.string().
-    - Preserve .prefault(), .default(), .describe(), .optional() chains: safeString().prefault("X").describe("Y") is valid.
-    - If the script already has a safeString or similar preprocess wrapper, do NOT duplicate it.
+25. ABSOLUTELY NO CODE INJECTION / NO REFACTORING (TRANSLATION ONLY):
+    You are TRANSLATING this script, NOT rewriting or "hardening" it. NEVER add, inject, or invent any
+    code that is not already in the source. In particular, for Zod schemas (z.object / z.enum / z.string …):
+    - Do NOT add helper functions (e.g. a safeString / preprocess / try-catch wrapper).
+    - Do NOT replace z.string() with any wrapper, and do NOT change z.enum/z.object/z.array shapes.
+    - Do NOT add validation, defaults, or "resilience" that the author did not write.
+    Keep the EXACT SAME code: same functions, same declarations, same statement count. The ONLY thing you
+    change is CJK TEXT → target language (comments, display strings, and CJK identifier/key names per sync
+    rules). z.string().prefault("…") stays z.string().prefault("…") with only the CJK inside translated.
+    Return the author's code faithfully — never an "improved" version.
     - EJS OBJECT LITERAL KEY QUOTING: When translating EJS blocks or JS code, if an object literal contains keys with Vietnamese diacritics, spaces, or special characters (e.g. 'Loại', 'Mô Tả'), you MUST wrap those keys in single quotes '' (e.g. 'Loại': 'Võ công', 'Mô Tả': '...'). Without quotes, EJS compiler throws an immediate syntax error.
 26. URL/LINK PROTECTION: NEVER translate any part of URLs (http://, https://, ftp://, //). Keep ALL HTML attribute values for src, href, action, data-src, poster, srcset EXACTLY as-is. Keep CSS url() references intact. Keep import()/require() path arguments intact. Even if the URL contains CJK characters in the path (e.g., https://cdn.com/骰子系统/stable.js or import(\`https://cdn.com/\${version}/dist/骰子系统/stable.js\`)), do NOT translate them — they are file paths, not prose. Also preserve data URIs, email addresses, markdown link URLs, and relative file paths (./ or ../).
 27. DO NOT TRANSLATE ENGLISH: Never translate CSS properties (like font-family), HTML tags, or JS. "font-family" must remain "font-family".

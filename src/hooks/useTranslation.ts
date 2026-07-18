@@ -14,7 +14,7 @@ import { findReusableTwin } from '../utils/translationReuse';
 import { getMvuCardSummary } from '../utils/mvuDetector';
 import { validateMvuVariables, autoFixMvuVariables, generateSyncReport, buildEntryNameDictionary, buildRegexTriggerDictionary, validateEntryNameSync } from '../utils/mvuValidator';
 import { buildEffectivePrompt } from '../utils/promptBuilder';
-import { surgicalTranslate } from '../utils/surgical';
+import { surgicalTranslate, verifyCodeStructureParity, detectInventedDeclarations } from '../utils/surgical';
 import { parsePatchOutput, applyPatches, validatePatchResult } from '../utils/patchEngine';
 import { injectMvuZodSystem } from '../utils/mvuGenerator';
 import { detectEjsCard, extractEjsEntryNames, extractEjsKeywords, aiTranslateEjsEntries, validateEjsSync, autoFixEjsEntryNames, autoFixEjsKeywords, enforceEjsEntryName, enforceEjsCovariance, enforceEjsKeywordCasing, autoFixEjsKeywordsExtended, enforceEjsDictConsistency } from '../utils/ejsSync';
@@ -932,6 +932,39 @@ export function useTranslation() {
         }
       }
 
+      // ═══ (User 2026 — bugNeedFix/33) GUARD CHỐNG "AI BỊA THÊM CODE" (safeString & đồng bọn) ═══
+      // Đã gỡ 2 lệnh prompt bắt inject safeString (masterPrompt C3.4 + promptBuilder rule 25). Đây là
+      // LƯỚI TẦNG 2: kể cả AI tự ý thêm hàm/khối mới, bắt bằng 2 tín hiệu — (a) có KHAI BÁO const/function
+      // mới không có trong gốc, (b) TỔNG ngoặc ()/{}/[]/backtick LỆCH (thêm hàm = thêm ngoặc). Code dịch
+      // trung thực KHÔNG đổi số ngoặc; phiên âm tên định danh (Hán→ASCII) KHÔNG đổi ngoặc → không báo nhầm.
+      // Chỉ áp cho field code (tavern_helper/regex/initvar/controller/mvu_logic). Dính → retry; hết retry
+      // → GIỮ NGUYÊN gốc (code Trung vẫn chạy) + cảnh báo. THÀ giữ gốc còn hơn nhét code AI bịa vào card.
+      const isCodeFieldForHallucGuard =
+        field.group === 'tavern_helper' || field.group === 'regex' ||
+        field.entryType === 'initvar' || field.entryType === 'controller' || field.entryType === 'mvu_logic';
+      if (translated && translated !== field.original && isCodeFieldForHallucGuard) {
+        const parity = verifyCodeStructureParity(field.original, translated);
+        const invented = detectInventedDeclarations(field.original, translated);
+        // Bịa code khi: ngoặc lệch NHIỀU (≥4 = cả 1 khối/hàm thêm-bớt) HOẶC có khai báo mới + ngoặc lệch ≥1.
+        const hallucinated = parity.maxDiff >= 4 || (invented.length > 0 && parity.maxDiff >= 1);
+        if (hallucinated) {
+          const why = invented.length > 0
+            ? `thêm khai báo lạ [${invented.slice(0, 3).join(', ')}${invented.length > 3 ? '…' : ''}]` + (parity.reason ? ` + ${parity.reason}` : '')
+            : (parity.reason || 'cấu trúc code lệch');
+          if (freshRetries() < (store.proxy.maxRetries || 3)) {
+            store.updateField(field.path, { retries: freshRetries() + 1 });
+            store.addLog('retry', `⚠️ Nghi AI BỊA CODE (${field.label}): ${why} → dịch lại (chỉ dịch chữ, không thêm code)…`);
+            await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
+            return 'retry';
+          }
+          store.addLog('warning',
+            `⚠️ Chống bịa code: ${field.label} vẫn ${why} sau retry → GIỮ NGUYÊN bản gốc để KHÔNG nhét ` +
+            `code AI tự chế vào card. Hãy dịch lại riêng entry này (hoặc bật Dịch phẫu thuật).`
+          );
+          translated = field.original;
+        }
+      }
+
       // Keep chunk progress for export, clear failed index only
       store.updateField(field.path, { status: 'done', translated, failedChunkIndex: undefined });
       store.addLog('success', `✅ Đã dịch: ${field.label} (${translated.length} ký tự)`);
@@ -1456,6 +1489,28 @@ export function useTranslation() {
               `bản gốc field này. Hãy dịch lại riêng entry này.`
             );
             translated = batchFields[j].original;
+          }
+        }
+
+        // ═══ (User 2026 — bugNeedFix/33) GUARD CHỐNG BỊA CODE (đường BATCH) — kể cả sau khi gỡ lệnh inject
+        // safeString, nếu AI tự thêm hàm/khối mới (khai báo lạ + ngoặc lệch nhiều) → GIỮ NGUYÊN bản gốc.
+        {
+          const bf = batchFields[j];
+          const isCode = bf.group === 'tavern_helper' || bf.group === 'regex' ||
+            bf.entryType === 'initvar' || bf.entryType === 'controller' || bf.entryType === 'mvu_logic';
+          if (translated && translated !== bf.original && isCode) {
+            const parity = verifyCodeStructureParity(bf.original, translated);
+            const invented = detectInventedDeclarations(bf.original, translated);
+            if (parity.maxDiff >= 4 || (invented.length > 0 && parity.maxDiff >= 1)) {
+              const why = invented.length > 0
+                ? `thêm khai báo lạ [${invented.slice(0, 3).join(', ')}${invented.length > 3 ? '…' : ''}]` + (parity.reason ? ` + ${parity.reason}` : '')
+                : (parity.reason || 'cấu trúc code lệch');
+              store.addLog('warning',
+                `⚠️ Chống bịa code: ${bf.label} — ${why} → GIỮ NGUYÊN bản gốc field này (không nhét code AI tự chế). ` +
+                `Hãy dịch lại riêng entry này.`
+              );
+              translated = bf.original;
+            }
           }
         }
 

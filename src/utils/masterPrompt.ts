@@ -569,27 +569,18 @@ RULE C3.3 — BRACKET NOTATION FOR KEYS WITH SPACES (CRITICAL FOR VIETNAMESE/MUL
    making obj.Hệ Thống a SYNTAX ERROR. ALWAYS use bracket notation for multi-word keys.
     This applies to ALL JavaScript code: EJS blocks, TavernHelper scripts, and inline JS.
 
-RULE C3.4 — safeString HELPER (ZOD SCHEMA RESILIENCE):
-   When translating a TavernHelper script that defines a Zod schema (z.object({...})),
-   you MUST inject a safeString helper at the TOP of the script (BEFORE any z.object call),
-   then use safeString() in place of z.string() for ALL string-type fields:
-
-   const safeString = () => z.preprocess(
-     (val) => {
-       if (val === null || val === undefined) return '';
-       if (typeof val === 'string') return val;
-       if (typeof val === 'object') {
-         try { return JSON.stringify(val); } catch { return String(val); }
-       }
-       return String(val);
-     },
-     z.string()
-   );
-
-   THEN: z.object({ "Tên": safeString().prefault("...") }) instead of z.string().prefault("...")
-   WHY: MVU engine may feed truncated Objects to Zod. safeString() silently recovers them.
-   RULES: Inject ONCE at top. Use for ALL z.string() fields only. Preserve .prefault()/.describe() chains.
-   If the script already has safeString or a similar preprocess wrapper, do NOT duplicate it.
+RULE C3.4 — ABSOLUTELY NO CODE INJECTION / NO REFACTORING (TRANSLATION ONLY):
+   You are TRANSLATING this script, NOT rewriting or "hardening" it. You MUST NOT add, inject, or
+   invent ANY new code that is not already present in the source. Specifically for Zod schemas
+   (z.object / z.enum / z.string …):
+     - Do NOT add helper functions (e.g. a safeString / safeNumber / preprocess wrapper).
+     - Do NOT replace z.string() with any wrapper, or change z.enum/z.object/z.array shapes.
+     - Do NOT add validation, try/catch, defaults, or "resilience" the author did not write.
+   Keep the EXACT SAME code: same functions, same declarations, same number of statements. The ONLY
+   thing you change is CJK TEXT → target language (comments, string-literal display text, and CJK
+   identifier/key names per the sync rules). If a Zod field was z.string().prefault("…"), it stays
+   z.string().prefault("…") with only the CJK text inside translated. Output must be the author's
+   code, faithfully — never your improved version of it.
 
 RULE C3.5 — SINGLE QUOTES FOR OBJECT KEYS WITH DIACRITICS OR SPACES (EJS SAFETY):
    When translating EJS code blocks or templates, or narrative openers (first_mes/alternate_greetings) containing EJS, if there is an object literal being constructed or passed to functions (such as passing an object to setvar('key', { ... })), any key that contains spaces, special characters, or diacritics (like Vietnamese characters 'Loại', 'Mô Tả') MUST be enclosed in single quotes '' (e.g., 'Loại': 'Võ công', 'Mô Tả': '...').

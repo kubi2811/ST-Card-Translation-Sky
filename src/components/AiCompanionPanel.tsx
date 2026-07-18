@@ -1412,7 +1412,7 @@ const MessageList = memo(({
    ════════════════════════════════════════════════════════════════════ */
 export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
   // (User 2026) `providers` = các provider PHỤ — bơm vào pool để Trợ Lý AI cũng xoay lane như Dịch Card.
-  const { card, proxy, providers, updateCard, addToast } = useStore();
+  const { card, proxy, providers, updateCard, addToast, fields } = useStore();
   const ui = useUi();
   
   // ─── Local Storage States ───
@@ -1686,13 +1686,28 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
   // ─── Context Compilation (Full Detail) ───
   const contextBlock = useMemo(() => {
     let context = '';
-    
+
+    // (User 2026 — bugNeedFix/32) Trợ lý trước đây CHỈ đọc `card` (bản GỐC tiếng Trung) — bản DỊCH
+    // nằm trong store `fields` chưa ghi ngược vào card ⇒ AI không có bản dịch để so sánh/sửa lỗi.
+    // Dựng map path→bản dịch để đính KÈM bản dịch cạnh bản gốc trong ngữ cảnh.
+    const transByPath = new Map<string, string>();
+    for (const f of (fields || [])) {
+      if (f.status === 'done' && f.translated && f.translated !== f.original) {
+        transByPath.set(f.path, f.translated);
+      }
+    }
+    const anyTranslated = transByPath.size > 0;
+
     // 1. Full card context with regex + lorebook details
     if (card) {
       const cardName = card.name || card.data?.name || 'Unknown';
       const desc = card.data?.description || '';
       context += `[NGỮ CẢNH CARD ĐANG MỞ — "${cardName}"]\n`;
-      context += `Mô tả: ${desc.length > 600 ? desc.slice(0, 600) + '...' : desc}\n\n`;
+      if (anyTranslated) context += `[LƯU Ý QUAN TRỌNG]: Card này ĐÃ được dịch một phần. Mỗi mục dưới đây có cả BẢN GỐC và BẢN DỊCH (nếu đã dịch). Khi sửa lỗi nhỏ, hãy SO SÁNH bản gốc ↔ bản dịch để hiểu ý, và trả về bản đã sửa dựa trên BẢN DỊCH.\n`;
+      const descTrans = transByPath.get('data.description');
+      context += `Mô tả (gốc): ${desc.length > 600 ? desc.slice(0, 600) + '...' : desc}\n`;
+      if (descTrans) context += `Mô tả (bản dịch): ${descTrans.length > 600 ? descTrans.slice(0, 600) + '...' : descTrans}\n`;
+      context += '\n';
 
       // ── Regex Scripts (full detail) ──
       const regexScripts = card.data?.extensions?.regex_scripts || [];
@@ -1715,7 +1730,16 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
           context += `    disabled: ${s.disabled || false}\n`;
           context += `    placement: ${JSON.stringify(s.placement || [])}\n`;
           if (structSummary) context += `    structure: ${structSummary}\n`;
-          context += `    replaceString (${(s.replaceString || '').length} chars): ${replacePreview}\n\n`;
+          context += `    replaceString GỐC (${(s.replaceString || '').length} chars): ${replacePreview}\n`;
+          // (Bug 32) kèm bản DỊCH của replaceString (nếu có) để AI so sánh
+          const rTrans = transByPath.get(`data.extensions.regex_scripts[${i}].replaceString`);
+          if (rTrans) {
+            const rt = rTrans.length > REGEX_CONTEXT_MAX_CHARS
+              ? rTrans.slice(0, REGEX_CONTEXT_MAX_CHARS) + `\n... (TRUNCATED — dùng VIEW_FULL_REGEX scriptIndex=${i})`
+              : rTrans;
+            context += `    replaceString BẢN DỊCH (${rTrans.length} chars): ${rt}\n`;
+          }
+          context += '\n';
         });
       }
 
@@ -1728,8 +1752,16 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
           const contentPreview = (e.content || '').length > LOREBOOK_CONTEXT_MAX_CHARS
             ? e.content.slice(0, LOREBOOK_CONTEXT_MAX_CHARS) + '... (truncated)'
             : (e.content || '(trống)');
-          context += `  #${i}: keys=[${keys}] comment="${e.comment || ''}" enabled=${e.enabled !== false}\n`;
-          context += `    content: ${contentPreview}\n\n`;
+          const cmtTrans = transByPath.get(`data.character_book.entries[${i}].comment`);
+          context += `  #${i}: keys=[${keys}] comment="${e.comment || ''}"${cmtTrans ? ` (dịch: "${cmtTrans}")` : ''} enabled=${e.enabled !== false}\n`;
+          context += `    content GỐC: ${contentPreview}\n`;
+          // (Bug 32) kèm bản DỊCH của content lorebook (nếu có)
+          const cTrans = transByPath.get(`data.character_book.entries[${i}].content`);
+          if (cTrans) {
+            const ct = cTrans.length > LOREBOOK_CONTEXT_MAX_CHARS ? cTrans.slice(0, LOREBOOK_CONTEXT_MAX_CHARS) + '... (truncated)' : cTrans;
+            context += `    content BẢN DỊCH: ${ct}\n`;
+          }
+          context += '\n';
         });
       }
 
@@ -1773,7 +1805,7 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
     }
 
     return context.trim();
-  }, [card, attachedFiles]);
+  }, [card, attachedFiles, fields]);
 
   // ─── Send message logic ───
     

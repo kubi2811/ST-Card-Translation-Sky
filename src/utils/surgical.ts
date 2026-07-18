@@ -344,6 +344,27 @@ function restoreCSSFromOriginal(original: string, translated: string): string {
  * NOTE: A-Za-z is deliberately excluded from joiners so that English words
  * such as CSS properties are never captured as part of a CJK token.
  */
+/**
+ * (bugNeedFix/34) Quét `lineBefore` (từ đầu dòng tới vị trí token) xác định điểm cuối có ĐANG NẰM
+ * TRONG CHUỖI ' hoặc " hay không — theo ĐÚNG ngữ nghĩa JS: dấu " nằm trong chuỗi '…' KHÔNG mở chuỗi
+ * mới, và ngược lại; có xử lý \escape. Backtick (`) cố tình BỎ QUA (giữ hành vi cũ: token CJK trong
+ * ${obj.<CJK>} của template literal vẫn được coi là code để wrap bracket).
+ */
+export function isInsideStringAtEnd(lineBefore: string): boolean {
+  let quote: "'" | '"' | null = null;
+  for (let i = 0; i < lineBefore.length; i++) {
+    const c = lineBefore[i];
+    if (quote) {
+      if (c === '\\') { i++; continue; }      // bỏ qua ký tự escape kế tiếp
+      if (c === quote) quote = null;           // đóng chuỗi
+      // dấu nháy loại KHÁC bên trong chuỗi → chỉ là ký tự thường, KHÔNG đổi trạng thái
+    } else {
+      if (c === "'" || c === '"') quote = c;   // mở chuỗi
+    }
+  }
+  return quote !== null;
+}
+
 export function extractCJKTokens(
   text: string,
   protectedZones?: ProtectedZone[],
@@ -380,16 +401,20 @@ export function extractCJKTokens(
     const isCssVar = /--$/.test(contextBefore);
     if (isCssVar) continue;
 
-    // ═══ Guard "ĐANG Ở TRONG CHUỖI STRING" (đếm nháy '/" chưa đóng từ đầu dòng) ═══
+    // ═══ Guard "ĐANG Ở TRONG CHUỖI STRING" ═══
     // Vụ vỡ card thật: token CJK nằm TRONG chuỗi ('人，统领:' / '1. 回答…') bị coi là object-key /
     // dot-notation → reinsert chèn thêm nháy hoặc ['…'] vào GIỮA chuỗi → SyntaxError, script sập.
     // Trong chuỗi string thì mọi kiểu wrap đều sai — chỉ được thay chữ thuần tuý.
-    // KHÔNG đếm backtick: ${obj.<CJK>} trong template literal là code thật, cần giữ wrap.
+    //
+    // (User 2026 — bugNeedFix/34: Translated Preview TRẮNG MÀN) BUG CŨ: đếm ' và " ĐỘC LẬP
+    // (_sq % 2 / _dq % 2). Chuỗi '<span class="tag ' có 1 dấu " (là KÝ TỰ trong chuỗi nháy đơn,
+    // KHÔNG phải mở chuỗi) → _dq lẻ → tưởng đang trong chuỗi nháy kép → tắt dot-notation cho
+    // cv.已测能量 ngay sau đó → không đổi sang cv['…'] → "cv.Đã Đo Năng Lượng" (có dấu cách) =
+    // SyntaxError → <script> sập → iframe preview trắng, mất cả UI. FIX: quét ĐÚNG trạng thái nháy —
+    // dấu " nằm trong chuỗi '…' KHÔNG tính là mở chuỗi (và ngược lại), có xử lý \escape.
     const _lineStart = text.lastIndexOf('\n', mStart - 1) + 1;
     const _lineBefore = text.slice(_lineStart, mStart);
-    const _sq = (_lineBefore.match(/(?<!\\)'/g) || []).length;
-    const _dq = (_lineBefore.match(/(?<!\\)"/g) || []).length;
-    const insideStringLiteral = _sq % 2 === 1 || _dq % 2 === 1;
+    const insideStringLiteral = isInsideStringAtEnd(_lineBefore);
 
     // 1. JS Object Key
     // Must be preceded by {, ,, or newline/spaces, optionally followed by a quote.
@@ -683,6 +708,83 @@ export function verifySurgicalResult(original: string, translated: string): bool
   }
 
   return true;
+}
+
+/**
+ * (User 2026 — bugNeedFix/33) GUARD CHỐNG "AI BỊA THÊM CODE".
+ *
+ * Triệu chứng: dịch 1 script code (vd Zod schema `变量管理`), AI KHÔNG chỉ dịch chữ Hán mà TỰ VIẾT
+ * THÊM hàm mới (vd `const safeString = () => z.preprocess((val) => {…})`) vốn KHÔNG có trong bản gốc.
+ * Code bịa ra vẫn parse HỢP LỆ nên guard cú pháp JS (acorn) không bắt được → lọt vào card.
+ *
+ * Nguyên tắc bắt lỗi: một bản dịch CODE trung thực CHỈ đổi chữ trong comment/chuỗi/định danh — nó
+ * KHÔNG BAO GIỜ làm đổi TỔNG SỐ dấu ngoặc `()`, `{}`, `[]` và backtick. Thêm 1 hàm/khối = thêm ngoặc;
+ * xoá code = bớt ngoặc. Nên chênh lệch số ngoặc (ngoài dung sai nhỏ) ⇒ code bị thêm/bớt ⇒ chặn.
+ *
+ * Đếm gộp fullwidth (（ ＝ (, ｛ ＝ {, …) để KHÔNG báo nhầm khi comment tiếng Trung đổi ngoặc
+ * fullwidth→halfwidth. `tolerance` cho phép lệch rất nhỏ (mặc định 0 = nghiêm ngặt cho code).
+ */
+export function verifyCodeStructureParity(
+  original: string,
+  translated: string,
+  tolerance = 0,
+): { ok: boolean; reason?: string; maxDiff: number } {
+  // Đếm 1 lớp ngoặc gồm biến thể ASCII + fullwidth + CJP tương ĐƯƠNG (để KHÔNG báo nhầm khi comment
+  // tiếng Trung đổi （→( , 【→[ , 〔→[ … sang ASCII lúc dịch — chúng cùng lớp nên tổng giữ nguyên).
+  // KHÔNG gộp ngoặc-nháy CJK 「」『』《》〈〉 vì chúng thường đổi thành "…"/'…' (không phải ngoặc ASCII
+  // tôi đang đếm) → không gây nhiễu lớp (){}[].
+  const countClass = (str: string, chars: string): number => {
+    let c = 0;
+    for (let i = 0; i < str.length; i++) if (chars.indexOf(str[i]) !== -1) c++;
+    return c;
+  };
+  const checks: { name: string; chars: string }[] = [
+    { name: '(', chars: '(（' },
+    { name: ')', chars: ')）' },
+    { name: '{', chars: '{｛' },
+    { name: '}', chars: '}｝' },
+    { name: '[', chars: '[［【〔〖' },
+    { name: ']', chars: ']］】〕〗' },
+    { name: '`', chars: '`' },
+  ];
+  let worst: { name: string; o: number; t: number; diff: number } | null = null;
+  for (const c of checks) {
+    const o = countClass(original, c.chars);
+    const t = countClass(translated, c.chars);
+    const diff = Math.abs(t - o);
+    if (!worst || diff > worst.diff) worst = { name: c.name, o, t, diff };
+  }
+  const maxDiff = worst ? worst.diff : 0;
+  if (worst && worst.diff > tolerance) {
+    const verb = worst.t > worst.o ? 'THÊM' : 'BỚT';
+    return { ok: false, maxDiff, reason: `dấu "${worst.name}" ${verb} ${worst.diff} (gốc ${worst.o} → dịch ${worst.t})` };
+  }
+  return { ok: true, maxDiff };
+}
+
+/**
+ * (User 2026 — bugNeedFix/33) Phát hiện ĐỊNH DANH KHAI BÁO MỚI mà bản dịch tự thêm.
+ * Bắt các khai báo top-levelish `const/let/var/function NAME` với NAME là ASCII (không phải chữ Hán
+ * được phiên âm) mà bản GỐC KHÔNG hề có → dấu hiệu AI bịa hàm/biến (vd `safeString`, `helper`, `sanitize`).
+ * Trả về danh sách tên bịa (rỗng nếu không có). Dùng làm tín hiệu PHỤ (log rõ), không phải cổng cứng
+ * vì phiên âm định danh Hán sang ASCII là hợp lệ trong vài trường hợp.
+ */
+export function detectInventedDeclarations(original: string, translated: string): string[] {
+  const declRe = /\b(?:const|let|var|function)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g;
+  const names = (src: string): Set<string> => {
+    const s = new Set<string>();
+    let m: RegExpExecArray | null;
+    declRe.lastIndex = 0;
+    while ((m = declRe.exec(src)) !== null) s.add(m[1]);
+    return s;
+  };
+  const origNames = names(original);
+  const transNames = names(translated);
+  const invented: string[] = [];
+  for (const n of transNames) {
+    if (!origNames.has(n)) invented.push(n);
+  }
+  return invented;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

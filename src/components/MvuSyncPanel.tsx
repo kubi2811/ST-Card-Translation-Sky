@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useStore } from '../store';
+import { useIdleMemo } from '../hooks/useIdleMemo';
 import { useT, useUi } from '../i18n/useLocale';
 import { fmt } from '../i18n';
 import { 
@@ -83,7 +84,14 @@ export default function MvuSyncPanel() {
   if (!card) return null;
 
   // ─── MVU Card Detection Summary ───
-  const mvuSummary = useMemo(() => getMvuZodSummary(card), [card]);
+  // (bugNeedFix/37) HOÃN quét MVU/Zod ra idle tick: getMvuZodSummary chạy ~8 regex + brace-scan trên
+  // TOÀN BỘ 199 entry + 692KB tavern_helper + 200KB regex — chạy đồng bộ ngay khi import card lớn là
+  // 1 thủ phạm chính làm "trang không phản hồi". Giá trị chờ = summary rỗng (an toàn cho UI).
+  const mvuSummary = useIdleMemo(
+    () => getMvuZodSummary(card),
+    [card],
+    { isMvu: false, variableCount: 0, initvarCount: 0, jsonPatchEntries: 0, hasZodSchema: false, confidence: 0 } as ReturnType<typeof getMvuZodSummary>,
+  );
 
   const toggleSync = () => setTranslationConfig({ enableMvuSync: !enableMvuSync });
 
@@ -1013,7 +1021,40 @@ export default function MvuSyncPanel() {
             >
               <Upload size={14} />
             </button>
+            {/* (User 2026) 🔒 Khoá từ điển — cấm pipeline dịch tự thêm/sửa/dọn biến; chỉ DÙNG dict user. */}
+            <button
+              onClick={() => {
+                const next = !translationConfig.mvuDictLocked;
+                setTranslationConfig({ mvuDictLocked: next });
+                addToast('info', next ? ui.msDictLockedToast : ui.msDictUnlockedToast);
+              }}
+              title={ui.msDictLockTip}
+              style={{
+                background: translationConfig.mvuDictLocked ? 'rgba(245,158,11,0.15)' : 'none',
+                border: translationConfig.mvuDictLocked ? '1px solid rgba(245,158,11,0.5)' : '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius-sm)',
+                padding: '4px 8px', cursor: 'pointer', flexShrink: 0,
+                color: translationConfig.mvuDictLocked ? '#fbbf24' : 'var(--text-secondary)',
+                display: 'flex', alignItems: 'center', gap: '4px',
+                fontSize: '0.68rem', fontWeight: 700,
+              }}
+            >
+              {translationConfig.mvuDictLocked ? '🔒' : '🔓'} {ui.msDictLock}
+            </button>
           </div>
+
+          {/* (User 2026) Badge trạng thái khoá */}
+          {translationConfig.mvuDictLocked && (
+            <div style={{
+              padding: '6px 10px', marginBottom: '8px',
+              borderRadius: 'var(--radius-sm)',
+              background: 'rgba(245,158,11,0.08)',
+              border: '1px solid rgba(245,158,11,0.3)',
+              color: '#fbbf24', fontSize: '0.7rem',
+            }}>
+              🔒 {ui.msDictLockedBadge}
+            </div>
+          )}
 
           {/* Stats Panel */}
           {showStats && (

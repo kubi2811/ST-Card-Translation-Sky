@@ -387,6 +387,12 @@ export interface TranslationConfig {
   nameStyle: NameStyle;
   enableMvuSync: boolean; // Enable Strategy B (Sync MVU Variables)
   mvuDictionary: Record<string, string>; // Dictionary for Strategy B
+  /**
+   * (User 2026) 🔒 KHOÁ từ điển MVU: khi bật, PIPELINE DỊCH TỰ ĐỘNG bị cấm ghi vào mvuDictionary
+   * (không auto-extract/AI-dịch biến/merge/sweep/dọn) — chỉ DÙNG từ điển user đã chốt. Thao tác TAY
+   * trong panel Chiến lược B (user tự bấm) vẫn cho phép.
+   */
+  mvuDictLocked: boolean;
   enableRAGContext: boolean; // Enable Cross-field Context RAG for consistency
   ragMaxFields: number; // Max context fields to include (default: 5)
   ragMaxChars: number; // Max total chars for RAG context (default: 3000)

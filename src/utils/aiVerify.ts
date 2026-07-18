@@ -636,30 +636,60 @@ export function verifyFields(
       const missingMacros: string[] = [];
       const extraMacros: string[] = [];
 
+      // (User 2026 — bugNeedFix/38) PHÂN LOẠI macro để hết báo "macro damaged" GIẢ:
+      //  • FUNCTIONAL — macro LỆNH: có "::" (getvar/format_message_variable/BẤT KỲ loại) hoặc ruột là
+      //    1 token ASCII ({{char}}, {{user}}, {{roll:d6}}). Phải giữ CẤU TRÚC; riêng ARG được phép đổi
+      //    theo từ điển MVU — kể cả PATH CHẤM nhiều đoạn (stat_data.交互记录.换装状态): map TỪNG ĐOẠN.
+      //  • PLACEHOLDER — ruột là CHỮ hiển thị ({{时间/地点/是否亲密中}}: có CJK/khoảng trắng/diacritics,
+      //    KHÔNG "::") → DỊCH ruột là ĐÚNG YÊU CẦU, không được đòi nguyên văn; chỉ lỗi thật khi bản dịch
+      //    MẤT placeholder (tổng số {{…}} loại này giảm).
+      const isFunctionalMacro = (mm: string) => {
+        const inner = mm.slice(2, -2).trim();
+        if (inner.includes('::')) return true;
+        return /^[A-Za-z0-9_.:\-]+$/.test(inner); // 1 token ASCII thuần ({{char}}, {{roll:d6}}…)
+      };
+      const mapSegments = (arg: string, dict: Record<string, string>) =>
+        arg.split('.').map(seg => dict[seg.trim()] ?? seg).join('.');
+      const reverseDict: Record<string, string> = {};
+      for (const [k, v] of Object.entries(mvuDictionary)) { if (v && v !== k) reverseDict[v] = k; }
+      const splitTypeArg = (mm: string): { type: string; arg: string } | null => {
+        const inner = mm.slice(2, -2);
+        const idx = inner.indexOf('::');
+        if (idx === -1) return null;
+        return { type: inner.slice(0, idx).trim(), arg: inner.slice(idx + 2).trim() };
+      };
+      const countType = (list: string[], type: string) =>
+        list.filter(x => splitTypeArg(x)?.type === type).length;
+      const macroHasCjk = (s: string) => /[぀-ヿ㐀-䶿一-鿿가-힯]/.test(s);
+
       for (const m of origSet) {
-        if (!transSet.has(m)) {
-          // Check if this macro was MVU-remapped in translation
-          const varMatch = m.match(/\{\{(getvar|setvar|addvar|getglobalvar|setglobalvar|addglobalvar)::([^:}]+)/);
-          if (varMatch) {
-            const varName = varMatch[2].trim();
-            // Forward lookup: original var → mapped name
-            const mappedName = mvuDictionary[varName];
-            if (mappedName && transSet.has(m.replace(varName, mappedName))) continue;
-            // Reverse lookup: check if any MVU mapping covers this macro
-            const reverseMapped = Object.entries(mvuDictionary).find(([, v]) => v === varName)?.[0];
-            if (reverseMapped && transSet.has(m.replace(varName, reverseMapped))) continue;
-            // Partial match: check if translation has same macro type with any MVU-known variable
-            const macroType = varMatch[1];
-            const hasAnyMVUVariant = [...transSet].some(tm => {
-              const tmMatch = tm.match(new RegExp(`\\{\\{${macroType}::([^:}]+)`));
-              if (!tmMatch) return false;
-              const tmVar = tmMatch[1].trim();
-              return Object.keys(mvuDictionary).includes(tmVar) || Object.values(mvuDictionary).includes(tmVar);
-            });
-            if (hasAnyMVUVariant) continue;
-          }
-          missingMacros.push(m);
+        if (transSet.has(m)) continue;
+        if (!isFunctionalMacro(m)) continue; // placeholder → kiểm theo ĐẾM bên dưới
+        const ta = splitTypeArg(m);
+        if (ta) {
+          // Macro lệnh BẤT KỲ loại: coi là CÒN NGUYÊN nếu bản dịch có macro CÙNG type với arg = nguyên
+          // văn / map XUÔI theo dict / map NGƯỢC về đúng arg gốc (map từng đoạn path chấm).
+          const matched = [...transSet].some(tm => {
+            const tt = splitTypeArg(tm);
+            if (!tt || tt.type !== ta.type) return false;
+            return tt.arg === ta.arg ||
+              tt.arg === mapSegments(ta.arg, mvuDictionary) ||
+              mapSegments(tt.arg, reverseDict) === ta.arg;
+          });
+          if (matched) continue;
+          // Arg chứa CJK (tên biến Trung được DỊCH nhưng lệch dict) + bản dịch vẫn ĐỦ SỐ macro cùng
+          // type → cấu trúc còn nguyên, chỉ là biến thể dịch (mvu_inconsistent lo phần tên) — không
+          // phải "damaged".
+          if (macroHasCjk(ta.arg) && countType(transMacros, ta.type) >= countType(origMacros, ta.type)) continue;
         }
+        missingMacros.push(m);
+      }
+
+      // PLACEHOLDER: ghép cặp gốc↔bản dịch theo thứ tự xuất hiện; chỉ phần THIẾU HỤT là mất thật.
+      const origPh = origMacros.filter(mm => !isFunctionalMacro(mm) && !transSet.has(mm));
+      const transPh = transMacros.filter(mm => !isFunctionalMacro(mm) && !origSet.has(mm));
+      if (origPh.length > transPh.length) {
+        for (const m of origPh.slice(transPh.length)) missingMacros.push(m);
       }
 
       for (const m of transSet) {

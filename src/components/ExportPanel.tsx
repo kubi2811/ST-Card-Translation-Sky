@@ -11,7 +11,9 @@ import { scanFieldsHealth, buildTranslationReport, type HealthSeverity } from '.
 import { verifyFields, quickVerify, type FieldIssue, type VerifyIssue } from '../utils/aiVerify';
 import { countEjsBlocks } from '../utils/ejsSegmenter';
 import { isLikelyJsScript, jsParseErrorAny } from '../utils/scriptSafety';
-import type { ExportKeyMode } from '../types/card';
+import type { ExportKeyMode, TranslationField } from '../types/card';
+import { useThrottledStore } from '../hooks/useThrottledStore';
+import { useIdleMemo } from '../hooks/useIdleMemo';
 
 /** 1 dòng vấn đề trong báo cáo GỘP của "🩺 Kiểm tra tổng" (3 nguồn về chung 1 shape). */
 interface MergedIssue {
@@ -29,8 +31,32 @@ const KEY_MODE_OPTIONS: { value: ExportKeyMode; labelKey: 'epKeyModeMerge' | 'ep
   { value: 'original_only', labelKey: 'epKeyModeOriginal', desc: '原Key only' },
 ];
 
+/** (bugNeedFix/37) Báo cáo rỗng dùng làm giá trị chờ trong lúc quét sức khoẻ chạy ở idle tick. */
+const EMPTY_HEALTH: import('../utils/cardHealth').HealthReport = {
+  counts: { total: 0, done: 0, error: 0, pending: 0, skipped: 0, brokenScripts: 0, residualCjkCode: 0, residualCjkText: 0, glossaryUnapplied: 0 },
+  issues: [],
+  ok: true,
+};
+
 export default function ExportPanel() {
-  const { card, fields, cardFileName, originalImage, _pngArrayBuffer, translationConfig, setTranslationConfig, phase, saveTranslationCache, locale, contentType, originalWorldbook, setJumpToFieldPath, updateField, addLog } = useStore();
+  // (bugNeedFix/37) Selector HẸP thay cho useStore() trọn gói: trước đây MỌI store write (kể cả addLog/
+  // updateField lúc đang dịch) re-render panel này → scanFieldsHealth + acorn parse cả 692KB script chạy
+  // ĐI CHẠY LẠI hàng trăm lần. `fields` throttle 300ms; các action là hàm ổn định.
+  const card = useStore((s) => s.card);
+  const fields = useThrottledStore((s) => s.fields, 300);
+  const cardFileName = useStore((s) => s.cardFileName);
+  const originalImage = useStore((s) => s.originalImage);
+  const _pngArrayBuffer = useStore((s) => s._pngArrayBuffer);
+  const translationConfig = useStore((s) => s.translationConfig);
+  const setTranslationConfig = useStore((s) => s.setTranslationConfig);
+  const phase = useStore((s) => s.phase);
+  const saveTranslationCache = useStore((s) => s.saveTranslationCache);
+  const locale = useStore((s) => s.locale);
+  const contentType = useStore((s) => s.contentType);
+  const originalWorldbook = useStore((s) => s.originalWorldbook);
+  const setJumpToFieldPath = useStore((s) => s.setJumpToFieldPath);
+  const updateField = useStore((s) => s.updateField);
+  const addLog = useStore((s) => s.addLog);
   const { getExportCard } = useTranslation();
   const t = useT();
   const ui = useUi();
@@ -40,8 +66,15 @@ export default function ExportPanel() {
   const ignoredCount = fields.filter((f) => f.status === 'ignored').length;
   const hasLorebookKeys = fields.some(f => f.group === 'lorebook_keys');
 
-  // 🩺 Sức khoẻ thẻ — quét nội dung bản dịch (script vỡ / chữ Hán sót / thuật ngữ chưa áp) chứ không chỉ trạng thái trường.
-  const health = useMemo(() => scanFieldsHealth(fields, translationConfig.glossary), [fields, translationConfig.glossary]);
+  // 🩺 Sức khoẻ thẻ — quét nội dung bản dịch (script vỡ / chữ Hán sót / thuật ngữ chưa áp).
+  // (bugNeedFix/37) HOÃN ra idle tick + TẠM NGƯNG khi đang dịch: scanFieldsHealth acorn-parse mọi field
+  // JS (tavern_helper 692KB) — chạy đồng bộ NGAY khi import là 1 trong các thủ phạm đơ máy card lớn.
+  const health = useIdleMemo(
+    () => scanFieldsHealth(fields, translationConfig.glossary),
+    [fields, translationConfig.glossary],
+    EMPTY_HEALTH,
+    phase !== 'translating',
+  );
   const [showIssues, setShowIssues] = useState(false);
 
   // ═══ 🩺 KIỂM TRA TỔNG (nghiệm thu 1 nút) ═══
@@ -72,7 +105,8 @@ export default function ExportPanel() {
   // Trung vẫn chạy, an toàn tuyệt đối). Từ v1.99.4 lỗi này được chặn NGAY khi dịch; nút để chữa card cũ.
   // (User 2026) Gồm 2 loại VỠ: (a) EJS lệch số khối <%…%>; (b) script JS trần (TavernHelper) gốc
   // parse sạch mà bản dịch vỡ cú pháp (cụt output/đứt regex — bug script 71K). Cả 2 revert về gốc là an toàn.
-  const brokenEjsFields = useMemo(
+  // (bugNeedFix/37) cũng HOÃN ra idle (acorn parse mỗi field JS) + tạm ngưng khi đang dịch.
+  const brokenEjsFields = useIdleMemo<TranslationField[]>(
     () => fields.filter(f => {
       if (f.status !== 'done' || !f.translated || f.translated === f.original) return false;
       if (f.original.includes('<%')) {
@@ -85,6 +119,8 @@ export default function ExportPanel() {
       return false;
     }),
     [fields],
+    [],
+    phase !== 'translating',
   );
   const [repairMsg, setRepairMsg] = useState('');
   const repairBrokenEjs = () => {

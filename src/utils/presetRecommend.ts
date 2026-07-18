@@ -35,7 +35,20 @@ export const REC_SCRIPT_CJK_MIN = 500;   // script chứa ≥ chừng này chữ
 export const REC_BIG_TOTAL_CJK = 40000;  // tổng chữ Hán vượt = card to
 export const REC_BIG_ENTRIES = 15;       // số entry vượt = card to
 
+// (bugNeedFix/37) Cache theo THAM CHIẾU card: TranslateConfig + PresetRecommendModal cùng gọi
+// recommendPreset(card) → trước đây quét card lớn 2 LẦN trong cùng render tick import. WeakMap
+// không giữ card sống (GC tự dọn), cùng object card → trả kết quả cũ ngay.
+const _recCache = new WeakMap<object, PresetRecommendation>();
+
 export function recommendPreset(card: CharacterCard): PresetRecommendation {
+  const cached = _recCache.get(card as object);
+  if (cached) return cached;
+  const result = _recommendPresetUncached(card);
+  _recCache.set(card as object, result);
+  return result;
+}
+
+function _recommendPresetUncached(card: CharacterCard): PresetRecommendation {
   const d: any = (card as any).data || card || {};
   const ext = d.extensions || {};
   const entries: any[] = d.character_book?.entries || [];

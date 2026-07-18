@@ -40,6 +40,22 @@ const LONG_ENTRY_ISOLATE_CHARS = 16000;
 
 // (Audit dot 3) stripUrlsForCjkCheck gom ve utils/cjk.ts (truoc day dup 3 noi).
 
+/**
+ * (User 2026 — "AI tự thêm lại biến vào từ điển dù đã sửa/xoá") Ghi mvuDictionary từ PIPELINE TỰ ĐỘNG
+ * (auto-extract / AI dịch biến / merge / consistency / covariance / sweep / dọn) — TÔN TRỌNG khoá 🔒:
+ * khi user bật "Khoá từ điển" ở Chiến lược B, mọi ghi tự động bị BỎ QUA (chỉ DÙNG dict user đã chốt).
+ * Trả về true nếu đã ghi (caller mới nên log "đã thêm/sửa…"). Thao tác TAY trong panel không đi qua đây.
+ */
+function writeMvuDictAuto(dict: Record<string, string>, why: string): boolean {
+  const st = useStore.getState();
+  if (st.translationConfig.mvuDictLocked) {
+    st.addLog('info', `🔒 Từ điển MVU đang KHOÁ — bỏ qua: ${why} (giữ nguyên từ điển của bạn).`);
+    return false;
+  }
+  st.setTranslationConfig({ mvuDictionary: dict });
+  return true;
+}
+
 
 /**
  * Bake modded/translated fields into the card and update field originals.
@@ -600,13 +616,10 @@ export function useTranslation() {
                 store.setMvuKeyMetadata(currentMetadata);
                 // Enforce 100% exact consistency
                 const { fixedDict, fixes } = enforceExactConsistency(updatedDict, currentMetadata);
-                if (fixes.length > 0) {
-                  store.setTranslationConfig({ mvuDictionary: fixedDict });
-                  store.addLog('info', `🔒 Exact consistency: fixed ${fixes.length} case/spelling variations: ${fixes.join(', ')}`);
-                } else {
-                  store.setTranslationConfig({ mvuDictionary: updatedDict });
+                if (writeMvuDictAuto(fixes.length > 0 ? fixedDict : updatedDict, 'progressive thêm biến từ entry')) {
+                  if (fixes.length > 0) store.addLog('info', `🔒 Exact consistency: fixed ${fixes.length} case/spelling variations: ${fixes.join(', ')}`);
+                  store.addLog('info', `🔗 Progressive: +${addedCount} entry-specific var(s) from ${field.label}`);
                 }
-                store.addLog('info', `🔗 Progressive: +${addedCount} entry-specific var(s) from ${field.label}`);
               }
             }
           }
@@ -1340,8 +1353,7 @@ export function useTranslation() {
                     addedCount++;
                   }
                 }
-                if (addedCount > 0) {
-                  store.setTranslationConfig({ mvuDictionary: updatedDict });
+                if (addedCount > 0 && writeMvuDictAuto(updatedDict, 'progressive thêm biến (batch)')) {
                   store.addLog('info', `🔗 Progressive: +${addedCount} entry-specific var(s) from ${bf.label}`);
                 }
               }
@@ -1827,8 +1839,9 @@ export function useTranslation() {
     const cardIsMvu = !!mvuSummary && (mvuSummary.isMvu || mvuSummary.initvarCount > 0 || mvuSummary.hasZodSchema || mvuSummary.variableCount > 0);
     const cardIsEjs = store.card ? (() => { try { return detectEjsCard(store.card!).isEjs; } catch { return false; } })() : false;
     if (!cardIsMvu && Object.keys(useStore.getState().translationConfig.mvuDictionary).length > 0) {
-      store.setTranslationConfig({ mvuDictionary: {} });
-      store.addLog('info', 'ℹ️ Card thường (không phát hiện biến MVU) → bỏ qua Chiến lược B, không tự chế key. Đã dọn từ điển MVU dây từ card trước.');
+      if (writeMvuDictAuto({}, 'dọn từ điển cho card thường')) {
+        store.addLog('info', 'ℹ️ Card thường (không phát hiện biến MVU) → bỏ qua Chiến lược B, không tự chế key. Đã dọn từ điển MVU dây từ card trước.');
+      }
     }
     if (!cardIsEjs && (Object.keys(useStore.getState().translationConfig.ejsEntryNameDict).length > 0 || Object.keys(useStore.getState().translationConfig.ejsKeywordDict).length > 0)) {
       store.setTranslationConfig({ ejsEntryNameDict: {}, ejsKeywordDict: {} });
@@ -1841,8 +1854,13 @@ export function useTranslation() {
     if (store.translationConfig.enableMvuSync && cardIsMvu && store.card && !skipMvuBuild) {
       try {
         store.addLog('info', '🔧 Chiến lược B (đồng bộ biến MVU): đang dò biến MVU/Zod…');
-        const extractedKeys = extractPotentialMvuKeyStrings(store.card);
-        
+        // (User 2026 — khoá dict) 🔒 khoá → KHÔNG dò + KHÔNG gọi AI dịch tên biến; dùng nguyên dict user.
+        const dictLockedB = useStore.getState().translationConfig.mvuDictLocked;
+        if (dictLockedB) {
+          store.addLog('info', `🔒 Từ điển MVU đang KHOÁ — bỏ qua tự dò/AI dịch tên biến; dùng nguyên ${Object.keys(useStore.getState().translationConfig.mvuDictionary).length} biến bạn đã chốt.`);
+        }
+        const extractedKeys = dictLockedB ? [] : extractPotentialMvuKeyStrings(store.card);
+
         if (extractedKeys.length > 0) {
           let existingDict = store.translationConfig.mvuDictionary;
           const totalMvuPasses = Math.max(1, Math.min(5, store.translationConfig.mvuScanPasses || 1));
@@ -1925,8 +1943,9 @@ export function useTranslation() {
             if (addedCount > 0) {
               store.setMvuKeyMetadata(currentMetadata);
               const { fixedDict, fixes } = enforceExactConsistency(mergedDict, currentMetadata);
-              store.setTranslationConfig({ mvuDictionary: fixedDict });
-              store.addLog('success', `✅ Auto-added ${addedCount} variable translations to MVU Dictionary`);
+              if (writeMvuDictAuto(fixedDict, 'auto-add biến AI dịch')) {
+                store.addLog('success', `✅ Auto-added ${addedCount} variable translations to MVU Dictionary`);
+              }
             } else {
               store.addLog('info', 'Mọi biến đã là ASCII hoặc đã dịch — không cần gọi AI');
               break;
@@ -1993,8 +2012,9 @@ export function useTranslation() {
               }
             }
             store.setMvuKeyMetadata(currentMetadata);
-            store.setTranslationConfig({ mvuDictionary: fixedDict });
-            store.addLog('success', `✅ Chiến lược B: đã xử lý ${fixedCount} chỗ mâu thuẫn`);
+            if (writeMvuDictAuto(fixedDict, 'xử lý mâu thuẫn dict')) {
+              store.addLog('success', `✅ Chiến lược B: đã xử lý ${fixedCount} chỗ mâu thuẫn`);
+            }
           } else {
             store.addLog('warning', `⚠️ Chiến lược B: không tự xử lý được mâu thuẫn`);
           }
@@ -2617,11 +2637,12 @@ export function useTranslation() {
                   // Enforce 100% exact consistency
                   const { fixedDict, fixes } = enforceExactConsistency(mergedDict, currentMetadata);
                   const dictAfterConsistency = fixes.length > 0 ? fixedDict : mergedDict;
-                  if (fixes.length > 0) {
-                    store.addLog('info', `🔒 Exact consistency: fixed ${fixes.length} case/spelling variations: ${fixes.join(', ')}`);
+                  if (writeMvuDictAuto(dictAfterConsistency, 'covariance inject key từ schema')) {
+                    if (fixes.length > 0) {
+                      store.addLog('info', `🔒 Exact consistency: fixed ${fixes.length} case/spelling variations: ${fixes.join(', ')}`);
+                    }
+                    store.addLog('info', `🔗 Cross-Script Covariance: injected ${newEntries.length} key mapping(s) from translated schema → dictionary (total: ${earlyMappingCount})`);
                   }
-                  store.setTranslationConfig({ mvuDictionary: dictAfterConsistency });
-                  store.addLog('info', `🔗 Cross-Script Covariance: injected ${newEntries.length} key mapping(s) from translated schema → dictionary (total: ${earlyMappingCount})`);
 
                   // ═══ Auto-resolve conflicts after injection ═══
                   const postInjectConflicts = validateDictionaryConflicts(dictAfterConsistency);
@@ -2655,8 +2676,9 @@ export function useTranslation() {
                           }
                         }
                         store.setMvuKeyMetadata(updatedMeta);
-                        store.setTranslationConfig({ mvuDictionary: resolvedDict });
-                        store.addLog('success', `✅ Cross-Script Covariance: AI resolved ${fixedCount} conflict(s)`);
+                        if (writeMvuDictAuto(resolvedDict, 'AI resolve mâu thuẫn covariance')) {
+                          store.addLog('success', `✅ Cross-Script Covariance: AI resolved ${fixedCount} conflict(s)`);
+                        }
                       } else {
                         store.addLog('warning', `⚠️ Cross-Script Covariance: AI could not auto-resolve conflicts`);
                       }
@@ -2704,8 +2726,8 @@ export function useTranslation() {
           const { fields: sweptFields, dictionary: fixedDict, fixCount } = recanonicalizeMvuInFields(
             useStore.getState().fields, rawDict, useStore.getState().mvuKeyMetadata,
           );
-          store.setTranslationConfig({ mvuDictionary: fixedDict });
-          if (fixCount > 0) {
+          // (khoá dict) 🔒 → không chuẩn hoá lại dict (user chốt dạng nào giữ dạng đó, kể cả _/-).
+          if (writeMvuDictAuto(fixedDict, 'sweep chuẩn hoá dict (_/- → space)') && fixCount > 0) {
             store.setFields(sweptFields);
             store.addLog('success', `🔗 Đồng nhất tên biến MVU: chuẩn hoá ${fixCount} field về 1 dạng thống nhất (bỏ dấu _/-).`);
           }
@@ -3203,8 +3225,7 @@ export function useTranslation() {
       // Prior to export, enforce exact consistency of the dictionary
       const currentDict = store.translationConfig.mvuDictionary;
       const { fixedDict, fixes } = enforceExactConsistency(currentDict, useStore.getState().mvuKeyMetadata);
-      if (fixes.length > 0) {
-        store.setTranslationConfig({ mvuDictionary: fixedDict });
+      if (fixes.length > 0 && writeMvuDictAuto(fixedDict, 'export exact-consistency')) {
         store.addLog('info', `🔒 Export exact consistency: fixed ${fixes.length} case/spelling variations: ${fixes.join(', ')}`);
       }
 
@@ -3524,11 +3545,10 @@ export function useTranslation() {
                 }
               }
 
-              if (changedCount > 0) {
-                store.setTranslationConfig({ mvuDictionary: newDict });
-                store.addLog('success', `✅ Mod: ${changedCount} variable(s) will be renamed during sync`);
-              } else {
+              if (changedCount === 0) {
                 store.addLog('info', 'Mod instructions did not change any variable names');
+              } else if (writeMvuDictAuto(newDict, 'Mod đổi tên biến')) {
+                store.addLog('success', `✅ Mod: ${changedCount} variable(s) will be renamed during sync`);
               }
             }
           } catch (mvuErr) {
@@ -3899,8 +3919,9 @@ export function useTranslation() {
           }
 
           if (changedCount > 0) {
-            store.setTranslationConfig({ mvuDictionary: newDict });
-            store.addLog('success', `✅ Mod: ${changedCount} variable(s) will be renamed during Mod sync`);
+            if (writeMvuDictAuto(newDict, 'Mod đổi tên biến (Mod sync)')) {
+              store.addLog('success', `✅ Mod: ${changedCount} variable(s) will be renamed during Mod sync`);
+            }
           } else {
             store.addLog('info', 'Mod instructions did not change any variable names');
           }

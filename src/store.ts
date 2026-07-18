@@ -243,7 +243,8 @@ export const useStore = create<AppState>((set) => ({
       mvuConversionProgress: '',
       translationConfig: {
         ...s.translationConfig,
-        mvuDictionary: {}, // Clear dictionary for new card
+        // (User 2026 — khoá dict) 🔒 đang khoá → GIỮ từ điển user qua card mới; không khoá → dọn như cũ.
+        mvuDictionary: s.translationConfig.mvuDictLocked ? s.translationConfig.mvuDictionary : {},
         ejsEntryNameDict: {}, // Clear EJS dictionaries for new card
         ejsKeywordDict: {},
       },
@@ -252,7 +253,7 @@ export const useStore = create<AppState>((set) => ({
     }));
     // Clear Translation Memory on card load
     clearTranslationMemory().catch(e => console.warn('[TM] Clear error:', e));
-    LS.set('st-translator-mvu-dict', {});
+    if (!useStore.getState().translationConfig.mvuDictLocked) LS.set('st-translator-mvu-dict', {});
     LS.set('st-translator-ejs-entry-dict', {});
     LS.set('st-translator-ejs-keyword-dict', {});
     // IDB is not used — opening it causes Windows Defender to scan old LevelDB files (freeze).
@@ -316,7 +317,8 @@ export const useStore = create<AppState>((set) => ({
       mvuConversionProgress: '',
       translationConfig: {
         ...s.translationConfig,
-        mvuDictionary: {},
+        // (User 2026 — khoá dict) 🔒 đang khoá → GIỮ từ điển user khi gỡ card.
+        mvuDictionary: s.translationConfig.mvuDictLocked ? s.translationConfig.mvuDictionary : {},
         ejsEntryNameDict: {},
         ejsKeywordDict: {},
         // (Fix bug #10) dọn mục glossary TỰ SINH cho card cũ (Pha 0/tự nạp/tự trích); giữ mục user tự gõ.
@@ -325,7 +327,7 @@ export const useStore = create<AppState>((set) => ({
       mvuKeyMetadata: {},
       mvuDictionaryHistory: [],
     }));
-    LS.set('st-translator-mvu-dict', {});
+    if (!useStore.getState().translationConfig.mvuDictLocked) LS.set('st-translator-mvu-dict', {});
     LS.set('st-translator-ejs-entry-dict', {});
     LS.set('st-translator-ejs-keyword-dict', {});
     LS.set('st-translator-glossary', useStore.getState().translationConfig.glossary);
@@ -542,6 +544,7 @@ export const useStore = create<AppState>((set) => ({
     nameStyle: LS.get('st-translator-name-style', 'hanviet') as import('./types/card').NameStyle,
     enableMvuSync: LS.get('st-translator-mvu-sync-enabled', true),
     mvuDictionary: LS.get('st-translator-mvu-dict', {}) as Record<string, string>,
+    mvuDictLocked: LS.get('st-translator-mvu-dict-locked', false),
     enableRAGContext: LS.get('st-translator-rag-enabled', true),
     ragMaxFields: LS.get('st-translator-rag-max-fields', 5),
     ragMaxChars: LS.get('st-translator-rag-max-chars', 3000),
@@ -632,6 +635,9 @@ export const useStore = create<AppState>((set) => ({
       }
       if ('enableMvuSync' in partial) {
         LS.set('st-translator-mvu-sync-enabled', next.enableMvuSync);
+      }
+      if ('mvuDictLocked' in partial) {
+        LS.set('st-translator-mvu-dict-locked', next.mvuDictLocked);
       }
       if ('enableMvuConversion' in partial) {
         LS.set('st-translator-mvu-conversion', next.enableMvuConversion);
@@ -788,6 +794,7 @@ export const useStore = create<AppState>((set) => ({
       nameStyle: 'hanviet' as import('./types/card').NameStyle,
       enableMvuSync: false,
       mvuDictionary: {},
+      mvuDictLocked: false,
       enableRAGContext: true,
       ragMaxFields: 5,
       ragMaxChars: 3000,

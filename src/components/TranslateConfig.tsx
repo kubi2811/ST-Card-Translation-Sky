@@ -6,7 +6,8 @@ import { fmt } from '../i18n';
 import { TARGET_LANGUAGES, SOURCE_LANGUAGES, extractTranslatableFields } from '../utils/cardFields';
 import { getDefaultTranslationPrompt, getModelSuggestions } from '../utils/apiClient';
 import { aiExtractGlossaryTerms } from '../utils/mvuSync';
-import type { LorebookStrategy, FieldGroupConfig, FieldGroup, GlossaryEntry, NameStyle } from '../types/card';
+import type { LorebookStrategy, FieldGroupConfig, FieldGroup, GlossaryEntry, NameStyle, TranslationField } from '../types/card';
+import { useIdleMemo } from '../hooks/useIdleMemo';
 import { Languages, FileJson, BookOpen, Plus, Trash2, Download, Upload, Bot, Loader2, Save, RotateCcw, CheckCircle, Zap } from 'lucide-react';
 import { recommendPreset } from '../utils/presetRecommend';
 import { GLOSSARY_PRESETS } from '../utils/glossaryPresets';
@@ -42,11 +43,15 @@ export default function TranslateConfig() {
   const { translationConfig, setTranslationConfig, toggleFieldGroup, card, proxy, addToast, fields, setFields, deleteCurrentCardCache, deleteAllCaches, scannedModels, resetTranslationConfig, activePresetId } = useStore();
   const ui = useUi();
 
-  const allAvailableFields = useMemo(() => {
+  // (bugNeedFix/37) HOÃN extract ra idle tick: trước đây useMemo([card]) chạy NGAY trong render tick
+  // của import — LẶP LẠI đúng việc worker parse đã làm (duyệt 199 entry + 692KB tavern_helper) trên
+  // main thread → góp phần đơ "trang không phản hồi" với card lớn. Kết quả chỉ phục vụ UI phụ
+  // (ước lượng batch, model routing) nên hoãn vài trăm ms là vô hại.
+  const allAvailableFields = useIdleMemo<TranslationField[]>(() => {
     if (!card) return [];
     const groups: FieldGroup[] = ['core', 'messages', 'system', 'creator', 'lorebook', 'lorebook_keys', 'regex', 'depth_prompt', 'tavern_helper'];
     return extractTranslatableFields(card, groups);
-  }, [card]);
+  }, [card], []);
 
   // (User yêu cầu) Ước lượng tải token cho chế độ gộp nhiều entry/lô — hiển thị cảnh báo trước khi chạy.
   const batchLoadEstimate = useMemo(() => {
@@ -231,7 +236,8 @@ export default function TranslateConfig() {
     try { return localStorage.getItem('st-tc-show-advanced') === '1'; } catch { return false; }
   });
   // 🔍 Phân tích card khi import → gợi ý preset phù hợp (MVU/script nặng → nhẹ; to → siêu tốc; gọn → đầy đủ).
-  const recommendation = useMemo(() => (card ? recommendPreset(card) : null), [card]);
+  // (bugNeedFix/37) hoãn ra idle tick — countHan + join toàn bộ entry là O(size card) trên main thread.
+  const recommendation = useIdleMemo(() => (card ? recommendPreset(card) : null), [card], null);
   const recStar = (id: string) => recommendation?.preset === id
     ? <span title={ui.tcRecBadge} style={{ marginLeft: 4, color: '#facc15', fontWeight: 800 }}>★</span>
     : null;

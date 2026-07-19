@@ -10,7 +10,7 @@ import {
   ChevronDown, ChevronRight, X, Check, Filter,
   ToggleLeft, ToggleRight,
   Edit3, Layers, Zap, FileText, Globe, Lock, AlertTriangle, Gauge,
-  Wand2,
+  Wand2, Pencil,
 } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useCardStore } from '../store/cardStore';
@@ -107,6 +107,20 @@ function EntriesTab() {
   const getNextEntryId = useCardStore(s => s.getNextEntryId);
 
   const entries = useMemo(() => card.data.character_book?.entries ?? [], [card.data.character_book?.entries]);
+
+  // ─── Đổi tên lorebook (character_book.name) ─────────────────────────
+  const [renamingBook, setRenamingBook] = useState(false);
+  const [bookNameDraft, setBookNameDraft] = useState('');
+
+  const commitBookName = useCallback(() => {
+    const next = bookNameDraft.trim();
+    useCardStore.getState().updateCard(c => {
+      // Thẻ có thể chưa có character_book (chưa thêm entry nào) → tạo rỗng để giữ được tên.
+      if (!c.data.character_book) c.data.character_book = { name: next, entries: [] };
+      else c.data.character_book.name = next;
+    });
+    setRenamingBook(false);
+  }, [bookNameDraft]);
 
   // ─── Filter/Search/Sort state ───────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState('');
@@ -267,11 +281,40 @@ function EntriesTab() {
         {/* Header */}
         <div className="shrink-0 px-5 py-4 border-b border-border bg-card/50">
           <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <BookOpen className="w-5 h-5 text-primary" />
-              <h1 className="text-lg font-semibold">Lorebook</h1>
+            {/* Tên lorebook (character_book.name) — bấm vào để đổi tên tại chỗ.
+                Bỏ trống thì SillyTavern hiển thị theo tên thẻ, nên không ép nhập. */}
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              <BookOpen className="w-5 h-5 text-primary shrink-0" />
+              {renamingBook ? (
+                <input
+                  autoFocus
+                  value={bookNameDraft}
+                  // Bôi đen sẵn tên cũ để gõ là thay luôn, khỏi phải xoá tay.
+                  onFocus={e => e.currentTarget.select()}
+                  onChange={e => setBookNameDraft(e.target.value)}
+                  onBlur={commitBookName}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') commitBookName();
+                    if (e.key === 'Escape') setRenamingBook(false);
+                  }}
+                  placeholder={ui.lbBookNamePh}
+                  className="settings-input text-lg font-semibold py-1 max-w-md"
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => { setBookNameDraft(card.data.character_book?.name ?? ''); setRenamingBook(true); }}
+                  title={ui.lbRenameBookTip}
+                  className="group flex items-center gap-1.5 min-w-0 text-left rounded px-1 -mx-1 hover:bg-muted/60 transition-colors"
+                >
+                  <h1 className="text-lg font-semibold truncate">
+                    {card.data.character_book?.name?.trim() || 'Lorebook'}
+                  </h1>
+                  <Pencil className="w-3.5 h-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                </button>
+              )}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 shrink-0">
               <button onClick={() => { setDedupLogs([]); setShowDedupPanel(true); }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-sm font-medium hover:bg-muted/80 hover:text-foreground transition-colors text-muted-foreground">
                 <Layers className="w-4 h-4 text-primary" /> {ui.lbDedupBtn}

@@ -4,6 +4,7 @@
  */
 
 import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
+import { usePersistedState } from '../../lib/usePersistedState';
 import {
   Play, Pause, Square, ChevronDown, ChevronRight,
   Zap, AlertCircle, Check, Loader2,
@@ -57,27 +58,30 @@ export function BatchGeneratorPanel() {
   ], []);
 
   const [activeTab, setActiveTab] = useState<TabKey>('main_char');
-  const [prompts, setPrompts] = useState<Record<TabKey, string>>({
+  // (User 2026 — "AI Sinh Theo Batch không lưu setting") TẤT CẢ thiết lập + ô nhập prompt nay dùng
+  // usePersistedState → giữ nguyên khi chuyển tab / đổi trang / F5 / mở lại app. Trước đây là useState
+  // thuần nên rời panel một cái là mất sạch, phải gõ lại từ đầu mỗi lần sinh batch.
+  const [prompts, setPrompts] = usePersistedState<Record<TabKey, string>>('bgen.prompts', {
     main_char: '', multi_char: '', worldview: '', region: '', scene: '', secondary: '', custom: ''
   });
 
-  const [useCardContext, setUseCardContext] = useState(true);
-  const [useWebSearch, setUseWebSearch] = useState(false);
+  const [useCardContext, setUseCardContext] = usePersistedState('bgen.useCardContext', true);
+  const [useWebSearch, setUseWebSearch] = usePersistedState('bgen.useWebSearch', false);
   // Mặc định BẬT: nếu card có schema biến (MVU-ZOD, vd võ lực/trí lực), entry sinh ra sẽ bám theo
   // các chỉ số đó. Nếu card không có schema thì tự bỏ qua (mvuzodSchema=null → không inject).
-  const [useSchemaContext, setUseSchemaContext] = useState(true);
-  const [autoConfig, setAutoConfig] = useState(true);
-  const [totalEntries, setTotalEntries] = useState(10);
-  const [entriesPerBatch, setEntriesPerBatch] = useState(5);
-  const [concurrentBatches, setConcurrentBatches] = useState(1);
-  const [tokensPerEntry, setTokensPerEntry] = useState(200);
-  const [defaultPosition, setDefaultPosition] = useState<0|1|2|3|4|5|6|7>(0);
-  const [insertionOrderMode, setInsertionOrderMode] = useState<'same' | 'increment'>('increment');
-  const [insertionOrderStart, setInsertionOrderStart] = useState(100);
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [maxRetries, setMaxRetries] = useState(2);
-  const [maxConsecErrors, setMaxConsecErrors] = useState(3);
-  const [modelOverride, setModelOverride] = useState('');
+  const [useSchemaContext, setUseSchemaContext] = usePersistedState('bgen.useSchemaContext', true);
+  const [autoConfig, setAutoConfig] = usePersistedState('bgen.autoConfig', true);
+  const [totalEntries, setTotalEntries] = usePersistedState('bgen.totalEntries', 10);
+  const [entriesPerBatch, setEntriesPerBatch] = usePersistedState('bgen.entriesPerBatch', 5);
+  const [concurrentBatches, setConcurrentBatches] = usePersistedState('bgen.concurrentBatches', 1);
+  const [tokensPerEntry, setTokensPerEntry] = usePersistedState('bgen.tokensPerEntry', 200);
+  const [defaultPosition, setDefaultPosition] = usePersistedState<0|1|2|3|4|5|6|7>('bgen.defaultPosition', 0);
+  const [insertionOrderMode, setInsertionOrderMode] = usePersistedState<'same' | 'increment'>('bgen.insertionOrderMode', 'increment');
+  const [insertionOrderStart, setInsertionOrderStart] = usePersistedState('bgen.insertionOrderStart', 100);
+  const [showAdvanced, setShowAdvanced] = usePersistedState('bgen.showAdvanced', false);
+  const [maxRetries, setMaxRetries] = usePersistedState('bgen.maxRetries', 2);
+  const [maxConsecErrors, setMaxConsecErrors] = usePersistedState('bgen.maxConsecErrors', 3);
+  const [modelOverride, setModelOverride] = usePersistedState('bgen.modelOverride', '');
 
   // ─── Run state (persistent store → không mất khi chuyển tab/trang giữa chừng) ───
   const isRunning = useBatchRunStore(s => s.isRunning);

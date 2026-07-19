@@ -27,6 +27,13 @@ const crc32 = (buf: Uint8Array): number => {
 };
 
 /**
+ * Chunk có phải tEXt không.
+ * Chấp nhận thêm 'tExt' (viết sai chữ X) để ĐỌC / DỌN được những file PNG do bản cũ của tool
+ * xuất ra trước khi lỗi này được sửa — nhờ vậy xuất lại là thẻ sạch, không còn chunk hỏng sót lại.
+ */
+const isTextChunkType = (type: string) => type === 'tEXt' || type === 'tExt';
+
+/**
  * Extracts character JSON string from PNG ArrayBuffer.
  * Checks for 'ccv3' keyword first (V3 cards), then falls back to 'chara' (V2).
  */
@@ -61,7 +68,7 @@ export function extractCharaFromPng(arrayBuffer: ArrayBuffer): string | null {
     const length = view.getUint32(offset);
     const type = textDecoder.decode(uint8.subarray(offset + 4, offset + 8));
 
-    if (type === 'tEXt') {
+    if (isTextChunkType(type)) {
       const dataStart = offset + 8;
       const dataEnd = dataStart + length;
       const chunkData = uint8.subarray(dataStart, dataEnd);
@@ -114,10 +121,14 @@ function buildTextChunk(keyword: string, textData: string): Uint8Array {
   // Length (4 bytes)
   chunkView.setUint32(0, chunkDataLength);
 
-  // Type 'tEXt' (4 bytes)
+  // Type 'tEXt' (4 bytes).
+  // LƯU Ý: chữ X phải VIẾT HOA (88). Trước đây chỗ này ghi nhầm 120 ('x') → chunk ra "tExt",
+  // SillyTavern lọc `chunk.name === 'tEXt'` nên KHÔNG thấy metadata ⇒ báo "No PNG metadata"
+  // và không import được thẻ. (Theo chuẩn PNG, chữ thứ 3 viết thường còn có nghĩa là chunk
+  // "reserved/không hợp lệ" — nên đây là lỗi thật, không chỉ là lệch tên.)
   chunk[4] = 116; // 't'
   chunk[5] = 69;  // 'E'
-  chunk[6] = 120; // 'x'
+  chunk[6] = 88;  // 'X'  ← KHÔNG được là 120 ('x')
   chunk[7] = 116; // 't'
 
   // Data: keyword + null separator + text
@@ -153,7 +164,7 @@ function stripTextChunks(uint8: Uint8Array, keywords: Set<string>): Uint8Array {
     const type = textDecoder.decode(uint8.subarray(offset + 4, offset + 8));
     const totalChunkSize = 12 + length; // length(4) + type(4) + data(length) + crc(4)
 
-    if (type === 'tEXt') {
+    if (isTextChunkType(type)) {
       // Parse keyword from chunk data
       const dataStart = offset + 8;
       const dataEnd = dataStart + length;

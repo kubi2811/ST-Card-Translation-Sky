@@ -4,6 +4,7 @@ import {
   CheckCircle2, Circle, Loader2, ChevronRight, ChevronDown,
   AlertTriangle, Settings2, Hash, BookOpen, User, Terminal,
   MessageSquare, Sparkles, SkipForward, Edit3, Zap, Moon, Cog,
+  Maximize2, X,
   type LucideIcon
 } from 'lucide-react';
 import { useAutoCreatorStore } from '../store/autoCreatorStore';
@@ -67,6 +68,7 @@ export function AutoCreatorPage() {
   const [expandedStep, setExpandedStep] = useState<AnyPipelineStep | null>(null);
   const [showPromptOverride, setShowPromptOverride] = useState<AutoCreatorStep | null>(null);
   const [showMnPromptOverride, setShowMnPromptOverride] = useState<MinhNguyetStep | null>(null);
+  const [ideaExpanded, setIdeaExpanded] = useState(false); // ô "Ý tưởng của bạn" phóng to toàn màn hình
   const logEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -370,8 +372,20 @@ export function AutoCreatorPage() {
           {renderPresetSelector()}
 
           <div className="space-y-2">
-            <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">{ui.acYourIdea}</label>
+            <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2">{ui.acYourIdea}</span>
+              {/* Ô ý tưởng thường rất dài — cho mở rộng ra toàn màn hình để dễ soạn/sửa. */}
+              <button
+                type="button"
+                onClick={() => setIdeaExpanded(true)}
+                title={ui.acIdeaExpandTip}
+                className="flex items-center gap-1 px-2 py-1 rounded-lg border border-border text-[10px] font-normal normal-case tracking-normal text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              >
+                <Maximize2 className="w-3 h-3" /> {ui.acIdeaExpand}
+              </button>
+            </label>
             <textarea className="w-full h-28 p-3 text-sm rounded-xl border border-border bg-card resize-none focus:outline-none focus:ring-2 focus:ring-primary/50 placeholder:text-muted-foreground/50 disabled:opacity-50" placeholder={ui.acIdeaPh} value={store.config.idea} onChange={(e) => store.setIdea(e.target.value)} disabled={store.isRunning} />
+            <p className="text-[10px] text-muted-foreground/70 text-right">{ui.acIdeaChars.replace('{n}', String(store.config.idea.length))}</p>
           </div>
 
           {/* v3: Auto Apply toggle */}
@@ -583,6 +597,50 @@ export function AutoCreatorPage() {
           </div>
         </div>
       </div>
+
+      {/* Ô "Ý tưởng của bạn" phóng to — sửa trực tiếp vào store nên đóng lại là giữ nguyên nội dung. */}
+      {ideaExpanded && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-6"
+          onClick={() => setIdeaExpanded(false)}
+        >
+          <div
+            className="w-full max-w-4xl h-[80vh] bg-card border border-border rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+              <h3 className="font-semibold text-sm flex items-center gap-2">{ui.acYourIdea}</h3>
+              <button
+                type="button"
+                onClick={() => setIdeaExpanded(false)}
+                className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                title={ui.acIdeaCollapse}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <textarea
+              autoFocus
+              className="flex-1 w-full p-4 text-sm bg-transparent resize-none focus:outline-none placeholder:text-muted-foreground/50 disabled:opacity-50 scrollbar-thin"
+              placeholder={ui.acIdeaPh}
+              value={store.config.idea}
+              onChange={(e) => store.setIdea(e.target.value)}
+              disabled={store.isRunning}
+              onKeyDown={(e) => { if (e.key === 'Escape') setIdeaExpanded(false); }}
+            />
+            <div className="flex items-center justify-between px-4 py-2.5 border-t border-border shrink-0">
+              <span className="text-[11px] text-muted-foreground">{ui.acIdeaChars.replace('{n}', String(store.config.idea.length))}</span>
+              <button
+                type="button"
+                onClick={() => setIdeaExpanded(false)}
+                className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:opacity-90 transition-opacity"
+              >
+                {ui.acIdeaCollapse}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

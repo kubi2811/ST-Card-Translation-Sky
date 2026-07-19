@@ -15,7 +15,12 @@ const REASON_KEY = { mvu: 'tcRecMvu', script: 'tcRecScript', big: 'tcRecBig', sm
  * Chỉ hiện 1 lần cho mỗi lần nạp card MỚI (card khôi phục từ cache có tiến trình → không hiện).
  */
 export default function PresetRecommendModal() {
-  const { card, cardFileName, presetRecommendCard, presetRecommendSeed, translationConfig } = useStore();
+  // (bugNeedFix/39) selector hẹp — trước đây subscribe toàn store, re-render theo mọi set() lúc dịch.
+  const card = useStore((s) => s.card);
+  const cardFileName = useStore((s) => s.cardFileName);
+  const presetRecommendCard = useStore((s) => s.presetRecommendCard);
+  const presetRecommendSeed = useStore((s) => s.presetRecommendSeed);
+  const translationConfig = useStore((s) => s.translationConfig);
   const ui = useUi() as Record<string, string>;
   const applyPreset = usePresetApply();
   const [dismissed, setDismissed] = useState(false);

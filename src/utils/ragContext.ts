@@ -52,6 +52,25 @@ interface FieldFeatures {
 
 const featureCache = new Map<string, FieldFeatures>();
 
+/**
+ * (User 2026 — bugNeedFix/39) TERM-VECTOR CACHE cho TF-IDF cosine.
+ * Trước đây tfidfCosineSimilarity XÂY LẠI 2 Map term→weight cho MỖI CẶP field (rồi còn tính
+ * magnitude 3 lần): field script 171K ký tự có ~hàng chục nghìn bigram → so với 418 field done
+ * (luồng "So sánh → Gộp thông minh") = hàng chục triệu phép copy MỖI field dịch ⇒ đo thật 1.43s
+ * block/field lớn, ~34s tổng cho 187 field → "Trang không phản hồi".
+ * Nay: vector (đã nhân IDF, đã CAP top-N term đại diện) + magnitude tính 1 LẦN mỗi field và cache;
+ * cosine mỗi cặp chỉ còn dot-product trên vector ≤ VECTOR_TOP_TERMS phần tử, 0 allocation.
+ */
+interface TermVector {
+  /** term → weight (freq × idf), đã cap top-N theo weight */
+  terms: Map<string, number>;
+  /** magnitude của vector (sqrt Σw²) */
+  mag: number;
+}
+const vectorCache = new Map<string, TermVector>();
+/** Trần số term đại diện mỗi vector — đủ cho similarity ranking, chặn O(bigram) nổ với script lớn. */
+const VECTOR_TOP_TERMS = 400;
+
 /** Document frequency: term → number of fields containing it */
 let dfMap: Map<string, number> | null = null;
 /** Total number of documents used to build dfMap */
@@ -59,6 +78,7 @@ let dfDocCount = 0;
 
 export function clearRAGCache(): void {
   featureCache.clear();
+  vectorCache.clear();
   dfMap = null;
   dfDocCount = 0;
 }
@@ -121,12 +141,50 @@ function extractFeatures(text: string): FieldFeatures {
   return { cjkBigrams, words, placeholders, tags, properNouns };
 }
 
+/** Key cache an toàn: path + độ dài original — đổi card cùng path (import bản mới) không dính stale. */
+const cacheKeyOf = (field: TranslationField) => `${field.path}:${field.original.length}`;
+
 function getFeaturesFor(field: TranslationField): FieldFeatures {
-  const cached = featureCache.get(field.path);
+  const key = cacheKeyOf(field);
+  const cached = featureCache.get(key);
   if (cached) return cached;
   const features = extractFeatures(field.original);
-  featureCache.set(field.path, features);
+  featureCache.set(key, features);
   return features;
+}
+
+/** (bug 39) Lấy term-vector TF-IDF (đã cap + cache) cho field — tính đúng 1 lần mỗi field. */
+function getVectorFor(field: TranslationField): TermVector {
+  const key = cacheKeyOf(field);
+  const cached = vectorCache.get(key);
+  if (cached) return cached;
+
+  const f = getFeaturesFor(field);
+  // Merge: CJK bigram (trọng số 1.5) + words — như logic cũ.
+  const merged = new Map<string, number>();
+  for (const [term, freq] of f.cjkBigrams) merged.set(term, (merged.get(term) || 0) + freq * 1.5);
+  for (const [term, freq] of f.words) merged.set(term, (merged.get(term) || 0) + freq);
+
+  // Nhân IDF thành weight.
+  let weighted: Array<[string, number]> = [];
+  for (const [term, freq] of merged) weighted.push([term, freq * idf(term)]);
+
+  // CAP top-N term theo weight — script 171K ký tự có hàng chục nghìn bigram, giữ N term đại diện
+  // là đủ cho việc XẾP HẠNG similarity (không cần cosine chính xác tuyệt đối).
+  if (weighted.length > VECTOR_TOP_TERMS) {
+    weighted.sort((a, b) => b[1] - a[1]);
+    weighted = weighted.slice(0, VECTOR_TOP_TERMS);
+  }
+
+  let magSq = 0;
+  const terms = new Map<string, number>();
+  for (const [term, w] of weighted) {
+    terms.set(term, w);
+    magSq += w * w;
+  }
+  const vec: TermVector = { terms, mag: Math.sqrt(magSq) };
+  vectorCache.set(key, vec);
+  return vec;
 }
 
 /* ─── TF-IDF Document Frequency ─── */
@@ -138,6 +196,7 @@ function ensureDFMap(allFields: TranslationField[]): void {
 
   dfMap = new Map<string, number>();
   dfDocCount = allFields.length;
+  vectorCache.clear(); // (bug 39) IDF đổi → vector weight cũ hết hiệu lực
 
   for (const field of allFields) {
     const features = getFeaturesFor(field);
@@ -169,83 +228,20 @@ function idf(term: string): number {
 
 /* ─── TF-IDF Cosine Similarity ─── */
 
-function tfidfCosineSimilarity(
-  aFeatures: FieldFeatures,
-  bFeatures: FieldFeatures,
-): number {
-  // Merge CJK bigrams and words into unified term vectors
-  const aTerms = new Map<string, number>();
-  const bTerms = new Map<string, number>();
-
-  // CJK bigrams (weight 1.5x)
-  for (const [term, freq] of aFeatures.cjkBigrams) {
-    aTerms.set(term, (aTerms.get(term) || 0) + freq * 1.5);
-  }
-  for (const [term, freq] of bFeatures.cjkBigrams) {
-    bTerms.set(term, (bTerms.get(term) || 0) + freq * 1.5);
-  }
-
-  // Words
-  for (const [term, freq] of aFeatures.words) {
-    aTerms.set(term, (aTerms.get(term) || 0) + freq);
-  }
-  for (const [term, freq] of bFeatures.words) {
-    bTerms.set(term, (bTerms.get(term) || 0) + freq);
-  }
-
-  if (aTerms.size === 0 || bTerms.size === 0) return 0;
-
-  // Compute TF-IDF weighted dot product and magnitudes
+/**
+ * (bug 39) Cosine trên 2 vector ĐÃ CACHE (weight có sẵn IDF, magnitude tính sẵn).
+ * Chỉ còn dot-product duyệt vector NHỎ hơn (≤ VECTOR_TOP_TERMS) — 0 allocation, 0 tính lại.
+ * (Bản cũ xây lại 2 Map + tính magnitude 3 lần cho MỖI CẶP field — thủ phạm treo 34s luồng So sánh.)
+ */
+function tfidfCosineSimilarity(aVec: TermVector, bVec: TermVector): number {
+  if (aVec.terms.size === 0 || bVec.terms.size === 0 || aVec.mag === 0 || bVec.mag === 0) return 0;
+  const [smaller, larger] = aVec.terms.size <= bVec.terms.size ? [aVec.terms, bVec.terms] : [bVec.terms, aVec.terms];
   let dotProduct = 0;
-  let aMag = 0;
-  let bMag = 0;
-
-  // Iterate over smaller set for efficiency
-  const [smaller, larger, isSwapped] = aTerms.size <= bTerms.size
-    ? [aTerms, bTerms, false]
-    : [bTerms, aTerms, true];
-
-  for (const [term, sFreq] of smaller) {
-    const lFreq = larger.get(term);
-    const termIdf = idf(term);
-    const sWeight = sFreq * termIdf;
-    aMag += isSwapped ? 0 : sWeight * sWeight;
-    bMag += isSwapped ? sWeight * sWeight : 0;
-    if (lFreq !== undefined) {
-      const lWeight = lFreq * termIdf;
-      dotProduct += sWeight * lWeight;
-    }
+  for (const [term, sWeight] of smaller) {
+    const lWeight = larger.get(term);
+    if (lWeight !== undefined) dotProduct += sWeight * lWeight;
   }
-
-  // Compute full magnitudes
-  for (const [term, freq] of aTerms) {
-    const w = freq * idf(term);
-    if (isSwapped || !smaller.has(term)) {
-      // Already counted in smaller loop if not swapped
-    }
-    aMag += w * w;
-  }
-  for (const [term, freq] of bTerms) {
-    const w = freq * idf(term);
-    bMag += w * w;
-  }
-
-  // Recompute magnitudes properly (simpler, correct approach)
-  aMag = 0;
-  bMag = 0;
-  for (const [term, freq] of aTerms) {
-    const w = freq * idf(term);
-    aMag += w * w;
-  }
-  for (const [term, freq] of bTerms) {
-    const w = freq * idf(term);
-    bMag += w * w;
-  }
-
-  const denominator = Math.sqrt(aMag) * Math.sqrt(bMag);
-  if (denominator === 0) return 0;
-
-  return dotProduct / denominator;
+  return dotProduct / (aVec.mag * bVec.mag);
 }
 
 /** Legacy overlap coefficient for placeholders/tags (small sets, no TF-IDF needed) */
@@ -259,12 +255,17 @@ function overlapCoefficient(a: Set<string>, b: Set<string>): number {
   return intersection / smaller.size;
 }
 
-function calculateSimilarity(currentFeatures: FieldFeatures, candidateFeatures: FieldFeatures): number {
+function calculateSimilarity(
+  currentFeatures: FieldFeatures,
+  candidateFeatures: FieldFeatures,
+  currentVec: TermVector,
+  candidateVec: TermVector,
+): number {
   let score = 0;
   let weightSum = 0;
 
-  // TF-IDF cosine similarity for text content (primary signal)
-  const tfidfScore = tfidfCosineSimilarity(currentFeatures, candidateFeatures);
+  // TF-IDF cosine similarity for text content (primary signal) — dùng vector cache (bug 39)
+  const tfidfScore = tfidfCosineSimilarity(currentVec, candidateVec);
   if (tfidfScore > 0) {
     score += tfidfScore * 6;
     weightSum += 6;
@@ -915,11 +916,12 @@ function buildCrossFieldSection(
   ]);
 
   const tier3: ScoredField[] = [];
+  const currentVec = getVectorFor(currentField); // (bug 39) vector của field hiện tại: lấy 1 lần
   for (const candidate of translatedFields) {
     if (tier1and2Paths.has(candidate.path)) continue;
 
     const candidateFeatures = getFeaturesFor(candidate);
-    let score = calculateSimilarity(currentFeatures, candidateFeatures);
+    let score = calculateSimilarity(currentFeatures, candidateFeatures, currentVec, getVectorFor(candidate));
 
     // Group bonuses
     if (candidate.group === currentField.group) score += 0.12;

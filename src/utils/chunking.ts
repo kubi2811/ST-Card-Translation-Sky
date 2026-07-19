@@ -233,18 +233,44 @@ function isSafeBoundary(text: string, pos: number): boolean {
  * Searches backward from targetPos looking for a split point that passes isSafeBoundary().
  * Returns the best position, or targetPos if no safe boundary found.
  */
+/**
+ * (User 2026 — bugNeedFix/39) TRẦN SỐ LẦN DÒ mỗi dấu phân tách.
+ *
+ * isSafeBoundary() ĐẮT (slice tiền tố + vài regex quét lại + vòng 10K ký tự). Trước đây
+ * findSafeBoundary duyệt LÙI qua MỌI lần xuất hiện của dấu phân tách trong cửa sổ [minPos, targetPos]
+ * — với field code 88K ký tự, riêng dấu CÁCH và XUỐNG DÒNG đã hàng nghìn vị trí ⇒ hàng nghìn lần gọi
+ * ⇒ đo thật 1.123ms CHỈ để chunk 1 field (×10 field code = ~10 giây nghẽn main thread → bug 39).
+ *
+ * Ta chỉ cần 1 ranh giới AN TOÀN, KHÔNG cần ranh giới "đẹp nhất": dò tối đa N vị trí gần targetPos
+ * nhất cho mỗi dấu, không thấy thì sang dấu kế (rồi tới các fallback sẵn có). Kết quả vẫn luôn là
+ * ranh giới an toàn, chỉ có thể lệch đôi chút so với trước.
+ */
+const MAX_BOUNDARY_PROBES_PER_SEP = 12;
+
 function findSafeBoundary(text: string, targetPos: number, minPos: number): number {
   // Try double newline boundaries first (most natural)
   const priorities = ['\n\n', '\n', '. ', '。', '；', ' '];
-  
+
+  // (bug 39) memo theo vị trí — findSafeBoundary hay dò lại đúng vị trí cũ giữa các dấu/fallback.
+  const memo = new Map<number, boolean>();
+  const safeAt = (pos: number): boolean => {
+    const hit = memo.get(pos);
+    if (hit !== undefined) return hit;
+    const ok = isSafeBoundary(text, pos);
+    memo.set(pos, ok);
+    return ok;
+  };
+
   for (const sep of priorities) {
     let searchFrom = targetPos;
-    while (searchFrom > minPos) {
+    let probes = 0;
+    while (searchFrom > minPos && probes < MAX_BOUNDARY_PROBES_PER_SEP) {
       const idx = text.lastIndexOf(sep, searchFrom);
       if (idx <= minPos) break;
-      
+
       const splitAt = idx + sep.length;
-      if (isSafeBoundary(text, splitAt)) {
+      probes++;
+      if (safeAt(splitAt)) {
         return splitAt;
       }
       searchFrom = idx - 1;
@@ -252,13 +278,15 @@ function findSafeBoundary(text: string, targetPos: number, minPos: number): numb
   }
 
   // Fallback: try any position near targetPos that is safe
-  for (let pos = targetPos; pos > minPos; pos -= 50) {
-    if (isSafeBoundary(text, pos)) {
+  // (bug 39) bước 200 thay vì 50: isSafeBoundary đắt (quét ngược 5000 ký tự + regex mỗi dấu `{`),
+  // mà trạng thái an toàn đổi rất chậm theo vị trí → bước thưa hơn vẫn tìm ra ranh giới an toàn.
+  for (let pos = targetPos; pos > minPos; pos -= 200) {
+    if (safeAt(pos)) {
       // Find nearest newline or space
       const nl = text.lastIndexOf('\n', pos);
-      if (nl > minPos && isSafeBoundary(text, nl + 1)) return nl + 1;
+      if (nl > minPos && safeAt(nl + 1)) return nl + 1;
       const sp = text.lastIndexOf(' ', pos);
-      if (sp > minPos && isSafeBoundary(text, sp + 1)) return sp + 1;
+      if (sp > minPos && safeAt(sp + 1)) return sp + 1;
       return pos;
     }
   }

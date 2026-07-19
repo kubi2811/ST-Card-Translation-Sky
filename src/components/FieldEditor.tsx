@@ -1,5 +1,6 @@
 import { useState, useMemo, useRef, useCallback, useEffect, lazy, Suspense, memo } from 'react';
 import { useStore } from '../store';
+import { useThrottledStore } from '../hooks/useThrottledStore';
 import { useTranslation } from '../hooks/useTranslation';
 import { useT, useUi } from '../i18n/useLocale';
 import { fmt } from '../i18n';
@@ -14,6 +15,24 @@ const getFieldBaseKey = (path: string) => {
   const lastPart = path.split('.').pop() || '';
   return lastPart.replace(/\[\d+\]$/, '');
 };
+
+// (bugNeedFix/39) Đếm số field theo baseKey CACHE theo tham chiếu mảng fields: trước đây MỖI HÀNG
+// ảo hoá filter cả 605 field ngay trong render (~28 hàng × 605 phép so mỗi lần render) — burst dịch
+// khiến bảng render liên tục ⇒ cộng dồn đáng kể. WeakMap không giữ mảng sống; fields đổi identity
+// (mỗi nhịp throttle 150ms) → tự build lại 1 lần (~0.5ms).
+const _baseKeyCountCache = new WeakMap<object, Map<string, number>>();
+function getBaseKeyCounts(allFields: { path: string }[]): Map<string, number> {
+  let m = _baseKeyCountCache.get(allFields);
+  if (!m) {
+    m = new Map();
+    for (const f of allFields) {
+      const k = getFieldBaseKey(f.path);
+      m.set(k, (m.get(k) || 0) + 1);
+    }
+    _baseKeyCountCache.set(allFields, m);
+  }
+  return m;
+}
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -240,7 +259,8 @@ function ChunkStatusAndResume({
   retranslateField: (path: string, resume?: boolean) => void;
   phase: string;
 }) {
-  const { proxy, translationConfig } = useStore();
+  const proxy = useStore((s) => s.proxy);
+  const translationConfig = useStore((s) => s.translationConfig);
   const ui = useUi();
   const t = useT();
   const [expanded, setExpanded] = useState(false);
@@ -859,8 +879,8 @@ const VirtualFieldTableRow = memo(({
             </label>
             {(() => {
               const baseKey = getFieldBaseKey(field.path);
-              const matchingFields = allFields.filter(f => getFieldBaseKey(f.path) === baseKey && f.path !== field.path);
-              if (matchingFields.length === 0) return null;
+              // (bug 39) O(1) qua cache thay vì filter 605 field mỗi hàng mỗi render.
+              if ((getBaseKeyCounts(allFields).get(baseKey) || 0) <= 1) return null;
               return (
                 <button
                   className="btn btn-ghost tooltip"
@@ -1048,7 +1068,10 @@ function VirtualTableView({
   scrollToPath?: string | null;
   highlightPath?: string | null;
 }) {
-  const { setFields, fields: allFields, addToast } = useStore();
+  // (bugNeedFix/39) selector hẹp + throttle allFields — 2 view bảng này mount suốt lúc dịch.
+  const setFields = useStore((s) => s.setFields);
+  const allFields = useThrottledStore((s) => s.fields, 200);
+  const addToast = useStore((s) => s.addToast);
   const parentRef = useRef<HTMLDivElement>(null);
   const headerCheckboxRef = useRef<HTMLInputElement>(null);
 
@@ -1295,8 +1318,8 @@ const VirtualFieldCardRow = memo(({
             </label>
             {(() => {
               const baseKey = getFieldBaseKey(field.path);
-              const matchingFields = allFields.filter(f => getFieldBaseKey(f.path) === baseKey && f.path !== field.path);
-              if (matchingFields.length === 0) return null;
+              // (bug 39) O(1) qua cache thay vì filter 605 field mỗi hàng mỗi render.
+              if ((getBaseKeyCounts(allFields).get(baseKey) || 0) <= 1) return null;
               return (
                 <button
                   className="btn btn-ghost tooltip"
@@ -1429,7 +1452,10 @@ function VirtualDiffView({
   scrollToPath?: string | null;
   highlightPath?: string | null;
 }) {
-  const { setFields, fields: allFields, addToast } = useStore();
+  // (bugNeedFix/39) selector hẹp + throttle allFields — 2 view bảng này mount suốt lúc dịch.
+  const setFields = useStore((s) => s.setFields);
+  const allFields = useThrottledStore((s) => s.fields, 200);
+  const addToast = useStore((s) => s.addToast);
   const parentRef = useRef<HTMLDivElement>(null);
   const headerCheckboxRef = useRef<HTMLInputElement>(null);
 
@@ -1613,7 +1639,15 @@ function VirtualDiffView({
 }
 
 export default function FieldEditor() {
-  const { fields, updateField, phase, translationConfig, jumpToFieldPath, setJumpToFieldPath } = useStore();
+  // (bugNeedFix/39) `fields` THROTTLE 150ms + selector hẹp phần còn lại. Trước đây subscribe toàn
+  // store: burst dịch (560+ set()) → re-render + lọc/đếm 605 field + reconcile bảng ảo hoá MỖI set();
+  // nếu ô Tìm có chữ còn thêm toLowerCase trên ~5MB text mỗi lần ⇒ góp phần treo luồng So sánh.
+  const fields = useThrottledStore((s) => s.fields, 150);
+  const updateField = useStore((s) => s.updateField);
+  const phase = useStore((s) => s.phase);
+  const translationConfig = useStore((s) => s.translationConfig);
+  const jumpToFieldPath = useStore((s) => s.jumpToFieldPath);
+  const setJumpToFieldPath = useStore((s) => s.setJumpToFieldPath);
   const { retranslateField, applyModToField } = useTranslation();
   const t = useT();
   const modEnabled = Boolean(translationConfig.enableModMode && translationConfig.modInstructions?.trim());

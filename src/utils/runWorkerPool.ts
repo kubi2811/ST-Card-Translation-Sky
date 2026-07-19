@@ -53,6 +53,16 @@ export async function runWorkerPool(opts: WorkerPoolOptions): Promise<{ cancelle
       const idx = next++;
       if (idx >= total) return; // hết hàng đợi → worker nghỉ
 
+      // (User 2026 — bugNeedFix/39) NHẢ MAIN THREAD 1 macrotask trước mỗi việc. Không có dòng này,
+      // hàng chục worker khởi động đồng loạt chỉ cách nhau MICROTASK boundary → toàn bộ phần chuẩn bị
+      // ĐỒNG BỘ của mọi việc (build prompt/RAG/dict/surgical extract) dính thành MỘT long task duy
+      // nhất hàng chục giây — browser không paint/không nhận input ⇒ "Trang không phản hồi" (luồng
+      // So sánh 418 field done sẵn là ca nặng nhất). setTimeout(0) tách mỗi việc thành macrotask
+      // riêng → UI luôn sống; chi phí ~1-4ms/việc, không ảnh hưởng tổng thời gian dịch (nghẽn thật
+      // nằm ở chờ API).
+      await new Promise<void>((r) => setTimeout(r, 0));
+      if (cancelled || shouldStop?.()) { cancelled = true; return; }
+
       try {
         await runOne(idx);
       } catch (err) {

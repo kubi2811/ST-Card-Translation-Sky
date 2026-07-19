@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useStore } from '../store';
 import { useIdleMemo } from '../hooks/useIdleMemo';
+import { useThrottledStore } from '../hooks/useThrottledStore';
 import { useT, useUi } from '../i18n/useLocale';
 import { fmt } from '../i18n';
 import { 
@@ -46,21 +47,21 @@ import {
 const GROUP_ROW_CAP = 150;
 
 export default function MvuSyncPanel() {
-  const { 
-    card,
-    fields,
-    translationConfig,
-    setTranslationConfig,
-    locale,
-    proxy,
-    addToast,
-    mvuKeyMetadata,
-    setMvuKeyMetadata,
-    mvuDictionaryHistory,
-    pushDictionaryHistory,
-    updateCard,
-    setFields
-  } = useStore();
+  // (bugNeedFix/39) selector hẹp + throttle fields — trước đây subscribe toàn store nên panel này
+  // (mount trong sidebar khi mở Nâng cao) re-render theo TỪNG set() trong burst dịch.
+  const card = useStore((s) => s.card);
+  const fields = useThrottledStore((s) => s.fields, 200);
+  const translationConfig = useStore((s) => s.translationConfig);
+  const setTranslationConfig = useStore((s) => s.setTranslationConfig);
+  const locale = useStore((s) => s.locale);
+  const proxy = useStore((s) => s.proxy);
+  const addToast = useStore((s) => s.addToast);
+  const mvuKeyMetadata = useStore((s) => s.mvuKeyMetadata);
+  const setMvuKeyMetadata = useStore((s) => s.setMvuKeyMetadata);
+  const mvuDictionaryHistory = useStore((s) => s.mvuDictionaryHistory);
+  const pushDictionaryHistory = useStore((s) => s.pushDictionaryHistory);
+  const updateCard = useStore((s) => s.updateCard);
+  const setFields = useStore((s) => s.setFields);
   const t = useT();
   const [isExpanded, setIsExpanded] = useState(false);
   const [newKey, setNewKey] = useState('');

@@ -1,12 +1,22 @@
 import React, { useState, useMemo } from 'react';
 import { useStore } from '../store';
+import { useThrottledStore } from '../hooks/useThrottledStore';
 import { useT, useUi } from '../i18n/useLocale';
 import { fmt } from '../i18n';
 import { detectEjsCard, extractEjsEntryNames, extractEjsKeywords, extractAllDecorators, aiTranslateEjsEntries, enforceEjsDictConsistency, autoFixEjsEntryNames, autoFixEjsKeywords, enforceEjsCovariance, enforceEjsKeywordCasing, autoFixEjsKeywordsExtended, detectEjsConflicts, aiResolveEjsConflicts } from '../utils/ejsSync';
 import { Settings, Plus, Trash2, Wand2, Loader2, Search, Download, Upload, Shield, Zap, Hash, BookOpen, Eye } from 'lucide-react';
 
 export default function EjsSyncPanel() {
-  const { card, translationConfig, setTranslationConfig, proxy, addToast, fields, updateField, addLog, saveTranslationCache } = useStore();
+  // (bugNeedFix/39) selector hẹp + throttle fields — trước đây subscribe toàn store lúc dịch.
+  const card = useStore((s) => s.card);
+  const translationConfig = useStore((s) => s.translationConfig);
+  const setTranslationConfig = useStore((s) => s.setTranslationConfig);
+  const proxy = useStore((s) => s.proxy);
+  const addToast = useStore((s) => s.addToast);
+  const fields = useThrottledStore((s) => s.fields, 200);
+  const updateField = useStore((s) => s.updateField);
+  const addLog = useStore((s) => s.addLog);
+  const saveTranslationCache = useStore((s) => s.saveTranslationCache);
   const t = useT();
   const [isExpanded, setIsExpanded] = useState(false);
   const [newKey, setNewKey] = useState('');

@@ -153,7 +153,8 @@ interface AppState {
   clearLogs: () => void;
 
   // Toasts
-  toasts: { id: string; level: 'error' | 'success' | 'info'; message: string }[];
+  /** `count` = số lần cùng 1 thông báo bị gộp (chống bão toast — xem addToast). */
+  toasts: { id: string; level: 'error' | 'success' | 'info'; message: string; count?: number }[];
   addToast: (level: 'error' | 'success' | 'info', message: string) => void;
   removeToast: (id: string) => void;
 
@@ -951,7 +952,19 @@ export const useStore = create<AppState>((set) => ({
   toasts: [],
   addToast: (level, message) => {
     const id = crypto.randomUUID();
-    set((s) => ({ toasts: [...s.toasts, { id, level, message }] }));
+    set((s) => {
+      // (User 2026 — bugNeedFix/39) CHỐNG BÃO TOAST. Dịch card lớn mà gặp sự cố (hết quota, key sai,
+      // proxy chết…) thì MỌI field đều bắn toast lỗi: 187 field × số lần thử = HÀNG TRĂM toast, mỗi
+      // cái sống 5s ⇒ hàng trăm DOM node + hàng trăm set() ⇒ chính là "trang không phản hồi".
+      //  (a) GỘP TRÙNG: cùng level+message thì chỉ tăng bộ đếm ×N, không thêm dòng mới.
+      //  (b) TRẦN 5 dòng: quá thì bỏ dòng cũ nhất.
+      const same = s.toasts.find((t) => t.level === level && t.message === message);
+      if (same) {
+        return { toasts: s.toasts.map((t) => (t.id === same.id ? { ...t, count: (t.count || 1) + 1 } : t)) };
+      }
+      const next = [...s.toasts, { id, level, message }];
+      return { toasts: next.length > 5 ? next.slice(next.length - 5) : next };
+    });
     setTimeout(() => {
       set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
     }, 5000);

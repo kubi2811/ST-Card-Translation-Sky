@@ -148,7 +148,21 @@ function bakeModdedFieldsIntoCard() {
 }
 
 export function useTranslation() {
-  const store = useStore();
+  // (User 2026 — bugNeedFix/39) KHÔNG subscribe store trong hook engine.
+  // Trước đây `const store = useStore()` (không selector) khiến MỌI component gọi useTranslation()
+  // (FieldEditor, TranslationProgress, VerifyPanel, ExportPanel, ExternalLinkTab…) re-render theo
+  // TỪNG set() — burst dịch 187 field bắn 560+ set() ⇒ bão re-render + identity `store` đổi phá
+  // memo của bảng ảo hoá. Engine chỉ cần ĐỌC TƯƠI + gọi action — Proxy này chuyển mọi truy cập
+  // thuộc tính sang useStore.getState() tại thời điểm dùng: luôn tươi, identity ổn định vĩnh viễn
+  // (useRef), và KHÔNG đăng ký subscription nào. Hành vi đọc/ghi giữ nguyên 100% (các chỗ cần
+  // snapshot tươi vốn đã gọi useStore.getState() trực tiếp).
+  const storeProxyRef = useRef<ReturnType<typeof useStore.getState> | null>(null);
+  if (!storeProxyRef.current) {
+    storeProxyRef.current = new Proxy({} as ReturnType<typeof useStore.getState>, {
+      get: (_t, prop) => (useStore.getState() as unknown as Record<string | symbol, unknown>)[prop],
+    });
+  }
+  const store = storeProxyRef.current;
   const abortRef = useRef<AbortController | null>(null);
   const pauseRef = useRef(false);
   // Track whether the main translation loop is actively running
@@ -257,6 +271,12 @@ export function useTranslation() {
     if (checkAbort()) throw new Error('Cancelled');
     store.setCurrentFieldIndex(index);
     store.updateField(field.path, { status: 'translating' });
+    // (User 2026 — bugNeedFix/39) NHẢ main thread 1 nhịp trước phần chuẩn bị ĐỒNG BỘ (RAG/prompt/dict).
+    // Nhiều worker song song chạy các khối sync liên tiếp có thể chiếm main thread hàng chục giây
+    // (luồng So sánh: 418 field done sẵn → RAG per-field nặng ngay từ đầu) → "Trang không phản hồi".
+    // Gốc rễ đã fix ở ragContext (vector cache, ×67 nhanh hơn); yield này là LƯỚI BẢO HIỂM để UI
+    // LUÔN sống kể cả khi xuất hiện hotspot mới. Chi phí ~1-4ms/field — không đáng kể.
+    await new Promise<void>((r) => setTimeout(r, 0));
     const charCount = field.original.length;
     const currentMaxTokens = store.proxy.maxTokens;
     const currentChunkSize = store.translationConfig.chunkSize;

@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo, useRef } from 'react';
 import { useStore } from '../store';
+import { useThrottledStore } from '../hooks/useThrottledStore';
 import { useTranslation } from '../hooks/useTranslation';
 import { useT, useUi } from '../i18n/useLocale';
 import { fmt } from '../i18n';
@@ -47,8 +48,15 @@ const CATEGORY_ICON: Record<string, typeof Code2> = {
 type VerifyTab = 'field' | 'card';
 
 export default function VerifyPanel() {
-  const store = useStore();
-  const { card, fields, proxy, translationConfig, addToast, addLog, updateField } = store;
+  // (bugNeedFix/39) selector hẹp + throttle fields — trước đây subscribe toàn store, mỗi set() trong
+  // burst dịch re-render panel + filter 605 field.
+  const card = useStore((s) => s.card);
+  const fields = useThrottledStore((s) => s.fields, 200);
+  const proxy = useStore((s) => s.proxy);
+  const translationConfig = useStore((s) => s.translationConfig);
+  const addToast = useStore((s) => s.addToast);
+  const addLog = useStore((s) => s.addLog);
+  const updateField = useStore((s) => s.updateField);
   const { getExportCard } = useTranslation();
   const t = useT() as Record<string, string>;
   const ui = useUi();

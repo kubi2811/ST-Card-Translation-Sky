@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useStore } from '../store';
+import { useThrottledStore } from '../hooks/useThrottledStore';
 import { useTranslation } from '../hooks/useTranslation';
 import { Code2, Play, Loader2, Trash2, CheckCircle2, Copy, Check, X, Globe } from 'lucide-react';
 import { publishToGithub } from '../utils/githubApi';
@@ -24,7 +25,12 @@ const renderSafeHtml = (htmlContent: string) => {
 };
 
 export default function ExternalLinkTab() {
-  const { fields, setFields, updateField, phase, addToast } = useStore();
+  // (bugNeedFix/39) selector hẹp + throttle fields — trước đây subscribe toàn store lúc dịch.
+  const fields = useThrottledStore((s) => s.fields, 200);
+  const setFields = useStore((s) => s.setFields);
+  const updateField = useStore((s) => s.updateField);
+  const phase = useStore((s) => s.phase);
+  const addToast = useStore((s) => s.addToast);
   const ui = useUi();
   const { retranslateField, cancelFieldTranslation } = useTranslation();
   

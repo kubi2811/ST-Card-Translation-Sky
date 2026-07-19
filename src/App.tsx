@@ -55,7 +55,14 @@ function warmupLazyChunks() {
 }
 
 export default function App() {
-  const { toasts, removeToast, card, jumpToFieldPath } = useStore();
+  // (User 2026 — bugNeedFix/39) Selector HẸP ở ROOT: trước đây `useStore()` không selector khiến
+  // MỌI set() (560+ lần trong burst dịch) re-render CẢ CÂY app từ gốc — vô hiệu hoá mọi fix selector
+  // của các component con. `card` chỉ dùng để bật/tắt khối UI → thu về boolean cho đỡ re-render
+  // khi updateCard đổi nội dung.
+  const toasts = useStore((s) => s.toasts);
+  const removeToast = useStore((s) => s.removeToast);
+  const hasCard = useStore((s) => !!s.card);
+  const jumpToFieldPath = useStore((s) => s.jumpToFieldPath);
   const t = useT();
   const ui = useUi();
   const [showEjsCreator, setShowEjsCreator] = useState(false);
@@ -98,7 +105,7 @@ export default function App() {
           {toasts.map((toast) => (
             <div key={toast.id} className={`toast toast-${toast.level}`}>
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
-                <span style={{ flex: 1 }}>{toast.message}</span>
+                <span style={{ flex: 1 }}>{toast.message}{toast.count && toast.count > 1 ? ` (×${toast.count})` : ''}</span>
                 <button
                   onClick={() => removeToast(toast.id)}
                   style={{
@@ -197,7 +204,7 @@ export default function App() {
         <TranslateConfig />
 
         {/* Nút mở EJS Creator Modal */}
-        {card && (
+        {hasCard && (
           <div style={{ padding: '0 20px', marginTop: '10px', marginBottom: '10px' }}>
             <button
               onClick={() => setShowEjsCreator(true)}
@@ -273,7 +280,7 @@ export default function App() {
 
       {/* ─── Main Content ─── */}
       <main className="main-content">
-        {!card ? (
+        {!hasCard ? (
           <div
             style={{
               display: 'flex',
@@ -403,7 +410,7 @@ export default function App() {
         {toasts.map((toast) => (
           <div key={toast.id} className={`toast toast-${toast.level}`}>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
-              <span style={{ flex: 1 }}>{toast.message}</span>
+              <span style={{ flex: 1 }}>{toast.message}{toast.count && toast.count > 1 ? ` (×${toast.count})` : ''}</span>
               <button
                 onClick={() => removeToast(toast.id)}
                 style={{

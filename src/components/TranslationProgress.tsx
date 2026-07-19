@@ -42,7 +42,9 @@ function MiniStat({ icon, value, label, color }: { icon: React.ReactNode; value:
 /** Live count-up timer: how long since translation started (wall-clock).
  *  Ticks every second while translating/paused; freezes when done/cancelled. */
 function ElapsedTime({ color = 'var(--text-secondary)' }: { color?: string }) {
-  const { startTime, phase } = useStore();
+  // (bugNeedFix/39) selector hẹp — trước đây subscribe toàn store, thêm 1 re-render mỗi set().
+  const startTime = useStore((s) => s.startTime);
+  const phase = useStore((s) => s.phase);
   const ui = useUi();
   const [, tick] = useState(0);
   useEffect(() => {
@@ -819,9 +821,10 @@ function TranslationPanel() {
 // ═══════════════════════════════════════════════
 
 export default function TranslationProgress() {
-  const { card, translationConfig } = useStore();
-  if (!card) return null;
-
-  const isModMode = translationConfig.enableModMode;
+  // (bugNeedFix/39) Selector hẹp: cha này bọc NGOÀI TranslationPanel đã throttle — nếu subscribe
+  // toàn store thì mỗi set() vẫn re-render từ cha xuống, vô hiệu hoá fix throttle bên trong.
+  const hasCard = useStore((s) => !!s.card);
+  const isModMode = useStore((s) => s.translationConfig.enableModMode);
+  if (!hasCard) return null;
   return isModMode ? <ModModePanel /> : <TranslationPanel />;
 }

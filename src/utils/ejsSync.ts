@@ -952,10 +952,42 @@ EXAMPLE (After - CORRECT):
  *
  * This is the EJS equivalent of MVU's autoFixMvuVariables().
  */
+/**
+ * (User 2026 — bugNeedFix/39) LỌC TỪ ĐIỂN THEO TEXT trước khi dựng RegExp.
+ *
+ * Bối cảnh: chuỗi auto-fix EJS (5 hàm dưới) chạy SAU KHI MỖI field dịch xong. Mỗi hàm duyệt TOÀN BỘ
+ * từ điển và dựng vài RegExp cho TỪNG mục — chi phí theo SỐ MỤC chứ không theo độ dài text. Đo thật
+ * trên card user (dict ~400 mục): field chỉ 1.117 ký tự vẫn tốn 145ms, field lớn tốn 1.250ms
+ * ⇒ ~88 giây cộng dồn cho 187 field ⇒ main thread nghẽn ⇒ "Trang không phản hồi" (đúng bug 39).
+ *
+ * Nhận xét then chốt: MỌI pattern trong các hàm này đều nhúng `escapeRegex(original)` NGUYÊN VĂN.
+ * Nếu `original` KHÔNG xuất hiện trong text thì KHÔNG pattern nào có thể khớp → loại mục đó ra là
+ * BẢO TOÀN HÀNH VI 100%, chỉ bỏ công vô ích. `includes` là mã native rất nhanh (≈1 GB/s) nên 1 lượt
+ * lọc rẻ hơn nhiều so với dựng hàng trăm RegExp.
+ *
+ * @param caseInsensitive true cho hàm sửa HOA/thường (khớp không phân biệt hoa thường).
+ */
+function filterDictByText(
+  dict: Record<string, string>,
+  text: string,
+  caseInsensitive = false,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!text) return out;
+  const hay = caseInsensitive ? text.toLowerCase() : text;
+  for (const [k, v] of Object.entries(dict)) {
+    if (!k || !v || k === v) continue;
+    if (hay.includes(caseInsensitive ? k.toLowerCase() : k)) out[k] = v;
+  }
+  return out;
+}
+
 export function autoFixEjsEntryNames(
   translated: string,
-  ejsEntryNameDict: Record<string, string>,
+  ejsEntryNameDictRaw: Record<string, string>,
 ): { text: string; fixes: { found: string; replaced: string }[] } {
+  // (bug 39) chỉ giữ mục THỰC SỰ có mặt trong text — xem filterDictByText.
+  const ejsEntryNameDict = filterDictByText(ejsEntryNameDictRaw, translated);
   const fixes: { found: string; replaced: string }[] = [];
   let text = translated;
 
@@ -1011,8 +1043,10 @@ export function autoFixEjsEntryNames(
  */
 export function autoFixEjsKeywords(
   translated: string,
-  ejsKeywordDict: Record<string, string>,
+  ejsKeywordDictRaw: Record<string, string>,
 ): { text: string; fixes: { found: string; replaced: string }[] } {
+  // (bug 39) lọc từ điển theo text trước khi dựng RegExp — xem filterDictByText.
+  const ejsKeywordDict = filterDictByText(ejsKeywordDictRaw, translated);
   const fixes: { found: string; replaced: string }[] = [];
 
   const entries = Object.entries(ejsKeywordDict).filter(([k, v]) => k && v && k !== v);
@@ -1112,12 +1146,15 @@ export function enforceEjsEntryName(
  */
 export function enforceEjsCovariance(
   translatedText: string,
-  ejsEntryNameDict: Record<string, string>,
-  ejsKeywordDict: Record<string, string>,
+  ejsEntryNameDictRaw: Record<string, string>,
+  ejsKeywordDictRaw: Record<string, string>,
 ): { text: string; fixes: { found: string; replaced: string }[] } {
   if (!translatedText || typeof translatedText !== 'string') {
     return { text: translatedText, fixes: [] };
   }
+  // (bug 39) lọc 2 từ điển theo text trước khi dựng RegExp — xem filterDictByText.
+  const ejsEntryNameDict = filterDictByText(ejsEntryNameDictRaw, translatedText);
+  const ejsKeywordDict = filterDictByText(ejsKeywordDictRaw, translatedText);
 
   const fixes: { found: string; replaced: string }[] = [];
   let result = translatedText;
@@ -1286,12 +1323,22 @@ export function enforceEjsCovariance(
  */
 export function enforceEjsKeywordCasing(
   translatedText: string,
-  ejsEntryNameDict: Record<string, string>,
-  ejsKeywordDict: Record<string, string>,
+  ejsEntryNameDictRaw: Record<string, string>,
+  ejsKeywordDictRaw: Record<string, string>,
 ): { text: string; fixes: { found: string; replaced: string }[] } {
   if (!translatedText || typeof translatedText !== 'string') {
     return { text: translatedText, fixes: [] };
   }
+  // (bug 39) lọc theo text KHÔNG phân biệt hoa/thường (hàm này chuyên sửa casing) — xem filterDictByText.
+  // Lọc theo GIÁ TRỊ dịch (canonical) vì hàm dò biến thể sai hoa/thường của chính giá trị đó.
+  const keepByValue = (d: Record<string, string>) => {
+    const low = translatedText.toLowerCase();
+    const o: Record<string, string> = {};
+    for (const [k, v] of Object.entries(d)) if (v && low.includes(v.toLowerCase())) o[k] = v;
+    return o;
+  };
+  const ejsEntryNameDict = keepByValue(ejsEntryNameDictRaw);
+  const ejsKeywordDict = keepByValue(ejsKeywordDictRaw);
 
   const fixes: { found: string; replaced: string }[] = [];
 
@@ -1641,8 +1688,10 @@ ${conflictItems.map((it, i) => `${i + 1}. [${it.type}] "${it.key}"`).join('\n')}
 
 export function autoFixEjsKeywordsExtended(
   translated: string,
-  ejsKeywordDict: Record<string, string>,
+  ejsKeywordDictRaw: Record<string, string>,
 ): { text: string; fixes: { found: string; replaced: string }[] } {
+  // (bug 39) lọc từ điển theo text trước khi dựng RegExp — xem filterDictByText.
+  const ejsKeywordDict = filterDictByText(ejsKeywordDictRaw, translated);
   const fixes: { found: string; replaced: string }[] = [];
 
   const entries = Object.entries(ejsKeywordDict).filter(([k, v]) => k && v && k !== v);

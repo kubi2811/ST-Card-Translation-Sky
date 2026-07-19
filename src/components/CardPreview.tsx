@@ -1,4 +1,5 @@
 import { useStore } from '../store';
+import { useThrottledStore } from '../hooks/useThrottledStore';
 import { useT, useUi } from '../i18n/useLocale';
 import { Eye, ChevronDown, ChevronRight, Languages, BookOpen } from 'lucide-react';
 import { useState, useMemo } from 'react';
@@ -6,7 +7,8 @@ import StPreviewModal from './StPreviewModal';
 
 /* ─── Map field paths to translated values ─── */
 function useTranslatedFields(): Map<string, string> {
-  const { fields } = useStore();
+  // (bugNeedFix/39) throttle: trước đây mỗi updateField dựng lại Map trên 605 field + re-render preview.
+  const fields = useThrottledStore((s) => s.fields, 250);
   return useMemo(() => {
     const map = new Map<string, string>();
     for (const f of fields) {
@@ -19,7 +21,8 @@ function useTranslatedFields(): Map<string, string> {
 }
 
 export default function CardPreview() {
-  const { card, contentType } = useStore();
+  const card = useStore((s) => s.card);
+  const contentType = useStore((s) => s.contentType);
   const t = useT();
   const ui = useUi() as Record<string, string>;
   const translated = useTranslatedFields();

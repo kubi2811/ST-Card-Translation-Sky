@@ -13,7 +13,12 @@ interface Props {
 
 export default function PresetImportPanel({ onOpenPromptViewer }: Props) {
   const t = useT();
-  const { activePreset, setActivePreset, applyPresetAIParams, card, addToast } = useStore();
+  // (bugNeedFix/39) selector hẹp — trước đây subscribe toàn store, re-render theo mọi set() lúc dịch.
+  const activePreset = useStore((s) => s.activePreset);
+  const setActivePreset = useStore((s) => s.setActivePreset);
+  const applyPresetAIParams = useStore((s) => s.applyPresetAIParams);
+  const card = useStore((s) => s.card);
+  const addToast = useStore((s) => s.addToast);
   const [library, setLibrary] = useState<SavedPreset[]>([]);
   const [expanded, setExpanded] = useState(true);
   const [renamingId, setRenamingId] = useState<string | null>(null);

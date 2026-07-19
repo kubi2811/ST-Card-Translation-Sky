@@ -8,6 +8,7 @@ import { getDefaultTranslationPrompt, getModelSuggestions } from '../utils/apiCl
 import { aiExtractGlossaryTerms } from '../utils/mvuSync';
 import type { LorebookStrategy, FieldGroupConfig, FieldGroup, GlossaryEntry, NameStyle, TranslationField } from '../types/card';
 import { useIdleMemo } from '../hooks/useIdleMemo';
+import { useThrottledStore } from '../hooks/useThrottledStore';
 import { Languages, FileJson, BookOpen, Plus, Trash2, Download, Upload, Bot, Loader2, Save, RotateCcw, CheckCircle, Zap } from 'lucide-react';
 import { recommendPreset } from '../utils/presetRecommend';
 import { GLOSSARY_PRESETS } from '../utils/glossaryPresets';
@@ -40,7 +41,21 @@ const getFieldBaseKey = (path: string) => {
 };
 
 export default function TranslateConfig() {
-  const { translationConfig, setTranslationConfig, toggleFieldGroup, card, proxy, addToast, fields, setFields, deleteCurrentCardCache, deleteAllCaches, scannedModels, resetTranslationConfig, activePresetId } = useStore();
+  // (bugNeedFix/39) selector hẹp + throttle fields — trước đây subscribe toàn store nên panel cấu hình
+  // (luôn mount ở sidebar) re-render theo TỪNG set() trong burst dịch.
+  const translationConfig = useStore((s) => s.translationConfig);
+  const setTranslationConfig = useStore((s) => s.setTranslationConfig);
+  const toggleFieldGroup = useStore((s) => s.toggleFieldGroup);
+  const card = useStore((s) => s.card);
+  const proxy = useStore((s) => s.proxy);
+  const addToast = useStore((s) => s.addToast);
+  const fields = useThrottledStore((s) => s.fields, 200);
+  const setFields = useStore((s) => s.setFields);
+  const deleteCurrentCardCache = useStore((s) => s.deleteCurrentCardCache);
+  const deleteAllCaches = useStore((s) => s.deleteAllCaches);
+  const scannedModels = useStore((s) => s.scannedModels);
+  const resetTranslationConfig = useStore((s) => s.resetTranslationConfig);
+  const activePresetId = useStore((s) => s.activePresetId);
   const ui = useUi();
 
   // (bugNeedFix/37) HOÃN extract ra idle tick: trước đây useMemo([card]) chạy NGAY trong render tick

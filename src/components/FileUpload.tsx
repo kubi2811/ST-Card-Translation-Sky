@@ -41,7 +41,15 @@ function normalizeCardUrl(raw: string): { url: string; rewritten: boolean } {
 
 export default function FileUpload() {
   const { parseCardFile, updateCardFromOriginal, clearCard, isParsing, parseProgress } = useCardParser();
-  const { card, cardFileName, contentType, originalWorldbook, loadTranslationCache, reuseFromVersionCache, triggerPresetRecommend, addLog } = useStore();
+  // (bugNeedFix/39) selector hẹp — trước đây subscribe toàn store, re-render theo mọi set() lúc dịch.
+  const card = useStore((s) => s.card);
+  const cardFileName = useStore((s) => s.cardFileName);
+  const contentType = useStore((s) => s.contentType);
+  const originalWorldbook = useStore((s) => s.originalWorldbook);
+  const loadTranslationCache = useStore((s) => s.loadTranslationCache);
+  const reuseFromVersionCache = useStore((s) => s.reuseFromVersionCache);
+  const triggerPresetRecommend = useStore((s) => s.triggerPresetRecommend);
+  const addLog = useStore((s) => s.addLog);
 
   // Sau khi parse xong: khôi phục cache trùng tên; không có thì thử TÁI DÙNG bản dịch từ
   // cache các card cũ (update phiên bản — field nội dung không đổi bê thẳng bản dịch sang).

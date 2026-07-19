@@ -31,7 +31,16 @@ const PROVIDER_LABEL: Record<string, string> = {
 };
 
 export default function ProxyConfig() {
-  const { proxy, setProxy, connectionStatus, setConnectionStatus, scannedModels, setScannedModels, addToast, locale, resetProxy } = useStore();
+  // (bugNeedFix/39) selector hẹp — trước đây subscribe toàn store, re-render theo mọi set() lúc dịch.
+  const proxy = useStore((s) => s.proxy);
+  const setProxy = useStore((s) => s.setProxy);
+  const connectionStatus = useStore((s) => s.connectionStatus);
+  const setConnectionStatus = useStore((s) => s.setConnectionStatus);
+  const scannedModels = useStore((s) => s.scannedModels);
+  const setScannedModels = useStore((s) => s.setScannedModels);
+  const addToast = useStore((s) => s.addToast);
+  const locale = useStore((s) => s.locale);
+  const resetProxy = useStore((s) => s.resetProxy);
   const t = useT();
   const ui = useUi();
   const [showAdvanced, setShowAdvanced] = useState(false);

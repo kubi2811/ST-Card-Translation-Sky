@@ -106,7 +106,7 @@ export interface Project {
   regexes: RegexScript[];
 }
 
-export type WorkspaceStep = 'parameters' | 'prompts' | 'regex' | 'export';
+export type WorkspaceStep = 'parameters' | 'prompts' | 'template' | 'regex' | 'export';
 export type AppMode = 'preset' | 'regex';
 
 export interface ToastMessage {

@@ -4,6 +4,7 @@ import { ChatWindow } from './components/ChatWindow';
 import { SettingsModal } from './components/SettingsModal';
 import { StepParameters } from './components/StepParameters';
 import { StepPrompts } from './components/StepPrompts';
+import { StepTemplate } from './components/StepTemplate';
 import { StepRegex } from './components/StepRegex';
 import { StepExport } from './components/StepExport';
 import {
@@ -306,6 +307,16 @@ function App() {
                 {t.step2}
               </button>
               <button
+                onClick={() => setActiveStep('template')}
+                className={`flex-1 py-3 px-4 text-center border-b-2 flex items-center justify-center gap-1.5 transition whitespace-nowrap ${
+                  activeStep === 'template'
+                    ? `border-${accentColor}-400 text-${accentColor}-400 bg-${accentColor}-500/[0.02]`
+                    : 'border-transparent hover:text-gray-200'
+                }`}
+              >
+                {t.stepTemplate}
+              </button>
+              <button
                 onClick={() => setActiveStep('regex')}
                 className={`flex-1 py-3 px-4 text-center border-b-2 flex items-center justify-center gap-1.5 transition whitespace-nowrap ${
                   activeStep === 'regex'
@@ -331,6 +342,7 @@ function App() {
             <div className="flex-1 overflow-y-auto p-4 sm:p-6 bg-gray-950/20">
               {activeStep === 'parameters' && <StepParameters />}
               {activeStep === 'prompts' && <StepPrompts />}
+              {activeStep === 'template' && <StepTemplate />}
               {activeStep === 'regex' && <StepRegex />}
               {activeStep === 'export' && <StepExport />}
             </div>

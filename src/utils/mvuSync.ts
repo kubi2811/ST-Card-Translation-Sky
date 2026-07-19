@@ -1594,19 +1594,82 @@ export function extractZodDescriptions(schemaText: string): Record<string, strin
   const result: Record<string, string> = {};
   if (!schemaText) return result;
 
-  // Pattern: fieldName: z.type().describe("description") or .describe('description')
-  const regex = /([^\s:.,;()]+)\s*:\s*(?:z|Zod)\.\w+(?:\([^)]*\))?(?:\.\w+\([^)]*\))*\.describe\(\s*['"`]([^'"`]+)['"`]\s*\)/g;
-  let match;
-  while ((match = regex.exec(schemaText)) !== null) {
-    result[match[1]] = match[2];
-  }
+  // (Bug 39c — TREO khi bấm Dịch, xác nhận bằng card thật bugNeedFix/40) Bản regex cũ có
+  // `(?:\.\w+\([^)]*\))*` — QUANTIFIER LỒNG không chặn ⇒ catastrophic backtracking: script MVU
+  // 525K với hàng nghìn chuỗi `z.number().min(0).max(100)` KHÔNG có .describe làm regex chạy
+  // hàng CHỤC PHÚT (đo Node: >10 phút chưa xong 1 script). extractPotentialMvuKeys gọi hàm này
+  // cho TỪNG script TavernHelper ngay sau Pha 0 ⇒ đúng cú "Trang không phản hồi" của user.
+  // Viết lại TUYẾN TÍNH: indexOf từng ".describe(" rồi đi LÙI qua chuỗi method bằng máy quét
+  // tay (bounded) tới `z.`/`Zod.` để lấy tên field — không còn backtracking, O(n) theo text.
+  const MAX_CHAIN_BACK = 2000; // chuỗi method dài nhất chấp nhận (z.enum([...]).min()... )
+  let idx = 0;
+  while ((idx = schemaText.indexOf('.describe(', idx)) !== -1) {
+    const anchor = idx;
+    idx += 10; // qua ".describe(" — vòng sau tìm tiếp từ đây dù occurrence này bị bỏ
 
-  // Also try: z.object keys with describe, including quoted ones
-  const regex2 = /['"]([^'":\s]+)['"]\s*:\s*(?:z|Zod)\.\w+(?:\([^)]*\))?(?:\.\w+\([^)]*\))*\.describe\(\s*['"`]([^'"`]+)['"`]\s*\)/g;
-  while ((match = regex2.exec(schemaText)) !== null) {
-    if (!result[match[1]]) {
-      result[match[1]] = match[2];
+    // ── Đọc chuỗi mô tả phía trước: '…' | "…" | `…` ──
+    let j = anchor + 10;
+    while (j < schemaText.length && (schemaText[j] === ' ' || schemaText[j] === '\t' || schemaText[j] === '\n' || schemaText[j] === '\r')) j++;
+    const quote = schemaText[j];
+    if (quote !== "'" && quote !== '"' && quote !== '`') continue;
+    let k = j + 1;
+    while (k < schemaText.length && schemaText[k] !== quote) k++;
+    if (k >= schemaText.length) continue;
+    const desc = schemaText.slice(j + 1, k);
+    if (!desc) continue;
+
+    // ── Đi lùi từ trước ".describe": bỏ qua các đoạn `.\w+(...)` cho tới `z.`/`Zod.` ──
+    const floor = Math.max(0, anchor - MAX_CHAIN_BACK);
+    let p = anchor - 1;
+    let sawZ = false;
+    let hops = 0;
+    while (p >= floor && hops++ < 200) {
+      while (p >= floor && /\s/.test(schemaText[p])) p--;
+      if (p < floor) break;
+      if (schemaText[p] === ')') {
+        // nhảy lùi qua cặp ngoặc cân bằng (đối số của method)
+        let depth = 0;
+        while (p >= floor) {
+          const ch = schemaText[p];
+          if (ch === ')') depth++;
+          else if (ch === '(') { depth--; if (depth === 0) { p--; break; } }
+          p--;
+        }
+        if (depth !== 0) break; // ngoặc lệch (paren trong chuỗi…) → bỏ occurrence này
+        continue;
+      }
+      // tên method hoặc z/Zod: quét \w đi lùi
+      const wEnd = p;
+      while (p >= floor && /\w/.test(schemaText[p])) p--;
+      if (wEnd === p) break; // không phải \w → cấu trúc lạ
+      const word = schemaText.slice(p + 1, wEnd + 1);
+      if (p >= 0 && schemaText[p] === '.') { p--; continue; } // ".word" → phần chuỗi method, lùi tiếp
+      if (word === 'z' || word === 'Zod') sawZ = true;
+      break;
     }
+    if (!sawZ) continue;
+
+    // ── p đứng TRƯỚC `z`/`Zod` — kỳ vọng dạng `field  :  z…` ──
+    let q = p;
+    while (q >= 0 && /\s/.test(schemaText[q])) q--;
+    if (q < 0 || schemaText[q] !== ':') continue;
+    q--;
+    while (q >= 0 && /\s/.test(schemaText[q])) q--;
+    if (q < 0) continue;
+    let field = '';
+    if (schemaText[q] === '"' || schemaText[q] === "'") {
+      const qq = schemaText[q];
+      let r = q - 1;
+      while (r >= 0 && schemaText[r] !== qq && q - r <= 120) r--;
+      if (r < 0 || schemaText[r] !== qq) continue;
+      field = schemaText.slice(r + 1, q);
+    } else {
+      let r = q;
+      while (r >= 0 && q - r < 100 && !/[\s:.,;()'"`{}[\]]/.test(schemaText[r])) r--;
+      field = schemaText.slice(r + 1, q + 1);
+    }
+    field = field.trim();
+    if (field && field.length <= 80) result[field] = desc;
   }
 
   return result;

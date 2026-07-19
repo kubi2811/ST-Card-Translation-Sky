@@ -26,6 +26,18 @@ export function isMvuCard(card: CharacterCard): boolean {
   return getMvuCardSummary(card).isMvu;
 }
 
+/** obj['中文'] — quét TUYẾN TÍNH thay cho regex có leading \w+ (chống backtracking O(n²)). */
+function hasCjkBracketAccess(text: string): boolean {
+  const re = /\[\s*['"]([^\x00-\x7F'"]+)['"]\s*\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    let j = m.index - 1;
+    while (j >= 0 && (text[j] === ' ' || text[j] === '\t')) j--;
+    if (j >= 0 && /\w/.test(text[j])) return true;
+  }
+  return false;
+}
+
 /**
  * Detailed analysis of MVU/Zod patterns in a card.
  */
@@ -102,7 +114,10 @@ export function getMvuCardSummary(card: CharacterCard): MvuCardSummary {
       result.reasons.push('MVU pattern found in TavernHelper');
     }
     // Bracket property access with CJK keys: obj['中文']
-    if (/\w+\s*\[\s*['"][^\x00-\x7F]+['"]\s*\]/.test(script.content)) {
+    // (Bug 39c) BỎ leading \w+ — quantifier đứng đầu gây catastrophic backtracking trên run \w
+    // dài (base64/minified). Neo vào ['" hiếm gặp rồi tự kiểm ký tự \w đứng trước — tuyến tính.
+    // (Cùng bài học đã fix ở mvuSync scanBracketAccess/scanZodFields.)
+    if (hasCjkBracketAccess(script.content)) {
       score += 1;
       result.reasons.push('Bracket CJK access detected');
     }

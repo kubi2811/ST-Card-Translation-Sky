@@ -1855,6 +1855,10 @@ export function useTranslation() {
     // getMvuCardSummary/detectEjsCard) mới xử lý; card thường thì dọn sạch từ điển dây dính.
     // Nới ngưỡng: coi là MVU nếu có BẤT KỲ tín hiệu (isMvu score≥3, HOẶC 1 [initvar]/Zod/biến bất kỳ)
     // → không bỏ sót card MVU nhẹ; chỉ card hoàn toàn KHÔNG tín hiệu (card thường) mới bị skip.
+    // (Bug 39c) NHẢ main thread trước cụm quét đồng bộ (getMvuCardSummary/detectEjsCard/
+    // extractPotentialMvuKeys…) — để log Pha 0 kịp vẽ và trình duyệt kịp thở; gốc rễ treo
+    // (extractZodDescriptions backtracking) đã fix tận nơi, đây là lưới bảo hiểm cho hotspot mới.
+    await new Promise<void>((r) => setTimeout(r, 0));
     const mvuSummary = store.card ? getMvuCardSummary(store.card) : null;
     const cardIsMvu = !!mvuSummary && (mvuSummary.isMvu || mvuSummary.initvarCount > 0 || mvuSummary.hasZodSchema || mvuSummary.variableCount > 0);
     const cardIsEjs = store.card ? (() => { try { return detectEjsCard(store.card!).isEjs; } catch { return false; } })() : false;
@@ -2058,6 +2062,8 @@ export function useTranslation() {
     if (store.translationConfig.enableEjsSync && store.card && !skipEjsBuild) {
       try {
         store.addLog('info', '🔮 Chiến lược C (đồng bộ EJS): đang quét tên mục & từ khoá EJS…');
+        // (Bug 39c) nhả main thread để log trên kịp vẽ trước cụm quét EJS đồng bộ.
+        await new Promise<void>((r) => setTimeout(r, 0));
         const ejsEntryRefs = extractEjsEntryNames(store.card);
         const ejsKeywords = extractEjsKeywords(store.card);
         const totalEjsPasses = Math.max(1, Math.min(5, store.translationConfig.ejsScanPasses || 1));

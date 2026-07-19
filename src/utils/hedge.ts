@@ -21,6 +21,13 @@ export async function hedgedRace<T>(
   spawn: () => HedgeAttempt<T>,
   hedgeAfterMs: number,
   onHedge?: () => void,
+  /**
+   * (Bug "Aborted" 2026) Hỏi TẠI THỜI ĐIỂM chạm ngưỡng: có đáng bắn bản dự phòng không?
+   * Trả false (vd: bản A ĐANG stream dữ liệu về đều — chỉ là câu trả lời dài) → không bắn B,
+   * chờ A chạy nốt. Hedge vốn để cứu lane KHÔNG PHẢN HỒI, không phải để chạy đua với lane khoẻ
+   * (bắn đôi lúc đó chỉ tốn quota + tự giết bản đang chạy tốt).
+   */
+  shouldHedge?: () => boolean,
 ): Promise<T> {
   const a = spawn();
 
@@ -34,6 +41,9 @@ export async function hedgedRace<T>(
 
   if (first.k === 'ok') return first.r;
   if (first.k === 'err') throw first.e;
+
+  // A đang stream bình thường (đã có dữ liệu về) → khỏi hedge, chờ A xong.
+  if (shouldHedge && !shouldHedge()) return a.p;
 
   // A vẫn chạy sau ngưỡng → bắn B trên lane khác, đua lấy bản THÀNH CÔNG trước.
   onHedge?.();

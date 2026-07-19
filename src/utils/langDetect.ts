@@ -113,19 +113,34 @@ const LANG_LABEL_MAP: Record<string, string> = {
 };
 
 /**
- * Check if text should be skipped for translation.
- * ONLY skips if text is already in the target language.
- * Never skip based on source language mismatch — cards often mix languages
- * (e.g. Chinese text with English variable names, HTML, code).
+ * Check if text should be skipped for translation. Skips when:
+ *  1. Text is already in the TARGET language (nothing to do), or
+ *  2. (Bug "dịch cả entry tiếng Anh" 2026) The user declared a SPECIFIC source language
+ *     (e.g. FROM 中文 in the Custom Translation Prompt) and the text is definitively in a
+ *     DIFFERENT specific language that is neither source nor target (e.g. a pure-English
+ *     lorebook entry in a Chinese card). Master prompt rules ("no foreign chars may remain")
+ *     used to force the AI to translate those too — violating the user's FROM/TO contract.
+ *     This guard is deterministic: the field never reaches the AI at all.
+ * 'unknown'/'mixed' still always translate (cards mix languages — let the AI handle them),
+ * and sourceLanguage 'auto' keeps the old behavior (only target-language skip).
  */
-export function shouldSkipTranslation(text: string, targetLanguage: string, _sourceLanguage: string = 'auto'): boolean {
+export function shouldSkipTranslation(text: string, targetLanguage: string, sourceLanguage: string = 'auto'): boolean {
   const detected = detectLanguage(text);
   // If we can't detect or it's mixed → always translate (let AI handle it)
   if (detected === 'unknown' || detected === 'mixed') return false;
 
   const normalizedTarget = LANG_LABEL_MAP[targetLanguage] || targetLanguage;
-  // ONLY skip if text is definitively already in the target language
-  return detected === normalizedTarget;
+  // Skip if text is definitively already in the target language
+  if (detected === normalizedTarget) return true;
+
+  // Skip if text is definitively in a THIRD language (≠ declared source, ≠ target).
+  // Only when the source is a specific known language — 'auto' means "translate whatever".
+  const normalizedSource = LANG_LABEL_MAP[sourceLanguage];
+  if (normalizedSource && normalizedSource !== normalizedTarget && detected !== normalizedSource) {
+    return true;
+  }
+
+  return false;
 }
 
 /* --- Residual-CJK detection (chong "DONE gia") --- */

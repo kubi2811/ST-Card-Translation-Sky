@@ -85,3 +85,41 @@ describe('hedgedRace — hedge dùng chung cho lượt gọi 1-shot', () => {
     expect(calls.length).toBe(2);
   });
 });
+
+describe('hedgedRace + shouldHedge — bug "Aborted": đừng bắn kép khi lane ĐANG stream', () => {
+  it('shouldHedge()=false tại ngưỡng (đã có byte về) → KHÔNG bắn B, chờ A xong', async () => {
+    const onHedge = vi.fn();
+    // A là câu trả lời DÀI: stream 40s mới xong — trước fix, chạm ngưỡng 5s là bắn bản kép vô ích.
+    const { spawn, calls } = makeSpawn([(res) => setTimeout(() => res('A-dài-nhưng-khoẻ'), 40_000)]);
+    const p = hedgedRace(spawn, 5000, onHedge, () => false /* đang stream */);
+    await vi.advanceTimersByTimeAsync(41_000);
+    await expect(p).resolves.toBe('A-dài-nhưng-khoẻ');
+    expect(calls.length).toBe(1);          // không tốn call kép
+    expect(onHedge).not.toHaveBeenCalled();
+    expect(calls[0].aborted).toBe(false);  // và KHÔNG ai chém bản đang chạy tốt
+  });
+
+  it('shouldHedge()=true tại ngưỡng (im bặt, chưa có byte nào) → hedge như cũ', async () => {
+    const onHedge = vi.fn();
+    const { spawn, calls } = makeSpawn([
+      (res) => setTimeout(() => res('A-treo'), 60_000),
+      (res) => setTimeout(() => res('B-cứu'), 400),
+    ]);
+    const p = hedgedRace(spawn, 5000, onHedge, () => true /* chưa nhận gì */);
+    await vi.advanceTimersByTimeAsync(5600);
+    await expect(p).resolves.toBe('B-cứu');
+    expect(calls.length).toBe(2);
+    expect(onHedge).toHaveBeenCalledTimes(1);
+  });
+
+  it('không truyền shouldHedge → giữ nguyên hành vi cũ (hedge tại ngưỡng)', async () => {
+    const { spawn, calls } = makeSpawn([
+      (res) => setTimeout(() => res('A-treo'), 60_000),
+      (res) => setTimeout(() => res('B'), 400),
+    ]);
+    const p = hedgedRace(spawn, 5000);
+    await vi.advanceTimersByTimeAsync(5600);
+    await expect(p).resolves.toBe('B');
+    expect(calls.length).toBe(2);
+  });
+});

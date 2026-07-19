@@ -1167,6 +1167,19 @@ function VirtualTableView({
     if (idx >= 0) virtualizer.scrollToIndex(idx, { align: 'center' });
   }, [scrollToPath, fields, virtualizer]);
 
+  // (Bug UI 2026 — "kéo xuống dưới cùng vẫn không thấy hết bảng") Cache chiều cao của virtualizer
+  // đánh số theo INDEX. Khi danh sách ĐỔI ĐỘ DÀI (lọc/gộp So Sánh/đổi nhóm field), chiều cao đã đo
+  // của row cũ bị gán nhầm cho row mới ở cùng index → tổng chiều cao spacer sai → cuộn tới "đáy"
+  // scrollbar mà vẫn còn row chưa hiện. Đổi độ dài là hiếm (không phải mỗi lần update field) nên
+  // measure() lại toàn bộ ở đây rẻ và an toàn.
+  const prevLenRef = useRef(fields.length);
+  useEffect(() => {
+    if (prevLenRef.current !== fields.length) {
+      prevLenRef.current = fields.length;
+      virtualizer.measure();
+    }
+  }, [fields.length, virtualizer]);
+
   const [ragDebugField, setRagDebugField] = useState<TranslationField | null>(null);
 
   return (
@@ -1218,7 +1231,9 @@ function VirtualTableView({
           const isJumpHighlight = !!highlightPath && field.path === highlightPath;
           return (
             <div
-              key={field.path}
+              // (Bug UI 2026) key phải kèm index: nếu 2 field TRÙNG path (có thể xảy ra sau luồng
+              // So Sánh/gộp) thì React lặng lẽ VỨT row trùng key → bảng thiếu row dù data đủ.
+              key={`${virtualRow.index}:${field.path}`}
               ref={virtualizer.measureElement}
               data-index={virtualRow.index}
               style={{
@@ -1561,6 +1576,15 @@ function VirtualDiffView({
     if (idx >= 0) virtualizer.scrollToIndex(idx, { align: 'center' });
   }, [scrollToPath, fields, virtualizer]);
 
+  // (Bug UI 2026) Như bảng chính: đổi ĐỘ DÀI danh sách → measure() lại để tổng chiều cao spacer đúng.
+  const prevLenRef = useRef(fields.length);
+  useEffect(() => {
+    if (prevLenRef.current !== fields.length) {
+      prevLenRef.current = fields.length;
+      virtualizer.measure();
+    }
+  }, [fields.length, virtualizer]);
+
   return (
     <div
       ref={parentRef}
@@ -1601,7 +1625,8 @@ function VirtualDiffView({
           const isJumpHighlight = !!highlightPath && field.path === highlightPath;
           return (
             <div
-              key={field.path}
+              // (Bug UI 2026) key kèm index — chống React vứt row khi 2 field trùng path (xem bảng chính).
+              key={`${virtualRow.index}:${field.path}`}
               ref={virtualizer.measureElement}
               data-index={virtualRow.index}
               style={{

@@ -67,7 +67,11 @@ function withTimeout(userSignal: AbortSignal | undefined, ms: number): { signal:
   if (!ms || ms <= 0 || typeof AbortController === 'undefined') return { signal: userSignal, clear: () => {}, timedOut: () => false };
   const ctrl = new AbortController();
   let to = false;
-  const timer = setTimeout(() => { to = true; ctrl.abort(); }, ms);
+  // Abort KÈM LÝ DO — readChunkOrAbort sẽ chuyển tiếp nguyên văn lên UI thay vì chữ "Aborted" cụt lủn.
+  const timer = setTimeout(() => {
+    to = true;
+    ctrl.abort(new ApiError(`API không phản hồi quá ${Math.round(ms / 1000)}s (bị kẹt/timeout) — sẽ thử lại`, undefined, true));
+  }, ms);
   let signal: AbortSignal = ctrl.signal;
   if (userSignal) {
     const anyFn = (AbortSignal as unknown as { any?: (s: AbortSignal[]) => AbortSignal }).any;
@@ -88,9 +92,14 @@ function readChunkOrAbort(
   signal: AbortSignal | undefined,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
   if (!signal) return reader.read();
-  if (signal.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'));
+  // (Bug "Aborted" 2026) GIỮ NGUYÊN lý do abort (reason) nếu có: trước đây chỗ này luôn ném
+  // DOMException('Aborted') trống trơn → timeout cứng/hedge bị báo ra user thành đúng 1 chữ
+  // "Aborted", không ai hiểu vì sao. Nay lý do thật (vd "Quá 120s không nhận thêm dữ liệu…")
+  // đi thẳng lên UI.
+  const abortErr = () => (signal.reason instanceof Error ? signal.reason : new DOMException('Aborted', 'AbortError'));
+  if (signal.aborted) return Promise.reject(abortErr());
   return new Promise<ReadableStreamReadResult<Uint8Array>>((resolve, reject) => {
-    const onAbort = () => reject(new DOMException('Aborted', 'AbortError'));
+    const onAbort = () => reject(abortErr());
     signal.addEventListener('abort', onAbort, { once: true });
     reader.read().then(
       (r) => { signal.removeEventListener('abort', onAbort); resolve(r); },
@@ -169,39 +178,52 @@ export async function callProviderHedged(
     /** Gọi khi bản dự phòng được bắn — để UI báo "đang thử lane khác". */
     onHedge?: () => void;
     /**
-     * (User 2026 — bugNeedFix/4) TIMEOUT CỨNG cho TỪNG lane: quá ngưỡng này mà lane chưa trả lời thì
-     * ABORT lane đó (dù màn sleep làm fetch treo). Không đặt → dùng timeout nội mặc định (5 phút) →
-     * Trợ Lý AI treo hàng chục phút. Đặt ~120s cho gọi tương tác để hỏng-nhanh + retry/hedge sớm.
+     * (User 2026 — bugNeedFix/4, sửa lại sau bug "Aborted" 2026) WATCHDOG IM LẶNG cho TỪNG lane:
+     * quá ngưỡng này mà lane KHÔNG NHẬN THÊM DỮ LIỆU nào thì abort lane đó (đúng ca màn sleep làm
+     * fetch treo — socket chết là im bặt). Trước đây đây là timeout TỔNG THỜI GIAN → câu trả lời
+     * dài đang stream ngon lành cứ chạm 120s là bị chém giữa chừng, retry lần nào cũng chết ở đúng
+     * mốc đó ⇒ Trợ Lý AI báo "Aborted" cả 3 lần. Nay đồng hồ RESET mỗi khi có chunk mới về: stream
+     * khoẻ chạy bao lâu cũng được, chỉ lane im bặt mới bị cắt.
      */
     hardTimeoutMs?: number;
   },
 ): Promise<string> {
   const hedgeAfterMs = opts?.hedgeAfterMs ?? 30_000;
+  // Đã nhận được byte nào chưa (mọi lane gộp chung) — lane đang stream thì đừng hedge (bắn bản
+  // kép lúc đó chỉ tốn quota; hedge là để cứu lane KHÔNG phản hồi).
+  let anyProgress = false;
   return hedgedRace<string>(
     () => {
       const ctrl = new AbortController();
       const linked = opts?.signal ? AbortSignal.any([opts.signal, ctrl.signal]) : ctrl.signal;
-      // Timeout cứng mỗi lane: hết giờ → abort chính lane này (hedgedRace coi như 1 bản hỏng → bản kia
-      // /retry tiếp). clear khi lane settle để không abort nhầm.
-      let hardTimer: ReturnType<typeof setTimeout> | null = null;
-      if (opts?.hardTimeoutMs && opts.hardTimeoutMs > 0) {
-        hardTimer = setTimeout(
-          () => ctrl.abort(new DOMException(`hard-timeout ${opts.hardTimeoutMs}ms`, 'AbortError')),
+      let idleTimer: ReturnType<typeof setTimeout> | null = null;
+      const disarm = () => { if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; } };
+      const arm = () => {
+        if (!opts?.hardTimeoutMs || opts.hardTimeoutMs <= 0) return;
+        disarm();
+        idleTimer = setTimeout(
+          () => ctrl.abort(new ApiError(
+            `Quá ${Math.round(opts.hardTimeoutMs! / 1000)}s không nhận thêm dữ liệu từ API (mạng/proxy kẹt) — sẽ thử lại`,
+            undefined,
+            true,
+          )),
           opts.hardTimeoutMs,
         );
-      }
-      const p = callProvider(config, system, user, linked, opts?.images, opts?.meta)
-        .finally(() => { if (hardTimer) clearTimeout(hardTimer); });
+      };
+      arm();
+      const p = callProvider(config, system, user, linked, opts?.images, opts?.meta, () => { anyProgress = true; arm(); })
+        .finally(disarm);
       return {
         p,
-        abort: (reason) => { if (hardTimer) clearTimeout(hardTimer); ctrl.abort(reason); },
+        abort: (reason) => { disarm(); ctrl.abort(reason); },
       };
     },
     hedgeAfterMs,
     () => {
-      console.log(`[callProviderHedged] ${opts?.meta?.label || 'call'} > ${hedgeAfterMs / 1000}s → bắn bản dự phòng trên lane khác`);
+      console.log(`[callProviderHedged] ${opts?.meta?.label || 'call'} > ${hedgeAfterMs / 1000}s chưa có phản hồi → bắn bản dự phòng trên lane khác`);
       opts?.onHedge?.();
     },
+    () => !anyProgress,
   );
 }
 
@@ -803,7 +825,8 @@ async function callOpenAICompatible(
   user: string,
   signal?: AbortSignal,
   images?: string[],
-  usageSink?: TokenUsageSink
+  usageSink?: TokenUsageSink,
+  onProgress?: () => void
 ): Promise<string> {
   const useStream = config.useStream !== false;
   const rawUrl = config.proxyUrl.replace(/\/+$/, '') + '/chat/completions';
@@ -896,6 +919,7 @@ async function callOpenAICompatible(
   try {
     while (true) {
       const { done, value } = await readChunkOrAbort(reader, _to.signal);
+      onProgress?.(); // (Bug "Aborted" 2026) báo watchdog: lane còn sống, đừng abort
       if (done) {
         if (buffer) {
           // Process any remaining buffered text
@@ -949,7 +973,8 @@ async function callAnthropic(
   user: string,
   signal?: AbortSignal,
   images?: string[],
-  usageSink?: TokenUsageSink
+  usageSink?: TokenUsageSink,
+  onProgress?: () => void
 ): Promise<string> {
   const useStream = config.useStream !== false;
   const rawUrl = config.proxyUrl.replace(/\/+$/, '') + '/messages';
@@ -1050,6 +1075,7 @@ async function callAnthropic(
   try {
     while (true) {
       const { done, value } = await readChunkOrAbort(reader, _to.signal);
+      onProgress?.(); // (Bug "Aborted" 2026) báo watchdog: lane còn sống, đừng abort
       if (done) {
         if (buffer) {
           const line = buffer.trim();
@@ -1104,7 +1130,8 @@ async function callGemini(
   user: string,
   signal?: AbortSignal,
   images?: string[],
-  usageSink?: TokenUsageSink
+  usageSink?: TokenUsageSink,
+  onProgress?: () => void
 ): Promise<string> {
   const useStream = config.useStream !== false;
   const baseUrl = config.proxyUrl.replace(/\/+$/, '');
@@ -1229,6 +1256,7 @@ async function callGemini(
   try {
     while (true) {
       const { done, value } = await readChunkOrAbort(reader, _to.signal);
+      onProgress?.(); // (Bug "Aborted" 2026) báo watchdog: lane còn sống, đừng abort
       if (done) {
         if (buffer) {
           const line = buffer.trim();
@@ -1548,7 +1576,9 @@ export async function callProvider(
   user: string,
   signal?: AbortSignal,
   images?: string[],
-  meta?: { label?: string; charCount?: number; preferSecondary?: boolean }
+  meta?: { label?: string; charCount?: number; preferSecondary?: boolean },
+  /** Gọi mỗi khi nhận thêm 1 chunk stream — cho watchdog "im lặng bao lâu thì abort" ở tầng trên. */
+  onProgress?: () => void
 ): Promise<string> {
   // ═══ Multi-provider pool: chọn lane (provider+model+key) round-robin, gate theo RPM ═══
   // `config` (= store.proxy) là provider #1; _extraProviders là các provider phụ đã bơm vào.
@@ -1580,15 +1610,15 @@ export async function callProvider(
     let result: string;
     switch (rotatedConfig.provider) {
       case 'anthropic':
-        result = await callAnthropic(rotatedConfig, system, user, signal, images, usageSink);
+        result = await callAnthropic(rotatedConfig, system, user, signal, images, usageSink, onProgress);
         break;
       case 'google':
-        result = await callGemini(rotatedConfig, system, user, signal, images, usageSink);
+        result = await callGemini(rotatedConfig, system, user, signal, images, usageSink, onProgress);
         break;
       case 'openai':
       case 'custom':
       default:
-        result = await callOpenAICompatible(rotatedConfig, system, user, signal, images, usageSink);
+        result = await callOpenAICompatible(rotatedConfig, system, user, signal, images, usageSink, onProgress);
         break;
     }
     recordLaneSuccess(laneRlKey); // lane khoẻ lại → xoá đếm fail + hết nghỉ

@@ -94,7 +94,7 @@ export function generateMultiPhasePersona(
   if (!target) return null;
 
   const phases = options.phases ?? 3;
-  const max = target.constraints.max ?? target.constraints.clamp?.[1] ?? 100;
+  const max = target.constraints?.max ?? target.constraints?.clamp?.[1] ?? 100;
 
   // Default thresholds: evenly split
   const thresholds = options.thresholds ?? Array.from(
@@ -168,7 +168,7 @@ export function generateVariableDisplay(
   const leaves = getLeafFields(schema.fields);
   const filtered = options.include
     ? leaves.filter(f => options.include!.includes(f.dotPath) || options.include!.includes(f.path))
-    : leaves.filter(f => !f.constraints.hidden);
+    : leaves.filter(f => !f.constraints?.hidden);
 
   const title = options.title ?? 'Trạng thái hiện tại';
 

@@ -12,6 +12,8 @@ import {
 import { useCardStore } from '../../store/cardStore';
 import { useSettingsStore } from '../../store/settingsStore';
 import { useBatchRunStore } from '../../store/batchRunStore';
+import { useAutoCreatorStore } from '../../store/autoCreatorStore';
+import { useToastStore } from '../../store/toastStore';
 import { runBatchGeneration, type BatchGenConfig } from '../../lib/ai/batchGenerator';
 import { CompletionCriteriaPanel } from './CompletionCriteriaPanel';
 import type { CompletionCriteria, VerificationReport } from '../../lib/completionVerifier/criteria';
@@ -92,7 +94,12 @@ export function BatchGeneratorPanel() {
   const logEndRef = useRef<HTMLDivElement>(null);
 
   // ─── Completion Verification state ──────────────────────────────────
-  const [criteria, setCriteria] = useState<CompletionCriteria>(DEFAULT_CRITERIA);
+  // (User 19/07 — "Tiêu chí hoàn thành vẫn chưa lưu") Đây là setting DUY NHẤT còn dùng useState
+  // thường trong panel — 17 cái kia đã persist đợt trước nhưng criteria bị sót → rời tab là reset
+  // về DEFAULT_CRITERIA. Lưu nguyên object 1 key + spread default để thêm field mới không vỡ bản lưu cũ.
+  const [criteriaSaved, setCriteriaSaved] = usePersistedState<CompletionCriteria>('bgen.criteria', DEFAULT_CRITERIA);
+  const criteria = useMemo<CompletionCriteria>(() => ({ ...DEFAULT_CRITERIA, ...criteriaSaved }), [criteriaSaved]);
+  const setCriteria = setCriteriaSaved;
   const [verifyReport, setVerifyReport] = useState<VerificationReport | null>(null);
   const [isVerifying, setIsVerifying] = useState(false);
 
@@ -100,6 +107,38 @@ export function BatchGeneratorPanel() {
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
+
+  // (User 19/07) Nút Lưu tường minh: mọi setting vốn tự lưu qua usePersistedState, nhưng user
+  // muốn một nút bấm để CHẮC CHẮN — ghi lại toàn bộ một lần nữa + toast xác nhận.
+  const handleSaveSettings = useCallback(() => {
+    try {
+      localStorage.setItem('bgen.criteria', JSON.stringify(criteria));
+      localStorage.setItem('bgen.prompts', JSON.stringify(prompts));
+      useToastStore.getState().success(ui.bgSavedToast);
+    } catch {
+      useToastStore.getState().error(ui.bgSaveFailToast);
+    }
+  }, [criteria, prompts]);
+
+  // (User 19/07) Bơm cấu hình AI Sinh Theo Batch vào bước Lorebook của Auto Creator:
+  // map các field trùng khái niệm; minEntries lấy từ Tiêu chí hoàn thành (nếu bật).
+  const handleApplyToAutoCreator = useCallback(() => {
+    const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.round(v) || lo));
+    const tab = TABS.find(t => t.id === activeTab)!;
+    const total = clamp(totalEntries, 5, 100);
+    useAutoCreatorStore.getState().updateStepConfig('lorebook', {
+      totalEntries: total,
+      minEntries: criteria.enabled ? clamp(criteria.minEntryCount ?? 0, 0, total) : 0,
+      entriesPerBatch: clamp(entriesPerBatch, 1, 10),
+      concurrentBatches: clamp(concurrentBatches, 1, 5),
+      useWebSearch,
+      category: tab.category,
+      cardType: tab.cardType,
+      promptOverride: prompts[activeTab]?.trim() || undefined,
+      promptMode: prompts[activeTab]?.trim() ? 'append' : 'default',
+    });
+    useToastStore.getState().success(ui.bgAppliedAcToast);
+  }, [TABS, activeTab, totalEntries, entriesPerBatch, concurrentBatches, useWebSearch, prompts, criteria]);
 
   const totalBatches = useMemo(() => Math.ceil(totalEntries / entriesPerBatch), [totalEntries, entriesPerBatch]);
   const totalRounds = useMemo(() => Math.ceil(totalBatches / concurrentBatches), [totalBatches, concurrentBatches]);
@@ -463,6 +502,22 @@ export function BatchGeneratorPanel() {
         report={verifyReport}
         isVerifying={isVerifying}
       />
+
+      {/* (User 19/07) Nút Lưu tường minh + nút Áp dụng cấu hình sang Auto Creator.
+          Mọi setting vốn đã TỰ lưu (usePersistedState) — nút Lưu ghi lại lần nữa và báo toast
+          để bạn yên tâm là đã nằm trong máy; nút Áp dụng bơm cấu hình tương ứng vào bước
+          Lorebook của Auto Creator (tab 🪄), khỏi phải chỉnh 2 nơi. */}
+      <div className="flex flex-wrap gap-2">
+        <button onClick={handleSaveSettings}
+          className="flex items-center gap-2 px-4 py-2 rounded-xl border border-emerald-500/50 bg-emerald-600/15 text-emerald-400 text-sm font-medium hover:bg-emerald-600/25 transition-colors">
+          💾 {ui.bgSaveBtn}
+        </button>
+        <button onClick={handleApplyToAutoCreator}
+          className="flex items-center gap-2 px-4 py-2 rounded-xl border border-purple-500/50 bg-purple-600/15 text-purple-400 text-sm font-medium hover:bg-purple-600/25 transition-colors"
+          title={ui.bgApplyAcTip}>
+          🪄 {ui.bgApplyAcBtn}
+        </button>
+      </div>
 
       {/* Control buttons */}
       <div className="flex gap-2">

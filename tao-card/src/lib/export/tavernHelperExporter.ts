@@ -133,9 +133,9 @@ function generateZodSchemaFile(schema: MVUZODSchema, charName: string): string {
       let zodType = '';
       switch (field.type) {
         case 'number':
-          zodType = field.constraints.coerce ? 'z.coerce.number()' : 'z.number()';
-          if (field.constraints.clamp) {
-            zodType += `.transform(v => _.clamp(v, ${field.constraints.clamp[0]}, ${field.constraints.clamp[1]}))`;
+          zodType = field.constraints?.coerce ? 'z.coerce.number()' : 'z.number()';
+          if (field.constraints?.clamp) {
+            zodType += `.transform(v => _.clamp(v, ${field.constraints?.clamp[0]}, ${field.constraints?.clamp[1]}))`;
           }
           break;
         case 'string':
@@ -153,8 +153,8 @@ function generateZodSchemaFile(schema: MVUZODSchema, charName: string): string {
         default:
           zodType = 'z.unknown()';
       }
-      if (field.constraints.prefault !== undefined) {
-        zodType += `.prefault(${JSON.stringify(field.constraints.prefault)})`;
+      if (field.constraints?.prefault !== undefined) {
+        zodType += `.prefault(${JSON.stringify(field.constraints?.prefault)})`;
       }
       if (field.description) {
         zodType += `.describe('${field.description.replace(/'/g, "\\'")}')`;

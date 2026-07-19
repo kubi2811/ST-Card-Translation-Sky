@@ -7,9 +7,9 @@ import { v4 as uuidv4 } from 'uuid';
 import type { AutoCreatorConfig, AutoCreatorStep, CardBlueprint, StepPreview } from '../../types';
 import type { ProxyProfile, GenerationParams, CardExtensions } from '../../types';
 import type { RegexPlacement } from '../../types';
-import type { MVUZODSchema } from '../../types';
 import { useCardStore } from '../../store/cardStore';
 import { buildSchemaContextForBatch } from '../mvuzod/schemaContextBuilder';
+import { normalizeMVUZODSchema } from '../mvuzod/normalizeSchema';
 import { useAutoCreatorStore } from '../../store/autoCreatorStore';
 import { callAI } from './client';
 import { runBatchGeneration } from './batchGenerator';
@@ -431,7 +431,10 @@ function applyParsedDataToCard(
           };
         }
         if (result.schema) {
-          c.data.extensions.mvuzod.schema = result.schema as MVUZODSchema;
+          // (Bug enumValues 19/07) Schema AI trả về hay THIẾU key `constraints` (nhất là field
+          // string/children) — cast thô là consumer phía sau crash "reading 'enumValues'".
+          // Normalize tại biên: constraints luôn là object, children đệ quy sạch.
+          c.data.extensions.mvuzod.schema = normalizeMVUZODSchema(result.schema);
         }
         
         if (!c.data.character_book) c.data.character_book = { name: c.data.name, entries: [] };

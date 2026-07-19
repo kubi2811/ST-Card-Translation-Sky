@@ -21,6 +21,7 @@
  */
 
 import type { LorebookEntry } from '../../types';
+import { normalizeMVUZODSchema } from './normalizeSchema';
 import type {
   MVUZODSchema, MVUZODField, InferenceReport, InferenceResult,
 } from '../../types/mvuzod.types';
@@ -961,15 +962,15 @@ function fieldToZod(field: MVUZODField, indent: number): string[] {
 
     // Object-level transform
     let transform = '';
-    if (field.constraints.transform === 'custom' && field.constraints.transformExpr) {
-      transform = `.transform(${field.constraints.transformExpr})`;
+    if (field.constraints?.transform === 'custom' && field.constraints?.transformExpr) {
+      transform = `.transform(${field.constraints?.transformExpr})`;
     }
 
     lines.push(`${pad}})${transform},`);
 
   } else if (field.type === 'record') {
     // z.record(keySchema, valueSchema)
-    const keyDesc = field.constraints.describe;
+    const keyDesc = field.constraints?.describe;
     const keySchema = keyDesc ? `z.string().describe('${keyDesc}')` : 'z.string()';
 
     // Build value schema from children or constraints
@@ -988,9 +989,9 @@ function fieldToZod(field: MVUZODField, indent: number): string[] {
       } else {
         valueSchema = 'z.string()';
       }
-    } else if (field.constraints.enumValues) {
+    } else if (field.constraints?.enumValues) {
       // Record with enum keys: z.record(z.enum([...]), valueType)
-      const enumVals = field.constraints.enumValues.map(v => `'${v}'`).join(', ');
+      const enumVals = field.constraints?.enumValues.map(v => `'${v}'`).join(', ');
       const enumKeySchema = `z.enum([${enumVals}])`;
       valueSchema = `z.string().describe('描述')`;
       lines.push(`${pad}${key}: z.record(${enumKeySchema}, ${valueSchema}).prefault({}),`);
@@ -1001,9 +1002,9 @@ function fieldToZod(field: MVUZODField, indent: number): string[] {
 
     // Transform
     let transform = '';
-    if (field.constraints.transform === 'pickBy') {
+    if (field.constraints?.transform === 'pickBy') {
       transform = `\n${pad}  .transform(data => _.pickBy(data, ({ 数量 }) => 数量 > 0))`;
-    } else if (field.constraints.transform === 'takeRight') {
+    } else if (field.constraints?.transform === 'takeRight') {
       transform = `\n${pad}  .transform(data => _(data).entries().takeRight(10).fromPairs().value())`;
     }
 
@@ -1013,7 +1014,7 @@ function fieldToZod(field: MVUZODField, indent: number): string[] {
     lines.push(`${pad}${key}: ${buildZodType(field)},`);
 
   } else if (field.type === 'boolean') {
-    const pf = field.constraints.prefault !== undefined ? `.prefault(${field.constraints.prefault})` : '.prefault(false)';
+    const pf = field.constraints?.prefault !== undefined ? `.prefault(${field.constraints?.prefault})` : '.prefault(false)';
     lines.push(`${pad}${key}: z.boolean()${pf},`);
 
   } else if (field.type === 'array') {
@@ -1029,11 +1030,11 @@ function fieldToZod(field: MVUZODField, indent: number): string[] {
 
 function buildZodType(field: MVUZODField): string {
   if (field.type === 'number') {
-    let s = field.constraints.coerce ? 'z.coerce.number()' : 'z.number()';
-    if (field.constraints.clamp) {
-      s += `.transform(v => _.clamp(v, ${field.constraints.clamp[0]}, ${field.constraints.clamp[1]}))`;
+    let s = field.constraints?.coerce ? 'z.coerce.number()' : 'z.number()';
+    if (field.constraints?.clamp) {
+      s += `.transform(v => _.clamp(v, ${field.constraints?.clamp[0]}, ${field.constraints?.clamp[1]}))`;
     }
-    const pf = field.constraints.prefault !== undefined ? field.constraints.prefault : (field.defaultValue ?? 0);
+    const pf = field.constraints?.prefault !== undefined ? field.constraints?.prefault : (field.defaultValue ?? 0);
     s += `.prefault(${pf})`;
     return s;
   }
@@ -1041,17 +1042,17 @@ function buildZodType(field: MVUZODField): string {
   if (field.type === 'string') {
     let s = 'z.string()';
     // Enum
-    if (field.constraints.enumValues?.length) {
-      const vals = field.constraints.enumValues.map(v => `'${v}'`).join(', ');
+    if (field.constraints?.enumValues?.length) {
+      const vals = field.constraints?.enumValues.map(v => `'${v}'`).join(', ');
       s = `z.enum([${vals}])`;
     }
     // Describe
-    if (field.constraints.describe) {
-      s += `.describe('${field.constraints.describe}')`;
+    if (field.constraints?.describe) {
+      s += `.describe('${field.constraints?.describe}')`;
     }
     // Prefault
-    const pf = field.constraints.prefault !== undefined
-      ? JSON.stringify(field.constraints.prefault)
+    const pf = field.constraints?.prefault !== undefined
+      ? JSON.stringify(field.constraints?.prefault)
       : JSON.stringify(field.defaultValue ?? '');
     if (pf !== '""') s += `.prefault(${pf})`;
     return s;
@@ -1186,7 +1187,9 @@ export function parseSchemaInferenceResponse(raw: string): {
     throw new Error("Dữ liệu trả về từ AI không phải là một JSON Object hợp lệ.");
   }
 
-  return obj as {
+  // (Bug enumValues 19/07) AI hay bỏ key `constraints` trong field → normalize trước khi trả
+  // để SchemaWizard/InitVarEditor/UpdateRulesEditor không crash "reading 'enumValues'".
+  const typed = obj as {
     analysis: {
       groups: Array<{ name: string; count: number; sample: string[] }>;
       npcPattern: boolean;
@@ -1197,4 +1200,6 @@ export function parseSchemaInferenceResponse(raw: string): {
     };
     proposedSchema: MVUZODSchema;
   };
+  typed.proposedSchema = normalizeMVUZODSchema(typed.proposedSchema);
+  return typed;
 }

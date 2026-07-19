@@ -164,6 +164,11 @@ Yêu cầu định dạng JSON chính xác:
   "updateRulesEntry": "Nội dung cho [mvu_update]Quy tắc cập nhật biến (nếu được yêu cầu)",
   "varListEntry": "Nội dung hiển thị biến (nếu được yêu cầu)"
 }
+
+QUY TẮC BẮT BUỘC VỀ SCHEMA:
+- MỌI field (kể cả field lồng trong "children") BẮT BUỘC phải có key "constraints" — nếu không có ràng buộc nào thì dùng object rỗng {}.
+- "constraints.enumValues" (nếu dùng) phải là MẢNG chuỗi, ví dụ ["Thấp","Trung","Cao"].
+- MỌI field phải có đủ "path", "type", "label", "defaultValue".
 ${JSON_FORMAT_REQUIREMENT}
 `;
   return applyOverride(base, config.promptOverride, config.promptMode);

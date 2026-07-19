@@ -110,11 +110,11 @@ function applyReplace(
 
   // Coerce if needed
   let finalValue = value;
-  if (field?.constraints.coerce && field.type === 'number') {
+  if (field?.constraints?.coerce && field.type === 'number') {
     finalValue = Number(value);
     if (isNaN(finalValue as number)) {
       if (mode === 'lenient') {
-        finalValue = field.constraints.prefault ?? field.defaultValue ?? 0;
+        finalValue = field.constraints?.prefault ?? field.defaultValue ?? 0;
         errors.push({ path, op: 'replace', reason: 'Coercion failed, used prefault', fallbackApplied: true, fallbackValue: finalValue });
       } else {
         errors.push({ path, op: 'replace', reason: 'Number coercion failed' });
@@ -124,8 +124,8 @@ function applyReplace(
   }
 
   // Clamp
-  if (field?.constraints.clamp && typeof finalValue === 'number') {
-    finalValue = Math.max(field.constraints.clamp[0], Math.min(field.constraints.clamp[1], finalValue));
+  if (field?.constraints?.clamp && typeof finalValue === 'number') {
+    finalValue = Math.max(field.constraints?.clamp[0], Math.min(field.constraints?.clamp[1], finalValue));
   }
 
   (parent as Record<string, unknown>)[key] = finalValue;
@@ -162,9 +162,9 @@ function applyDelta(
 
   // Clamp after delta
   const field = findSchemaField(schema, path);
-  if (field?.constraints.clamp) {
+  if (field?.constraints?.clamp) {
     const val = (parent as Record<string, unknown>)[key] as number;
-    (parent as Record<string, unknown>)[key] = Math.max(field.constraints.clamp[0], Math.min(field.constraints.clamp[1], val));
+    (parent as Record<string, unknown>)[key] = Math.max(field.constraints?.clamp[0], Math.min(field.constraints?.clamp[1], val));
   }
 }
 

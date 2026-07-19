@@ -112,7 +112,7 @@ function renderFieldBlock(field: MVUZODField, indent: number): string[] {
 
   if (field.type === 'object' && field.children?.length) {
     // Object with children → z.object({...})
-    const hasTransform = !!field.constraints.transformExpr;
+    const hasTransform = !!field.constraints?.transformExpr;
 
     lines.push(`${pad(indent)}${name}: z.object({`);
     for (const child of field.children) {
@@ -130,17 +130,17 @@ function renderFieldBlock(field: MVUZODField, indent: number): string[] {
 
     if (hasTransform) {
       lines.push(`${pad(indent)}})`);
-      lines.push(`${pad(indent + 1)}.transform(${field.constraints.transformExpr}),`);
+      lines.push(`${pad(indent + 1)}.transform(${field.constraints?.transformExpr}),`);
     } else {
       lines.push(`${pad(indent)}}),`);
     }
   } else if (field.type === 'record' && field.children?.length) {
     // Record with children template
     const recordType = buildZodTypeExpr(field, indent);
-    const hasTransform = !!field.constraints.transformExpr;
+    const hasTransform = !!field.constraints?.transformExpr;
     if (hasTransform) {
       lines.push(`${pad(indent)}${name}: ${recordType}`);
-      lines.push(`${pad(indent + 1)}.transform(${field.constraints.transformExpr}),`);
+      lines.push(`${pad(indent + 1)}.transform(${field.constraints?.transformExpr}),`);
     } else {
       lines.push(`${pad(indent)}${name}: ${recordType},`);
     }
@@ -323,14 +323,14 @@ export function generateVariableListEntry(
     // Selective: show each top-level field with its own macro
     for (const field of schema.fields) {
       const name = getFieldName(field);
-      if (field.constraints.hidden) continue;
+      if (field.constraints?.hidden) continue;
 
       if (field.children?.length) {
         lines.push(`${name}:`);
         // Show selective children
         for (const child of field.children) {
           const childName = getFieldName(child);
-          if (child.constraints.hidden) continue;
+          if (child.constraints?.hidden) continue;
           lines.push(`  ${childName}: {{format_message_variable::stat_data.${name}.${childName}}}`);
         }
       } else {
@@ -381,7 +381,7 @@ function processUpdateRuleField(field: MVUZODField, indent: number, lines: strin
   const p = '  '.repeat(indent);
 
   // Skip readonly fields
-  if (name.startsWith('_') || field.constraints.readOnly) return;
+  if (name.startsWith('_') || field.constraints?.readOnly) return;
 
   if (field.children?.length && (field.type === 'object')) {
     lines.push(`${p}${name}:`);
@@ -395,21 +395,21 @@ function processUpdateRuleField(field: MVUZODField, indent: number, lines: strin
   lines.push(`${p}${name}:`);
 
   // Type info
-  if (field.constraints.updateType) {
-    const typeLines = field.constraints.updateType.split('\n');
+  if (field.constraints?.updateType) {
+    const typeLines = field.constraints?.updateType.split('\n');
     if (typeLines.length > 1) {
       lines.push(`${p}  type: |-`);
       for (const line of typeLines) {
         lines.push(`${p}    ${line}`);
       }
     } else {
-      lines.push(`${p}  type: ${field.constraints.updateType}`);
+      lines.push(`${p}  type: ${field.constraints?.updateType}`);
     }
   } else if (field.type === 'number') {
     lines.push(`${p}  type: number`);
   } else if (field.type === 'record') {
     // Generate TypeScript-like type signature
-    const keyDesc = field.constraints.describe ?? 'key';
+    const keyDesc = field.constraints?.describe ?? 'key';
     if (field.children?.length) {
       lines.push(`${p}  type: |-`);
       lines.push(`${p}    {`);
@@ -419,9 +419,9 @@ function processUpdateRuleField(field: MVUZODField, indent: number, lines: strin
         const childType = child.type === 'number' ? 'number'
           : child.type === 'boolean' ? 'boolean'
             : 'string';
-        const optional = child.constraints.prefault !== undefined ? '?' : '';
-        const comment = child.constraints.prefault !== undefined
-          ? `  // mặc định: ${JSON.stringify(child.constraints.prefault)}`
+        const optional = child.constraints?.prefault !== undefined ? '?' : '';
+        const comment = child.constraints?.prefault !== undefined
+          ? `  // mặc định: ${JSON.stringify(child.constraints?.prefault)}`
           : '';
         lines.push(`${p}        ${childName}${optional}: ${childType};${comment}`);
       }
@@ -431,21 +431,21 @@ function processUpdateRuleField(field: MVUZODField, indent: number, lines: strin
   }
 
   // Range
-  if (field.constraints.updateRange) {
-    lines.push(`${p}  range: ${field.constraints.updateRange}`);
-  } else if (field.constraints.clamp) {
-    lines.push(`${p}  range: ${field.constraints.clamp[0]}~${field.constraints.clamp[1]}`);
+  if (field.constraints?.updateRange) {
+    lines.push(`${p}  range: ${field.constraints?.updateRange}`);
+  } else if (field.constraints?.clamp) {
+    lines.push(`${p}  range: ${field.constraints?.clamp[0]}~${field.constraints?.clamp[1]}`);
   }
 
   // Format
-  if (field.constraints.updateFormat) {
-    lines.push(`${p}  format: ${field.constraints.updateFormat}`);
+  if (field.constraints?.updateFormat) {
+    lines.push(`${p}  format: ${field.constraints?.updateFormat}`);
   }
 
   // Check rules
-  if (field.constraints.checkRules?.length) {
+  if (field.constraints?.checkRules?.length) {
     lines.push(`${p}  check:`);
-    for (const rule of field.constraints.checkRules) {
+    for (const rule of field.constraints?.checkRules) {
       lines.push(`${p}    - ${rule}`);
     }
   }
@@ -460,7 +460,7 @@ export function generateOutputFormatEntry(schema: MVUZODSchema): string {
   const sampleOps: string[] = [];
 
   for (const field of schema.fields) {
-    const sampleChild = field.children?.find(c => !c.constraints.readOnly);
+    const sampleChild = field.children?.find(c => !c.constraints?.readOnly);
     if (sampleChild) {
       const parentName = getFieldName(field);
       const childName = getFieldName(sampleChild);

@@ -80,11 +80,11 @@ function flattenFields(fields: MVUZODField[], lines: string[], depth: number): v
 
 function formatFieldType(field: MVUZODField): string {
   let typeStr: string = field.type;
-  if (field.constraints.coerce) {
+  if (field.constraints?.coerce) {
     typeStr = `coerce.${typeStr}`;
   }
-  if (field.constraints.enumValues?.length) {
-    typeStr = `enum[${field.constraints.enumValues.join('|')}]`;
+  if (field.constraints?.enumValues?.length) {
+    typeStr = `enum[${field.constraints?.enumValues.join('|')}]`;
   }
   return typeStr;
 }

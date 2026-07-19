@@ -178,7 +178,7 @@ export function linkToSchema(
     if (!field) {
       issue = 'missing_from_schema';
       suggestion = `Thêm field "${a.jsonPointer}" vào MVUZOD Schema`;
-    } else if (a.operation === 'write' && field.constraints.readOnly) {
+    } else if (a.operation === 'write' && field.constraints?.readOnly) {
       issue = 'read_only_but_written';
       suggestion = `Field "${a.jsonPointer}" là readOnly — không nên ghi`;
     }

@@ -11,6 +11,7 @@ import type { MVUZODSchema, InitVarConfig } from '../types/mvuzod.types';
 import { tavernSync } from '../lib/sync/tavernSyncService';
 import { createEmptyCard, syncMirrorFields, nextEntryId } from '../lib/converters/cardDefaults';
 import { schemaToZodCode } from '../lib/mvuzod/schemaInferencer';
+import { normalizeMVUZODSchema } from '../lib/mvuzod/normalizeSchema';
 import * as repo from '../lib/db/projectRepo';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -225,7 +226,11 @@ const createCardSlice: StateCreator<CardState, [], [], CardSlice> = (set, get) =
     return nextEntryId(entries);
   },
 
-  setMvuzodSchema: (schema) => {
+  setMvuzodSchema: (schemaRaw) => {
+    // (Bug enumValues 19/07) Chốt chặn cho MỌI đường ghi schema (AI sinh, wizard, import):
+    // field thiếu `constraints` sẽ làm schemaToZodCode bên dưới (và mọi consumer khác) crash
+    // "reading 'enumValues'". Normalize trước khi đụng bất kỳ thứ gì.
+    const schema = schemaRaw ? normalizeMVUZODSchema(schemaRaw) : schemaRaw;
     set(s => {
       const card = structuredClone(s.card);
       const ext = (card.data.extensions ?? {}) as unknown as Record<string, unknown>;

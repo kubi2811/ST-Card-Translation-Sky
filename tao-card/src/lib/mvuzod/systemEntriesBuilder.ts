@@ -143,7 +143,7 @@ function buildUpdateRulesContent(schema: MVUZODSchema): string {
       for (const child of field.children) {
         const childName = child.path.split('/').pop() ?? child.path;
         lines.push(`    ${childName}:`);
-        lines.push(`      type: ${child.type}${child.constraints.clamp ? ` [${child.constraints.clamp[0]}-${child.constraints.clamp[1]}]` : ''}`);
+        lines.push(`      type: ${child.type}${child.constraints?.clamp ? ` [${child.constraints?.clamp[0]}-${child.constraints?.clamp[1]}]` : ''}`);
         if (child.description) lines.push(`      note: ${child.description}`);
       }
     } else if (field.type === 'record') {

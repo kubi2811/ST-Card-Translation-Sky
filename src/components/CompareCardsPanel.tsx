@@ -5,7 +5,8 @@
  * nhóm theo loại (core, lorebook, mở đầu, regex, MVU…). Sửa từng ô → Lưu ghi thẳng vào card
  * (trong bộ nhớ) → Xuất JSON/PNG. Hoàn toàn tách biệt với phiên dịch chính (không đụng store card).
  */
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { useUi } from '../i18n/useLocale';
 import { fmt } from '../i18n';
 import {
@@ -183,20 +184,30 @@ export function CompareCardsPanel({ onClose }: Props) {
   }, [allThree, slots, addToast]);
 
   // Đưa Card Final sang Dịch Card: reused = "đã dịch" (khoá), phần mới = "chờ dịch".
+  // (Bug 39b — 2026) THỨ TỰ QUAN TRỌNG: trước đây setCard/setFields chạy NGAY trong click khi
+  // overlay So Sánh còn mount → React commit MỘT LẦN vừa dựng toàn bộ UI dịch (605 field) vừa
+  // re-render overlay ⇒ main thread nghẽn chục giây, Chrome báo "Trang không phản hồi" ngay tại
+  // nút bấm. Nay: (1) đóng overlay TRƯỚC (unmount cây nặng, trình duyệt kịp vẽ), (2) việc nặng
+  // dời sang setTimeout để chạy ở commit sau — dữ liệu đã chụp vào closure nên không đổi hành vi.
   const sendToTranslate = useCallback(() => {
     const finalSlot = slots.final;
     if (!finalSlot.parsed || !merge) return;
     if (!window.confirm(fmt(ui.ccConfirmSend, { reused: merge.counts.reused, changed: merge.counts.changed }))) return;
-    const st = useStore.getState();
-    st.setCard(finalSlot.parsed.card, finalSlot.parsed.fileName, finalSlot.parsed.dataUrl, 'card', null);
-    const enabled = st.translationConfig.fieldGroups.filter((g) => g.enabled).map((g) => g.id);
-    const fields = extractTranslatableFields(finalSlot.parsed.card, enabled);
-    const mergedFields = fields.map((f) => merge.reused.has(f.path)
-      ? { ...f, translated: merge.reused.get(f.path)!, status: 'done' as const, error: undefined }
-      : f);
-    st.setFields(mergedFields);
-    addToast('success', fmt(ui.ccToastSent, { count: merge.counts.changed }));
+    const { card, fileName, dataUrl } = finalSlot.parsed;
+    const reused = merge.reused;
+    const changedCount = merge.counts.changed;
     onClose();
+    setTimeout(() => {
+      const st = useStore.getState();
+      st.setCard(card, fileName, dataUrl, 'card', null);
+      const enabled = st.translationConfig.fieldGroups.filter((g) => g.enabled).map((g) => g.id);
+      const fields = extractTranslatableFields(card, enabled);
+      const mergedFields = fields.map((f) => reused.has(f.path)
+        ? { ...f, translated: reused.get(f.path)!, status: 'done' as const, error: undefined }
+        : f);
+      st.setFields(mergedFields);
+      addToast('success', fmt(ui.ccToastSent, { count: changedCount }));
+    }, 60);
   }, [slots, merge, addToast, onClose]);
 
   // Xuất Card Final đã gộp (đắp bản dịch cũ vào entry không đổi, phần mới giữ nguyên ngữ).
@@ -245,6 +256,39 @@ export function CompareCardsPanel({ onClose }: Props) {
   };
 
   const gridCols = '200px repeat(3, minmax(0, 1fr))';
+
+  // ─── (Bug 39b — 2026) ẢO HOÁ bảng so sánh ───
+  // Trước đây render THẲNG 605 hàng × 3 ô textarea (~1.815 textarea thật trong DOM) → mount/re-render
+  // nào cũng nghẽn main thread hàng giây; cộng với cú setCard khi "Đưa sang Dịch Card" là đủ
+  // "Trang không phản hồi". Nay làm phẳng (header nhóm + hàng) thành 1 danh sách rồi chỉ render
+  // phần đang nhìn thấy — cùng kỹ thuật bảng chính FieldEditor đang dùng.
+  type FlatItem =
+    | { kind: 'header'; group: (typeof visibleGroups)[number]['group']; label: string; count: number }
+    | { kind: 'row'; entry: (typeof visibleGroups)[number]['entries'][number] };
+  const flatItems = useMemo<FlatItem[]>(() => {
+    const out: FlatItem[] = [];
+    for (const g of visibleGroups) {
+      out.push({ kind: 'header', group: g.group, label: g.label, count: g.entries.length });
+      if (!collapsed.has(g.group)) for (const e of g.entries) out.push({ kind: 'row', entry: e });
+    }
+    return out;
+  }, [visibleGroups, collapsed]);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: flatItems.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: (i) => (flatItems[i]?.kind === 'header' ? 34 : 96),
+    overscan: 10,
+  });
+  // Đổi độ dài danh sách (lọc/gộp/đóng mở nhóm) → đo lại, tránh tổng chiều cao lệch (như FieldEditor).
+  const prevFlatLenRef = useRef(flatItems.length);
+  useEffect(() => {
+    if (prevFlatLenRef.current !== flatItems.length) {
+      prevFlatLenRef.current = flatItems.length;
+      rowVirtualizer.measure();
+    }
+  }, [flatItems.length, rowVirtualizer]);
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'var(--bg-primary)', display: 'flex', flexDirection: 'column' }}>
@@ -327,29 +371,32 @@ export function CompareCardsPanel({ onClose }: Props) {
       </div>
 
       {/* Grid body */}
-      <div style={{ flex: 1, overflow: 'auto' }}>
+      <div ref={scrollRef} style={{ flex: 1, overflow: 'auto' }}>
         {loadedSlots.length === 0 ? (
           <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '0.85rem', textAlign: 'center', padding: '20px' }}>
             {ui.ccEmpty1}<br />
             <span style={{ fontSize: '0.72rem' }}>{ui.ccEmpty2}</span>
           </div>
-        ) : visibleGroups.length === 0 ? (
+        ) : flatItems.length === 0 ? (
           <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.8rem' }}>{ui.ccNoMatch}</div>
         ) : (
-          visibleGroups.map((g) => {
-            const isCollapsed = collapsed.has(g.group);
-            return (
-              <div key={g.group}>
-                {/* Group header */}
-                <div onClick={() => setCollapsed((prev) => { const n = new Set(prev); n.has(g.group) ? n.delete(g.group) : n.add(g.group); return n; })}
-                  style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 12px', background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-subtle)', cursor: 'pointer', position: 'sticky', top: 0, zIndex: 2 }}>
-                  {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-                  <span style={{ fontWeight: 600, fontSize: '0.78rem' }}>{g.label}</span>
-                  <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>({g.entries.length})</span>
-                </div>
-                {/* Rows */}
-                {!isCollapsed && g.entries.map((e) => (
-                  <div key={e.path} style={{ display: 'grid', gridTemplateColumns: gridCols, borderBottom: '1px solid var(--border-subtle)' }}>
+          <div style={{ height: `${rowVirtualizer.getTotalSize()}px`, width: '100%', position: 'relative' }}>
+            {rowVirtualizer.getVirtualItems().map((vRow) => {
+              const item = flatItems[vRow.index];
+              const inner = item.kind === 'header' ? (() => {
+                const isCollapsed = collapsed.has(item.group);
+                return (
+                  <div onClick={() => setCollapsed((prev) => { const n = new Set(prev); n.has(item.group) ? n.delete(item.group) : n.add(item.group); return n; })}
+                    style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 12px', background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-subtle)', cursor: 'pointer' }}>
+                    {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                    <span style={{ fontWeight: 600, fontSize: '0.78rem' }}>{item.label}</span>
+                    <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>({item.count})</span>
+                  </div>
+                );
+              })() : (() => {
+                const e = item.entry;
+                return (
+                  <div style={{ display: 'grid', gridTemplateColumns: gridCols, borderBottom: '1px solid var(--border-subtle)' }}>
                     <div style={{ padding: '8px 12px', fontSize: '0.7rem', color: 'var(--text-secondary)', wordBreak: 'break-word', borderRight: '1px solid var(--border-subtle)' }}>
                       <div style={{ fontWeight: 600 }}>{e.label}</div>
                       <div style={{ fontSize: '0.58rem', color: 'var(--text-muted)', marginTop: '2px' }}>{e.path}</div>
@@ -374,10 +421,21 @@ export function CompareCardsPanel({ onClose }: Props) {
                       );
                     })}
                   </div>
-                ))}
-              </div>
-            );
-          })
+                );
+              })();
+              return (
+                <div
+                  // key kèm index — chống trùng path làm React vứt row (cùng bài học bảng FieldEditor).
+                  key={item.kind === 'header' ? `h:${item.group}` : `${vRow.index}:${item.entry.path}`}
+                  ref={rowVirtualizer.measureElement}
+                  data-index={vRow.index}
+                  style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vRow.start}px)` }}
+                >
+                  {inner}
+                </div>
+              );
+            })}
+          </div>
         )}
       </div>
     </div>

@@ -1,4 +1,5 @@
 import { stripUrlsForCjkCheck } from './cjk';
+import { setFandom } from './fandomMode';
 import type { AIProvider, ProxySettings, ProviderConfig, GlossaryEntry, CharacterBookEntry } from '../types/card';
 import {
   buildMasterSystemPrompt,
@@ -15,6 +16,16 @@ import {
 let _nameStyle: NameStyle = 'hanviet';
 export function setNameStyle(s: NameStyle): void { _nameStyle = s || 'hanviet'; }
 export function getNameStyle(): NameStyle { return _nameStyle; }
+
+// (User 19/07) 🎌 CHẾ ĐỘ ĐỒNG NHÂN toàn cục — store bơm vào trước khi dịch, y như _nameStyle.
+// Khi bật, buildProperNounRules/buildMasterSystemPrompt dùng khối luật tên canon (cấm Hán-Việt hoá).
+let _fandomMode = false;
+let _fandomName = '';
+export function setFandomMode(on: boolean, name = ''): void {
+  _fandomMode = !!on; _fandomName = name || '';
+  setFandom(_fandomMode, _fandomName); // bơm xuống module lá → Chiến lược B/C, surgical, aiVerify cùng thấy
+}
+export function getFandomMode(): { on: boolean; name: string } { return { on: _fandomMode, name: _fandomName }; }
 import { LOREBOOK_GENERATION_PROMPT } from './promptBuilder';
 import { extractCJKTokens, reinsertTranslations, surgicalTranslate } from './surgical';
 import { CallMonitor, estimateTokens } from './callMonitor';
@@ -376,7 +387,7 @@ STRICT RULES:
    - Variable placeholders like {{char}}, {{user}}, {{random}}: Keep exactly as-is, do NOT translate.
    - Text inside angle brackets like <角色名>, <设定>: Keep the bracket structure, translate the content inside.
 10. Maintain consistent terminology. If you translate a term one way, use that same translation throughout.
-11. ${buildProperNounRules(_nameStyle)}
+11. ${buildProperNounRules(_nameStyle, _fandomMode, _fandomName)}
     - All descriptive text → translate into natural, modern Vietnamese.
     - Keep honorifics as-is or map to Vietnamese equivalents based on context (-san, -chan, -sama).
 12. CRITICAL: The output must contain ONLY the translated text in ${targetLang}. Do NOT include source language text. Do NOT pair original text with translation. Do NOT use arrows (→) or colons (:) to show before/after.
@@ -409,6 +420,8 @@ export function buildSystemPromptForField(
       glossary,
       customPromptSuffix: customPrompt?.trim() || undefined,
       nameStyle: _nameStyle,
+      fandomMode: _fandomMode,
+      fandomName: _fandomName,
     });
   }
 
@@ -536,6 +549,13 @@ CHUNK RULES:
       glossary,
       customPromptSuffix: promptSuffix,
       ragContextBlock: ragBlock,
+      // (BUG 19/07) Đường dịch THẬT ở chế độ chuyên gia đi qua đây, và nó QUÊN truyền nameStyle
+      // ⇒ buildMasterSystemPrompt luôn rơi về mặc định 'hanviet': user chọn Romaji cũng vô hiệu,
+      // tên Nhật vẫn bị Hán-Việt hoá. (Hàm buildSystemPromptForField có truyền đúng nhưng là
+      // dead code, không ai gọi.) Nay truyền cả kiểu tên lẫn cờ Đồng Nhân.
+      nameStyle: _nameStyle,
+      fandomMode: _fandomMode,
+      fandomName: _fandomName,
     });
 
     // Schema is injected via RAG context or Layer 8 — add separately if provided and not already in RAG

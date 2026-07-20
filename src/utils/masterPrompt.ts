@@ -31,8 +31,36 @@ export type { NameStyle };
 const WESTERN_RESTORE_LINE =
   '    - WESTERN/FOREIGN NAMES: Non-Chinese names phonetically transcribed into CJK (e.g. 维拉→Vera, 亚瑟→Arthur, 威廉→William, 泰坦→Titan, 塞勒涅→Selene) → ALWAYS restore to the original Latin/English spelling. NEVER read them as Sino-Vietnamese (do NOT produce "Uy Lợi Nhĩ", "Thái Thản", …).';
 
+/**
+ * (User 19/07) 🎌 KHỐI LUẬT CHẾ ĐỘ ĐỒNG NHÂN — dùng THAY cho luật tên thường.
+ *
+ * Vì sao cần: card đồng nhân thường là card TIẾNG TRUNG viết về IP Nhật/Hàn/phương Tây. Tên nhân
+ * vật viết bằng Hán tự (雪ノ下雪乃) nhưng tên CHÍNH TẮC là âm Nhật (Yukinoshita Yukino). Luật
+ * thường thấy "nguồn = 中文" nên đẩy tên sang Hán-Việt → ra "Tuyết Nãi". Kể cả kiểu tên Romaji
+ * cũng chưa đủ vì nó bảo "Chinese → Pinyin" ⇒ ra "Xue Nai", vẫn sai.
+ * Khối này ép AI: tên là TÀI SẢN CỦA TÁC PHẨM GỐC, phải dùng đúng dạng cộng đồng đang dùng.
+ */
+export function buildFandomNameRules(fandomName?: string): string {
+  const ip = fandomName?.trim();
+  return `PROPER NOUNS — FAN-FICTION / DOUJIN MODE (HIGHEST PRIORITY, OVERRIDES EVERY OTHER NAME RULE BELOW):
+    - This card is FAN-FICTION of an existing work${ip ? `: "${ip}"` : ''}. Character names, place names, organizations, techniques and item names are ESTABLISHED CANON — they are NOT ordinary Chinese words to be re-read.
+    - Use the CANONICAL name form the fandom actually uses in Latin script. For a Japanese work that means the Japanese reading in Romaji; Korean → Revised Romanization; Western → the original Latin spelling.
+    - ABSOLUTELY FORBIDDEN: reading a canon name with Sino-Vietnamese (Hán-Việt) just because it is written in Han characters. Examples of the exact mistake to avoid:
+        雪ノ下雪乃 → "Yukinoshita Yukino"   (NEVER "Tuyết Chi Hạ Tuyết Nãi", NEVER "Tuyết Nãi")
+        雪乃       → "Yukino"               (NEVER "Tuyết Nãi")
+        比企谷八幡 → "Hikigaya Hachiman"    (NEVER "Tỉ Xí Cốc Bát Phiên")
+        由比ヶ浜結衣 → "Yuigahama Yui"      (NEVER "Do Tỉ Ca Bang Kết Y")
+    - Also FORBIDDEN: Pinyin for a Japanese-work name (雪乃 is "Yukino", NOT "Xue Nai").
+    - If you are not certain of the canonical reading, keep the name in its ORIGINAL script unchanged rather than inventing a Sino-Vietnamese or Pinyin reading. An untranslated name is acceptable; a wrong localized name is NOT.
+    - Honorifics (-san, -chan, -sama, -kun, -senpai) and canon nicknames stay in their fandom-standard form.
+    - Once a name has been rendered one way, keep that EXACT spelling everywhere in the card — never "correct" it into a different form later.
+${WESTERN_RESTORE_LINE}`;
+}
+
 /** Sinh khối luật PHIÊN ÂM TÊN RIÊNG theo kiểu tên đã chọn. */
-export function buildProperNounRules(nameStyle: NameStyle = 'hanviet'): string {
+export function buildProperNounRules(nameStyle: NameStyle = 'hanviet', fandomMode = false, fandomName?: string): string {
+  // 🎌 Đồng nhân ĐÈ mọi kiểu tên — tên canon quan trọng hơn quy ước phiên âm theo ngôn ngữ nguồn.
+  if (fandomMode) return buildFandomNameRules(fandomName);
   if (nameStyle === 'romaji') {
     return `PROPER NOUN TRANSLITERATION — INTERNATIONAL/ROMAJI STYLE (names & places only):
     - CHARACTER/PERSON NAMES → international romanization, NOT Sino-Vietnamese: Japanese-origin → Romaji (田中→Tanaka, if the card uses a Japanese IP name written in Han like 小白 → Shiro); Chinese → Pinyin (叶凡→Ye Fan, 李明→Li Ming); Korean → Revised Romanization (金泰亨→Kim Tae-hyung).
@@ -81,6 +109,9 @@ export interface MasterPromptOptions {
   entryNameDictionary?: Record<string, string>;
   /** (User 2026) Kiểu tên riêng — đổi cách phiên âm tên nhân vật (mặc định 'hanviet'). */
   nameStyle?: NameStyle;
+  /** (User 19/07) 🎌 Chế độ Đồng Nhân — tên canon của IP, cấm Hán-Việt hoá. Đè mọi luật tên khác. */
+  fandomMode?: boolean;
+  fandomName?: string;
 }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -185,7 +216,7 @@ A single mismatch = total system crash.`;
    ════════════════════════════════════════════════════════════════════ */
 
 /** Narrative fields: proper nouns, register, pronouns, tone */
-function buildNarrativeRules(sourceLang: string, targetLang: string, nameStyle: NameStyle = 'hanviet'): string {
+function buildNarrativeRules(sourceLang: string, targetLang: string, nameStyle: NameStyle = 'hanviet', fandomMode = false, fandomName?: string): string {
   const isVietnamese = targetLang.toLowerCase().includes('việt') || targetLang.toLowerCase().includes('vietnamese');
   const isChinese = sourceLang.includes('中') || sourceLang.toLowerCase().includes('chinese');
   const isJapanese = sourceLang.includes('日') || sourceLang.toLowerCase().includes('japanese');
@@ -194,6 +225,15 @@ function buildNarrativeRules(sourceLang: string, targetLang: string, nameStyle: 
   let rules = `
 TRANSLATION PRINCIPLES (NARRATIVE):
 `;
+
+  // (User 19/07) 🎌 ĐỒNG NHÂN đè TRƯỚC TIÊN: phải chặn nhánh `isChinese → Sino-Vietnamese` bên dưới,
+  // vì card đồng nhân IP Nhật hầu hết là card tiếng Trung — đi vào nhánh đó là 雪乃 thành "Tuyết Nãi".
+  if (fandomMode) {
+    rules += `
+P1 — ${buildFandomNameRules(fandomName)}
+  - All descriptive text (traits, prose, dialogue) → translate into natural, modern Vietnamese as usual. ONLY names/canon terms follow the rule above.`;
+    return rules;
+  }
 
   // (User 2026) Kiểu tên ≠ Hán-Việt → dùng khối luật quốc tế/giữ nguyên cho MỌI nguồn (đè nhánh chi tiết bên dưới).
   if (isVietnamese && nameStyle !== 'hanviet') {
@@ -955,16 +995,16 @@ export function buildMasterSystemPrompt(options: MasterPromptOptions): string {
   // Layer 2: Field-specific rules
   switch (fieldType) {
     case 'narrative':
-      layers.push(buildNarrativeRules(sourceLang, targetLang, options.nameStyle));
+      layers.push(buildNarrativeRules(sourceLang, targetLang, options.nameStyle, options.fandomMode, options.fandomName));
       break;
     case 'regex':
       layers.push(buildRegexRules());
-      layers.push(buildNarrativeRules(sourceLang, targetLang, options.nameStyle)); // Regex replaceString may have narrative
+      layers.push(buildNarrativeRules(sourceLang, targetLang, options.nameStyle, options.fandomMode, options.fandomName)); // Regex replaceString may have narrative
       break;
     case 'lorebook':
       layers.push(buildLorebookRules());
       layers.push(buildEjsRules());
-      layers.push(buildNarrativeRules(sourceLang, targetLang, options.nameStyle));
+      layers.push(buildNarrativeRules(sourceLang, targetLang, options.nameStyle, options.fandomMode, options.fandomName));
       break;
     case 'ejs_code':
       layers.push(buildEjsRules());
@@ -981,7 +1021,7 @@ export function buildMasterSystemPrompt(options: MasterPromptOptions): string {
     case 'mixed':
     default:
       // Include all relevant rules for mixed/unknown content
-      layers.push(buildNarrativeRules(sourceLang, targetLang, options.nameStyle));
+      layers.push(buildNarrativeRules(sourceLang, targetLang, options.nameStyle, options.fandomMode, options.fandomName));
       layers.push(buildLorebookRules());
       layers.push(buildEjsRules());
       layers.push(buildRegexRules());

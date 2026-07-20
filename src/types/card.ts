@@ -385,6 +385,18 @@ export interface TranslationConfig {
    * (Nhật→Romaji, Trung→Pinyin); 'keep' = giữ dạng gốc/quốc tế. Tên phương Tây LUÔN khôi phục Latin.
    */
   nameStyle: NameStyle;
+  /**
+   * (User 19/07) 🎌 CHẾ ĐỘ ĐỒNG NHÂN (fanfic/doujin của một tác phẩm có sẵn).
+   * Card đồng nhân thường là card TIẾNG TRUNG viết về IP Nhật/Hàn/phương Tây — tên nhân vật viết
+   * bằng Hán tự nhưng PHẢI đọc theo âm gốc của tác phẩm (雪ノ下雪乃 → Yukinoshita Yukino), TUYỆT
+   * ĐỐI KHÔNG Hán-Việt hoá ("Tuyết Nãi"). Bật cờ này sẽ: (1) ép khối luật tên chống Hán-Việt hoá
+   * ở MỌI tầng prompt, (2) đổi persona Pha 0 (bảng tên) sang "chuyên gia fandom" thay vì "thẻ tu
+   * tiên Trung", (3) KHÔNG tự nạp bộ thuật ngữ Tu tiên/Võ hiệp (bộ này kéo tên về Hán-Việt),
+   * (4) khoá bảng tên đã chốt khỏi bị cơ chế hậu kỳ ghi đè ngược.
+   */
+  fandomMode: boolean;
+  /** Tên tác phẩm gốc (vd "Oregairu", "Genshin Impact") — giúp AI tra đúng tên chính tắc. */
+  fandomName: string;
   enableMvuSync: boolean; // Enable Strategy B (Sync MVU Variables)
   mvuDictionary: Record<string, string>; // Dictionary for Strategy B
   /**

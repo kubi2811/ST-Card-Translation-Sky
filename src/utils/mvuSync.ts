@@ -1,4 +1,5 @@
 import type { CharacterCard, ProxySettings, TranslationField } from '../types/card';
+import { fandomNameOverride } from './fandomMode';
 import type { ZodFieldDef } from '../types/mvuZodTypes';
 import { extractPatchFieldNames } from './jsonPatchValidator';
 import { callProvider } from './apiClient';
@@ -427,6 +428,13 @@ export function recanonicalizeMvuInFields(
   fields: TranslationField[],
   mvuDictionary: Record<string, string>,
   keyMetadata?: Record<string, { confidence?: string; keyType?: string }>,
+  /**
+   * (User 19/07 — bug "dịch đúng rồi tự sửa thành sai") Bỏ qua field VĂN XUÔI (lorebook/
+   * lorebook_keys), chỉ sweep field CODE. Dùng cho Chế độ Đồng Nhân: từ điển biến MVU (do AI
+   * dịch tên biến sinh ra, dễ ra "Tuyết Nãi") KHÔNG phải nguồn chân lý cho tên nhân vật trong
+   * văn xuôi — để nó quét narrative là ghi đè ngược lên bản dịch tên đã đúng ở cuối lượt dịch.
+   */
+  skipNarrative = false,
 ): { fields: TranslationField[]; dictionary: Record<string, string>; fixCount: number } {
   const { fixedDict } = enforceExactConsistency(mvuDictionary, keyMetadata as any);
   let fixCount = 0;
@@ -438,6 +446,7 @@ export function recanonicalizeMvuInFields(
     // (bug #8) Gồm cả lorebook_keys — trigger keyword nhiễm `_` khi export sẽ đè lên card đã sửa.
     const isLbNarr = (f.group === 'lorebook' || f.group === 'lorebook_keys') && !isCode;
     if (!isCode && !isLbNarr) return f;
+    if (isLbNarr && skipNarrative) return f;
     // (bug #8) Sweep dict-less TRƯỚC — Lưu_Tam_Bảo → Lưu Tam Bảo kể cả khi dict trống/thiếu key.
     let t = unifyVietnameseUnderscoresInText(f.translated).text;
     t = enforceInitvarCovariance(t, fixedDict, isLbNarr).text;
@@ -2227,7 +2236,7 @@ export async function aiTranslateMvuKeys(
     ? `\n\n═══ USER CUSTOM TRANSLATION RULES (HIGHEST PRIORITY) ═══\nThe user has provided custom instructions for how variable names should be translated. Follow these instructions ABOVE ALL other rules:\n${customPrompt.trim()}\n═══ END CUSTOM RULES ═══`
     : '';
 
-  const systemPrompt = `Translate CJK (Chinese/Japanese/Korean) variable names to ${targetLang}. Do NOT translate English or ASCII names. Chinese proper nouns (names, places) → Sino-Vietnamese (Hán Việt). Japanese proper nouns → Romaji. Korean proper nouns → Standard Revised Romanization (e.g. 金泰亨→Kim Tae-hyung), NOT Sino-Vietnamese. Do NOT translate English. Keep consistency with MVU Schema.
+  const systemPrompt = `Translate CJK (Chinese/Japanese/Korean) variable names to ${targetLang}. Do NOT translate English or ASCII names. Chinese proper nouns (names, places) → Sino-Vietnamese (Hán Việt). Japanese proper nouns → Romaji. Korean proper nouns → Standard Revised Romanization (e.g. 金泰亨→Kim Tae-hyung), NOT Sino-Vietnamese. Do NOT translate English. Keep consistency with MVU Schema.${fandomNameOverride()}
 
 You are a variable name translator for SillyTavern character cards.
 Your job: translate variable names from the source language to ${targetLang}.
@@ -2574,7 +2583,7 @@ export async function aiResolveMvuConflicts(
     })
     .join('\n');
 
-  const systemPrompt = `Translate CJK (Chinese/Japanese/Korean) variable names to ${targetLang}. Do NOT translate English or ASCII names. Chinese proper nouns → Sino-Vietnamese (Hán Việt). Japanese proper nouns → Romaji. Korean proper nouns → Standard Revised Romanization (NOT Sino-Vietnamese). Keep consistency with MVU Schema.
+  const systemPrompt = `Translate CJK (Chinese/Japanese/Korean) variable names to ${targetLang}. Do NOT translate English or ASCII names. Chinese proper nouns → Sino-Vietnamese (Hán Việt). Japanese proper nouns → Romaji. Korean proper nouns → Standard Revised Romanization (NOT Sino-Vietnamese). Keep consistency with MVU Schema.${fandomNameOverride()}
 
 You are a variable name translator for SillyTavern character cards.
 Your job: translate variable names from the source language to ${targetLang}.
@@ -2794,7 +2803,7 @@ Your job is to read the character's background and extract proper nouns, charact
 RULES:
 1. ONLY extract important proper nouns and specific terminology. DO NOT extract common words (like "sword", "house", "run").
 2. Translate them to ${targetLang}. 
-   - For Vietnamese (${targetLang}), use Sino-Vietnamese reading for Chinese proper nouns only (e.g. 李明 -> Lý Minh, 长安 -> Trường An). All descriptive text → natural modern Vietnamese.
+   - For Vietnamese (${targetLang}), use Sino-Vietnamese reading for Chinese proper nouns only (e.g. 李明 -> Lý Minh, 长安 -> Trường An). All descriptive text → natural modern Vietnamese.${fandomNameOverride()}
 3. Keep the list concise (max 15-20 most important terms).
 4. Output EXACT JSON format: {"glossary": {"Source Term": "Translated Term"}}
 5. DO NOT wrap the JSON in markdown blocks like \`\`\`json. Just output the raw JSON string.`;

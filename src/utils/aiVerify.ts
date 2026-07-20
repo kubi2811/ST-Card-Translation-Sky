@@ -1,4 +1,5 @@
 import { countCjkText } from './cjk';
+import { fandomNameOverride } from './fandomMode';
 import type { CharacterCard, ProxySettings, TranslationField } from '../types/card';
 import { detectStructuralTruncation, callProvider } from './apiClient';
 
@@ -1641,7 +1642,7 @@ CRITICAL RULES:
 - Do NOT change variable names, function names, or technical identifiers
 - Do NOT add or remove line breaks unless an issue specifically requires it
 - The output length should be very close to the input translation length
-${categoryHints ? '\n' + categoryHints : ''}${mvuBlock}${roundNote}`;
+${categoryHints ? '\n' + categoryHints : ''}${mvuBlock}${roundNote}${fandomNameOverride()}`;
 
   // Dynamic content limit based on model
   const contentLimit = Math.floor(getModelContentLimit(modelName || 'unknown') / 3); // /3 because we send original + translation + system
@@ -1905,7 +1906,7 @@ RULES:
 - Fix ONLY the ONE issue described below. Change NOTHING else.
 - Preserve ALL {{macros}}, HTML tags, brackets, code blocks exactly.
 - Output length must be very close to input length.
-${categoryHint ? '\n' + categoryHint : ''}${mvuBlock}`;
+${categoryHint ? '\n' + categoryHint : ''}${mvuBlock}${fandomNameOverride()}`;
 
   const userPrompt = `Fix this ONE issue in the ${targetLang} translation.
 

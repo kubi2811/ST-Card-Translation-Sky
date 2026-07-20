@@ -1,5 +1,6 @@
 // ── Imports ───────────────────────────────────────────────────────────────────
 import { extractTranslationFromResponse } from './masterPrompt';
+import { fandomNameOverride } from './fandomMode';
 import type { ProxySettings, GlossaryEntry } from '../types/card';
 import { writeDebugLog } from './debugLogger';
 import { extractScriptBodies, jsParseError } from './scriptSafety';
@@ -1377,7 +1378,7 @@ ${langRules}${glossaryPrompt}${mvuPrompt}` +
           .join('\n');
 
         const fallbackSystemPrompt =
-          `You are a professional CJK Sino-Vietnamese (Hán Việt) dictionary and translation engine.
+          `You are a professional CJK Sino-Vietnamese (Hán Việt) dictionary and translation engine.${fandomNameOverride()}
 Your task is to translate the following isolated CJK terms to Vietnamese:
 1. For single Chinese characters (length 1): Return ONLY their standard Sino-Vietnamese (Hán Việt) reading in lowercase.
    Examples: 峙 -> trĩ, 庸 -> dung, 饷 -> hướng, 铠 -> khải, 槊 -> sóc, 兵 -> binh.

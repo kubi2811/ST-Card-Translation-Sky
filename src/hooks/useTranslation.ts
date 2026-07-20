@@ -2,7 +2,7 @@ import { splitLorebookBatches } from '../utils/batchSplit';
 import { stripUrlsForCjkCheck } from '../utils/cjk';
 import { useCallback, useRef } from 'react';
 import { useStore } from '../store';
-import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookEntries, ChunkError, ApiError, setExtraProviders, resetProviderPool, computePoolConcurrency, callProvider, setNameStyle } from '../utils/apiClient';
+import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookEntries, ChunkError, ApiError, setExtraProviders, resetProviderPool, computePoolConcurrency, callProvider, setNameStyle, setFandomMode } from '../utils/apiClient';
 import { extractNameCandidates, buildNameGlossaryPrompt, parseNameGlossaryResponse, mergeGlossary, harvestGlossaryFromFields } from '../utils/nameGlossary';
 import { GLOSSARY_PRESETS } from '../utils/glossaryPresets';
 import { extractTranslatableFields, applyTranslationsToCard, autoTranslateLorebookTriggerKeys, injectNewLorebookEntries, isMvuUpdateField } from '../utils/cardFields';
@@ -1746,6 +1746,8 @@ export function useTranslation() {
     setExtraProviders(store.providers);
     resetProviderPool();
     setNameStyle(store.translationConfig.nameStyle); // (User 2026) Kiểu tên riêng → mọi prompt dùng chung
+    // (User 19/07) 🎌 Đồng nhân → khối luật tên canon (cấm Hán-Việt hoá) áp cho mọi prompt.
+    setFandomMode(store.translationConfig.fandomMode, store.translationConfig.fandomName);
     if (store.providers.filter((p) => p.enabled).length > 0) {
       store.addLog('info', `🔀 Đa provider: ${1 + store.providers.filter((p) => p.enabled).length} provider chạy song song (rải đều).`);
     }
@@ -1787,7 +1789,11 @@ export function useTranslation() {
         // ── Tự nạp bộ thuật ngữ có sẵn khi card khớp thể loại (user khỏi phải nhớ bấm nút) ──
         // Đếm nhanh (0 token): ≥8 thuật ngữ của bộ xuất hiện trong card → nạp cả bộ.
         // Đã có ≥5 mục của bộ trong Từ điển thì coi như nạp rồi (tôn trọng user đã xoá bớt).
-        {
+        // (User 19/07) 🎌 ĐỒNG NHÂN: KHÔNG tự nạp bộ tu tiên/võ hiệp. Bộ này toàn thuật ngữ Hán-Việt,
+        // nạp vào card đồng nhân Nhật/Hàn là kéo cả văn phong lẫn tên riêng về hướng Hán-Việt.
+        if (useStore.getState().translationConfig.fandomMode) {
+          store.addLog('info', '🎌 Chế độ Đồng Nhân: bỏ qua tự nạp bộ thuật ngữ Tu tiên/Võ hiệp (tránh kéo tên nhân vật về Hán-Việt).');
+        } else {
           const cfgPk = useStore.getState().translationConfig;
           const corpus = fields
             .filter(f => f.status === 'pending' || f.status === 'error')
@@ -1812,7 +1818,7 @@ export function useTranslation() {
         const candidates = extractNameCandidates(fields).filter(c => !existingSources.has(c.term));
         if (candidates.length >= 2) {
           store.addLog('info', `📖 Pha 0 — bảng tên riêng: thấy ${candidates.length} tên/thuật ngữ lặp lại, đang dịch bảng tên (1 lượt gọi) để thống nhất toàn card…`);
-          const { system, user } = buildNameGlossaryPrompt(candidates, cfgP0.targetLanguage, cfgP0.nameStyle);
+          const { system, user } = buildNameGlossaryPrompt(candidates, cfgP0.targetLanguage, cfgP0.nameStyle, cfgP0.fandomMode, cfgP0.fandomName);
           const rawNames = await callProvider(store.proxy, system, user, abortRef.current!.signal, undefined,
             { label: '📖 Bảng tên riêng (Pha 0)', charCount: user.length });
           const nameEntries = parseNameGlossaryResponse(rawNames, candidates);
@@ -2749,8 +2755,12 @@ export function useTranslation() {
       try {
         const rawDict = useStore.getState().translationConfig.mvuDictionary;
         if (rawDict && Object.keys(rawDict).length > 0) {
+          // (User 19/07) 🎌 Đồng nhân: sweep CHỈ đụng field code. Trước đây nó áp từ điển biến lên
+          // cả văn xuôi lorebook ở CUỐI lượt dịch — đó chính là cơ chế "đã dịch đúng rồi sau một
+          // hồi lại tự sửa thành sai" (Yukino ở narrative bị kéo về dạng trong dict biến).
           const { fields: sweptFields, dictionary: fixedDict, fixCount } = recanonicalizeMvuInFields(
             useStore.getState().fields, rawDict, useStore.getState().mvuKeyMetadata,
+            store.translationConfig.fandomMode,
           );
           // (khoá dict) 🔒 → không chuẩn hoá lại dict (user chốt dạng nào giữ dạng đó, kể cả _/-).
           if (writeMvuDictAuto(fixedDict, 'sweep chuẩn hoá dict (_/- → space)') && fixCount > 0) {
@@ -3883,6 +3893,8 @@ export function useTranslation() {
     setExtraProviders(store.providers);
     resetProviderPool();
     setNameStyle(store.translationConfig.nameStyle); // (User 2026) Kiểu tên riêng → mọi prompt dùng chung
+    // (User 19/07) 🎌 Đồng nhân → khối luật tên canon (cấm Hán-Việt hoá) áp cho mọi prompt.
+    setFandomMode(store.translationConfig.fandomMode, store.translationConfig.fandomName);
 
     store.addLog('info', `🔧 Applying Mod to ${targetFields.length} field(s) [Language: ${effectiveLang}]`);
     store.addLog('info', `📝 Mod instructions: "${modInstructions.slice(0, 100)}${modInstructions.length > 100 ? '...' : ''}"`);

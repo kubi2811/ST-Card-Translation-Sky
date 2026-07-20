@@ -581,6 +581,44 @@ export default function TranslateConfig() {
             </span>
           </div>
 
+          {/* (User 19/07) 🎌 CHẾ ĐỘ ĐỒNG NHÂN — card fanfic của IP có sẵn (anime/game/light novel).
+              Bật để chặn Hán-Việt hoá tên nhân vật (雪乃 → Yukino, KHÔNG phải "Tuyết Nãi"). */}
+          <div style={{
+            marginBottom: '10px', padding: '8px 10px', borderRadius: 'var(--radius-sm)',
+            border: `1px solid ${translationConfig.fandomMode ? 'var(--accent-primary)' : 'var(--border-subtle)'}`,
+            background: translationConfig.fandomMode ? 'rgba(124,106,240,0.07)' : 'transparent',
+          }}>
+            <label className="checkbox-wrapper" style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={translationConfig.fandomMode}
+                onChange={(e) => setTranslationConfig({ fandomMode: e.target.checked })}
+                style={{ marginTop: '2px' }}
+              />
+              <span>
+                <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>🎌 {ui.tcFandomMode}</span>
+                <span style={{ display: 'block', fontSize: '0.65rem', color: 'var(--text-muted)', lineHeight: 1.45 }}>
+                  {ui.tcFandomModeHint}
+                </span>
+              </span>
+            </label>
+            {translationConfig.fandomMode && (
+              <div style={{ marginTop: '8px' }}>
+                <input
+                  className="input"
+                  type="text"
+                  value={translationConfig.fandomName}
+                  onChange={(e) => setTranslationConfig({ fandomName: e.target.value })}
+                  placeholder={ui.tcFandomNamePh}
+                  style={{ width: '100%', fontSize: '0.75rem', padding: '5px 8px' }}
+                />
+                <span style={{ display: 'block', fontSize: '0.62rem', color: 'var(--text-muted)', lineHeight: 1.45, marginTop: '4px' }}>
+                  {ui.tcFandomNameHint}
+                </span>
+              </div>
+            )}
+          </div>
+
           {/* (User 2026) Thanh xoá hàng loạt — tick chọn nhiều dòng xoá 1 phát / xoá tất cả (có xác nhận) */}
           {translationConfig.glossary.length > 0 && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', fontSize: '0.68rem', color: 'var(--text-secondary)' }}>

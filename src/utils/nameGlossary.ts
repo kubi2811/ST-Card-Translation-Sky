@@ -1,5 +1,5 @@
 import type { TranslationField, GlossaryEntry } from '../types/card';
-import { buildProperNounRules, type NameStyle } from './masterPrompt';
+import { buildProperNounRules, buildFandomNameRules, type NameStyle } from './masterPrompt';
 
 /**
  * ─── Pha 0: Bảng tên riêng tự động ───
@@ -165,7 +165,33 @@ export function buildNameGlossaryPrompt(
   candidates: NameCandidate[],
   targetLanguage: string,
   nameStyle: NameStyle = 'hanviet',
+  fandomMode = false,
+  fandomName = '',
 ): { system: string; user: string } {
+  // (User 19/07) 🎌 ĐỒNG NHÂN — persona KHÁC HẲN. Bản thường tự nhận là "chuyên gia thẻ tiếng Trung"
+  // + đòi "dịch thuật ngữ tu luyện", nên card đồng nhân IP Nhật bị đọc qua lăng kính Trung ngay từ
+  // bước lập bảng tên; mà bảng tên này lại được ép cho TOÀN BỘ card ở các field sau ⇒ 1 tên sai ở
+  // đây là sai lan ra cả thẻ (và ghi đè cả field trước đó đã dịch đúng).
+  if (fandomMode) {
+    const ip = fandomName.trim();
+    const system = `Bạn là chuyên gia về ĐỒNG NHÂN (fan-fiction) và tên gọi chính tắc của các tác phẩm anime/manga/game/light novel${ip ? `, đặc biệt là tác phẩm "${ip}"` : ''}.
+Người dùng gửi danh sách cụm từ XUẤT HIỆN NHIỀU LẦN trong một thẻ nhân vật đồng nhân (thẻ viết bằng tiếng Trung nhưng nhân vật thuộc tác phẩm gốc). Nhiệm vụ:
+
+1. CHỈ GIỮ tên riêng / thuật ngữ cần cố định: tên nhân vật, địa danh, tổ chức, chiêu thức, vật phẩm, biệt danh.
+2. QUY TẮC TÊN — TUÂN THỦ TUYỆT ĐỐI:
+${buildFandomNameRules(ip)}
+3. Với MỖI cụm, hãy tự hỏi: "đây có phải tên của một nhân vật/địa danh trong tác phẩm gốc không?"
+   - CÓ → dùng ĐÚNG tên chính tắc mà fandom dùng (dạng Latin). Ví dụ 雪乃 trong Oregairu là "Yukino", KHÔNG phải "Tuyết Nãi", KHÔNG phải "Xue Nai".
+   - KHÔNG chắc → BỎ HẲN dòng đó (thà thiếu còn hơn chốt sai, vì bảng này sẽ được ép cho toàn thẻ).
+4. Từ thông dụng, động từ, cụm mô tả vô danh → BỎ HẲN (không ghi dòng nào).
+
+FORMAT KẾT QUẢ — mỗi mục 1 dòng, KHÔNG giải thích, KHÔNG đánh số, KHÔNG markdown:
+原文=Tên chính tắc`;
+    const user = `Danh sách cụm từ (kèm số lần xuất hiện trong thẻ):\n\n`
+      + candidates.map(c => `${c.term} (${c.count} lần${c.fromKeys ? ', là keyword lorebook' : ''})`).join('\n');
+    return { system, user };
+  }
+
   const system = `Bạn là chuyên gia dịch TÊN RIÊNG và THUẬT NGỮ trong thẻ nhân vật (character card) tiếng Trung sang ${targetLanguage}.
 Người dùng gửi danh sách cụm từ XUẤT HIỆN NHIỀU LẦN trong thẻ. Nhiệm vụ của bạn:
 

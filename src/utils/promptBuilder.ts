@@ -18,6 +18,7 @@
  */
 
 import type { TranslationField, GlossaryEntry } from '../types/card';
+import { fandomNameOverride } from './fandomMode';
 import { buildUnifiedRAGContext, type TranslationMemoryHit } from './ragContext';
 import { buildEjsPromptBlock } from './ejsSync';
 import { filterGlossaryForText } from './nameGlossary';
@@ -38,7 +39,7 @@ ADDITIONAL RULES FOR HTML/REGEX CONTENT:
     - Any other Chinese/Japanese font → 'Segoe UI', sans-serif
 15. VARIABLE NAME FORMATTING: Translated variable names may use natural spacing. The ONLY rule is EXACT CONSISTENCY — every occurrence of the same variable across all fields (Initvar, Zod schema, HTML data-var, macros) MUST use the identical string, character for character, INCLUDING CAPITALIZATION. If the MVU Dictionary says "Hảo Cảm" (Title Case), you MUST write data-var="Hảo Cảm" and {{getvar::Hảo Cảm}} — NOT "hảo cảm" or "Hảo cảm". Wrong casing = broken card.
 16. TRANSLATE ALL CJK (Chinese/Japanese/Korean) text. Keep all HTML structure, data-var attributes, class names, and id attributes intact, BUT if an attribute value or tag content contains CJK, you MUST translate it.
-17. PROPER NOUN RULE: Chinese proper nouns (character names, place names) → keep their Sino-Vietnamese reading for names only. Japanese proper nouns → Romaji (NOT Sino-Vietnamese). Western/Fantasy names phonetically transcribed into CJK (e.g., 维拉→Vera, 塞勒涅→Selene) → restore to original Latin spelling. All descriptive text → translate into natural, modern Vietnamese.
+17. PROPER NOUN RULE: Chinese proper nouns (character names, place names) → keep their Sino-Vietnamese reading for names only. Japanese proper nouns → Romaji (NOT Sino-Vietnamese). Western/Fantasy names phonetically transcribed into CJK (e.g., 维拉→Vera, 塞勒涅→Selene) → restore to original Latin spelling. All descriptive text → translate into natural, modern Vietnamese.${fandomNameOverride()}
 18. BRACKET NOTATION: If translated keys contain spaces (e.g., "Hệ Thống"), use bracket notation: obj['Hệ Thống'] NOT obj.Hệ Thống. For nested: data['Key']['SubKey'].
 19. HTML id MUST BE ASCII-ONLY: No spaces or diacritics in id/data-target. Use camelCase: id="tab-NhaO" NOT id="tab-Nhà Ở". CSS selectors must match.
 20. EJS OBJECT KEY QUOTING: In EJS templates or JS code, if an object literal contains keys with Vietnamese diacritics, spaces, or special characters (such as passing an object to setvar()), you MUST wrap those keys in single quotes '' (e.g. 'Loại': 'Võ công', 'Mô Tả': '...'). Otherwise, EJS compiler throws an immediate syntax error.
@@ -121,7 +122,7 @@ ADDITIONAL RULES FOR JAVASCRIPT/TAVERNHELPER SCRIPT CONTENT:
 18. Keep ALL code structure intact — same line breaks, same indentation, same semicolons/brackets.
 19. If a string contains mixed code and text (e.g. template literals with \${var}), translate only the CJK/text parts and preserve the code interpolations.
 20. Preserve font-family replacements as specified for Chinese/Japanese fonts.
-21. PROPER NOUN RULE: Chinese proper nouns (names, places) → Sino-Vietnamese reading for names only. Japanese proper nouns → Romaji. Western/Fantasy names transcribed into CJK (e.g., 维拉→Vera) → restore to original Latin spelling. All descriptive text → natural, modern Vietnamese.
+21. PROPER NOUN RULE: Chinese proper nouns (names, places) → Sino-Vietnamese reading for names only. Japanese proper nouns → Romaji. Western/Fantasy names transcribed into CJK (e.g., 维拉→Vera) → restore to original Latin spelling. All descriptive text → natural, modern Vietnamese.${fandomNameOverride()}
 22. BRACKET NOTATION: If translated keys/variable names contain spaces (e.g., "Hệ Thống"), you MUST use bracket notation in JS: obj['Hệ Thống'] NOT obj.Hệ Thống. Use data['key']['subkey'] for nested access.
 23. HTML id SAFETY: HTML id attributes MUST be ASCII-only with no spaces. Use camelCase: id="tab-NhaO" NOT id="tab-Nhà Ở". Put readable text in visible content only. Same ASCII id in data-target and CSS selectors.
 24. lodash _.get() SAFETY: Do NOT use _.get(obj, 'key with spaces.subkey') — use bracket notation or array path: _.get(obj, ['Key With Spaces', 'SubKey']).
@@ -152,7 +153,7 @@ ADDITIONAL RULES FOR [initvar] VARIABLE INITIALIZATION ENTRIES:
 18. Keep any {{macro}} placeholders exactly as-is (except for their CJK arguments).
 19. VARIABLE NAME FORMATTING: Translated key names may use natural spacing. The ONLY critical rule is 100% CHARACTER-EXACT CONSISTENCY between initvar YAML keys, z.object schema fields, and all macros. Example: if you choose "Hảo cảm" here, it MUST be "Hảo cảm" everywhere — not "Hảo Cảm" or "hảo cảm".
 20. CROSS-FIELD CONSISTENCY: The key names you produce here MUST be IDENTICAL to the z.object field names in the schema entry. If the schema uses "Giá trị tức đọa", you MUST also use "Giá trị tức đọa" here — never a different spelling or format.
-21. PROPER NOUN RULE: If variable names contain Japanese proper nouns, transliterate using Romaji. Western/Fantasy names transcribed into CJK (e.g., 维拉→Vera) → restore to original Latin spelling. All descriptive text → natural, modern Vietnamese.
+21. PROPER NOUN RULE: If variable names contain Japanese proper nouns, transliterate using Romaji. Western/Fantasy names transcribed into CJK (e.g., 维拉→Vera) → restore to original Latin spelling. All descriptive text → natural, modern Vietnamese.${fandomNameOverride()}
 22. BRACKET NOTATION: If translated key names contain spaces, use bracket notation in any JS code: obj['Hệ Thống'] NOT obj.Hệ Thống. This applies to EJS getvar/setvar string literals, z.object fields, and all property access.
 23. HTML id SAFETY: HTML id attributes MUST be ASCII-only without spaces or diacritics. Use camelCase/PascalCase: id="tab-NhaO" NOT id="tab-Nhà Ở".
 24. ENUM VALUE CONSISTENCY: If a YAML value corresponds to a z.enum field (e.g., phase/stage/state variables), it MUST be translated IDENTICALLY to the z.enum() values in the schema. The MVU dictionary includes enum values — use them EXACTLY as-is. Example: if schema has z.enum(['Giai đoạn 1_Tĩnh lặng', ...]).prefault('Giai đoạn 1_Tĩnh lặng'), then initvar MUST also use "Giai đoạn 1_Tĩnh lặng" — NOT a different translation like "Giai đoạn 1_Chì Thủy". The part AFTER the number (e.g., _Tĩnh lặng) IS a variable value and MUST match.
@@ -170,7 +171,7 @@ ADDITIONAL RULES FOR MVU LOGIC/CONTROLLER ENTRIES:
 19. Translate all descriptive text and CJK labels.
 20. VARIABLE NAME FORMATTING: Translated variable names may use natural spacing. In z.object() and JavaScript code, use QUOTED string keys for multi-word names. Example: z.object({ "Giá trị tức đọa": z.number() }). The ONLY rule is EXACT CONSISTENCY — same variable = same string everywhere.
 21. CROSS-FIELD CONSISTENCY: Variable names MUST be IDENTICAL across initvar YAML keys and z.object schema keys. If the MVU dictionary provides a translated name, use it EXACTLY as-is (with spaces, no underscores).
-22. PROPER NOUN RULE: If variable/field names contain Japanese proper nouns, transliterate using Romaji. Western/Fantasy names transcribed into CJK (e.g., 维拉→Vera) → restore to original Latin spelling. All descriptive text → natural, modern Vietnamese.
+22. PROPER NOUN RULE: If variable/field names contain Japanese proper nouns, transliterate using Romaji. Western/Fantasy names transcribed into CJK (e.g., 维拉→Vera) → restore to original Latin spelling. All descriptive text → natural, modern Vietnamese.${fandomNameOverride()}
 23. BRACKET NOTATION MANDATORY: If translated variable/key names contain spaces (e.g., "Hệ Thống", "Nhân Vật"), you MUST use bracket notation in ALL JavaScript code: obj['Hệ Thống'] NOT obj.Hệ Thống. For nested access: data['Trang Phục']['Áo Khoác'] NOT data.Trang Phục.Áo Khoác. For lodash _.get(): use array path _.get(data, ['Key', 'SubKey']) NOT dot-string _.get(data, 'Key.SubKey').
 24. HTML id MUST BE ASCII-ONLY: No spaces, no diacritics in HTML id or data-target attributes. Convert to camelCase: id="tab-NhaO" NOT id="tab-Nhà Ở". Put readable Vietnamese text in visible content, not in id. CSS selectors must match the ASCII id.
 25. ENUM VALUE CONSISTENCY: z.enum() option values, .default()/.prefault() values, and YAML variable values that reference the same concept MUST all use the IDENTICAL translated string. If the MVU dictionary maps an enum value (e.g., '阶段 1_静谧' → 'Giai đoạn 1_Tĩnh lặng'), use it EXACTLY everywhere — in z.enum([...]), .prefault('...'), .default('...'), .describe('...'), and all YAML values. The part AFTER the phase number (e.g., _静谧 → _Tĩnh lặng) is a VARIABLE VALUE, not a label — it MUST be synchronized.

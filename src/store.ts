@@ -543,6 +543,9 @@ export const useStore = create<AppState>((set) => ({
     autoNameGlossary: LS.get('st-translator-auto-name-glossary', true),
     // (User 2026) Kiểu tên riêng — mặc định Hán-Việt (chuẩn VN). LS nhớ lựa chọn.
     nameStyle: LS.get('st-translator-name-style', 'hanviet') as import('./types/card').NameStyle,
+    // (User 19/07) 🎌 Chế độ Đồng Nhân — chống Hán-Việt hoá tên nhân vật của IP Nhật/Hàn/Tây.
+    fandomMode: LS.get('st-translator-fandom-mode', false),
+    fandomName: LS.get('st-translator-fandom-name', ''),
     enableMvuSync: LS.get('st-translator-mvu-sync-enabled', true),
     mvuDictionary: LS.get('st-translator-mvu-dict', {}) as Record<string, string>,
     mvuDictLocked: LS.get('st-translator-mvu-dict-locked', false),
@@ -586,6 +589,8 @@ export const useStore = create<AppState>((set) => ({
       if ('glossary' in partial) {
         LS.set('st-translator-glossary', next.glossary);
       }
+      if ('fandomMode' in partial) LS.set('st-translator-fandom-mode', next.fandomMode);
+      if ('fandomName' in partial) LS.set('st-translator-fandom-name', next.fandomName);
       if ('nameStyle' in partial) {
         LS.set('st-translator-name-style', next.nameStyle);
       }
@@ -793,6 +798,8 @@ export const useStore = create<AppState>((set) => ({
       glossary: [],
       autoNameGlossary: true,
       nameStyle: 'hanviet' as import('./types/card').NameStyle,
+      fandomMode: false,
+      fandomName: '',
       enableMvuSync: false,
       mvuDictionary: {},
       mvuDictLocked: false,

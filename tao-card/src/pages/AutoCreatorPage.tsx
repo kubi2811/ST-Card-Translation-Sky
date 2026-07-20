@@ -18,14 +18,18 @@ import type { AutoCreatorStep, MinhNguyetStep, AnyPipelineStep } from '../types'
 import { cn } from '../lib/utils';
 import { t as ui } from '../i18n';
 
+// (User 19/07) Thứ tự hiển thị khớp thứ tự CHẠY mới: mvuzod trước regex (regex bám schema),
+// game_ui sau mvuzod, final_check cuối cùng.
 const STEP_DEFS: { id: AutoCreatorStep; label: string; icon: LucideIcon; desc: string }[] = [
   { id: 'basic_info', label: ui.acStepBasicInfo, icon: User, desc: 'Name, Description, Personality, Scenario' },
   { id: 'lorebook', label: 'Lorebook Entries', icon: BookOpen, desc: ui.acStepLorebookDesc },
-  { id: 'regex', label: 'Regex Scripts', icon: Settings2, desc: ui.acStepRegexDesc },
   { id: 'mvuzod', label: 'MVUZOD Schema', icon: Hash, desc: ui.acStepMvuzodDesc },
+  { id: 'game_ui', label: 'Game UI', icon: Settings2, desc: ui.acStepGameUiDesc },
+  { id: 'regex', label: 'Regex Scripts', icon: Settings2, desc: ui.acStepRegexDesc },
   { id: 'system_prompt', label: 'System Prompt', icon: Terminal, desc: ui.acStepSysPromptDesc },
   { id: 'first_message', label: 'First Message', icon: MessageSquare, desc: ui.acStepFirstMesDesc },
   { id: 'mes_example', label: 'Message Examples', icon: MessageSquare, desc: ui.acStepMesExampleDesc },
+  { id: 'final_check', label: ui.acStepFinalCheck, icon: CheckCircle2, desc: ui.acStepFinalCheckDesc },
 ];
 
 /** Nhãn hiển thị của preset. Giữ `AUTO_CREATOR_PRESETS` nguyên vẹn (config là dữ liệu). */
@@ -211,6 +215,21 @@ export function AutoCreatorPage() {
               <SliderControl label={ui.acRegexCount} value={stepConfigs.regex.count} min={1} max={10} onChange={(v) => store.updateStepConfig('regex', { count: v })} disabled={store.isRunning} />
             )}
 
+            {step === 'game_ui' && (
+              <div className="flex items-center gap-2">
+                <span>{ui.acGameUiComponent}</span>
+                <select className="border rounded px-2 py-1 bg-background" value={stepConfigs.game_ui.component} onChange={(e) => store.updateStepConfig('game_ui', { component: e.target.value as 'status_bar' | 'opening_form' | 'full_set' })} disabled={store.isRunning}>
+                  <option value="full_set">{ui.acGameUiFullSet}</option>
+                  <option value="status_bar">{ui.acGameUiStatusBar}</option>
+                  <option value="opening_form">{ui.acGameUiOpeningForm}</option>
+                </select>
+              </div>
+            )}
+
+            {step === 'final_check' && (
+              <label className="flex items-center gap-2"><input type="checkbox" checked={stepConfigs.final_check.useAiReview} onChange={(e) => store.updateStepConfig('final_check', { useAiReview: e.target.checked })} disabled={store.isRunning} /> {ui.acFinalCheckUseAi}</label>
+            )}
+
             {step === 'mvuzod' && (
               <>
                 <label className="flex items-center gap-2"><input type="checkbox" checked={stepConfigs.mvuzod.createInitVar} onChange={(e) => store.updateStepConfig('mvuzod', { createInitVar: e.target.checked })} disabled={store.isRunning} /> {ui.acCreateInitVar}</label>
@@ -386,6 +405,13 @@ export function AutoCreatorPage() {
             </label>
             <textarea className="w-full h-28 p-3 text-sm rounded-xl border border-border bg-card resize-none focus:outline-none focus:ring-2 focus:ring-primary/50 placeholder:text-muted-foreground/50 disabled:opacity-50" placeholder={ui.acIdeaPh} value={store.config.idea} onChange={(e) => store.setIdea(e.target.value)} disabled={store.isRunning} />
             <p className="text-[10px] text-muted-foreground/70 text-right">{ui.acIdeaChars.replace('{n}', String(store.config.idea.length))}</p>
+          </div>
+
+          {/* (User 19/07) Yêu cầu / quy tắc TOÀN CỤC cho AI — áp cho MỌI bước pipeline */}
+          <div className="space-y-2">
+            <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">{ui.acUserRules}</label>
+            <textarea className="w-full h-20 p-3 text-sm rounded-xl border border-border bg-card resize-none focus:outline-none focus:ring-2 focus:ring-primary/50 placeholder:text-muted-foreground/50 disabled:opacity-50" placeholder={ui.acUserRulesPh} value={store.config.userRules} onChange={(e) => store.setUserRules(e.target.value)} disabled={store.isRunning} />
+            <p className="text-[10px] text-muted-foreground/70">{ui.acUserRulesDesc}</p>
           </div>
 
           {/* v3: Auto Apply toggle */}

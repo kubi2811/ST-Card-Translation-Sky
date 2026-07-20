@@ -77,12 +77,12 @@ ${JSON_FORMAT_REQUIREMENT}
   return applyOverride(base, config.promptOverride, config.promptMode);
 }
 
-export function buildLorebookBatchPrompt(idea: string, cardContext: string, bp: CardBlueprint | null): string {
+export function buildLorebookBatchPrompt(idea: string, cardContext: string, bp: CardBlueprint | null, override?: string, mode: PromptMode = 'default'): string {
   const topicHints = bp?.suggestedEntryTopics
     ?.map(t => `- [${t.category}] ${t.title}: ${t.description} (priority: ${t.priority})`)
     .join('\n') ?? '';
 
-  return `
+  const base = `
 Đây là tiến trình tạo hàng loạt Lorebook tự động cho ý tưởng card sau:
 Ý TƯỞNG: "${idea}"
 ${blueprintContext(bp)}
@@ -92,16 +92,24 @@ ${topicHints ? `--- CHỦ ĐỀ GỢI Ý TỪ BLUEPRINT ---\n${topicHints}\n` : 
 NGỮ CẢNH HIỆN TẠI:
 ${cardContext}
 `;
+  // (Fix 19/07) Trước đây step lorebook là bước DUY NHẤT không gọi applyOverride — user điền
+  // promptOverride cho lorebook mà không có tác dụng gì.
+  return applyOverride(base, override, mode);
 }
 
-export function buildRegexPrompt(idea: string, cardContext: string, config: RegexStepConfig, bp: CardBlueprint | null): string {
+export function buildRegexPrompt(idea: string, cardContext: string, config: RegexStepConfig, bp: CardBlueprint | null, schemaContext?: string): string {
+  // (User 19/07 — "tích hợp Regex và MVU xử lý chung") schema MVU được bơm TƯỜNG MINH:
+  // regex dashboard phải dùng ĐÚNG tên biến schema trong data-var, không được bịa tên mới.
+  const schemaBlock = schemaContext?.trim()
+    ? `\n--- SCHEMA BIẾN MVU CỦA CARD (BẮT BUỘC BÁM THEO) ---\n${schemaContext}\nQUY TẮC: mọi thuộc tính data-var="..." trong replaceString PHẢI dùng ĐÚNG tên biến/đường dẫn ở schema trên. TUYỆT ĐỐI KHÔNG tự bịa tên biến mới.\n`
+    : '';
   const base = `
 Bạn là chuyên gia viết Regex Scripts cho SillyTavern. Dựa trên ý tưởng card và ngữ cảnh, hãy tạo ${config.count} regex scripts phù hợp.
 Loại regex được yêu cầu: ${config.types.join(', ')}.
 
 Ý TƯỞNG: "${idea}"
 ${blueprintContext(bp)}
-
+${schemaBlock}
 NGỮ CẢNH:
 ${cardContext}
 

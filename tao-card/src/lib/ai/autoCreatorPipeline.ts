@@ -10,6 +10,11 @@ import type { RegexPlacement } from '../../types';
 import { useCardStore } from '../../store/cardStore';
 import { buildSchemaContextForBatch } from '../mvuzod/schemaContextBuilder';
 import { normalizeMVUZODSchema } from '../mvuzod/normalizeSchema';
+import { schemaToZodCode } from '../mvuzod/schemaInferencer';
+import { buildProgrammaticRegex } from '../mvuzod/programmaticRegexBuilder';
+import { collectSchemaVarNames, parseFindRegex } from '../mvuzod/gameUiValidator';
+import { runQualityCheck } from '../validation/qualityChecker';
+import { checkWorldbookHealth } from '../worldbook/worldbookHealthCheck';
 import { useAutoCreatorStore } from '../../store/autoCreatorStore';
 import { callAI } from './client';
 import { runBatchGeneration } from './batchGenerator';
@@ -213,9 +218,14 @@ async function executeStep(
 
   const callAIAndExtract = async (prompt: string): Promise<unknown> => {
     let finalPrompt = prompt;
-    
+
     // Inject global Master Instruction & Pipeline Steps
     finalPrompt += getProfileExtractionContext(ctx.profile);
+
+    // (User 19/07) YÊU CẦU/QUY TẮC TOÀN CỤC của user — áp cho MỌI bước, đặt sát cuối để ưu tiên cao.
+    if (config.userRules?.trim()) {
+      finalPrompt += `\n\n[YÊU CẦU & QUY TẮC BẮT BUỘC TỪ NGƯỜI DÙNG — ÁP DỤNG CHO TOÀN BỘ CARD, TUÂN THỦ TUYỆT ĐỐI]\n${config.userRules.trim()}`;
+    }
 
     if (ctx.generationParams.max_tokens && ctx.generationParams.max_tokens >= 4000) {
       finalPrompt += `\n\n[YÊU CẦU ĐỘ DÀI VÀ CHI TIẾT - QUAN TRỌNG]
@@ -269,7 +279,7 @@ BẠN PHẢI TẬN DỤNG TỐI ĐA dung lượng này để tạo ra nội dung
 
     case 'lorebook': {
       const lbConfig = config.stepConfigs.lorebook;
-      const topicPrompt = buildLorebookBatchPrompt(config.idea, freshCardStr, blueprint);
+      const topicPrompt = buildLorebookBatchPrompt(config.idea, freshCardStr, blueprint, lbConfig.promptOverride, lbConfig.promptMode);
       
       let createdCount = 0;
       await runBatchGeneration({
@@ -313,24 +323,100 @@ BẠN PHẢI TẬN DỤNG TỐI ĐA dung lượng này để tạo ra nội dung
     }
 
     case 'regex': {
-      const prompt = buildRegexPrompt(config.idea, freshCardStr, config.stepConfigs.regex, blueprint);
+      // (User 19/07 — "tích hợp Regex và MVU xử lý chung") mvuzod nay chạy TRƯỚC regex (thứ tự
+      // ALL_STEPS) và schema được bơm TƯỜNG MINH vào prompt regex → dashboard/data-var bám đúng
+      // tên biến, không còn 2 bước lệch nhau.
+      const schemaForRegex = (() => {
+        const sch = (cardStore.card?.data?.extensions as unknown as Record<string, any>)?.mvuzod?.schema;
+        return sch ? buildSchemaContextForBatch(sch) : undefined;
+      })();
+      const prompt = buildRegexPrompt(config.idea, freshCardStr, config.stepConfigs.regex, blueprint, schemaForRegex);
       const result = await callAIAndExtract(prompt);
-      
+
       if (config.autoApplyAll && Array.isArray(result)) {
         applyParsedDataToCard(step, result, config, cardStore);
       }
-      store.setStepResult(step, `${Array.isArray(result) ? result.length : 0} scripts`);
+      store.setStepResult(step, `${Array.isArray(result) ? result.length : 0} scripts${schemaForRegex ? ' (bám schema MVU)' : ''}`);
       break;
     }
 
     case 'mvuzod': {
       const prompt = buildMvuzodPrompt(config.idea, freshCardStr, config.stepConfigs.mvuzod, blueprint);
       const result = await callAIAndExtract(prompt);
-      
+
+      // (User 19/07 — "MVU tạo xong chơi card bị lỗi") KIỂM NGAY sau khi AI trả về, TRƯỚC khi
+      // apply: schema phải dựng được Zod code, các entry đã yêu cầu phải có mặt. Fail → ném lỗi
+      // kèm lý do → vòng retry của pipeline chạy lại bước này (log ghi rõ vì sao).
+      const mvuIssues = verifyMvuzodResult(result, config.stepConfigs.mvuzod);
+      if (mvuIssues.length > 0) {
+        throw new Error(`MVU chưa đạt (${mvuIssues.length} vấn đề): ${mvuIssues.join(' · ')}`);
+      }
+      store.addLog({ step, level: 'success', message: '🧪 Kiểm MVU: schema dựng Zod code OK, đủ entry yêu cầu.' });
+
       if (config.autoApplyAll) {
         applyParsedDataToCard(step, result, config, cardStore);
       }
-      store.setStepResult(step, 'Schema + entries created');
+      store.setStepResult(step, 'Schema + entries created (đã kiểm)');
+      break;
+    }
+
+    case 'game_ui': {
+      // (User 19/07) Sinh Game UI PROGRAMMATIC từ schema — $0, không tốn AI, kết quả ổn định:
+      // status bar + form thiết lập ban đầu (full_set). Cần schema MVU đã có (bước mvuzod trước đó).
+      const sch = (cardStore.card?.data?.extensions as unknown as Record<string, any>)?.mvuzod?.schema;
+      if (!sch || !Array.isArray(sch.fields) || sch.fields.length === 0) {
+        throw new Error('Chưa có schema MVU — bật bước "MVUZOD Schema" chạy trước để sinh Game UI.');
+      }
+      const uiCfg = config.stepConfigs.game_ui;
+      const built = buildProgrammaticRegex({
+        schema: normalizeMVUZODSchema(sch),
+        component: uiCfg.component,
+        themeId: uiCfg.themeId,
+        gameName: cardStore.card?.data?.name || 'Game',
+      });
+      const preview: StepPreview = {
+        rawOutput: `Programmatic Game UI (${uiCfg.component}) — ${built.scripts.length} regex script, ${built.fieldsRendered} field, ${Math.round(built.totalSize / 1024)}KB`,
+        parsedData: built.scripts,
+        tokenEstimate: 0,
+      };
+      store.setStepPreview(step, preview);
+      if (config.autoApplyAll) {
+        applyParsedDataToCard(step, built.scripts, config, cardStore);
+      } else {
+        store.addLog({ step, level: 'info', message: '📋 Preview Game UI sẵn sàng. Nhấn Apply để áp dụng.' });
+      }
+      store.setStepResult(step, `${built.scripts.length} UI script (${uiCfg.component}, ${built.fieldsRendered} field)`);
+      break;
+    }
+
+    case 'final_check': {
+      // (User 19/07) KIỂM TRA TỔNG THỂ cuối pipeline: deterministic trước (schema/initvar/
+      // update-rules/regex compile/data-var khớp schema/lorebook health), rồi tuỳ chọn 1 lượt AI
+      // đọc báo cáo + nhận xét. KHÔNG chặn pipeline — báo cáo nằm ở preview + log.
+      const report = await buildFinalCheckReport(cardStore);
+      for (const line of report.lines) {
+        store.addLog({ step, level: line.startsWith('❌') ? 'error' : line.startsWith('⚠️') ? 'warning' : 'info', message: line });
+      }
+      let aiVerdict = '';
+      if (config.stepConfigs.final_check.useAiReview) {
+        try {
+          const resp = await callAI({
+            profile: ctx.profile,
+            params: ctx.generationParams,
+            messages: [{ role: 'user', content: buildFinalCheckReviewPrompt(report.lines.join('\n'), freshCardStr, config.userRules) }],
+          });
+          aiVerdict = resp.text.trim();
+          store.addLog({ step, level: 'info', message: `🧠 AI nhận xét tổng thể:\n${aiVerdict.slice(0, 1500)}` });
+        } catch (e) {
+          store.addLog({ step, level: 'warning', message: `AI review lỗi (bỏ qua): ${e instanceof Error ? e.message : String(e)}` });
+        }
+      }
+      store.setStepPreview(step, {
+        rawOutput: report.lines.join('\n') + (aiVerdict ? `\n\n═══ AI NHẬN XÉT ═══\n${aiVerdict}` : ''),
+        parsedData: { problems: report.problems, lines: report.lines, aiVerdict },
+        tokenEstimate: 0,
+      });
+      store.setStepResult(step, report.problems === 0 ? '✅ Card ổn — không thấy vấn đề' : `⚠️ ${report.problems} vấn đề cần xem (chi tiết trong log/preview)`);
       break;
     }
 
@@ -369,6 +455,129 @@ BẠN PHẢI TẬN DỤNG TỐI ĐA dung lượng này để tạo ra nội dung
   }
 }
 
+// ═══ (User 19/07) KIỂM MVU ngay sau khi AI trả về — fail thì retry bước với lý do rõ ràng ═══
+function verifyMvuzodResult(result: unknown, cfg: AutoCreatorConfig['stepConfigs']['mvuzod']): string[] {
+  const issues: string[] = [];
+  const r = result as Record<string, unknown> | null;
+  const schema = r?.schema as { fields?: unknown[] } | undefined;
+  if (!schema || !Array.isArray(schema.fields) || schema.fields.length === 0) {
+    issues.push('schema rỗng hoặc thiếu mảng fields');
+  } else {
+    try {
+      const norm = normalizeMVUZODSchema(schema);
+      schemaToZodCode(norm, 'check'); // phải dựng được Zod code — đây là thứ SillyTavern chạy thật
+      const badPaths = norm.fields.filter(f => !f.path.startsWith('/')).map(f => f.path);
+      if (badPaths.length > 0) issues.push(`path không bắt đầu bằng "/": ${badPaths.slice(0, 3).join(', ')}`);
+    } catch (e) {
+      issues.push(`schema không dựng được Zod code: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  const hasText = (v: unknown) => typeof v === 'string' && v.trim().length > 0;
+  if (cfg.createInitVar && !hasText(r?.initVarEntry)) issues.push('thiếu initVarEntry ([initvar]) dù đã yêu cầu — thiếu nó là MVU không khởi tạo biến, chơi card sẽ lỗi cập nhật');
+  if (cfg.createUpdateRules && !hasText(r?.updateRulesEntry)) issues.push('thiếu updateRulesEntry ([mvu_update]) dù đã yêu cầu — thiếu nó AI trong game không biết cách cập nhật biến');
+  if (cfg.createVarList && !hasText(r?.varListEntry)) issues.push('thiếu varListEntry dù đã yêu cầu');
+  return issues;
+}
+
+// ═══ (User 19/07) BÁO CÁO KIỂM TRA TỔNG THỂ toàn card (deterministic, không tốn AI) ═══
+async function buildFinalCheckReport(
+  cardStore: ReturnType<typeof useCardStore.getState>,
+): Promise<{ lines: string[]; problems: number }> {
+  const lines: string[] = [];
+  let problems = 0;
+  const data = cardStore.card.data;
+  const ext = data.extensions as unknown as Record<string, any>;
+  const entries = data.character_book?.entries ?? [];
+  const regexScripts: Array<{ findRegex?: string; replaceString?: string; scriptName?: string }> = ext?.regex_scripts ?? [];
+
+  // 1. Trường cơ bản
+  if (!data.name?.trim()) { lines.push('❌ Thiếu tên nhân vật'); problems++; }
+  if (!data.description?.trim()) { lines.push('❌ Thiếu description'); problems++; }
+  if (!data.first_mes?.trim()) { lines.push('⚠️ Thiếu first message — vào game sẽ không có lời mở đầu'); problems++; }
+
+  // 2. MVU: schema + initvar + update rules + data-var khớp schema
+  const schema = ext?.mvuzod?.schema;
+  if (schema && Array.isArray(schema.fields) && schema.fields.length > 0) {
+    try {
+      schemaToZodCode(normalizeMVUZODSchema(schema), data.name || 'Card');
+      lines.push(`✅ Schema MVU: ${schema.fields.length} field, dựng Zod code OK`);
+    } catch (e) {
+      lines.push(`❌ Schema MVU KHÔNG dựng được Zod code: ${e instanceof Error ? e.message : String(e)}`);
+      problems++;
+    }
+    const hasInit = entries.some(en => String(en.content || '').includes('[initvar]') || String(en.comment || '').toLowerCase().includes('initvar'));
+    if (hasInit) lines.push('✅ Có entry [initvar] (khởi tạo biến)');
+    else { lines.push('⚠️ Có schema nhưng KHÔNG thấy entry [initvar] — biến sẽ không khởi tạo, MVU dễ báo "变量更新失败"'); problems++; }
+    const hasUpdate = entries.some(en => /mvu_update/i.test(String(en.comment || '')) || /mvu_update/i.test(String(en.content || '')));
+    if (hasUpdate) lines.push('✅ Có entry quy tắc cập nhật biến ([mvu_update])');
+    else { lines.push('⚠️ KHÔNG thấy entry quy tắc cập nhật biến — AI trong game không biết cách cập nhật, dễ lỗi "变量更新失败"'); problems++; }
+
+    const varNames = new Set(collectSchemaVarNames(schema));
+    const badVars = new Set<string>();
+    for (const rs of regexScripts) {
+      for (const m of String(rs.replaceString || '').matchAll(/data-var\s*=\s*["']([^"']+)["']/g)) {
+        if (!varNames.has(m[1])) badVars.add(m[1]);
+      }
+    }
+    if (badVars.size > 0) {
+      lines.push(`❌ ${badVars.size} data-var trong regex KHÔNG khớp tên biến schema: ${[...badVars].slice(0, 5).join(', ')} — UI sẽ hiện trống`);
+      problems++;
+    } else if (regexScripts.length > 0) {
+      lines.push('✅ Mọi data-var trong regex khớp tên biến schema');
+    }
+  } else {
+    lines.push('ℹ️ Card không có schema MVU — bỏ qua kiểm MVU');
+  }
+
+  // 3. Regex compile
+  let badRegex = 0;
+  for (const rs of regexScripts) {
+    if (rs.findRegex && !parseFindRegex(String(rs.findRegex))) badRegex++;
+  }
+  if (badRegex > 0) { lines.push(`❌ ${badRegex}/${regexScripts.length} regex có findRegex KHÔNG compile được`); problems++; }
+  else if (regexScripts.length > 0) lines.push(`✅ ${regexScripts.length} regex compile OK`);
+
+  // 4. Lorebook: chất lượng + cấu hình
+  if (entries.length > 0) {
+    try {
+      const q = runQualityCheck(entries);
+      const qIssues = (q as unknown as { issues?: unknown[] }).issues?.length ?? 0;
+      lines.push(qIssues > 0 ? `⚠️ Lorebook: ${entries.length} entry, ${qIssues} vấn đề chất lượng (xem tab Lorebook → Kiểm chất lượng)` : `✅ Lorebook: ${entries.length} entry, chất lượng OK`);
+      if (qIssues > 0) problems++;
+    } catch { /* checker lỗi thì bỏ qua, không chặn */ }
+    try {
+      const h = await checkWorldbookHealth(entries, 'single');
+      const errs = (h as unknown as { errors?: unknown[] }).errors?.length ?? 0;
+      const warns = (h as unknown as { warnings?: unknown[] }).warnings?.length ?? 0;
+      if (errs + warns > 0) { lines.push(`⚠️ Cấu hình worldbook: ${errs} lỗi, ${warns} cảnh báo (tab Lorebook → Sức khoẻ có nút sửa tự động)`); problems += errs > 0 ? 1 : 0; }
+      else lines.push('✅ Cấu hình worldbook OK');
+    } catch { /* bỏ qua */ }
+  } else {
+    lines.push('⚠️ Card chưa có entry lorebook nào'); problems++;
+  }
+
+  return { lines, problems };
+}
+
+/** (User 19/07) Prompt cho lượt AI đọc báo cáo kiểm tra + nhận xét tổng thể. */
+function buildFinalCheckReviewPrompt(reportText: string, cardContext: string, userRules: string): string {
+  return `Bạn là chuyên gia thẩm định character card SillyTavern (MVU/Zod, regex dashboard, lorebook).
+Dưới đây là BÁO CÁO KIỂM TRA TỰ ĐỘNG của card vừa tạo xong, kèm nội dung card.
+
+═══ BÁO CÁO KIỂM TRA ═══
+${reportText}
+
+═══ NỘI DUNG CARD (JSON, có thể bị cắt) ═══
+${cardContext.slice(0, 60_000)}
+${userRules?.trim() ? `\n═══ QUY TẮC NGƯỜI DÙNG ĐẶT RA ═══\n${userRules.trim()}` : ''}
+
+NHIỆM VỤ: nhận xét NGẮN GỌN bằng tiếng Việt (tối đa ~300 từ):
+1. Card đã CHƠI ĐƯỢC chưa? Các mảnh (schema ↔ initvar ↔ update rules ↔ regex UI ↔ lorebook) có ăn khớp không?
+2. Với từng dòng ❌/⚠️ trong báo cáo: nên sửa thế nào (chỉ đúng bước Auto Creator cần chạy lại hoặc panel cần mở).
+3. Có vi phạm quy tắc người dùng đặt ra không?
+KHÔNG trả JSON, KHÔNG viết lại card — chỉ nhận xét và hướng dẫn sửa.`;
+}
+
 // ═══ APPLY DATA TO CARD (shared by auto-apply and manual apply) ═══
 function applyParsedDataToCard(
   step: AutoCreatorStep,
@@ -388,13 +597,32 @@ function applyParsedDataToCard(
       break;
     }
 
+    case 'game_ui': {
+      // (User 19/07) Script Game UI đã ĐẦY ĐỦ field (từ buildProgrammaticRegex) — chỉ cần gắn id.
+      const scripts = data as Array<Record<string, unknown>>;
+      if (!Array.isArray(scripts)) break;
+      cardStore.updateCard((c) => {
+        if (!c.data.extensions) c.data.extensions = {} as unknown as CardExtensions;
+        if (!c.data.extensions.regex_scripts) c.data.extensions.regex_scripts = [];
+        for (const s of scripts) {
+          c.data.extensions.regex_scripts.push({ ...(s as object), id: uuidv4() } as (typeof c.data.extensions.regex_scripts)[number]);
+        }
+      });
+      break;
+    }
+
+    case 'final_check': {
+      // Báo cáo chỉ để đọc — không ghi gì vào card.
+      break;
+    }
+
     case 'regex': {
       const items = data as Record<string, unknown>[];
       if (!Array.isArray(items)) break;
       cardStore.updateCard((c) => {
         if (!c.data.extensions) c.data.extensions = {} as unknown as CardExtensions;
         if (!c.data.extensions.regex_scripts) c.data.extensions.regex_scripts = [];
-        
+
         for (const s of items) {
           c.data.extensions.regex_scripts.push({
             id: uuidv4(),

@@ -1443,6 +1443,16 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
     return localStorage.getItem('ai_assistant_auto_retry') !== 'false';
   });
 
+  // (User 19/07) 📜 PROMPT CHỈ THỊ — khuôn khổ user tự đặt, KHOÁ CHẶT Trợ Lý vào các quy tắc đó
+  // (vd "Cấm dịch tiếng Anh", "Phải chất vấn/hỏi rõ chi tiết trước khi làm"). Được chèn vào CUỐI
+  // system prompt (vị trí ưu tiên cao nhất) với khung TUÂN THỦ TUYỆT ĐỐI. Lưu localStorage.
+  const [directivePrompt, setDirectivePrompt] = useState(() => localStorage.getItem('ai_assistant_directive') || '');
+  const [showDirective, setShowDirective] = useState(false);
+  const saveDirective = useCallback((v: string) => {
+    setDirectivePrompt(v);
+    try { localStorage.setItem('ai_assistant_directive', v); } catch { /* quota đầy — bỏ qua */ }
+  }, []);
+
   // ─── Interactive States ───
   const [inputValue, setInputValue] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
@@ -1874,11 +1884,16 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
     if (agentId !== 'general') console.log(`[Orchestrator] route → ${agentDef.label}`);
 
     // Build effective prompt
+    // (User 19/07) Prompt Chỉ Thị đặt CUỐI CÙNG — vị trí ưu tiên cao nhất với LLM, khung
+    // "TUÂN THỦ TUYỆT ĐỐI" để khoá chặt Trợ Lý vào khuôn khổ user đặt ra.
+    const directiveBlock = directivePrompt.trim()
+      ? `\n\n[📜 PROMPT CHỈ THỊ TỪ NGƯỜI DÙNG — TUÂN THỦ TUYỆT ĐỐI, ƯU TIÊN CAO HƠN MỌI HƯỚNG DẪN KHÁC Ở TRÊN. Nếu một yêu cầu trong hội thoại mâu thuẫn với chỉ thị này, PHẢI theo chỉ thị này và nói rõ cho người dùng biết lý do.]\n${directivePrompt.trim()}`
+      : '';
     const systemPrompt = `${SYSTEM_INSTRUCTION}
 ${agentDef.personaPrompt ? `\n${agentDef.personaPrompt}` : ''}
 ${nsfwEnabled ? '\n[CẦN CHÚ Ý: ĐÃ BẬT CHẾ ĐỘ R18/NSFW. Cho phép xử lý nội dung nhạy cảm người lớn nếu người dùng yêu cầu.]' : ''}
 ${contextBlock ? `\n[DANH SÁCH TÀI LIỆU NGỮ CẢNH HIỆN TẠI]:\n${contextBlock}` : ''}
-${ragBlock ? `\n${ragBlock}` : ''}`;
+${ragBlock ? `\n${ragBlock}` : ''}${directiveBlock}`;
 
     // (User 2026 — "thấu hiểu luồng hội thoại") Tab Trò Chuyện trước đây CHỈ gửi câu hiện tại →
     // AI quên sạch các lượt trước (tab MVU-Zod thì có history). Gửi kèm tối đa 10 lượt gần nhất;
@@ -2553,6 +2568,42 @@ ${ragBlock ? `\n${ragBlock}` : ''}`;
 
               {/* Settings Card */}
               <div className="p-4 space-y-4">
+                {/* (User 19/07) 📜 Prompt Chỉ Thị — khoá Trợ Lý vào khuôn khổ user đặt */}
+                <div className="bg-zinc-900/30 border border-zinc-800/60 rounded-xl p-3 flex flex-col gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowDirective(v => !v)}
+                    className="flex items-center justify-between cursor-pointer group select-none w-full bg-transparent border-0 p-0"
+                  >
+                    <span className="flex items-center gap-1.5 text-[10px] uppercase font-bold text-slate-400 group-hover:text-emerald-400 transition-colors">
+                      📜 {ui.acDirectiveTitle}
+                      {directivePrompt.trim() && <span className="normal-case font-normal text-emerald-500">● {ui.acDirectiveOn}</span>}
+                    </span>
+                    <span className="text-slate-500 text-[10px]">{showDirective ? '▲' : '▼'}</span>
+                  </button>
+                  {showDirective && (
+                    <>
+                      <textarea
+                        value={directivePrompt}
+                        onChange={e => saveDirective(e.target.value)}
+                        rows={5}
+                        placeholder={ui.acDirectivePh}
+                        spellCheck={false}
+                        className="w-full bg-zinc-950/60 border border-zinc-800 rounded-lg p-2 text-[11px] text-slate-300 leading-relaxed resize-y focus:outline-none focus:border-emerald-600/60"
+                      />
+                      <div className="flex items-center justify-between">
+                        <span className="text-[9px] text-slate-500 leading-relaxed">{ui.acDirectiveDesc}</span>
+                        {directivePrompt.trim() && (
+                          <button type="button" onClick={() => saveDirective('')}
+                            className="text-[9px] text-rose-400/80 hover:text-rose-400 bg-transparent border-0 cursor-pointer shrink-0 ml-2">
+                            {ui.acDirectiveClear}
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+
                 {/* (P1) RAG Memory Toggle */}
                 <div className="bg-zinc-900/30 border border-zinc-800/60 rounded-xl p-3 flex flex-col gap-2">
                   <label className="flex items-center justify-between cursor-pointer group select-none">

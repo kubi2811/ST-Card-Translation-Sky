@@ -4,14 +4,18 @@ import type { EntryCategory, CardType } from '../lib/worldbook/worldbookConfig';
 export type PipelineMethod = 'standard' | 'minh_nguyet';
 
 // ═══ Các bước pipeline — Standard ═══
+// (User 19/07) Thứ tự CHẠY do ALL_STEPS trong autoCreatorStore quyết định — mvuzod nay chạy
+// TRƯỚC regex để regex bám đúng tên biến schema; game_ui sau mvuzod; final_check cuối cùng.
 export type AutoCreatorStep =
   | 'basic_info'        // Name, Description, Personality, Scenario
   | 'lorebook'          // Lorebook entries
-  | 'regex'             // Regex scripts
   | 'mvuzod'            // MVUZOD schema + system entries
+  | 'game_ui'           // (User 19/07) Game UI programmatic: status bar + form thiết lập từ schema
+  | 'regex'             // Regex scripts (bám schema MVU nếu có)
   | 'system_prompt'     // System prompt + Depth prompt
   | 'first_message'     // First message + alternate greetings
-  | 'mes_example';      // Message examples
+  | 'mes_example'       // Message examples
+  | 'final_check';      // (User 19/07) Kiểm tra tổng thể toàn card cuối pipeline
 
 // ═══ Các bước pipeline — Minh Nguyệt ═══
 export type MinhNguyetStep =
@@ -100,6 +104,18 @@ export interface MesExampleStepConfig {
   promptMode: PromptMode;
 }
 
+/** (User 19/07) Game UI programmatic — sinh status bar / form thiết lập từ schema, $0 không tốn AI. */
+export interface GameUiStepConfig {
+  component: 'status_bar' | 'opening_form' | 'full_set';
+  themeId?: string;
+}
+
+/** (User 19/07) Kiểm tra tổng thể cuối pipeline. */
+export interface FinalCheckStepConfig {
+  /** Gọi thêm 1 lượt AI đọc báo cáo + nhận xét tổng thể (tắt = chỉ kiểm deterministic). */
+  useAiReview: boolean;
+}
+
 // ═══ Config Minh Nguyệt Global ═══
 export interface MinhNguyetGlobalConfig {
   worldviewPath: WorldviewPath;    // Đường A/B/C
@@ -143,6 +159,11 @@ export interface MnStepConfigs {
 // ═══ Config tổng thể ═══
 export interface AutoCreatorConfig {
   idea: string;                          // Ý tưởng chính
+  /**
+   * (User 19/07) Yêu cầu / quy tắc TOÀN CỤC cho AI về card — áp cho MỌI bước pipeline
+   * (vd "Không NSFW", "Văn phong cổ trang", "Mọi tên riêng dùng Hán-Việt").
+   */
+  userRules: string;
   pipelineMethod: PipelineMethod;        // 'standard' | 'minh_nguyet'
   selectedSteps: AutoCreatorStep[];      // Các bước đã bật — Standard
   selectedMnSteps: MinhNguyetStep[];     // Các bước đã bật — Minh Nguyệt
@@ -153,6 +174,8 @@ export interface AutoCreatorConfig {
     lorebook: LorebookStepConfig;
     regex: RegexStepConfig;
     mvuzod: MvuzodStepConfig;
+    game_ui: GameUiStepConfig;
+    final_check: FinalCheckStepConfig;
     system_prompt: SystemPromptStepConfig;
     first_message: FirstMessageStepConfig;
     mes_example: MesExampleStepConfig;

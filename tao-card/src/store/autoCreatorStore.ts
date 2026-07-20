@@ -38,6 +38,7 @@ interface AutoCreatorState {
 
   // Actions — Config
   setIdea: (idea: string) => void;
+  setUserRules: (userRules: string) => void;
   setPipelineMethod: (method: PipelineMethod) => void;
   toggleStep: (step: AutoCreatorStep) => void;
   toggleMnStep: (step: MinhNguyetStep) => void;
@@ -76,8 +77,10 @@ interface AutoCreatorState {
   clearAllPreviews: () => void;
 }
 
+// (User 19/07) THỨ TỰ CHẠY: mvuzod TRƯỚC regex (regex bám tên biến schema), game_ui ngay sau
+// mvuzod (cần schema), final_check CUỐI CÙNG (kiểm tổng thể toàn card).
 const ALL_STEPS: AutoCreatorStep[] = [
-  'basic_info', 'lorebook', 'regex', 'mvuzod', 'system_prompt', 'first_message', 'mes_example'
+  'basic_info', 'lorebook', 'mvuzod', 'game_ui', 'regex', 'system_prompt', 'first_message', 'mes_example', 'final_check'
 ];
 
 const ALL_MN_STEPS: MinhNguyetStep[] = [
@@ -91,8 +94,9 @@ const DEFAULT_MN_STEPS: MinhNguyetStep[] = [
 ];
 
 const emptyStatuses = (): Record<AutoCreatorStep, StepStatus> => ({
-  basic_info: 'pending', lorebook: 'pending', regex: 'pending',
-  mvuzod: 'pending', system_prompt: 'pending', first_message: 'pending', mes_example: 'pending'
+  basic_info: 'pending', lorebook: 'pending', regex: 'pending', mvuzod: 'pending',
+  game_ui: 'pending', final_check: 'pending',
+  system_prompt: 'pending', first_message: 'pending', mes_example: 'pending'
 });
 
 const emptyMnStatuses = (): Record<MinhNguyetStep, StepStatus> => ({
@@ -102,8 +106,8 @@ const emptyMnStatuses = (): Record<MinhNguyetStep, StepStatus> => ({
 });
 
 const emptyResults = (): Record<AutoCreatorStep, string> => ({
-  basic_info: '', lorebook: '', regex: '',
-  mvuzod: '', system_prompt: '', first_message: '', mes_example: ''
+  basic_info: '', lorebook: '', regex: '', mvuzod: '', game_ui: '', final_check: '',
+  system_prompt: '', first_message: '', mes_example: ''
 });
 
 const emptyMnResults = (): Record<MinhNguyetStep, string> => ({
@@ -113,8 +117,8 @@ const emptyMnResults = (): Record<MinhNguyetStep, string> => ({
 });
 
 const emptyPreviews = (): Record<AutoCreatorStep, StepPreview | null> => ({
-  basic_info: null, lorebook: null, regex: null,
-  mvuzod: null, system_prompt: null, first_message: null, mes_example: null
+  basic_info: null, lorebook: null, regex: null, mvuzod: null, game_ui: null, final_check: null,
+  system_prompt: null, first_message: null, mes_example: null
 });
 
 const emptyMnPreviews = (): Record<MinhNguyetStep, StepPreview | null> => ({
@@ -126,6 +130,7 @@ const emptyMnPreviews = (): Record<MinhNguyetStep, StepPreview | null> => ({
 export const useAutoCreatorStore = create<AutoCreatorState>((set) => ({
   config: {
     idea: '',
+    userRules: '',
     pipelineMethod: 'minh_nguyet',  // Minh Nguyệt = default
     selectedSteps: [...ALL_STEPS],
     selectedMnSteps: [...DEFAULT_MN_STEPS],
@@ -135,6 +140,8 @@ export const useAutoCreatorStore = create<AutoCreatorState>((set) => ({
       lorebook: { totalEntries: 20, minEntries: 0, entriesPerBatch: 5, concurrentBatches: 1, category: 'custom', cardType: 'single', useWebSearch: false, promptMode: 'default' },
       regex: { count: 3, types: ['dialog', 'cleanup', 'style'], promptMode: 'default' },
       mvuzod: { autoDetect: true, createInitVar: true, createVarList: true, createUpdateRules: true, promptMode: 'default' },
+      game_ui: { component: 'full_set' },
+      final_check: { useAiReview: true },
       system_prompt: { includeDepthPrompt: true, depthValue: 4, promptMode: 'default' },
       first_message: { alternateGreetings: 2, promptMode: 'default' },
       mes_example: { exampleCount: 2, promptMode: 'default' },
@@ -178,6 +185,9 @@ export const useAutoCreatorStore = create<AutoCreatorState>((set) => ({
 
   // ─── Config actions ───
   setIdea: (idea) => set((s) => ({ config: { ...s.config, idea } })),
+
+  // (User 19/07) Yêu cầu/quy tắc toàn cục — áp cho MỌI bước pipeline.
+  setUserRules: (userRules) => set((s) => ({ config: { ...s.config, userRules } })),
 
   setPipelineMethod: (pipelineMethod) => set((s) => ({
     config: { ...s.config, pipelineMethod }

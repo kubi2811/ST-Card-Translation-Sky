@@ -53,6 +53,15 @@ export const FLOWS: FlowDef[] = [
     color: '#38bdf8',
   },
   {
+    id: 'preset-translate',
+    label: 'Dịch Preset',
+    labelKey: 'railPresetTranslate',
+    emoji: '🈶',
+    kind: 'native',
+    loader: () => import('./presetTranslate/PresetTranslateFlow'),
+    color: '#f472b6',
+  },
+  {
     id: 'card-creator',
     serverToolId: 'card-creator',
     label: 'Tạo Card',

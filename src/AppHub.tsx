@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, Suspense, lazy, type LazyExoticComponent, type ComponentType } from 'react';
 import App from './App';
 import { FLOWS, type FlowDef } from './flows';
 import { RotateCw, ExternalLink, Bug, Play, Square } from 'lucide-react';
@@ -10,6 +10,13 @@ import { useToolServers, ensureToolServerPolling } from './hub/useToolServers';
 
 const RAIL_WIDTH = 78;
 const LS_KEY = 'hub-active-flow';
+
+// Flow native lazy (Dịch Script/Dịch Preset…): React.lazy dựng MỘT LẦN ở module scope —
+// dựng lại trong render là mất state con + refetch chunk.
+const LAZY_NATIVE: Record<string, LazyExoticComponent<ComponentType>> = {};
+for (const f of FLOWS) {
+  if (f.kind === 'native' && f.loader) LAZY_NATIVE[f.id] = lazy(f.loader);
+}
 
 /** Link file Excel để mọi người báo lỗi (mở tab mới khi bấm nút "Báo lỗi" ở header). */
 const BUG_REPORT_URL = 'https://onedrive.live.com/:x:/g/personal/9d827193364b0865/IQChejAgqiJJR5jbZcOTvFzuARJ72g4PVNDz_XNopPwkQ38?rtime=EXxXpf_e3kg&redeem=aHR0cHM6Ly8xZHJ2Lm1zL3gvYy85ZDgyNzE5MzM2NGIwODY1L0lRQ2hlakFncWlKSlI1amJaY09UdkZ6dUFSSjcyZzRQVk5Eel9YTm9wUHdrUTM4P2U9QUY0ZUQx';
@@ -91,6 +98,22 @@ export default function AppHub() {
             <App />
           </div>
 
+          {/* Flow native lazy — tải chunk khi bấm lần đầu, giữ mounted (ẩn) để chạy tiếp */}
+          {FLOWS.filter((f) => LAZY_NATIVE[f.id]).map((f) => {
+            if (!visited.has(f.id)) return null;
+            const C = LAZY_NATIVE[f.id];
+            return (
+              <div
+                key={f.id}
+                style={{ position: 'absolute', inset: 0, overflow: 'auto', display: active === f.id ? 'block' : 'none' }}
+              >
+                <Suspense fallback={<NativeFlowLoading color={f.color} />}>
+                  <C />
+                </Suspense>
+              </div>
+            );
+          })}
+
           {/* Iframe tools — mounted on first visit, then kept alive */}
           {iframeFlows.map((f) =>
             visited.has(f.id) ? (
@@ -99,6 +122,18 @@ export default function AppHub() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Màn chờ tải chunk của flow native lazy (Dịch Script/Dịch Preset). */
+function NativeFlowLoading({ color }: { color?: string }) {
+  return (
+    <div style={{
+      position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+      color: 'var(--text-muted, #b6b2c9)',
+    }}>
+      <RotateCw size={22} className="spin" style={{ color: color || 'var(--accent-primary)' }} />
     </div>
   );
 }

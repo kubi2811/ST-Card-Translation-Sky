@@ -4,6 +4,7 @@
 // iframes (kind: 'iframe') that also stay mounted when hidden, so their state/progress is
 // preserved across switches. Add more flows here later (e.g. a card-mod tool) — one entry each.
 import type { UiKeys } from './i18n/ui/en';
+import type { ComponentType } from 'react';
 
 export type FlowKind = 'native' | 'iframe';
 
@@ -25,6 +26,12 @@ export interface FlowDef {
    * lazy-start. Không có (novalcard tĩnh, flow native) → tab luôn sẵn sàng, không chấm trạng thái.
    */
   serverToolId?: string;
+  /**
+   * Flow native LAZY (code-split): component chỉ tải khi bấm tab lần đầu (React.lazy),
+   * sau đó giữ mounted như iframe để tiến trình chạy tiếp khi đổi tab. Flow 'translate'
+   * KHÔNG dùng loader — nó là host, luôn mounted từ đầu.
+   */
+  loader?: () => Promise<{ default: ComponentType }>;
 }
 
 export const FLOWS: FlowDef[] = [
@@ -35,6 +42,15 @@ export const FLOWS: FlowDef[] = [
     emoji: '🌐',
     kind: 'native',
     color: 'var(--accent-primary)',
+  },
+  {
+    id: 'script-translate',
+    label: 'Dịch Script',
+    labelKey: 'railScriptTranslate',
+    emoji: '📜',
+    kind: 'native',
+    loader: () => import('./scriptTranslate/ScriptTranslateFlow'),
+    color: '#38bdf8',
   },
   {
     id: 'card-creator',

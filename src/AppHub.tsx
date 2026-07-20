@@ -1,11 +1,12 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import App from './App';
 import { FLOWS, type FlowDef } from './flows';
-import { RotateCw, ExternalLink, Bug } from 'lucide-react';
+import { RotateCw, ExternalLink, Bug, Play, Square } from 'lucide-react';
 import HubUpdateButton from './components/HubUpdateButton';
 import { APP_VERSION } from './version';
 import { useUi } from './i18n/useLocale';
-import { getUiLang, setUiLang, UI_LANGS } from './i18n';
+import { getUiLang, setUiLang, UI_LANGS, fmt } from './i18n';
+import { useToolServers, ensureToolServerPolling } from './hub/useToolServers';
 
 const RAIL_WIDTH = 78;
 const LS_KEY = 'hub-active-flow';
@@ -43,6 +44,9 @@ export default function AppHub() {
 
   const iframeFlows = FLOWS.filter((f) => f.kind === 'iframe');
   const activeFlow = FLOWS.find((f) => f.id === active);
+
+  // Poll trạng thái server tool con (chấm sáng/mờ trên rail + màn chờ lazy-start).
+  useEffect(() => { ensureToolServerPolling(); }, []);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', overflow: 'hidden' }}>
@@ -227,10 +231,20 @@ function GlobalHeader({ activeFlow }: { activeFlow?: FlowDef }) {
 function RailButton({ flow, active, onClick }: { flow: FlowDef; active: boolean; onClick: () => void }) {
   const color = flow.color || 'var(--accent-primary)';
   const ui = useUi();
+  // Trạng thái server của tab (chỉ tab có serverToolId — tab native/tĩnh luôn "sáng").
+  const st = useToolServers((s) => (flow.serverToolId ? s.status[flow.serverToolId] : undefined));
+  const hasServer = !!flow.serverToolId;
+  const starting = st?.phase === 'starting';
+  const running = !!st?.running;
+  // Server tắt → icon mờ đi cho biết "tool này đang nghỉ, bấm là dậy".
+  const dimmed = hasServer && !!st && !running && !starting;
+  const dotColor = !hasServer || !st ? null : running ? '#22c55e' : starting ? '#f59e0b' : '#5b5b6e';
+  const stateTip = !hasServer || !st ? '' :
+    running ? ` — ${ui.toolSrvRunningTip}` : starting ? ` — ${ui.toolSrvStartingTip}` : ` — ${ui.toolSrvStoppedTip}`;
   return (
     <button
       onClick={onClick}
-      title={ui[flow.labelKey]}
+      title={ui[flow.labelKey] + stateTip}
       style={{
         width: RAIL_WIDTH - 14,
         padding: '8px 2px',
@@ -244,12 +258,24 @@ function RailButton({ flow, active, onClick }: { flow: FlowDef; active: boolean;
         color: active ? color : 'var(--text-secondary, #a09cb5)',
         cursor: 'pointer',
         transition: 'all 0.15s',
+        position: 'relative',
       }}
       onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = 'var(--bg-hover, #2a2a3e)'; }}
       onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = 'transparent'; }}
     >
-      <span style={{ fontSize: '1.5rem', lineHeight: 1 }}>{flow.emoji}</span>
-      <span style={{ fontSize: '0.68rem', fontWeight: 700, textAlign: 'center', lineHeight: 1.15 }}>{ui[flow.labelKey]}</span>
+      {dotColor && (
+        <span
+          className={starting ? 'animate-pulse' : undefined}
+          style={{
+            position: 'absolute', top: 5, right: 7,
+            width: 7, height: 7, borderRadius: '50%',
+            background: dotColor,
+            boxShadow: running ? '0 0 5px rgba(34,197,94,0.8)' : starting ? '0 0 5px rgba(245,158,11,0.8)' : 'none',
+          }}
+        />
+      )}
+      <span style={{ fontSize: '1.5rem', lineHeight: 1, opacity: dimmed ? 0.55 : 1, transition: 'opacity 0.2s' }}>{flow.emoji}</span>
+      <span style={{ fontSize: '0.68rem', fontWeight: 700, textAlign: 'center', lineHeight: 1.15, opacity: dimmed ? 0.7 : 1 }}>{ui[flow.labelKey]}</span>
     </button>
   );
 }
@@ -258,15 +284,27 @@ function IframeFlow({ flow, active }: { flow: FlowDef; active: boolean }) {
   const ref = useRef<HTMLIFrameElement>(null);
   const [nonce, setNonce] = useState(0);
   const [ready, setReady] = useState(false);
+  // User bấm Dừng thủ công → KHÔNG auto-start lại khi tab vẫn active (tránh loop stop/start);
+  // hiện nút "Khởi động" to giữa màn cho tới khi user chủ động bấm.
+  const [manuallyStopped, setManuallyStopped] = useState(false);
+  const [showLog, setShowLog] = useState(false);
+  const [, forceTick] = useState(0); // ticker 1s cho đồng hồ "({s}s)" khi đang khởi động
   const ui = useUi();
   const url = flow.url || '';
   const label = ui[flow.labelKey];
 
-  // The tool's dev server may still be booting when the Hub opens (start.bat launches both
-  // at once). Poll the URL until it's reachable, THEN mount the iframe — so the user never
-  // sees a permanent "refused to connect" and doesn't have to reload manually.
+  const toolId = flow.serverToolId;
+  const st = useToolServers((s) => (toolId ? s.status[toolId] : undefined));
+  const pending = useToolServers((s) => (toolId ? s.pending[toolId] : undefined));
+  const startSrv = useToolServers((s) => s.start);
+  const stopSrv = useToolServers((s) => s.stop);
+
+  // The tool's dev server may still be booting. Poll the URL until it's reachable, THEN mount
+  // the iframe — so the user never sees a permanent "refused to connect".
+  // Đang Dừng thủ công thì NGƯNG poll: server chết dần trong ~1-2s, poll trúng lúc còn sống
+  // sẽ bật ready lại → iframe remount ngay sau khi bấm Dừng (race bắt được khi verify live).
   useEffect(() => {
-    if (ready || !url) return;
+    if (ready || !url || manuallyStopped) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
     const check = async () => {
@@ -279,12 +317,45 @@ function IframeFlow({ flow, active }: { flow: FlowDef; active: boolean }) {
     };
     check();
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [url, ready]);
+  }, [url, ready, manuallyStopped]);
+
+  // ─── Lazy-start: bấm tab là đủ để bày tỏ ý định → tự khởi động server tool ───
+  // Không auto khi: server đang chạy/đang lên, đang có thao tác bay, vừa bị Dừng thủ công,
+  // hoặc lần khởi động trước lỗi (đợi user bấm "Thử lại" để không spam log lỗi).
+  useEffect(() => {
+    if (!active || !toolId || manuallyStopped) return;
+    if (!st) return;                                     // chưa có status đầu tiên → chờ poll
+    if (st.running || st.phase === 'starting' || st.phase === 'error' || pending) return;
+    void startSrv(toolId);
+  }, [active, toolId, manuallyStopped, st, pending, startSrv]);
+
+  // Đồng hồ giây trên màn "Đang khởi động…"
+  const starting = !!toolId && !ready && st?.phase === 'starting';
+  useEffect(() => {
+    if (!starting) return;
+    const t = setInterval(() => forceTick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [starting]);
 
   const reload = () => {
     // Re-probe + remount the iframe (also recovers if the tool server was restarted).
     setReady(false);
     setNonce((n) => n + 1);
+  };
+
+  const handleStop = async () => {
+    if (!toolId) return;
+    setManuallyStopped(true);
+    setReady(false);
+    const ok = await stopSrv(toolId);
+    if (!ok) setManuallyStopped(false); // dừng thất bại → về lại trạng thái cũ, hiện lỗi từ status
+  };
+
+  const handleStart = () => {
+    if (!toolId) return;
+    setManuallyStopped(false);
+    setReady(false); // ready cũ có thể là đồ thừa từ trước khi Dừng → bắt poll xác nhận lại
+    void startSrv(toolId);
   };
 
   return (
@@ -316,6 +387,16 @@ function IframeFlow({ flow, active }: { flow: FlowDef; active: boolean }) {
         </span>
         <span style={{ opacity: 0.85 }}>{ready ? ui.toolbarHintReady : ui.toolbarHintWaiting}</span>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
+          {toolId && st?.running && (
+            <button
+              onClick={handleStop}
+              disabled={pending === 'stop'}
+              title={ui.toolSrvStopTip}
+              style={{ ...toolbarBtn, color: '#ffb4a6', opacity: pending === 'stop' ? 0.6 : 1 }}
+            >
+              <Square size={15} /> {ui.toolSrvStop}
+            </button>
+          )}
           <button onClick={reload} title={ui.toolbarReload} style={toolbarBtn}>
             <RotateCw size={16} /> {ui.toolbarReload}
           </button>
@@ -324,7 +405,7 @@ function IframeFlow({ flow, active }: { flow: FlowDef; active: boolean }) {
           </a>
         </div>
       </div>
-      {ready ? (
+      {ready && !manuallyStopped ? (
         <iframe
           key={nonce}
           ref={ref}
@@ -332,19 +413,77 @@ function IframeFlow({ flow, active }: { flow: FlowDef; active: boolean }) {
           title={label}
           style={{ flex: 1, width: '100%', border: 0, background: 'var(--bg-primary, #0f0f14)' }}
         />
+      ) : toolId && manuallyStopped ? (
+        /* ─── Đã Dừng thủ công → chờ user chủ động bật lại (không auto-start) ─── */
+        <div style={waitScreen}>
+          <div style={{ fontSize: '2rem', opacity: 0.5 }}>{flow.emoji}</div>
+          <div>{ui.toolSrvStoppedMsg}</div>
+          <button onClick={handleStart} disabled={pending === 'stop'} style={{ ...bigStartBtn, borderColor: flow.color || 'var(--accent-primary)', color: flow.color || 'var(--accent-primary)' }}>
+            <Play size={18} /> {fmt(ui.toolSrvStartTool, { name: label })}
+          </button>
+          {st?.lastError && <div style={{ fontSize: '0.8rem', color: '#ffb4a6' }}>{fmt(ui.toolSrvStopFailed, { error: st.lastError })}</div>}
+        </div>
+      ) : toolId && st?.phase === 'error' ? (
+        /* ─── Server chết non → hiện lý do + log + Thử lại ─── */
+        <div style={waitScreen}>
+          <div style={{ fontSize: '1.05rem', fontWeight: 700, color: '#ffb4a6' }}>{fmt(ui.toolSrvErrorTitle, { name: label })}</div>
+          {st.lastError && <div style={{ fontSize: '0.85rem', maxWidth: 560, textAlign: 'center' }}>{st.lastError}</div>}
+          {st.logTail.length > 0 && (
+            <pre style={logTailBox}>{st.logTail.join('\n')}</pre>
+          )}
+          <button onClick={handleStart} style={{ ...bigStartBtn, borderColor: flow.color || 'var(--accent-primary)', color: flow.color || 'var(--accent-primary)' }}>
+            <RotateCw size={16} /> {ui.toolSrvRetry}
+          </button>
+        </div>
       ) : (
-        <div style={{
-          flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-          gap: 12, color: 'var(--text-muted, #b6b2c9)', fontSize: '0.95rem',
-        }}>
+        /* ─── Đang chờ server lên (auto-start đã gửi / server ngoài đang boot) ─── */
+        <div style={waitScreen}>
           <RotateCw size={24} className="spin" style={{ color: flow.color || 'var(--accent-primary)' }} />
-          <div>{ui.hubWaitPrefix} <b>{label}</b> {ui.hubWaitSuffix} ({url.replace('http://', '')})…</div>
+          <div>
+            {toolId && st?.startedAt
+              ? fmt(ui.toolSrvStarting, { name: label, s: Math.max(0, Math.floor((Date.now() - st.startedAt) / 1000)) })
+              : <>{ui.hubWaitPrefix} <b>{label}</b> {ui.hubWaitSuffix} ({url.replace('http://', '')})…</>}
+          </div>
           <div style={{ fontSize: '0.8rem', opacity: 0.85 }}>{ui.hubFirstRunHint}</div>
+          {toolId && (
+            <>
+              {st && st.logTail.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+                  <button onClick={() => setShowLog((v) => !v)} style={{ ...toolbarBtn, fontSize: '0.75rem', padding: '4px 10px' }}>
+                    {showLog ? '▾' : '▸'} {ui.toolSrvLogTail}
+                  </button>
+                  {showLog && <pre style={logTailBox}>{st.logTail.join('\n')}</pre>}
+                </div>
+              )}
+              <button onClick={handleStop} style={{ ...toolbarBtn, fontSize: '0.78rem', color: '#ffb4a6' }}>
+                <Square size={13} /> {ui.toolSrvCancel}
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>
   );
 }
+
+const waitScreen: React.CSSProperties = {
+  flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+  gap: 12, color: 'var(--text-muted, #b6b2c9)', fontSize: '0.95rem', padding: 16,
+};
+
+const bigStartBtn: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 8,
+  padding: '10px 22px', fontSize: '0.95rem', fontWeight: 700,
+  border: '1.5px solid var(--accent-primary)', borderRadius: 10,
+  background: 'transparent', cursor: 'pointer',
+};
+
+const logTailBox: React.CSSProperties = {
+  maxWidth: 640, maxHeight: 180, overflow: 'auto', margin: 0,
+  padding: '8px 12px', borderRadius: 8, fontSize: '0.72rem', lineHeight: 1.5,
+  background: 'var(--bg-secondary, #16161e)', border: '1px solid var(--border-subtle, #2a2a3e)',
+  color: 'var(--text-muted, #b6b2c9)', whiteSpace: 'pre-wrap', wordBreak: 'break-all', textAlign: 'left',
+};
 
 const toolbarBtn: React.CSSProperties = {
   display: 'flex',

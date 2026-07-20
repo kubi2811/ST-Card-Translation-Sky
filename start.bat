@@ -7,12 +7,10 @@ echo    SILLYTAVERN MULTI TOOLS  -  Launcher
 echo ==========================================================
 echo.
 
-REM -- Don port 5173-5177 truoc khi chay --
-REM 4 tool con chay bang `cmd /k` trong cua so rieng nen dong cua so launcher KHONG giet
-REM chung. Lan chay sau vite bao "Port 5173 is already in use" va chet han (strictPort).
-REM Script chi giet tien trinh node dang giu dung 5 port nay; gap tien trinh khac thi dung lai.
-echo [Launcher] Don port 5173-5177...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\free-ports.ps1" 5173 5174 5175 5176 5177
+REM -- Chi don port 5173 cua Hub. KHONG dong cac tool con (5174-5177): neu chung con song
+REM tu lan truoc, Hub se tu NHAN LAI (orphan adopt) va dung tiep - khong can khoi dong lai.
+echo [Launcher] Don port 5173...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\free-ports.ps1" 5173
 if errorlevel 1 (
     echo.
     echo [Launcher] Khong giai phong duoc port. Xem thong bao ben tren roi chay lai.
@@ -21,23 +19,19 @@ if errorlevel 1 (
 )
 echo.
 
-REM -- Launch each vendored sub-tool in its own minimized window --
-call :launch_tool "tao-card"    "Tao Card 5174"
-call :launch_tool "preset-tool" "Tao Preset 5175"
-call :launch_tool "mod-card"    "Mod Card 5176"
-call :launch_tool "crawler"     "Crawler 5177"
-
-REM -- Hub / tool Dich (this folder) - opens browser at http://localhost:5173 --
+REM -- CHI khoi dong Hub (Dich Card, port 5173). Cac tool khac (Tao Card / Tao Preset /
+REM Mod Card / Crawler) KHONG chay san nua cho nhe may: bam tab tuong ung trong giao dien
+REM la tool tu khoi dong (an trong nen, khong bung cua so CMD). Muon chay het nhu truoc:
+REM dung start-all.bat.
 echo.
-REM LUON dong bo thu vien: sau khi cap nhat (git pull/reset) co the co dependency MOI (vd acorn).
-REM Chi cai khi thieu node_modules se gay loi "Failed to resolve import ..." sau update.
+REM LUON dong bo thu vien: sau khi cap nhat (git pull/reset) co the co dependency MOI.
 echo [Hub] Dong bo thu vien (npm install)...
 call npm install --no-audit --no-fund
 echo [Hub] Khoi dong tren http://localhost:5173 ...
 echo.
 call npm run dev
 
-REM -- Hub da dung: dong luon 3 tool con de lan sau khong ket port --
+REM -- Hub da dung: quet not cac tool con (ke ca server Hub da spawn ngam) de khong ket port --
 echo.
 echo [Launcher] Dong cac tool con...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\free-ports.ps1" 5174 5175 5176 5177
@@ -45,13 +39,3 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\free-ports.ps1
 echo.
 echo (Da dung.) Nhan phim bat ky de dong.
 pause >nul
-goto :eof
-
-REM ── Subroutine: launch_tool  %1=folder  %2=window-title ──
-:launch_tool
-set "TOOL_DIR=%~dp0%~1"
-if not exist "%TOOL_DIR%\package.json" goto :eof
-REM Dong bo thu vien tool con moi lan chay (bat dependency moi sau update) roi moi chay dev.
-echo [%~2] Dong bo thu vien + khoi dong (cua so thu nho)...
-start "%~2 - de yen" /MIN /D "%TOOL_DIR%" cmd /k npm install --no-audit --no-fund ^&^& npm run dev
-goto :eof

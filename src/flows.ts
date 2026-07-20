@@ -20,6 +20,11 @@ export interface FlowDef {
   url?: string;
   /** Accent color for the active state */
   color?: string;
+  /**
+   * Id trong TOOL_SERVERS (src/hub/toolCatalog.ts) nếu tab này có dev server riêng cần
+   * lazy-start. Không có (novalcard tĩnh, flow native) → tab luôn sẵn sàng, không chấm trạng thái.
+   */
+  serverToolId?: string;
 }
 
 export const FLOWS: FlowDef[] = [
@@ -33,6 +38,7 @@ export const FLOWS: FlowDef[] = [
   },
   {
     id: 'card-creator',
+    serverToolId: 'card-creator',
     label: 'Tạo Card',
     labelKey: 'railCardCreator',
     emoji: '🃏',
@@ -43,6 +49,7 @@ export const FLOWS: FlowDef[] = [
   },
   {
     id: 'preset',
+    serverToolId: 'preset',
     label: 'Tạo Preset',
     labelKey: 'railPreset',
     emoji: '🎛️',
@@ -53,6 +60,7 @@ export const FLOWS: FlowDef[] = [
   },
   {
     id: 'mod-card',
+    serverToolId: 'mod-card',
     label: 'Mod Card',
     labelKey: 'railModCard',
     emoji: '🛠️',
@@ -63,6 +71,7 @@ export const FLOWS: FlowDef[] = [
   },
   {
     id: 'crawler',
+    serverToolId: 'crawler',
     label: 'Web Crawler',
     labelKey: 'railCrawler',
     emoji: '🧭',

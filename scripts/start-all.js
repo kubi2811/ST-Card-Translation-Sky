@@ -56,7 +56,9 @@ const isWindows = process.platform === 'win32';
 const npmCmd = isWindows ? 'npm.cmd' : 'npm';
 
 apps.forEach(app => {
-  const child = spawn(npmCmd, ['run', 'dev'], {
+  // npm install truoc moi lan chay (giong start.bat cu): sau update git co the co dep MOI,
+  // thieu la dev server chet voi "Failed to resolve import". Da co node_modules thi chi ton vai giay.
+  const child = spawn(`${npmCmd} install --no-audit --no-fund && ${npmCmd} run dev`, {
     cwd: app.dir,
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: true

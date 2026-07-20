@@ -31,7 +31,22 @@ const ui: UiKeys = {
   // Màn chờ server: "Đang chờ server <b>Tên</b> khởi động (url)…"
   hubWaitPrefix: 'Đang chờ server',
   hubWaitSuffix: 'khởi động',
-  hubFirstRunHint: 'Lần đầu chạy start.bat có thể mất ~30s để cài đặt.',
+  hubFirstRunHint: 'Lần đầu khởi động tool có thể mất ~30 giây để cài thư viện — các lần sau chỉ vài giây.',
+
+  // ─── Lazy-start server tool con (Phase A) ───
+  toolSrvRunningTip: 'server đang chạy',
+  toolSrvStartingTip: 'server đang khởi động…',
+  toolSrvStoppedTip: 'server đang tắt — bấm tab để khởi động',
+  toolSrvStop: 'Dừng server',
+  toolSrvStopTip: 'Tắt server tool này cho nhẹ máy — bấm lại tab sẽ tự khởi động lại.',
+  toolSrvStoppedMsg: 'Server của tool này đang tắt để nhẹ máy.',
+  toolSrvStartTool: 'Khởi động {name}',
+  toolSrvStopFailed: 'Không dừng được: {error}',
+  toolSrvErrorTitle: 'Không khởi động được {name}',
+  toolSrvRetry: 'Thử lại',
+  toolSrvStarting: 'Đang khởi động {name}… ({s}s)',
+  toolSrvLogTail: 'Log gần nhất',
+  toolSrvCancel: 'Hủy',
 
   // ─── Nút Cập nhật (rail + modal) — nguyên văn từ HubUpdateButton ───
   updRailUpdate: 'Cập nhật',

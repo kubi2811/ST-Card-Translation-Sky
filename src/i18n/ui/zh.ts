@@ -27,7 +27,22 @@ const ui: UiKeys = {
   // 等待服务器: "正在等待 <b>工具名</b> 服务器启动 (url)…"
   hubWaitPrefix: '正在等待',
   hubWaitSuffix: '服务器启动',
-  hubFirstRunHint: '首次运行 start.bat 可能需要约 30 秒来安装依赖。',
+  hubFirstRunHint: '首次启动工具可能需要约 30 秒安装依赖 — 之后只需几秒。',
+
+  // ─── Lazy-start server tool con (Phase A) ───
+  toolSrvRunningTip: '服务运行中',
+  toolSrvStartingTip: '服务启动中…',
+  toolSrvStoppedTip: '服务已关闭 — 点击标签即可启动',
+  toolSrvStop: '停止服务',
+  toolSrvStopTip: '关闭此工具的服务以节省资源 — 再次点击标签会自动重启。',
+  toolSrvStoppedMsg: '此工具的服务已关闭以保持轻量。',
+  toolSrvStartTool: '启动 {name}',
+  toolSrvStopFailed: '无法停止：{error}',
+  toolSrvErrorTitle: '无法启动 {name}',
+  toolSrvRetry: '重试',
+  toolSrvStarting: '正在启动 {name}…（{s}秒）',
+  toolSrvLogTail: '最近日志',
+  toolSrvCancel: '取消',
 
   // ─── 更新按钮（侧栏 + 弹窗）───
   updRailUpdate: '更新',

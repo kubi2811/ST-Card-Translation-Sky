@@ -6,6 +6,8 @@ import httpProxy from 'http-proxy';
 import { exec } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { parseToolsRoute, isToolsMutating, getToolById } from './src/hub/toolCatalog';
+import { statusAll, startTool, stopTool, getLogTail } from './scripts/tool-server-manager';
 
 // ─── Translation progress cache (filesystem, in the project folder) ───
 // Stored as plain JSON files so progress survives F5 / tab close / even switching
@@ -80,11 +82,46 @@ export default defineConfig({
             url === '/api/update' || url === '/api/downgrade' ||
             url === '/api/dump-config' || url === '/api/debug-log' ||
             url === '/api/progress/save' || url === '/api/progress/delete' ||
+            isToolsMutating(url) ||
             url.startsWith('/api-proxy/custom/');
           if (isMutating && !isSameOrigin(req)) {
             res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(JSON.stringify({ ok: false, error: 'Bị chặn: request cross-origin không được phép gọi endpoint này (chống CSRF).' }));
             return;
+          }
+
+          // ─── Lazy-start server tool con: status / start / stop / logs ───
+          // Hub (5173) luôn chạy nên nó spawn/kill dev server của các tool anh em theo yêu cầu
+          // từ UI. Logic thật nằm ở scripts/tool-server-manager.ts; route parse nằm ở
+          // src/hub/toolCatalog.ts (pure, có test).
+          {
+            const route = parseToolsRoute(url, req.method || 'GET');
+            if (route) {
+              const sendJson = (code: number, obj: unknown) => {
+                res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
+                res.end(JSON.stringify(obj));
+              };
+              try {
+                if (route.kind === 'status') {
+                  return sendJson(200, { ok: true, tools: await statusAll() });
+                }
+                if (route.kind === 'logs') {
+                  if (!getToolById(route.id)) return sendJson(400, { ok: false, error: `Tool không tồn tại: ${route.id}` });
+                  return sendJson(200, { ok: true, id: route.id, logTail: getLogTail(route.id) });
+                }
+                const body = await readJsonBody(req);
+                const id = body && typeof body.id === 'string' ? body.id : '';
+                if (!getToolById(id)) return sendJson(400, { ok: false, error: `Tool không tồn tại: ${id || '(thiếu id)'}` });
+                if (route.kind === 'start') {
+                  const r = await startTool(id, process.cwd());
+                  return sendJson(r.ok ? 200 : 500, r);
+                }
+                const r = await stopTool(id, process.cwd());
+                return sendJson(r.ok ? 200 : 500, { ...r, stopped: r.ok });
+              } catch (err: any) {
+                return sendJson(500, { ok: false, error: err?.message || String(err) });
+              }
+            }
           }
 
           // ─── Translation progress cache: save / load / list / delete (filesystem) ───

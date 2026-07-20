@@ -29,7 +29,22 @@ const ui = {
   // Màn chờ server (ghép: {prefix} <b>Tên tool</b> {suffix} (url)… )
   hubWaitPrefix: 'Waiting for the',
   hubWaitSuffix: 'server to start',
-  hubFirstRunHint: 'The first run of start.bat may take ~30s to install dependencies.',
+  hubFirstRunHint: 'First start of a tool may take ~30s to install its libraries — later starts take just seconds.',
+
+  // ─── Lazy-start server tool con (Phase A) ───
+  toolSrvRunningTip: 'server running',
+  toolSrvStartingTip: 'server starting…',
+  toolSrvStoppedTip: 'server off — click the tab to start it',
+  toolSrvStop: 'Stop server',
+  toolSrvStopTip: 'Turn this tool’s server off to save resources — clicking the tab again restarts it.',
+  toolSrvStoppedMsg: 'This tool’s server is off to keep things light.',
+  toolSrvStartTool: 'Start {name}',
+  toolSrvStopFailed: 'Could not stop: {error}',
+  toolSrvErrorTitle: 'Could not start {name}',
+  toolSrvRetry: 'Try again',
+  toolSrvStarting: 'Starting {name}… ({s}s)',
+  toolSrvLogTail: 'Recent log',
+  toolSrvCancel: 'Cancel',
 
   // ─── Nút Cập nhật (rail + modal) ───
   updRailUpdate: 'Update',

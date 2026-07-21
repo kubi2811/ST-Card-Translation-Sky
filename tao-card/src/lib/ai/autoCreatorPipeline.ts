@@ -10,6 +10,8 @@ import type { RegexPlacement } from '../../types';
 import { useCardStore } from '../../store/cardStore';
 import { buildSchemaContextForBatch } from '../mvuzod/schemaContextBuilder';
 import { normalizeMVUZODSchema } from '../mvuzod/normalizeSchema';
+import { buildMVUZODScripts } from '../mvuzod/tavernScriptBuilder';
+import { OPENING_FORM_ANCHOR } from '../mvuzod/regexAnchors';
 import { schemaToZodCode } from '../mvuzod/schemaInferencer';
 import { buildProgrammaticRegex } from '../mvuzod/programmaticRegexBuilder';
 import { collectSchemaVarNames, parseFindRegex } from '../mvuzod/gameUiValidator';
@@ -662,7 +664,25 @@ function applyParsedDataToCard(
           // (Bug enumValues 19/07) Schema AI trả về hay THIẾU key `constraints` (nhất là field
           // string/children) — cast thô là consumer phía sau crash "reading 'enumValues'".
           // Normalize tại biên: constraints luôn là object, children đệ quy sạch.
-          c.data.extensions.mvuzod.schema = normalizeMVUZODSchema(result.schema);
+          const normalized = normalizeMVUZODSchema(result.schema);
+          c.data.extensions.mvuzod.schema = normalized;
+
+          // (User 21/07 — bug "Auto Creator xong mà TavernHelper KHÔNG có MVU")
+          // Schema chỉ được ghi vào extensions.mvuzod, còn 2 script TavernHelper (import engine
+          // MVU + đăng ký Zod schema) trước giờ CHỈ được tạo khi user tự bấm nút trong
+          // SchemaBuilder. Chạy Auto Creator thì không ai gọi ⇒ card ra lò thiếu MVU, biến
+          // không bao giờ chạy. Nay pipeline tự gắn luôn.
+          const scripts = buildMVUZODScripts(normalized, c.data.name);
+          const ext = c.data.extensions as unknown as Record<string, unknown>;
+          const th = (ext.tavern_helper ?? {}) as Record<string, unknown>;
+          const existing = (th.scripts ?? []) as Array<{ name: string }>;
+          for (const script of scripts) {
+            const idx = existing.findIndex(s => s.name === script.name);
+            if (idx >= 0) existing[idx] = script as unknown as { name: string };
+            else existing.push(script as unknown as { name: string });
+          }
+          th.scripts = existing;
+          ext.tavern_helper = th;
         }
         
         if (!c.data.character_book) c.data.character_book = { name: c.data.name, entries: [] };
@@ -720,6 +740,26 @@ function applyParsedDataToCard(
         if (result.first_mes) c.data.first_mes = result.first_mes;
         if (result.alternate_greetings && Array.isArray(result.alternate_greetings)) {
           c.data.alternate_greetings = result.alternate_greetings;
+        }
+
+        // (User 21/07) Form mở đầu chỉ hiện được khi trong lời mở đầu CÓ mỏ neo để regex thay.
+        // AI thường quên chèn ⇒ regex Opening Form nằm im, user tưởng tool tạo hỏng.
+        // Nếu card có script Opening Form mà lời mở đầu thiếu mỏ neo thì tự chèn vào ĐẦU —
+        // làm ở tầng code nên không phụ thuộc việc AI có nghe lời hay không.
+        const hasOpeningForm = (c.data.extensions?.regex_scripts ?? [])
+          .some(s => s.findRegex === OPENING_FORM_ANCHOR);
+        if (hasOpeningForm) {
+          if (c.data.first_mes && !c.data.first_mes.includes(OPENING_FORM_ANCHOR)) {
+            c.data.first_mes = `${OPENING_FORM_ANCHOR}\n${c.data.first_mes}`;
+          }
+          // Alternate greetings cũng là lời mở đầu → cũng cần form.
+          if (Array.isArray(c.data.alternate_greetings)) {
+            c.data.alternate_greetings = c.data.alternate_greetings.map(g =>
+              typeof g === 'string' && g && !g.includes(OPENING_FORM_ANCHOR)
+                ? `${OPENING_FORM_ANCHOR}\n${g}`
+                : g,
+            );
+          }
         }
       });
       break;

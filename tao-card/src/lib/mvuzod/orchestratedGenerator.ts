@@ -10,6 +10,7 @@
  */
 
 import type { MVUZODSchema } from '../../types/mvuzod.types';
+import { OPENING_FORM_ANCHOR, STATUS_BAR_ANCHOR } from './regexAnchors';
 import type { RegexScript } from '../../types/regex.types';
 import type { ProxyProfile, GenerationParams, ChatMessage } from '../../types';
 import { callAI } from '../ai/client';
@@ -565,8 +566,10 @@ function buildRegexScripts(
 
   if (component === 'opening_form') {
     scripts.push({
+      // Mỏ neo RIÊNG, không dùng chung với Status Bar (trước đây trùng nên 2 script đè nhau).
+      // Thẻ này do card tự đặt trong First Message / Alternate Greetings.
       scriptName: '[Render] Opening Form (Orchestrated)',
-      findRegex: '<StatusPlaceHolderImpl/>',
+      findRegex: OPENING_FORM_ANCHOR,
       replaceString: fullHtml,
       trimStrings: [],
       placement: [2],
@@ -583,7 +586,7 @@ function buildRegexScripts(
     scripts.push(
       {
         scriptName: '[AI] Ẩn StatusPlaceHolder',
-        findRegex: '<StatusPlaceHolderImpl/>',
+        findRegex: STATUS_BAR_ANCHOR,
         replaceString: '',
         trimStrings: [],
         placement: [2],
@@ -597,7 +600,7 @@ function buildRegexScripts(
       },
       {
         scriptName: `[Render] ${component === 'game_screen' ? 'Game Screen' : 'Status Bar'} (Orchestrated)`,
-        findRegex: '<StatusPlaceHolderImpl/>',
+        findRegex: STATUS_BAR_ANCHOR,
         replaceString: fullHtml,
         trimStrings: [],
         placement: [2],

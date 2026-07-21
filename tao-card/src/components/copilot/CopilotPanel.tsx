@@ -7,7 +7,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   MessageSquare, Send, ChevronDown, Loader2,
   Check, X, Trash2, AlertTriangle, Bot, User,
-  Pause, Play, Square, Ghost, Paperclip, FileText
+  Pause, Play, Square, Ghost, Paperclip, FileText, Brain
 } from 'lucide-react';
 import { useCardStore } from '../../store/cardStore';
 import { useSettingsStore } from '../../store/settingsStore';
@@ -17,6 +17,7 @@ import type { ChatAttachment } from '../../types/aiAgent.types';
 import { runCopilotLoop, executeAction, type CopilotContext } from '../../lib/ai/agentLoop';
 import type { ChatMessage } from '../../types';
 import { DiffViewer } from '../DiffViewer';
+import { MemoryPanel } from './MemoryPanel';
 import { t as ui } from '../../i18n';
 
 /** Mô tả 7 chế độ Copilot. Giữ nguyên MODE_LABELS trong lib/ai/copilotTypes.ts. */
@@ -135,6 +136,7 @@ export function CopilotPanel() {
   const [thought, setThought] = useState<string | null>(null);
   const [pendingActions, setPendingActions] = useState<AIAction[]>([]);
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
+  const [showMemory, setShowMemory] = useState(false);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const ctxRef = useRef<{ paused: boolean; stopped: boolean }>({ paused: false, stopped: false });
@@ -491,6 +493,9 @@ export function CopilotPanel() {
         </div>
       )}
 
+      {/* Memory manager */}
+      {showMemory && <MemoryPanel onClose={() => setShowMemory(false)} />}
+
       {/* Preview pending attachments */}
       {pendingAttachments.length > 0 && (
         <div className={`px-4 py-2 border-t flex flex-wrap gap-2 ${isGhostMode ? 'bg-background/40 backdrop-blur border-border/30' : 'bg-muted/30 border-border'}`}>
@@ -525,7 +530,16 @@ export function CopilotPanel() {
             `}>
             <Paperclip className="w-4 h-4" />
           </button>
-          
+
+          <button onClick={() => setShowMemory(v => !v)}
+            title={ui.cpMemoryPanelTitle}
+            className={`shrink-0 w-9 h-9 rounded-xl flex items-center justify-center transition-colors
+              ${showMemory ? 'bg-primary/10 text-primary'
+                : isGhostMode ? 'bg-background/50 hover:bg-background/80 text-muted-foreground' : 'bg-muted hover:bg-muted/80 text-muted-foreground'}
+            `}>
+            <Brain className="w-4 h-4" />
+          </button>
+
           <textarea value={input} onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             rows={1}

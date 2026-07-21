@@ -1,5 +1,7 @@
 import type { CopilotContext } from './ai/agentLoop';
 import { cascadeSearch } from './ai/webScraper';
+import { useMemoryStore } from '../store/memoryStore';
+import { useCardStore } from '../store/cardStore';
 
 export interface AITool {
   name: string;
@@ -70,6 +72,44 @@ export const toolsEngine: Record<string, AITool> = {
       if (results.length === 0) return `Không tìm thấy kết quả nào cho "${query}" trên mạng.`;
       return `Kết quả tìm kiếm cho "${query}":\n\n` + results.map(r => `[Nguồn: ${r.source}]\nURL: ${r.url}\nNội dung:\n${r.content}`).join('\n\n---\n\n');
     }
+  },
+  propose_memory: {
+    name: 'propose_memory',
+    description: 'Đề xuất ghi nhớ một thông tin để dùng lại sau. KHÔNG ghi thẳng — hệ thống sẽ hỏi user duyệt. Dùng khi user nói ra sở thích/quy ước lặp lại (scope=global), thông tin cố định của thẻ đang làm (scope=project), hoặc quyết định quan trọng trong phiên (scope=session).',
+    parameters: {
+      scope: "string - 'global' (thói quen user, áp mọi thẻ) | 'project' (về thẻ đang làm) | 'session' (trong phiên này)",
+      key: 'string - Tiêu đề ngắn, vd "Văn phong ưa thích"',
+      value: 'string - Nội dung cần nhớ, viết gọn 1-2 câu',
+    },
+    execute: async (args, ctx) => {
+      const scope = String(args.scope || '') as 'global' | 'project' | 'session';
+      const key = String(args.key || '').trim();
+      const value = String(args.value || '').trim();
+
+      if (!['global', 'project', 'session'].includes(scope)) {
+        return `Lỗi: scope "${scope}" không hợp lệ. Chỉ dùng global | project | session.`;
+      }
+      if (!key || !value) return 'Lỗi: thiếu key hoặc value.';
+
+      const projectId = useCardStore.getState().currentProjectId ?? undefined;
+      // Ca biên: dự án chưa lưu thì không có id ổn định để gắn ký ức project.
+      if (scope === 'project' && !projectId) {
+        return 'Không lưu được ký ức phạm vi "project" vì dự án chưa được lưu (chưa có id). Hãy nhắc user lưu dự án trước, hoặc dùng scope "session".';
+      }
+
+      // Cơ chế duyệt CÓ SẴN: hiện thẻ Apply/Skip, chờ user quyết.
+      const decision = await ctx.showActionCard({ type: 'save_memory', data: { scope, key, value } });
+      if (decision !== 'apply') return `User đã từ chối ghi nhớ "${key}". Đừng đề xuất lại mục này.`;
+
+      useMemoryStore.getState().addMemory({
+        scope,
+        key,
+        value,
+        projectId: scope === 'project' ? projectId : undefined,
+        sessionId: scope === 'session' ? 'current' : undefined,
+      });
+      return `Đã ghi nhớ "${key}" (phạm vi ${scope}).`;
+    },
   },
 };
 

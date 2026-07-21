@@ -525,12 +525,29 @@ MOD ĐÃ THỰC HIỆN:
 {MOD_SUMMARY}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+KẾT QUẢ KIỂM TRA BẰNG CODE (tin tưởng tuyệt đối — đã đo trên nội dung ĐẦY ĐỦ):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{INTEGRITY_PRECHECK}
+
+⚠️ LUẬT BẮT BUỘC VỀ "CẮT CỤT / TRUNCATED":
+- Mục trên đã được KIỂM BẰNG CODE trên nội dung ĐẦY ĐỦ (đếm cân bằng ngoặc, bỏ qua ngoặc
+  trong chuỗi/comment). Nếu nó ghi "ngoặc CÂN BẰNG → KHÔNG bị cắt cụt" thì nội dung đó
+  NGUYÊN VẸN — TUYỆT ĐỐI KHÔNG được báo issue kiểu "bị cắt cụt", "truncated", "thiếu dấu
+  đóng ngoặc", "SyntaxError do thiếu }".
+- Nếu phần CONTENT bên dưới trông như dừng giữa chừng, đó CHỈ LÀ do bị cắt bớt để vừa
+  prompt (sẽ có nhãn [CẮT ĐỂ HIỂN THỊ] ở cuối) — KHÔNG PHẢI lỗi của card.
+- Chỉ được báo cắt cụt khi mục KIỂM TRA BẰNG CODE ở trên ghi "ngoặc LỆCH".
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CONTENT ĐỂ VALIDATE:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Schema (Script 1): {SCHEMA_CONTENT}
-mvu_update Rules (Entry [40]): {UPDATE_RULES_CONTENT}
-EJS Controller (Entry [0]): {EJS_CONTROLLER_PREVIEW}
-initvar (Entry [525]): {INITVAR_CONTENT}
+Schema (Script {SCHEMA_INDEX}): {SCHEMA_CONTENT}
+mvu_update Rules (Entry [{UPDATE_RULES_INDEX}]): {UPDATE_RULES_CONTENT}
+EJS Controller (Entry [{EJS_INDEX}]): {EJS_CONTROLLER_PREVIEW}
+initvar (Entry [{INITVAR_INDEX}]): {INITVAR_CONTENT}
+
+LƯU Ý VỀ SỐ HIỆU: các chỉ số Entry/Script ở trên là chỉ số THẬT trong card này. Khi mô tả
+issue phải trích đúng số đó, KHÔNG được bịa số khác.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OUTPUT FORMAT (JSON):

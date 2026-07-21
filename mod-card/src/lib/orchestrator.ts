@@ -2,6 +2,7 @@ import { CardV3 } from '../types/card';
 import { CardParser, VariableRemap } from './parser';
 import { LLMConfig } from './llm';
 import { SYSTEM_PROMPT, ANALYZE_CARD_PROMPT, MOD_SECTION_PROMPT, MOD_SCRIPT_PROMPT, KEYWORD_SYNC_PROMPT, CONSISTENCY_AUDIT_PROMPT, VALIDATE_CARD_PROMPT, MVUZOD_NARRATIVE_MOD_PROMPT, MVUZOD_VALIDATE_PROMPT, MVUZOD_VAR_REMAP_PROMPT, EXPAND_SECTION_PROMPT, EXPAND_SUBSECTION_PROMPT } from './prompts';
+import { describeIntegrity, checkBracketBalance } from './scriptSafety';
 
 /** Tuỳ chọn chế độ mở rộng khi mod 1 section. */
 export interface ModOptions {
@@ -546,19 +547,51 @@ export class ModOrchestrator {
       if (sanitizeModified.avatar) sanitizeModified.avatar = "[BASE64_IMAGE_OMITTED]";
       
       const scripts = modifiedCard.data.extensions?.tavern_helper?.scripts || [];
-      const schemaScript = scripts[1]?.content || '';
-      
+      // Tìm ĐÚNG script chứa Zod schema thay vì mặc định scripts[1]
+      let schemaIdx = scripts.findIndex(s => /z\.object\s*\(|registerMvuSchema/.test(s?.content || ''));
+      if (schemaIdx < 0) schemaIdx = scripts.length > 1 ? 1 : 0;
+      const schemaScript = scripts[schemaIdx]?.content || '';
+
       const entries = modifiedCard.data.character_book?.entries || [];
-      const updateRules = entries.find(e => e.comment?.includes('[mvu_update]'))?.content || '';
-      const ejsController = entries.find(e => e.content?.trim().startsWith('@@preprocessing'))?.content || '';
-      const initvar = entries.find(e => e.comment?.includes('[initvar]'))?.content || '';
+      const updateRulesIdx = entries.findIndex(e => e.comment?.includes('[mvu_update]'));
+      const ejsIdx = entries.findIndex(e => e.content?.trim().startsWith('@@preprocessing'));
+      const initvarIdx = entries.findIndex(e => e.comment?.includes('[initvar]'));
+      const updateRules = updateRulesIdx >= 0 ? entries[updateRulesIdx].content || '' : '';
+      const ejsController = ejsIdx >= 0 ? entries[ejsIdx].content || '' : '';
+      const initvar = initvarIdx >= 0 ? entries[initvarIdx].content || '' : '';
+
+      // ─── Kiểm cắt cụt BẰNG CODE trên nội dung ĐẦY ĐỦ ───
+      // Trước đây mỗi field bị substring(0,2000) rồi mới đưa cho LLM: Zod schema ~5K và
+      // mvu_update rules ~7.5K nên LLM chỉ thấy đoạn đứt giữa chừng → báo CRITICAL
+      // "schema bị cắt cụt" dù card hoàn toàn nguyên vẹn. Nay đo bằng code rồi nói thẳng
+      // kết quả cho LLM, và nếu buộc phải cắt cho vừa prompt thì dán nhãn rõ ràng.
+      const integrityPrecheck = [
+        // Chỉ Zod schema mới là JS thật → đếm ngoặc mới có nghĩa.
+        describeIntegrity(`Schema (Script ${schemaIdx})`, schemaScript, true),
+        // Còn lại là văn xuôi/XML → đưa ĐUÔI thật, không đếm ngoặc (ngoặc trong câu chữ gây lệch giả).
+        describeIntegrity(`mvu_update Rules (Entry [${updateRulesIdx}])`, updateRules),
+        describeIntegrity(`EJS Controller (Entry [${ejsIdx}])`, ejsController),
+        describeIntegrity(`initvar (Entry [${initvarIdx}])`, initvar),
+      ].join('\n');
+
+      const MAX_FIELD = 12000; // đủ chứa schema (~5K) và rules (~7.5K) thật, không còn cắt oan
+      const clip = (s: string, label: string) =>
+        s.length <= MAX_FIELD
+          ? s
+          : `${s.slice(0, MAX_FIELD)}\n\n…[CẮT ĐỂ HIỂN THỊ — còn ${s.length - MAX_FIELD} ký tự nữa không gửi kèm. ` +
+            `ĐÂY KHÔNG PHẢI LỖI CỦA CARD: KHÔNG được báo "${label} bị cắt cụt/truncated".]`;
 
       const userPrompt = MVUZOD_VALIDATE_PROMPT
         .replace('{MOD_SUMMARY}', formatRules(rules))
-        .replace('{SCHEMA_CONTENT}', schemaScript.substring(0, 2000))
-        .replace('{UPDATE_RULES_CONTENT}', updateRules.substring(0, 2000))
-        .replace('{EJS_CONTROLLER_PREVIEW}', ejsController.substring(0, 2000))
-        .replace('{INITVAR_CONTENT}', initvar.substring(0, 2000));
+        .replace('{INTEGRITY_PRECHECK}', integrityPrecheck)
+        .replace('{SCHEMA_INDEX}', String(schemaIdx))
+        .replace('{UPDATE_RULES_INDEX}', String(updateRulesIdx))
+        .replace('{EJS_INDEX}', String(ejsIdx))
+        .replace('{INITVAR_INDEX}', String(initvarIdx))
+        .replace('{SCHEMA_CONTENT}', clip(schemaScript, 'Schema'))
+        .replace('{UPDATE_RULES_CONTENT}', clip(updateRules, 'mvu_update Rules'))
+        .replace('{EJS_CONTROLLER_PREVIEW}', clip(ejsController, 'EJS Controller'))
+        .replace('{INITVAR_CONTENT}', clip(initvar, 'initvar'));
 
       const response = await fetchLLM(SYSTEM_PROMPT, userPrompt, this.cfg(), this.signal);
       
@@ -567,17 +600,50 @@ export class ModOrchestrator {
         console.warn("Could not parse JSON object for MVU-Zod validation");
         return null;
       }
+      // ─── CHẶN CỨNG: bỏ issue "cắt cụt/truncated" khi CODE đã xác nhận ngoặc cân bằng ───
+      // Không phụ thuộc việc LLM có tuân thủ luật trong prompt hay không. Đây là nguồn gây
+      // báo động giả CRITICAL khiến user tưởng mod hỏng dù card hoàn toàn nguyên vẹn.
+      // Một cáo buộc "cắt cụt" chỉ đáng tin khi nội dung THẬT SỰ có vấn đề. Ta biết chắc:
+      //  • field nào bị CHÍNH TA cắt cho vừa prompt (→ mọi cáo buộc cắt cụt là ảo), và
+      //  • Zod schema có cân bằng ngoặc không (kiểm bằng code trên bản đầy đủ).
+      const fieldChecks = [
+        { re: /schema|script/i,                clipped: schemaScript.length > MAX_FIELD,   intact: !schemaScript || checkBracketBalance(schemaScript).balanced },
+        { re: /mvu_update|update\s*rules/i,    clipped: updateRules.length > MAX_FIELD,    intact: true },
+        { re: /ejs|controller/i,               clipped: ejsController.length > MAX_FIELD,  intact: true },
+        { re: /initvar/i,                      clipped: initvar.length > MAX_FIELD,        intact: true },
+      ];
+      const TRUNC_RE = /cắt\s*cụt|truncat|bị\s*cắt|thiếu\s*dấu\s*đóng|chưa\s*đóng\s*ngoặc|unclosed|incomplete\s*schema/i;
+
+      const rawIssues = parsed.issues || [];
+      const keptIssues = rawIssues.filter((issue) => {
+        const text = `${issue.description || ''} ${issue.fix || ''} ${issue.check || ''}`;
+        if (!TRUNC_RE.test(text)) return true; // không phải cáo buộc cắt cụt → giữ nguyên
+        const field = fieldChecks.find(f => f.re.test(text));
+        if (!field) return true;
+        // Ta đã cắt field này để vừa prompt → LLM chỉ đang mô tả vết cắt của chính ta.
+        if (field.clipped) {
+          console.warn('[validateCard] Bỏ cáo buộc "cắt cụt" ảo (do prompt tự cắt field):', issue.description);
+          return false;
+        }
+        // Gửi trọn vẹn + code xác nhận nguyên vẹn → cáo buộc sai.
+        if (field.intact) {
+          console.warn('[validateCard] Bỏ cáo buộc "cắt cụt" sai (nội dung gửi đủ & nguyên vẹn):', issue.description);
+          return false;
+        }
+        return true;
+      });
+
       return {
-        status: parsed.validation_status || 'PASS',
+        status: keptIssues.length === 0 && rawIssues.length > 0 ? 'PASS' : (parsed.validation_status || 'PASS'),
         stats: {
           protected_fields_verified: (parsed.passed_checks?.length || 2) * 5
         },
-        issues: parsed.issues?.map((issue: { severity?: string; check?: string; description?: string; fix?: string }) => ({
+        issues: keptIssues.map((issue: { severity?: string; check?: string; description?: string; fix?: string }) => ({
           severity: issue.severity || 'MEDIUM',
           category: issue.check || 'MVUZOD_INTEGRITY',
           description: issue.description || '',
           fix: issue.fix || ''
-        })) || []
+        }))
       };
     }
 

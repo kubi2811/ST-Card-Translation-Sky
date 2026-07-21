@@ -6,6 +6,7 @@ import { fmt } from '../i18n';
 import { Download, AlertTriangle, Image as ImageIcon, KeyRound, Code, Activity, FileText, XCircle, Info } from 'lucide-react';
 import { embedCharaToPNG } from '../utils/pngHandler';
 import { cardToWorldbook } from '../utils/worldbookParser';
+import { characterBookToWorldInfo, worldInfoFileName } from '../utils/worldInfoFile';
 import { setNestedValue } from '../utils/cardFields';
 import { scanFieldsHealth, buildTranslationReport, type HealthSeverity } from '../utils/cardHealth';
 import { verifyFields, quickVerify, type FieldIssue, type VerifyIssue } from '../utils/aiVerify';
@@ -123,6 +124,28 @@ export default function ExportPanel() {
     phase !== 'translating',
   );
   const [repairMsg, setRepairMsg] = useState('');
+  // (bug 74) Mặc định BẬT theo yêu cầu user. Xuất kèm file World Info rời: nạp file này vào ST
+  // TRƯỚC khi import thẻ thì `world_names` đã có tên world ⇒ ST im lặng gắn luôn, không popup,
+  // không phải vào "More… → Import Card Lore" gắn tay.
+  const [alsoExportLorebook, setAlsoExportLorebook] = useState(true);
+
+  /** Tải kèm file World Info rời (nếu thẻ có lorebook nhúng và user đang bật tuỳ chọn). */
+  const downloadLorebookSideFile = (exportCard: unknown) => {
+    if (!alsoExportLorebook) return;
+    const wi = characterBookToWorldInfo(exportCard);
+    if (!wi) return; // thẻ không có lorebook nhúng — không đẻ ra file rỗng
+    const world = String(
+      ((exportCard as Record<string, any>)?.data?.extensions?.world) ||
+      ((exportCard as Record<string, any>)?.data?.character_book?.name) || '',
+    );
+    const blob = new Blob([JSON.stringify(wi, null, 4)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = worldInfoFileName(world);
+    a.click();
+    URL.revokeObjectURL(url);
+  };
   const repairBrokenEjs = () => {
     let reverted = 0;
     for (const f of brokenEjsFields) {
@@ -224,6 +247,8 @@ export default function ExportPanel() {
     a.download = fileName;
     a.click();
     URL.revokeObjectURL(url);
+    // (bug 74) Chế độ worldbook vốn đã xuất ra file world rồi — không tải trùng thêm lần nữa.
+    if (!isWorldbook) downloadLorebookSideFile(exportCard);
   };
 
   const handleExportPng = async () => {
@@ -248,6 +273,7 @@ export default function ExportPanel() {
       a.href = dataUrl;
       a.download = fileName;
       a.click();
+      downloadLorebookSideFile(exportCard);
     } catch (e) {
       console.error('Failed to export PNG:', e);
       alert('Failed to export PNG');
@@ -657,6 +683,35 @@ export default function ExportPanel() {
         }}>
           {ui.epLightExportNote}
         </div>
+      )}
+
+      {/* (bug 74) Xuất kèm file Lorebook rời — mặc định BẬT.
+          Chỉ hiện khi thẻ THẬT SỰ có lorebook nhúng, không thì tuỳ chọn này vô nghĩa. */}
+      {!isWorldbook && (card?.data?.character_book?.entries?.length ?? 0) > 0 && (
+        <label
+          title={ui.epLoreFileTip}
+          style={{
+            display: 'flex', alignItems: 'flex-start', gap: '8px', cursor: 'pointer',
+            padding: '9px 11px', marginBottom: '10px', fontSize: '0.72rem', lineHeight: 1.55,
+            background: alsoExportLorebook ? 'rgba(34,197,94,0.07)' : 'transparent',
+            border: `1px solid ${alsoExportLorebook ? 'rgba(34,197,94,0.32)' : 'var(--border-subtle)'}`,
+            borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={alsoExportLorebook}
+            onChange={(e) => setAlsoExportLorebook(e.target.checked)}
+            style={{ marginTop: '2px', accentColor: '#22c55e', cursor: 'pointer' }}
+          />
+          <span>
+            <b style={{ color: alsoExportLorebook ? '#4ade80' : 'var(--text-primary)' }}>
+              {ui.epLoreFileLabel}
+            </b>
+            <br />
+            {ui.epLoreFileHint}
+          </span>
+        </label>
       )}
 
       <div style={{ display: 'flex', gap: '8px', flexDirection: 'column' }}>

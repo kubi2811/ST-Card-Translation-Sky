@@ -6,6 +6,7 @@ import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookE
 import { extractNameCandidates, buildNameGlossaryPrompt, parseNameGlossaryResponse, mergeGlossary, harvestGlossaryFromFields } from '../utils/nameGlossary';
 import { GLOSSARY_PRESETS } from '../utils/glossaryPresets';
 import { extractTranslatableFields, applyTranslationsToCard, autoTranslateLorebookTriggerKeys, injectNewLorebookEntries, isMvuUpdateField } from '../utils/cardFields';
+import { syncEmbeddedWorldLink } from '../utils/worldLink';
 import { syncMvuVariables, postProcessRegexHtml, normalizeSmartQuotesInCode, fixNestedQuoteBracketPaths, fixBrokenLodashPaths, fixDotNotationPaths, extractPotentialMvuKeyStrings, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, enforceInitvarCovariance, extractMappingFromTranslatedInitvar, enforceExactConsistency, enforceVariableCasing, fixZodSyntaxErrors, validateDictionaryConflicts, aiResolveMvuConflicts, recanonicalizeMvuInFields, unifyVietnameseUnderscoresInText } from '../utils/mvuSync';
 import { shouldSkipTranslation, detectLanguage, detectResidualCjk } from '../utils/langDetect';
 import { clearRAGCache } from '../utils/ragContext';
@@ -3283,7 +3284,20 @@ export function useTranslation() {
       store.fields,
       store.translationConfig.enableMvuSync ? store.translationConfig.mvuDictionary : undefined
     );
-    
+
+    // (bug 73) Nối lại sợi dây lorebook ↔ nhân vật. Ta CÓ dịch data.character_book.name
+    // nhưng data.extensions.world thì trước giờ không ai đụng, nên card dịch ra luôn lệch:
+    // sách tên tiếng Việt mà world vẫn trỏ tên tiếng Trung. SillyTavern chỉ mời import lore
+    // khi world đó CHƯA tồn tại — ai đã cài bản gốc thì ST im lặng, và nhân vật bị gắn vào
+    // world tiếng Trung cũ. Đó chính là "lorebook bị tách riêng, phải tự đi add lại".
+    // `store.card` là bản GỐC — cần nó để không đụng world ngoài mà user cố ý trỏ tới.
+    const link = syncEmbeddedWorldLink(exportCard, store.card);
+    if (link.relinkedWorld) {
+      store.addLog('info', `🔗 Đã nối lorebook vào nhân vật: World = "${link.worldName}"${link.renamedBook ? ' (sách chưa có tên riêng, đã tự đặt)' : ''}`);
+    } else if (link.keptExternalWorld) {
+      store.addLog('info', `🔗 Giữ nguyên World ngoài mà thẻ gốc trỏ tới: "${link.worldName}"`);
+    }
+
     return exportCard;
   }, [store]);
 

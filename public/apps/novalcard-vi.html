@@ -2752,7 +2752,10 @@ function buildFullCard(){
     const data={
       name, description, personality:"", scenario:"", first_mes:"", mes_example:"",
       creator_notes:"Được tạo bởi Công cụ trích xuất thẻ nhân vật tiểu thuyết ("+chars.length+" nhân vật → "+chars.length+" mục Lorebook)", system_prompt:"", post_history_instructions:"",
-      alternate_greetings:[], tags:[], creator:"", character_version:"1.0", extensions:{},
+      // (bug 73) extensions.world PHẢI trùng tên Lorebook: SillyTavern dùng đúng field này để
+      // buộc nhân vật với world. Bỏ trống thì import xong lorebook nằm rời, user phải tự vào
+      // "More… → Import Card Lore" rồi tự gắn lại.
+      alternate_greetings:[], tags:[], creator:"", character_version:"1.0", extensions:{ world:bookName },
       character_book:{ name:bookName, entries:worldBook.concat(charBook) }
     };
     return { name, description, spec:"chara_card_v2", spec_version:"2.0", data, _charCount:chars.length };
@@ -2766,7 +2769,9 @@ function buildFullCard(){
     creator_notes:"Được tạo bởi Công cụ trích xuất thẻ nhân vật tiểu thuyết", system_prompt:"", post_history_instructions:"",
     alternate_greetings:[], tags:[], creator:"", character_version:"1.0", extensions:{}
   };
-  if(worldBook.length) data.character_book={ name:bookName, entries:worldBook };
+  // (bug 73) Có lorebook thì phải kèm extensions.world trùng tên — xem chú thích ở nhánh
+  // nhiều nhân vật phía trên. Không có world thì ST để lorebook nằm rời khỏi nhân vật.
+  if(worldBook.length){ data.character_book={ name:bookName, entries:worldBook }; data.extensions.world=bookName; }
   return { name, description:cardText, spec:"chara_card_v2", spec_version:"2.0", data, _charCount:1 };
 }
 $("fullCardBtn").onclick=()=>{

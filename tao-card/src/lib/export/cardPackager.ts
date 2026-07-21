@@ -16,6 +16,7 @@ import type { CharacterCardV3 } from '../../types/card.types';
 import type { RegexScript, RegexPlacement } from '../../types/regex.types';
 import type { MVUZODSchema } from '../../types/mvuzod.types';
 import { syncMirrorFields } from '../converters/cardDefaults';
+import { syncEmbeddedWorldLink } from '../converters/worldLink';
 import { exportCardV3, exportCardV2Compat } from '../converters/lorebookConvert';
 import { writeCharaToPng, getDefaultCardPng, convertToPngBuffer } from '../converters/pngMetadata';
 import { generateRegexPatterns, type GeneratedRegex } from '../mvuzod/scriptGenerator';
@@ -244,6 +245,19 @@ export async function packageCard(
 
   // ─── Step 4: Sync Mirror Fields ───────────────────────────────────────
   const finalCard = syncMirrorFields(exportCard);
+
+  // ─── Step 4b: Nối lorebook nhúng vào nhân vật ─────────────────────────
+  // (bug 73) SillyTavern buộc nhân vật với world qua data.extensions.world — app này trước
+  // giờ chưa từng ghi field đó, nên import xong lorebook nằm rời, user phải tự vào
+  // "More… → Import Card Lore" rồi tự gắn. Thêm nữa, tên sách hay dính giá trị chung chung
+  // ('New Character', 'Imported Lorebook'…) khiến card sau ghi đè world của card trước.
+  const link = syncEmbeddedWorldLink(finalCard, card);
+  if (link.relinkedWorld) {
+    injections.push(
+      `World: nối lorebook vào nhân vật (World = "${link.worldName}")` +
+      (link.renamedBook ? ' — sách chưa có tên riêng nên đã tự đặt' : ''),
+    );
+  }
 
   // ─── Step 5: Validate ─────────────────────────────────────────────────
   const validation = validateCardForExport(finalCard, schema);

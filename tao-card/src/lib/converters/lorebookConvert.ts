@@ -6,6 +6,7 @@
 import type { CharacterCardV3, CardExtensions, LorebookEntry, LorebookEntryExt } from '../../types';
 import { DEFAULT_ENTRY_EXT } from '../../types';
 import { createEmptyCard, syncMirrorFields } from './cardDefaults';
+import { syncEmbeddedWorldLink } from './worldLink';
 import { parseZodCodeToSchema, isMvuSchemaScript } from '../mvuzod/zodCodeParser';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -99,6 +100,10 @@ export function importCard(json: Record<string, unknown>): ImportResult {
 /** Export full V3 card JSON */
 export function exportCardV3(card: CharacterCardV3): string {
   const synced = syncMirrorFields(structuredClone(card));
+  // (bug 73) Chốt chặn CHUNG cho mọi đường xuất — cả nút xuất nhanh ở TopBar lẫn Export
+  // Wizard đều đi qua đây. Không có data.extensions.world thì SillyTavern để lorebook nằm
+  // rời, user phải tự vào "More… → Import Card Lore" rồi tự gắn vào nhân vật.
+  syncEmbeddedWorldLink(synced, card);
   return JSON.stringify(synced, null, 2);
 }
 
@@ -112,6 +117,8 @@ export function exportCardV3(card: CharacterCardV3): string {
  */
 export function exportCardV2Compat(card: CharacterCardV3): string {
   const synced = syncMirrorFields(structuredClone(card));
+  // (bug 73) Chunk 'chara' của PNG cũng phải mang sợi dây world — xem exportCardV3.
+  syncEmbeddedWorldLink(synced, card);
 
   // Convert character_book entries to SillyTavern V2 format
   const entries = synced.data.character_book?.entries ?? [];

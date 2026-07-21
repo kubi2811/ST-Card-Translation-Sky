@@ -1947,6 +1947,13 @@ ${ragBlock ? `\n${ragBlock}` : ''}${directiveBlock}`;
             const st = loop.stitchContinuation(finalResult, nextChunk || '');
             finalResult = st.stitched;
             if (st.overlapCut > 0) console.log(`[Loop] vòng ${loopState.round}: cắt ${st.overlapCut} ký tự AI lặp lại`);
+            if (st.restarted) {
+              // Model trả lời LẠI TỪ ĐẦU thay vì viết tiếp → đoạn này đã bị bỏ. Dừng ngay,
+              // đừng gọi thêm vòng nữa: nó sẽ lại viết lại từ đầu, chỉ tốn quota.
+              console.warn(`[Loop] vòng ${loopState.round}: AI viết lại từ đầu thay vì viết tiếp → bỏ đoạn đó và dừng vòng lặp`);
+              stopReason = 'stalled';
+              break;
+            }
             loopState.stalls = st.addedChars < loop.STALL_MIN_ADDED ? loopState.stalls + 1 : 0;
             stopReason = loop.shouldStop(finalResult, loopState);
           }
@@ -3883,6 +3890,12 @@ QUY TẮC BẮT BUỘC:
           const nextChunk = await callProvider(proxy, systemPrompt, continuationPrompt, undefined, undefined);
           const st = loop.stitchContinuation(response, nextChunk || '');
           response = st.stitched;
+          if (st.restarted) {
+            // Viết lại từ đầu thay vì viết tiếp → đoạn đó đã bị bỏ; dừng luôn cho khỏi tốn quota.
+            console.warn(`[Loop MVU] vòng ${loopState.round}: AI viết lại từ đầu → bỏ đoạn đó và dừng`);
+            stopReason = 'stalled';
+            break;
+          }
           loopState.stalls = st.addedChars < loop.STALL_MIN_ADDED ? loopState.stalls + 1 : 0;
           stopReason = loop.shouldStop(response, loopState);
         }

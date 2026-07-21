@@ -67,6 +67,33 @@ export interface StitchResult {
   overlapCut: number;
   /** Nội dung MỚI thực sự được thêm (sau khi khử lặp). */
   addedChars: number;
+  /**
+   * Đoạn "viết tiếp" thực chất là VIẾT LẠI TỪ ĐẦU (model phớt lờ lệnh nối mạch).
+   * Khi true thì KHÔNG nối gì — nếu nối sẽ thành 2 bài trong 1 câu trả lời.
+   */
+  restarted: boolean;
+}
+
+/* ─── Chặn ca model viết lại từ đầu ───
+ * (User 2026) "Trợ Lý AI trả về 2~3 phản hồi trong 1 câu trả lời." findOverlap chỉ khử được
+ * khi model LẶP LẠI ĐUÔI. Nếu model bỏ qua mỏ neo và trả lời lại câu hỏi từ đầu thì không có
+ * overlap nào → nguyên bài mới bị nối vào bài cũ.
+ * Dấu hiệu nhận biết: hai bài cùng trả lời một câu hỏi nên MỞ ĐẦU giống nhau. */
+const RESTART_PROBE_CHARS = 200;
+const RESTART_MIN_COMMON = 40;
+
+/** Chuẩn hoá nhẹ để so mở đầu: gộp khoảng trắng, bỏ phân biệt hoa/thường. */
+function normHead(s: string): string {
+  return s.replace(/\s+/g, ' ').trim().toLowerCase().slice(0, RESTART_PROBE_CHARS);
+}
+
+export function looksLikeRestart(existing: string, continuation: string): boolean {
+  const a = normHead(existing);
+  const b = normHead(continuation);
+  if (a.length < RESTART_MIN_COMMON || b.length < RESTART_MIN_COMMON) return false;
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  return i >= RESTART_MIN_COMMON;
 }
 
 /** Dò overlap: suffix của `existing` == prefix của `continuation` (thử raw rồi trim). */
@@ -88,10 +115,18 @@ export function findOverlap(existing: string, continuation: string): number {
 }
 
 export function stitchContinuation(existing: string, continuation: string): StitchResult {
-  if (!continuation) return { stitched: existing, overlapCut: 0, addedChars: 0 };
+  if (!continuation) return { stitched: existing, overlapCut: 0, addedChars: 0, restarted: false };
+
   const overlap = findOverlap(existing, continuation);
+  // Không có overlap + mở đầu giống bài cũ ⇒ model trả lời lại từ đầu chứ không viết tiếp.
+  // Nối vào sẽ ra 2 bài trong 1 câu trả lời → bỏ hẳn đoạn này, addedChars=0 để vòng lặp
+  // tính là "dậm chân" và dừng sớm thay vì đốt thêm quota.
+  if (overlap === 0 && looksLikeRestart(existing, continuation)) {
+    return { stitched: existing, overlapCut: 0, addedChars: 0, restarted: true };
+  }
+
   const fresh = continuation.slice(overlap);
-  return { stitched: existing + fresh, overlapCut: overlap, addedChars: fresh.trim().length };
+  return { stitched: existing + fresh, overlapCut: overlap, addedChars: fresh.trim().length, restarted: false };
 }
 
 /* ─── Prompt viết tiếp: chỉ gửi ĐUÔI mỏ neo (không gửi cả bài) ─── */

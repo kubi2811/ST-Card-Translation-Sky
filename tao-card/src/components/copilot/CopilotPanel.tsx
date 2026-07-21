@@ -56,7 +56,9 @@ function ActionCard({ action, onApply, onSkip }: {
   };
 
   const info = labels[action.type] ?? { icon: '❓', label: action.type, color: 'text-muted-foreground' };
-  const summary = action.type === 'save_memory' ? `[${(action.data as Record<string, unknown>).scope}] "${(action.data as Record<string, unknown>).key}": ${(action.data as Record<string, unknown>).value}`
+  // value có thể dài (AI viết 1-2 câu) — cắt để thẻ duyệt không tràn; nội dung đầy đủ vẫn được lưu.
+  const memVal = String((action.data as Record<string, unknown>).value ?? '');
+  const summary = action.type === 'save_memory' ? `[${(action.data as Record<string, unknown>).scope}] "${(action.data as Record<string, unknown>).key}": ${memVal.length > 120 ? memVal.slice(0, 120) + '…' : memVal}`
     : action.type === 'create_entry' ? `"${(action.data as Record<string, unknown>).comment}"`
     : action.type === 'update_entry' ? `ID: ${(action.data as Record<string, unknown>).id}`
     : action.type === 'delete_entry' ? `"${(action.data as Record<string, unknown>).comment ?? `ID ${(action.data as Record<string, unknown>).id}`}"`

@@ -940,6 +940,27 @@ export function enforceVariableCasing(
     return changed ? `${prefix}${newSegments.join('.')}${suffix}` : match;
   });
 
+  // ─── Pass 8: NHÃN HIỂN THỊ trong HTML — <td>Cảnh giới</td> ───
+  // (User 2026) Schema khai "Cảnh Giới" nhưng bảng trạng thái trong regex hiển thị "Cảnh giới".
+  // 7 pass trên chỉ chạm tới tên biến ở ngữ cảnh CODE (macro/bracket/getvar/YAML/lodash), còn tên
+  // biến nằm làm CHỮ HIỂN THỊ thì không pass nào đụng → hai nơi lệch nhau, regex không khớp được
+  // giá trị → vỡ card. Đây là lý do "đã khoá từ điển rồi vẫn bị".
+  //
+  // AN TOÀN: chỉ ép khi TOÀN BỘ text node đúng bằng tên biến (cho phép khoảng trắng và dấu ':'
+  // hai bên) — tức nó thực sự là một cái NHÃN. Văn xuôi có chứa tên biến giữa câu
+  // (vd "<p>Cảnh giới hạn của ngươi</p>") KHÔNG bị đụng, vì cả node không khớp.
+  result = result.replace(/>([^<>]+)</g, (match, textNode: string) => {
+    const raw = String(textNode);
+    // Tách: khoảng trắng đầu | phần chữ | dấu ':' và khoảng trắng cuối
+    const m = raw.match(/^(\s*)(.+?)(\s*[:：]?\s*)$/);
+    if (!m) return match;
+    const [, lead, core, trail] = m;
+    const canonical = getCasingFix(core);
+    if (!canonical) return match;
+    if (!fixes.some(f => f.found === core)) fixes.push({ found: core, replaced: canonical });
+    return `>${lead}${canonical}${trail}<`;
+  });
+
   return { text: result, fixes };
 }
 

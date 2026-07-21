@@ -13,6 +13,9 @@ import { Languages, FileJson, BookOpen, Plus, Trash2, Download, Upload, Bot, Loa
 import { recommendPreset } from '../utils/presetRecommend';
 import { GLOSSARY_PRESETS } from '../utils/glossaryPresets';
 import { mergeGlossary } from '../utils/nameGlossary';
+import { mergeGlossaries } from '../utils/glossaryIO';
+import { pushGlossaryToScript } from '../utils/glossaryBridge';
+import { safeSetItem } from '../utils/safeStorage';
 import { estimateLorebookBatchLoad } from '../utils/estimateBatchTokens';
 import { usePresetApply } from '../hooks/usePresetApply';
 import MvuSyncPanel from './MvuSyncPanel';
@@ -180,6 +183,27 @@ export default function TranslateConfig() {
     if (!window.confirm(fmt(ui.tcGlsDelAllConfirm, { count: translationConfig.glossary.length }))) return;
     setTranslationConfig({ glossary: [] });
     setSelectedGlossary(new Set());
+  };
+
+  /**
+   * Gửi từ điển hiện tại sang tab Dịch Script. Nếu tab đó đang mở sẵn thì nó nhận NGAY
+   * (qua CustomEvent); chưa mở lần nào thì ghi vào kho lưu của nó để lát mở lên đã có.
+   */
+  const sendGlossaryToScript = () => {
+    const usable = translationConfig.glossary.filter(g => g.source.trim() && g.target.trim());
+    if (!usable.length) { addToast('info', ui.tcGlsSendEmpty); return; }
+
+    const live = pushGlossaryToScript(usable);
+    if (!live) {
+      // Tab Dịch Script chưa mount → gộp thẳng vào kho lưu của nó (cùng khoá LS nó đọc lúc mở)
+      try {
+        const raw = localStorage.getItem('st-script-glossary');
+        const prev = raw ? (JSON.parse(raw) as GlossaryEntry[]) : [];
+        const { merged } = mergeGlossaries(Array.isArray(prev) ? prev : [], usable);
+        safeSetItem('st-script-glossary', JSON.stringify(merged));
+      } catch { /* quota/parse hỏng → thôi, user vẫn có nút Nhập file bên kia */ }
+    }
+    addToast('success', fmt(ui.tcGlsSendOk, { count: usable.length }));
   };
 
   const exportGlossary = () => {
@@ -537,6 +561,21 @@ export default function TranslateConfig() {
                   }}
                 >
                   <Download size={10} /> Export
+                </button>
+              )}
+              {/* Đẩy thẳng sang tab Dịch Script — khỏi phải xuất file rồi nhập lại */}
+              {translationConfig.glossary.length > 0 && (
+                <button
+                  onClick={sendGlossaryToScript}
+                  title={ui.tcGlsSendTip}
+                  style={{
+                    padding: '2px 6px', fontSize: '0.65rem', cursor: 'pointer',
+                    border: '1px solid rgba(56,189,248,0.45)', borderRadius: 'var(--radius-sm)',
+                    color: '#38bdf8', background: 'rgba(56,189,248,0.10)',
+                    display: 'flex', alignItems: 'center', gap: '3px', whiteSpace: 'nowrap',
+                  }}
+                >
+                  📜 {ui.tcGlsSendBtn}
                 </button>
               )}
             </div>

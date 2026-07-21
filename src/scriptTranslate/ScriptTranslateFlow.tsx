@@ -15,12 +15,17 @@ import {
   loadOpts, saveOpts, loadGlossary, saveGlossary,
   runSig, saveTokenMap, loadTokenMap, deleteTokenMap, tokensToMap,
 } from './persist';
+import { parseGlossaryJson, mergeGlossaries, countUsable, hasNewEntries, glossaryToJson } from '../utils/glossaryIO';
+import { onGlossaryPush } from '../utils/glossaryBridge';
 
 export default function ScriptTranslateFlow() {
   const ui = useUi();
   const proxy = useStore((s) => s.proxy);
   const providers = useStore((s) => s.providers);
   const tc = useStore((s) => s.translationConfig);
+  const addToast = useStore((s) => s.addToast);
+  /** Từ điển của thẻ đang mở bên Dịch Card — nguồn để "mượn" sang đây */
+  const cardGlossary = useStore((s) => s.translationConfig.glossary);
 
   const [source, setSource] = useState('');
   const [fileName, setFileName] = useState('');
@@ -35,14 +40,24 @@ export default function ScriptTranslateFlow() {
   const [paused, setPaused] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [resumeInfo, setResumeInfo] = useState<number>(0); // số token khôi phục từ cache
+  /** Kết quả lần nhập/mượn từ điển gần nhất — hiện ngay dưới hàng nút, tự tắt sau 6s */
+  const [glsNote, setGlsNote] = useState<{ text: string; ok: boolean } | null>(null);
+  useEffect(() => {
+    if (!glsNote) return;
+    const t = setTimeout(() => setGlsNote(null), 6000);
+    return () => clearTimeout(t);
+  }, [glsNote]);
 
   const abortRef = useRef<AbortController | null>(null);
   const pausedRef = useRef(false);
   const tokensRef = useRef<CJKToken[]>([]);
   const lastSaveRef = useRef(0);
 
+  /** Bản mới nhất của bảng tên — để hàm gộp đọc mà không dính stale closure */
+  const glossaryRef = useRef<GlossaryEntry[]>(glossary);
+
   useEffect(() => { saveOpts(opts); }, [opts]);
-  useEffect(() => { saveGlossary(glossary); }, [glossary]);
+  useEffect(() => { saveGlossary(glossary); glossaryRef.current = glossary; }, [glossary]);
   useEffect(() => { pausedRef.current = paused; }, [paused]);
   // Sig tiến độ phụ thuộc cờ beautify → user lật toggle thì tra lại map tương ứng
   useEffect(() => {
@@ -84,11 +99,69 @@ export default function ScriptTranslateFlow() {
     } catch { setStats(null); }
   }, []);
 
+  // ─── Nhập / mượn từ điển ───
+  /**
+   * Gộp danh sách mục vào bảng tên hiện tại + báo kết quả bằng toast.
+   * Tính merge NGOÀI updater của setState (đọc qua ref): updater có thể bị React gọi
+   * nhiều lần (StrictMode / concurrent) nên lấy số liệu từ trong đó là không đáng tin.
+   */
+  const mergeIntoGlossary = useCallback((incoming: GlossaryEntry[], sourceLabel: string) => {
+    const r = mergeGlossaries(glossaryRef.current, incoming);
+    glossaryRef.current = r.merged;
+    setGlossary(r.merged);
+    // Phản hồi hiện NGAY TRONG PANEL này, không dùng toast: toast sống trong <App/> của tab
+    // Dịch Card — đang bị display:none khi user đứng ở đây nên user sẽ chẳng thấy gì.
+    const parts = [
+      r.added > 0 ? fmt(ui.scrTrGlsImported, { n: r.added, from: sourceLabel }) : ui.scrTrGlsNothingNew,
+      r.conflicts > 0 ? fmt(ui.scrTrGlsConflicts, { n: r.conflicts }) : '',
+    ].filter(Boolean);
+    setGlsNote({ text: parts.join(' '), ok: r.added > 0 });
+  }, [ui]);
+
+  /** Nhập từ FILE .json (bộ xuất ra từ Dịch Card dùng được thẳng) */
+  const importGlossaryFile = useCallback(async (f: File | undefined) => {
+    if (!f) return;
+    try {
+      const entries = parseGlossaryJson(await f.text());
+      mergeIntoGlossary(entries, f.name);
+    } catch (e) {
+      const code = (e as Error)?.message;
+      setGlsNote({ text: code === 'BAD_JSON' ? ui.scrTrGlsBadJson : ui.scrTrGlsNoEntries, ok: false });
+    }
+  }, [mergeIntoGlossary, ui]);
+
+  /** Mượn thẳng từ điển của thẻ đang mở bên Dịch Card (không cần xuất/nhập file) */
+  const importFromCard = useCallback(() => {
+    if (countUsable(cardGlossary) === 0) { setGlsNote({ text: ui.scrTrGlsCardEmpty, ok: false }); return; }
+    mergeIntoGlossary(cardGlossary, ui.railTranslate);
+  }, [cardGlossary, mergeIntoGlossary, ui]);
+
+  const exportGlossaryFile = useCallback(() => {
+    const blob = new Blob([glossaryToJson(glossary)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'glossary-script.json';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  }, [glossary]);
+
+  // Nhận từ điển do bên Dịch Card "gửi sang" (nút ➡️ bên đó) khi tab này đang mở sẵn
+  useEffect(() => onGlossaryPush((entries) => mergeIntoGlossary(entries, ui.railTranslate)), [mergeIntoGlossary, ui]);
+
   const onFile = useCallback(async (f: File | undefined) => {
     if (!f) return;
     const text = await f.text();
     void acceptSource(text, f.name);
-  }, [acceptSource]);
+    // Vừa nạp script mà bên Dịch Card đang có từ điển CHƯA có ở đây → hỏi mượn luôn.
+    // Chỉ hỏi khi thật sự có mục mới, nên trả lời "Không" một lần rồi thôi cũng không bị hỏi lại.
+    if (countUsable(cardGlossary) > 0 && hasNewEntries(glossary, cardGlossary)) {
+      const n = countUsable(cardGlossary);
+      // Đợi 1 nhịp cho giao diện kịp vẽ tên file rồi mới bật hộp thoại
+      setTimeout(() => {
+        if (window.confirm(fmt(ui.scrTrGlsAskImport, { n }))) importFromCard();
+      }, 120);
+    }
+  }, [acceptSource, cardGlossary, glossary, importFromCard, ui]);
 
   // ─── Pha 0 ───
   const runPha0 = useCallback(async () => {
@@ -268,11 +341,45 @@ export default function ScriptTranslateFlow() {
             {glossaryBusy ? `⏳ ${ui.scrTrPha0Running}` : `🏷️ ${ui.scrTrPha0Btn}`}
           </button>
           <button onClick={() => setGlossary((g) => [...g, { source: '', target: '' }])} style={btn}>➕ {ui.scrTrPha0Add}</button>
+          {/* Mượn thẳng từ điển của thẻ đang mở bên Dịch Card — khỏi xuất/nhập file */}
+          <button
+            onClick={importFromCard}
+            disabled={running}
+            title={fmt(ui.scrTrGlsFromCardTip, { n: countUsable(cardGlossary) })}
+            style={{ ...btn, opacity: running ? 0.5 : 1 }}
+          >
+            🔗 {ui.scrTrGlsFromCard}
+            {countUsable(cardGlossary) > 0 && (
+              <span style={{
+                marginLeft: 4, padding: '0 5px', borderRadius: 8, fontSize: '0.7rem',
+                background: 'rgba(78,205,196,0.18)', color: '#4ecdc4',
+              }}>{countUsable(cardGlossary)}</span>
+            )}
+          </button>
+          {/* Nhập file .json — dùng thẳng được bộ xuất ra từ Dịch Card */}
+          <label style={{ ...btn, cursor: running ? 'not-allowed' : 'pointer', opacity: running ? 0.5 : 1 }} title={ui.scrTrGlsImportTip}>
+            📥 {ui.scrTrGlsImport}
+            <input type="file" accept=".json" style={{ display: 'none' }} disabled={running}
+              onChange={(e) => { void importGlossaryFile(e.target.files?.[0]); e.target.value = ''; }} />
+          </label>
           {glossary.length > 0 && (
-            <button onClick={() => setGlossary([])} style={{ ...btn, color: '#ffb4a6' }}>🗑️ {ui.scrTrPha0Clear}</button>
+            <>
+              <button onClick={exportGlossaryFile} title={ui.scrTrGlsExportTip} style={btn}>📤 {ui.scrTrGlsExport}</button>
+              <button onClick={() => setGlossary([])} style={{ ...btn, color: '#ffb4a6' }}>🗑️ {ui.scrTrPha0Clear}</button>
+            </>
           )}
           <span style={{ fontSize: '0.8rem', color: 'var(--text-muted, #b6b2c9)' }}>{fmt(ui.scrTrPha0Count, { n: glossary.length })}</span>
         </div>
+        {glsNote && (
+          <div style={{
+            marginTop: 8, padding: '6px 10px', borderRadius: 7, fontSize: '0.8rem',
+            background: glsNote.ok ? 'rgba(34,197,94,0.12)' : 'rgba(255,180,166,0.10)',
+            border: `1px solid ${glsNote.ok ? 'rgba(34,197,94,0.35)' : 'rgba(255,180,166,0.30)'}`,
+            color: glsNote.ok ? '#22c55e' : '#ffb4a6',
+          }}>
+            {glsNote.ok ? '✅' : 'ℹ️'} {glsNote.text}
+          </div>
+        )}
         {glossary.length > 0 && (
           <div style={{ maxHeight: 220, overflow: 'auto', marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
             {glossary.map((g, i) => (

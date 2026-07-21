@@ -7,6 +7,10 @@ import type { ChatMessage, CharacterCardV3, ProxyProfile, GenerationParams, Lore
 import type { AIAction, AIResponse, WorldbuildingMode, CopilotMessage } from './copilotTypes';
 import { callAI } from './client';
 import { buildCopilotSystemPrompt } from './copilotPrompts';
+import { buildMemoryBlock, getSessionId } from './memoryContext';
+import { shouldSummarize, summarizeHistory, buildCompressedHistory, KEEP_RECENT } from './memorySummarizer';
+import { useMemoryStore } from '../../store/memoryStore';
+import { useCardStore } from '../../store/cardStore';
 import { parseAIResponseJSON } from './jsonExtract';
 import { materializeEntry, nextEntryId } from '../converters/cardDefaults';
 import { toolsEngine } from '../toolsEngine';
@@ -53,18 +57,93 @@ function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/* ─── Cache bản nén lịch sử ───
+ * `coveredUpTo` = số lượt đầu ĐÃ được gói vào `summary`; các lượt từ mốc đó trở đi luôn gửi
+ * nguyên văn. Có cache thì mới không phải nén lại mỗi lượt (tốn thêm 1 call AI + độ trễ).
+ * Bị xoá khi lịch sử ngắn đi (user xoá chat / đổi thẻ). */
+let _summaryCache: { coveredUpTo: number; summary: string } | null = null;
+/** Phần chưa nén phải dài thêm chừng này mới nén lại. */
+const RESUMMARIZE_EVERY = 10;
+
+/**
+ * Adapter: bọc `callAI` (nhận AICallOptions, trả AICallResult) thành callback
+ * `(prompt: string) => Promise<string>` mà memorySummarizer yêu cầu.
+ * Dùng đúng profile + generationParams đang có trong CopilotContext.
+ */
+function summarizerCallAI(ctx: CopilotContext): (prompt: string) => Promise<string> {
+  return async (prompt: string) => {
+    const res = await callAI({
+      profile: ctx.profile,
+      // Tóm lược là việc phụ, KHÔNG ép JSON response format (prompt yêu cầu văn xuôi gạch đầu dòng).
+      params: { ...ctx.generationParams, useJsonResponseFormat: false },
+      messages: [{ role: 'user', content: prompt }],
+      label: 'Nén lịch sử chat',
+    });
+    return res.text;
+  };
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // MAIN LOOP
 // ═══════════════════════════════════════════════════════════════════════════
 
 export async function runCopilotLoop(userMessage: string, ctx: CopilotContext): Promise<void> {
   const isPipelineMode = ctx.mode === 'genesis' || ctx.mode === 'evolution' || ctx.mode === 'document_extraction';
-  const systemPrompt = buildCopilotSystemPrompt(ctx.mode, ctx.getCard(), ctx.contextChip) + 
+  // ─── Truy hồi ký ức liên quan tới câu user vừa hỏi ───
+  // Lỗi ở đây KHÔNG được làm hỏng chat: nuốt lỗi, coi như không có ký ức.
+  let memoryBlock = '';
+  try {
+    const projectId = useCardStore.getState().currentProjectId ?? undefined;
+    const found = useMemoryStore.getState().searchMemory(userMessage, { projectId, sessionId: getSessionId() });
+    // Tin rỗng (vd chỉ đính file) → store trả nguyên kho theo thứ tự chèn, không phải theo độ
+    // liên quan; khi đó phải ưu tiên ký ức mới nhất thay vì 12 mục cũ nhất.
+    memoryBlock = buildMemoryBlock(found, 12, userMessage.trim() === '');
+  } catch (e) {
+    console.warn('[memory] truy hồi lỗi, bỏ qua:', e);
+  }
+
+  const systemPrompt = buildCopilotSystemPrompt(ctx.mode, ctx.getCard(), ctx.contextChip) +
+    (memoryBlock ? '\n\n' + memoryBlock : '') +
     (isPipelineMode ? '\n\n' + CRITICAL_ABSOLUTE_COMPLETENESS_PROTOCOL : '');
+
+  // ─── Nén lịch sử chat khi đã quá dài ───
+  // Mặc định dùng NGUYÊN lịch sử gốc; chỉ thay bằng bản nén khi nén thành công.
+  // Mọi lỗi ở đây đều bị nuốt → chat KHÔNG được đứt.
+  let historyPart: ChatMessage[] = ctx.chatHistory;
+  try {
+    // Lịch sử ngắn đi (user xoá chat / đổi thẻ) → bản nén cũ vô nghĩa, bỏ đi.
+    if (_summaryCache && ctx.chatHistory.length < _summaryCache.coveredUpTo) _summaryCache = null;
+
+    if (shouldSummarize(ctx.chatHistory)) {
+      // Chỉ nén LẠI khi phần chưa được nén đã dài ra đáng kể. Nếu nén mỗi lượt thì từ lượt 20
+      // trở đi lượt nào cũng tốn thêm 1 call AI + độ trễ, mà nội dung gần như y hệt.
+      const uncovered = ctx.chatHistory.length - (_summaryCache?.coveredUpTo ?? 0);
+      if (!_summaryCache || uncovered >= RESUMMARIZE_EVERY + KEEP_RECENT) {
+        ctx.setStatus('🧠 Đang nén lịch sử hội thoại cho gọn...');
+        const r = await summarizeHistory(ctx.chatHistory, summarizerCallAI(ctx));
+        if (r) {
+          _summaryCache = { coveredUpTo: ctx.chatHistory.length - KEEP_RECENT, summary: r.summary };
+          ctx.appendMessage({
+            id: Date.now().toString(),
+            role: 'system',
+            content: `🧠 Hội thoại đã dài (${ctx.chatHistory.length} lượt) nên phần cũ được nén thành tóm lược; ${KEEP_RECENT} lượt gần nhất giữ nguyên văn.`,
+            timestamp: Date.now(),
+          });
+        }
+        ctx.setStatus(null);
+      }
+
+      if (_summaryCache) historyPart = buildCompressedHistory(ctx.chatHistory, _summaryCache);
+    }
+  } catch (e) {
+    console.warn('[memory] nén lịch sử lỗi, dùng lịch sử gốc:', e);
+    historyPart = ctx.chatHistory;
+    ctx.setStatus(null);
+  }
 
   const messages: ChatMessage[] = [
     { role: 'system', content: systemPrompt },
-    ...ctx.chatHistory,
+    ...historyPart,
     { role: 'user', content: userMessage },
   ];
 
@@ -195,6 +274,17 @@ async function handleAction(
 
     case 'continue_signal': {
       // Just continue the loop
+      break;
+    }
+
+    // `save_memory` KHÔNG phải action áp lên thẻ: executeAction không có case cho nó,
+    // nên nếu để rơi xuống default thì hệ thống báo "applied successfully" trong khi
+    // không có gì được lưu → AI tin nhầm, panel trống. Chặn tường minh và bắt AI tự sửa.
+    case 'save_memory': {
+      messages.push({
+        role: 'user',
+        content: '[System Tool Error] Dùng tool propose_memory để ghi nhớ, KHÔNG phát action save_memory trực tiếp.',
+      });
       break;
     }
 

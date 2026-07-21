@@ -35,6 +35,7 @@ export type AIAction =
   | { type: 'create_tavern_script'; data: { name: string; code: string; type: 'schema' | 'event' | 'ui' | 'init' } }
   | { type: 'generate_game_ui'; data: { component: string; html: string; css: string; script: string } }
   | { type: 'continue_signal'; data: { reason: string } }
+  | { type: 'save_memory'; data: { scope: 'global' | 'project' | 'session'; key: string; value: string } }
   | { type: 'tool_call'; data: { tool: string; args: Record<string, unknown> } };
 
 export interface AIResponse {

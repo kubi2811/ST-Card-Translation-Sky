@@ -17,6 +17,7 @@ import { useStore } from '../store';
 import { parseCardFile, parseCardJsonText, type ParsedCard } from '../utils/parseCardFile';
 import { buildCompareGroups, valuesDiffer, planMerge, type MergePlan } from '../utils/compareCards';
 import { extractTranslatableFields, setNestedValue, DEFAULT_FIELD_GROUPS } from '../utils/cardFields';
+import { syncEmbeddedWorldLink } from '../utils/worldLink';
 import { embedCharaToPNG } from '../utils/pngHandler';
 import type { CharacterCard, FieldGroup, TranslationField } from '../types/card';
 
@@ -146,6 +147,9 @@ export function CompareCardsPanel({ onClose }: Props) {
     for (const [p, v] of Object.entries(slot.edits)) {
       setNestedValue(slot.parsed.card as unknown as Record<string, unknown>, p, v);
     }
+    // (bug 73) Đây là điểm hội tụ của cả nút xuất JSON lẫn PNG ở panel này — nếu bỏ qua thì
+    // card xuất từ So Sánh Thẻ vẫn đứt sợi dây lorebook↔nhân vật, dù đường xuất chính đã vá.
+    syncEmbeddedWorldLink(slot.parsed.card, slot.parsed.card);
     return slot.parsed.card;
   }, []);
 
@@ -215,6 +219,8 @@ export function CompareCardsPanel({ onClose }: Props) {
     const finalSlot = slots.final;
     if (!finalSlot.parsed || !merge) return;
     for (const [p, v] of merge.reused) setNestedValue(finalSlot.parsed.card as unknown as Record<string, unknown>, p, v);
+    // (bug 73) Đường này KHÔNG đi qua flushEdits nên phải nối sợi dây riêng ở đây.
+    syncEmbeddedWorldLink(finalSlot.parsed.card, finalSlot.parsed.card);
     const blob = new Blob([JSON.stringify(finalSlot.parsed.card, null, 2)], { type: 'application/json' });
     triggerDownload(URL.createObjectURL(blob), `${stem(finalSlot.parsed.fileName)}_final.json`, true);
     addToast('success', fmt(ui.ccToastExported, { reused: merge.counts.reused, changed: merge.counts.changed }));

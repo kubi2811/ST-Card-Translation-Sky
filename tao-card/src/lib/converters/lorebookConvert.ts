@@ -160,7 +160,12 @@ export function exportStandaloneLorebook(card: CharacterCardV3): string {
 export function exportCharacterOnly(card: CharacterCardV3): string {
   const synced = syncMirrorFields(structuredClone(card));
   // Remove character_book to reduce size
-  const slimCard = { ...synced, data: { ...synced.data, character_book: undefined } };
+  // (bug 73) Bỏ sách thì phải bỏ luôn sợi dây trỏ tới nó — nếu không, file này vẫn khai
+  // world "<tên sách>" và ST sẽ gắn nhân vật vào world trùng tên của card KHÁC.
+  const slimCard = {
+    ...synced,
+    data: { ...synced.data, character_book: undefined, extensions: { ...synced.data.extensions, world: '' } },
+  };
   return JSON.stringify(slimCard, null, 2);
 }
 

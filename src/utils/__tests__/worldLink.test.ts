@@ -7,7 +7,7 @@
 //                                      ext.world = "光之战姬 (6.5)"          (còn tiếng Trung)
 // Cả app không có dòng nào ghi data.extensions.world → mọi card dịch đều đứt sợi dây.
 import { describe, it, expect } from 'vitest';
-import { syncEmbeddedWorldLink, isGenericBookName } from '../worldLink';
+import { syncEmbeddedWorldLink, isGenericBookName, sanitizeWorldName } from '../worldLink';
 
 const mk = (book: unknown, world?: string, name = 'Nhân Vật') => ({
   data: {
@@ -97,5 +97,80 @@ describe('syncEmbeddedWorldLink — nối lại lorebook nhúng với nhân vậ
     expect(isGenericBookName('  imported lorebook ')).toBe(true);
     expect(isGenericBookName('')).toBe(true);
     expect(isGenericBookName('Sách Thế Giới Long Tộc')).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tên world phải sống sót qua sanitize của ST.
+//
+// ST lưu world thành file `sanitize(name + '.json')` (src/endpoints/worldinfo.js:24) rồi
+// dựng `world_names` từ chính tên file đó (src/endpoints/settings.js:257). Nếu ta ghi
+// ext.world = tên GỐC còn ST lưu tên ĐÃ LỌC thì `world_names.includes()` false → quả cầu
+// World không sáng, ST mời import lại mỗi lần chọn nhân vật.
+//
+// Ca THẬT đo được trên card của user (bugNeedFix/9): bản gốc tiếng Trung dùng `？` fullwidth
+// (hợp lệ trong tên file) nhưng bản dịch đổi thành `?` ASCII — bị sanitize cắt.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('sanitizeWorldName — khớp đúng thứ SillyTavern lưu xuống đĩa', () => {
+  /** Mô phỏng đúng phép so của ST: world_names chứa tên file (đã sanitize, bỏ .json). */
+  const stStoresAs = (name: string) =>
+    name.replace(/[/?<>\\:*|"]|[\x00-\x1f\x80-\x9f]/g, '').replace(/^\.+/, '').replace(/[. ]+$/, '');
+
+  it('CA THẬT bugNeedFix/9: dấu ? ASCII do dịch sinh ra bị ST cắt', () => {
+    const raw = 'Sau khi sư tôn nhặt về lão già, mọi chuyện bắt đầu không ổn? 3.7';
+    expect(stStoresAs(raw)).not.toBe(raw); // chứng minh ST THẬT SỰ cắt tên này
+
+    const c = mk({ name: raw, entries: [] }, undefined, 'Sư Tôn');
+    const r = syncEmbeddedWorldLink(c, c);
+    const world = (r.card as any).data.extensions.world;
+    const book = (r.card as any).data.character_book.name;
+
+    expect(r.sanitizedName).toBe(true);
+    expect(world).toBe(book);          // hai field luôn bằng nhau
+    expect(world).toBe(stStoresAs(world)); // và bằng đúng thứ ST lưu ⇒ quả cầu sáng
+    expect(world).not.toContain('?');
+  });
+
+  it('mọi ký tự ST cắt đều bị lọc', () => {
+    for (const ch of ['?', ':', '/', '\\', '*', '|', '"', '<', '>']) {
+      const c = mk({ name: `Thế Giới${ch}Tu Tiên`, entries: [] });
+      const world = (syncEmbeddedWorldLink(c, c).card as any).data.extensions.world;
+      expect(world, `ky tu ${ch} chua duoc loc`).toBe(stStoresAs(world));
+    }
+  });
+
+  it('KHÔNG đụng chữ Việt có dấu và chữ Hán (chống lỡ tay strip Unicode)', () => {
+    expect(sanitizeWorldName('Thế Giới Tu Tiên')).toBe('Thế Giới Tu Tiên');
+    expect(sanitizeWorldName('光之战姬 (6.5)')).toBe('光之战姬 (6.5)');
+    expect(sanitizeWorldName('秋青子の世界')).toBe('秋青子の世界');
+    // ？ fullwidth hợp lệ trong tên file — giữ nguyên, chỉ ? ASCII mới bị cắt
+    expect(sanitizeWorldName('世界？')).toBe('世界？');
+  });
+
+  it('tên quá dài bị cắt để `<tên>.json` vừa 255 byte', () => {
+    const long = 'Thế Giới Tu Tiên '.repeat(40); // tiếng Việt có dấu = nhiều byte
+    const out = sanitizeWorldName(long);
+    expect(new TextEncoder().encode(out + '.json').length).toBeLessThanOrEqual(255);
+    expect(out.length).toBeGreaterThan(0);
+  });
+
+  it('tên dành riêng của Windows được né', () => {
+    expect(sanitizeWorldName('CON')).toBe('CON_');
+    expect(sanitizeWorldName('com1')).toBe('com1_');
+  });
+
+  it('tên toàn ký tự cấm → lùi về tên nhân vật, không ra chuỗi rỗng', () => {
+    const c = mk({ name: '???', entries: [] }, undefined, 'Lâm Hạo');
+    const world = (syncEmbeddedWorldLink(c, c).card as any).data.extensions.world;
+    expect(world).toBe('Lâm Hạo');
+  });
+
+  it('idempotent: chạy 2 lần không đổi thêm', () => {
+    const c = mk({ name: 'Thế Giới: Quyển 1?', entries: [] });
+    const once = syncEmbeddedWorldLink(c, c);
+    const twice = syncEmbeddedWorldLink(once.card, c);
+    expect(twice.sanitizedName).toBe(false);
+    expect((twice.card as any).data.extensions.world)
+      .toBe((once.card as any).data.extensions.world);
   });
 });

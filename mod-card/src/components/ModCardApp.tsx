@@ -2,6 +2,7 @@
 
 import { useState, useRef } from 'react';
 import FileUploader from '@/components/FileUploader';
+import { syncEmbeddedWorldLink } from '@/lib/worldLink';
 import ModRulesManager, { ModRule } from '@/components/ModRulesManager';
 import VarRemapPanel from '@/components/VarRemapPanel';
 import SubExpandPanel from '@/components/SubExpandPanel';
@@ -290,6 +291,10 @@ export default function ModCardApp() {
     if (!moddedCard) return;
     // Chế độ Lorebook: xuất RIÊNG lorebook (đúng format gốc), không phải cả thẻ.
     const isLB = isLorebookOnly || (moddedCard as CardV3).__lorebookOnly;
+    // (bug 73) Chỉ nhánh THẺ mới cần: SillyTavern buộc nhân vật với world qua
+    // data.extensions.world, app này trước giờ chưa từng ghi field đó nên thẻ mod xong import
+    // vào là lorebook nằm rời. Nhánh isLB xuất file World Info thuần — không đụng.
+    if (!isLB) syncEmbeddedWorldLink(moddedCard, moddedCard);
     const payload = isLB ? CardParser.unwrapLorebook(moddedCard) : moddedCard;
     const name = isLB
       ? ((moddedCard.data?.character_book?.name || moddedCard.data?.name || 'lorebook'))

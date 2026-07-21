@@ -2,5 +2,5 @@
 // BUMP `APP_VERSION` on every fix so builds are distinguishable in the UI (shown in the
 // sidebar header). Use the patch number for small fixes; keep `APP_VERSION_NOTE` to a one-line
 // summary of the most recent change (shown on hover).
-export const APP_VERSION = '2.7.3';
-export const APP_VERSION_NOTE = "Bug 73: import card vao SillyTavern khong con bi tach roi lorebook. Goc re: SillyTavern buoc nhan vat voi world qua data.extensions.world, nhung Dich Card co dich ten lorebook ma khong doi field do (sach ten tieng Viet, world van tro ten tieng Trung), con Tao Card / Trich Card thi chua bao gio ghi field do. Nay moi duong xuat deu tu noi lai world = ten lorebook, va ten sach chung chung ('New Character', 'Imported Lorebook'...) duoc doi thanh ten rieng theo nhan vat de card sau khong ghi de lorebook cua card truoc. World ma nguoi dung co y tro ra ngoai thi giu nguyen.";
+export const APP_VERSION = '2.7.4';
+export const APP_VERSION_NOTE = "Bug 73 (dot 2): bit not 3 duong xuat card con bo sot — So Sanh The (JSON / PNG / Card Final gop) va Mod Card — nay deu tu noi lorebook vao nhan vat. Them nua: ten world duoc loc theo dung cach SillyTavern dat ten file, vi ST luu world thanh sanitize(ten + '.json') roi so danh sach bang ten file do; ban dich sinh ra dau ? ASCII (ban goc dung ？ fullwidth) nen ten card khai va ten ST luu lech nhau, qua cau World khong sang va ST moi import lai moi lan. Ten qua dai cung duoc cat cho '<ten>.json' vua 255 byte. Xuat 'Nhan vat (khong lorebook)' nay xoa luon world de khong gan nham sach cua card khac.";

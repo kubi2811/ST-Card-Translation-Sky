@@ -110,23 +110,28 @@ export async function runAutoCreatorPipeline(ctx: AutoCreatorContext) {
     store.setCurrentStep(step);
     store.addLog({ step, level: 'info', message: `Bắt đầu xử lý: ${step}` });
 
-    const maxRetries = 1;
+    // (User 21/07) 2 lần là quá ít cho lỗi tạm thời (mạng/model hiccup) — bước bị bỏ là card
+    // thiếu mảng, user phải sửa tay. Nâng lên 3 lần, và lần sau CÓ NÓI cho AI biết lần trước
+    // hỏng vì gì (xem lastError bên dưới) thay vì gửi lại y hệt prompt cũ.
+    const maxRetries = 2;
+    let lastError = '';
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         if (attempt > 0) {
           store.addLog({ step, level: 'info', message: `🔄 Retry lần ${attempt}...` });
         }
-        
-        await executeStep(step, config, ctx, blueprint);
+
+        await executeStep(step, config, ctx, blueprint, lastError);
         
         store.setStepStatus(step, 'done');
         store.addLog({ step, level: 'success', message: `✅ Hoàn thành: ${step}` });
         break;
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
+        lastError = msg; // lần thử sau sẽ được nhắc rõ lần trước hỏng vì gì
         store.addLog({ step, level: 'error', message: `❌ Lỗi tại ${step}: ${msg}` });
-        
+
         if (attempt >= maxRetries) {
           // Auto-skip on final failure when autoApplyAll = true
           if (config.autoApplyAll) {
@@ -211,6 +216,8 @@ async function executeStep(
   config: AutoCreatorConfig,
   ctx: AutoCreatorContext,
   blueprint: CardBlueprint | null,
+  /** Lỗi của lần thử TRƯỚC (nếu có) — nhắc lại cho AI để nó khỏi lặp đúng lỗi cũ. */
+  lastError = '',
 ) {
   const cardStore = useCardStore.getState();
   const store = useAutoCreatorStore.getState();
@@ -220,6 +227,11 @@ async function executeStep(
 
   const callAIAndExtract = async (prompt: string): Promise<unknown> => {
     let finalPrompt = prompt;
+
+    // Lần thử trước hỏng vì gì thì nói thẳng, đừng gửi lại y hệt prompt cũ rồi mong khác đi.
+    if (lastError) {
+      finalPrompt += `\n\n[LẦN TRƯỚC BẠN TRẢ VỀ BỊ LỖI — ĐỪNG LẶP LẠI]\nLỗi: ${lastError}\nLần này BẮT BUỘC xuất JSON hợp lệ, thuần tuý, KHÔNG bọc markdown, KHÔNG thêm lời dẫn trước/sau.`;
+    }
 
     // Inject global Master Instruction & Pipeline Steps
     finalPrompt += getProfileExtractionContext(ctx.profile);
@@ -244,7 +256,39 @@ BẠN PHẢI TẬN DỤNG TỐI ĐA dung lượng này để tạo ra nội dung
       messages: [{ role: 'user', content: finalPrompt }]
     });
     
-    const parsed = extractJsonFromText(response.text);
+    let parsed = extractJsonFromText(response.text);
+
+    // (User 21/07 — "không skip tiến trình và tự vá") Trước đây parse hỏng là ném lỗi ngay,
+    // vòng ngoài retry bằng ĐÚNG prompt cũ nên model lặp lại đúng lỗi cũ, rồi pipeline bỏ qua
+    // luôn bước đó ⇒ card ra lò thiếu mảng, user phải sửa tay. Nay tự vá tại chỗ: đưa CHÍNH
+    // output hỏng lại cho model và bảo nó sửa thành JSON hợp lệ. Đây là lỗi ĐỊNH DẠNG, model
+    // gần như luôn sửa được khi biết mình sai ở đâu — khác hẳn retry mù.
+    if (!parsed) {
+      store.addLog({ step, level: 'warning', message: '🩹 Kết quả không phải JSON hợp lệ — đang nhờ AI tự vá lại...' });
+      const repairPrompt = `Đoạn dưới đây ĐÁNG LẼ phải là JSON hợp lệ nhưng bị sai định dạng. Hãy sửa lại thành JSON HỢP LỆ.
+
+QUY TẮC:
+- CHỈ xuất JSON thuần, KHÔNG bọc markdown, KHÔNG thêm lời dẫn nào.
+- GIỮ NGUYÊN toàn bộ nội dung/ý nghĩa, chỉ sửa phần cú pháp (ngoặc thiếu, dấu phẩy thừa, chuỗi chưa đóng, xuống dòng chưa escape...).
+- Nếu nội dung bị cắt giữa chừng thì đóng lại cho hợp lệ, giữ tối đa phần đã có.
+
+NỘI DUNG CẦN SỬA:
+${response.text}`;
+      try {
+        const repaired = await callAI({
+          profile: ctx.profile,
+          params: { ...ctx.generationParams, temperature: 0 },
+          messages: [{ role: 'user', content: repairPrompt }],
+        });
+        parsed = extractJsonFromText(repaired.text);
+        if (parsed) {
+          store.addLog({ step, level: 'success', message: '🩹 Đã vá được JSON, tiếp tục (không mất bước này).' });
+        }
+      } catch (e) {
+        console.warn('[AutoCreator] vá JSON thất bại:', e);
+      }
+    }
+
     if (!parsed) throw new Error('Không thể parse kết quả trả về từ AI (không phải JSON hợp lệ)');
     
     // v3: Store preview

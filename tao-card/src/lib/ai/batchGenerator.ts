@@ -90,7 +90,11 @@ KHÔNG TRÙNG LẶP với danh sách "Entries đã có".
   - Nhân vật/NPC: tên đầy đủ, biệt danh, ngoại hiệu, chức vụ
   - Cảnh vật: tên địa danh, tên gọi khác, hành động liên quan
   - Thế lực: tên đầy đủ, viết tắt, địa danh trụ sở
-  - Ngăn cách bằng dấu phẩy tiếng Anh (,), KHÔNG có khoảng trắng sau phẩy
+  - Mỗi key là MỘT phần tử riêng của mảng "keys". KHÔNG gộp nhiều key thành một chuỗi có dấu phẩy.
+  - Key phải CÙNG NGÔN NGỮ với nội dung thẻ (thẻ tiếng Việt → key tiếng Việt), vì người chơi
+    gõ chữ gì thì key phải đúng chữ đó.
+  - Khoảng trắng BÊN TRONG key là BẮT BUỘC khi từ có nhiều tiếng: "giao hàng" ĐÚNG,
+    "giao_hàng"/"giaohang" SAI. TUYỆT ĐỐI không dùng _ hay - để nối chữ.
 • constant: true cho entry thường trú (thế giới quan, bối cảnh, nhân vật thẻ đơn)
 • selective: true cho entry tải theo nhu cầu (NPC, cảnh vật, sự kiện)
 • insertion_order: worldview=1-3, overview=4, character=10-50, scene=50-98, NPC=100
@@ -107,6 +111,26 @@ Mỗi entry PHẢI có content dài KHOẢNG ${tokensPerEntry} tokens (≈ ${Mat
 • Nếu ${tokensPerEntry} = 100–300: Viết VỪA PHẢI, đủ chi tiết chính + 1-2 chi tiết phụ.
 • Nếu ${tokensPerEntry} ≥ 300: Viết CHI TIẾT ĐẦY ĐỦ, bao gồm mô tả sâu, ví dụ cụ thể, quan hệ liên kết.
 [LỆNH]: Mỗi entry KHÔNG ĐƯỢC ngắn hơn ${Math.round(tokensPerEntry * 0.7)} tokens và KHÔNG ĐƯỢC dài hơn ${Math.round(tokensPerEntry * 1.3)} tokens.`;
+}
+
+// ─── TIẾT KIỆM TOKEN KHI SINH SỐ LƯỢNG LỚN ──────────────────────────────
+/**
+ * (User 21/07) Entry `constant=true` được nhồi vào MỌI lượt chat, không cần từ khoá.
+ * Sinh 40 entry mà để constant hết thì mỗi lượt chat gánh cả 40 entry → cháy context,
+ * đắt và làm loãng prompt. Batch càng lớn thì càng phải khắt khe: chỉ vài entry nền
+ * móng mới được thường trú, phần còn lại để "ngủ" và chỉ bật khi người chơi nhắc tới.
+ */
+function buildLargeBatchBudgetDirective(entryCount: number): string {
+  if (!entryCount || entryCount < 10) return '';
+  const maxConstant = entryCount >= 30 ? 5 : entryCount >= 20 ? 4 : 3;
+  return `\n\n--- TIẾT KIỆM TOKEN CHO LÔ LỚN (${entryCount} entries) — BẮT BUỘC ---
+Entry constant=true bị nhồi vào MỌI lượt chat dù người chơi không nhắc tới. ${entryCount} entry
+mà để constant hết thì mỗi lượt chat phải gánh toàn bộ → cháy context, tốn tiền, loãng prompt.
+• TỐI ĐA ${maxConstant} entry được constant=true — chỉ dành cho nền móng KHÔNG THỂ THIẾU
+  (thế giới quan tổng, luật chơi cốt lõi, nhân vật chính của thẻ đơn).
+• TẤT CẢ entry còn lại: constant=false, selective=true → "ngủ" cho tới khi khớp từ khoá.
+• Vì vậy keys của nhóm ngủ phải ĐẶC BIỆT ĐẦY ĐỦ (tên, biệt danh, chức vụ, địa danh, cách gọi
+  tắt người chơi hay dùng) — key thiếu thì entry ngủ mãi, coi như mất trắng.`;
 }
 
 // ─── AUTO-CONFIG ADDON (chỉ inject khi autoConfig=true) ──────────────────
@@ -649,8 +673,10 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
         : '';
       const categoryDirective = buildCategoryDirective(config.category, config.cardType);
       const tokenBudgetDirective = buildTokenBudgetDirective(config.tokensPerEntry);
+      // Lô lớn → ép phần lớn entry "ngủ", chỉ bật theo từ khoá, cho khỏi cháy context mỗi lượt chat.
+      const largeBatchDirective = buildLargeBatchBudgetDirective(config.count ?? 0);
       const messages: ChatMessage[] = [
-        { role: 'system', content: BATCH_SYSTEM_PROMPT + tokenBudgetDirective + (config.autoConfig ? AUTO_CONFIG_ADDON : '\n\nCHỈ trả về MỘT MẢNG JSON hợp lệ:\n[{"comment":"...","keys":["..."],"content":"..."},...  ]') + categoryDirective + schemaAddon + getProfileExtractionContext(profile) },
+        { role: 'system', content: BATCH_SYSTEM_PROMPT + tokenBudgetDirective + largeBatchDirective + (config.autoConfig ? AUTO_CONFIG_ADDON : '\n\nCHỈ trả về MỘT MẢNG JSON hợp lệ:\n[{"comment":"...","keys":["..."],"content":"..."},...  ]') + categoryDirective + schemaAddon + getProfileExtractionContext(profile) },
         { role: 'user', content: userMessage + '\n\n[LỆNH CUỐI CÙNG]: TUYỆT ĐỐI CHỈ TRẢ VỀ MẢNG JSON. KHÔNG markdown, KHÔNG text giải thích, KHÔNG code block. Xoá mọi format Markdown đi, chỉ xuất đúng chuẩn mảng JSON (Bắt đầu bằng `[` và kết thúc bằng `]`).' },
       ];
 

@@ -25,7 +25,7 @@ import { UpdateRulesEditor } from '../components/mvuzod/UpdateRulesEditor';
 import { ScriptOutput } from '../components/mvuzod/ScriptOutput';
 import { GameUiStudio } from '../components/mvuzod/GameUiStudio';
 import { VariablePlayground } from '../components/mvuzod/VariablePlayground';
-import type { MVUZODSchema, MVUZODStudioTab } from '../types/mvuzod.types';
+import type { MVUZODSchema, MVUZODStudioTab, InitVarConfig } from '../types/mvuzod.types';
 import { t as ui } from '../i18n';
 
 const TABS: Array<{ id: MVUZODStudioTab; label: string; icon: typeof Wand2; description: string }> = [
@@ -48,6 +48,16 @@ export function MVUZODPage() {
     const ext = card.data.extensions as unknown as Record<string, unknown>;
     if (ext?.mvuzod) {
       return (ext.mvuzod as Record<string, unknown>).schema as MVUZODSchema ?? null;
+    }
+    return null;
+  }, [card.data.extensions]);
+
+  // initvar đi kèm schema — Game UI phải đồng biến với CẢ HAI (biến chỉ khai trong initvar
+  // vẫn là biến hợp lệ; nếu chỉ đối chiếu schema thì báo "bịa" oan).
+  const existingInitVar: InitVarConfig | null = useMemo(() => {
+    const ext = card.data.extensions as unknown as Record<string, unknown>;
+    if (ext?.mvuzod) {
+      return (ext.mvuzod as Record<string, unknown>).initVarConfig as InitVarConfig ?? null;
     }
     return null;
   }, [card.data.extensions]);
@@ -152,7 +162,7 @@ export function MVUZODPage() {
 
       <div className="flex-1 overflow-hidden" style={{ display: tab === 'game' ? undefined : 'none' }}>
         <div className="max-w-6xl mx-auto px-6 py-5 h-full">
-          <GameUiStudio schema={existingSchema} />
+          <GameUiStudio schema={existingSchema} initVarConfig={existingInitVar} />
         </div>
       </div>
 

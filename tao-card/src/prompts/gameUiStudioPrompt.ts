@@ -98,10 +98,24 @@ export function buildGameUiSystemPrompt(
   regexDraft: DraftScript[],
   sampleOutput: string,
   validation: ValidationReport | null,
+  /** Toàn bộ tên biến hợp lệ = schema ∪ initvar. Bơm tường minh để AI không phải đoán. */
+  allowedVarNames: string[] = [],
 ): string {
   const schemaBlock = schema?.fields?.length
     ? buildSchemaContextForBatch(schema)
     : '(Card này chưa có schema MVUZOD — cứ tạo widget theo yêu cầu, không cần bám biến.)';
+
+  // Danh sách trắng tường minh: bộ kiểm tự động đối chiếu ĐÚNG danh sách này, dùng tên
+  // ngoài danh sách = LỖI (widget sẽ render ra undefined), AI sẽ bị bắt sửa lại.
+  const allowListBlock = allowedVarNames.length
+    ? [
+        '\n═══ DANH SÁCH TRẮNG TÊN BIẾN (schema ∪ initvar) ═══',
+        'CHỈ được dùng các tên dưới đây trong getvar:: / stat_data[...] / _.get(...).',
+        'Dùng tên KHÁC = widget render ra rỗng (undefined) và sẽ bị bộ kiểm báo LỖI, bắt làm lại:',
+        allowedVarNames.map((v) => `• ${v}`).join('\n'),
+        'Nếu cần một biến CHƯA có trong danh sách: nói rõ cho user thêm vào schema trước, ĐỪNG tự bịa.',
+      ].join('\n')
+    : '';
 
   return [
     ROLE_LAYER,
@@ -111,6 +125,7 @@ export function buildGameUiSystemPrompt(
     REGEX_BEST_PRACTICES,
     '\n═══ SCHEMA BIẾN (dùng đúng tên, đừng bịa) ═══',
     schemaBlock,
+    allowListBlock,
     '\n' + buildSessionStateBlock(components, regexDraft, sampleOutput, validation),
     '\n' + XML_PROTOCOL,
   ].join('\n');

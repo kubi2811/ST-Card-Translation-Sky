@@ -8,11 +8,11 @@
 import { v4 as uuidv4 } from 'uuid';
 import { callAI } from '../ai/client';
 import type { ProxyProfile, GenerationParams, ChatMessage } from '../../types';
-import type { MVUZODSchema } from '../../types/mvuzod.types';
+import type { MVUZODSchema, InitVarConfig } from '../../types/mvuzod.types';
 import { useGameStudioStore, type StudioActionSummary } from '../../store/gameStudioStore';
 import { buildGameUiSystemPrompt } from '../../prompts/gameUiStudioPrompt';
 import {
-  validateRegexDraft, collectSchemaVarNames, reportToXml,
+  validateRegexDraft, collectSchemaVarNames, collectInitVarNames, reportToXml,
   type ValidationIssue,
 } from './gameUiValidator';
 import {
@@ -26,6 +26,8 @@ const MIN_OUTPUT_TOKENS = 60000;
 
 export interface GameUiAgentDeps {
   schema: MVUZODSchema | null | undefined;
+  /** Bộ initvar (giá trị khởi tạo thật) — UI phải đồng biến với CẢ schema lẫn initvar. */
+  initVarConfig?: InitVarConfig | null;
   profile: ProxyProfile;
   params: GenerationParams;
   signal: AbortSignal;
@@ -39,7 +41,12 @@ export async function runGameUiTurn(userMessage: string, deps: GameUiAgentDeps):
 
   st().appendMessage({ id: uuidv4(), role: 'user', content: userMessage });
 
-  const schemaVars = collectSchemaVarNames(deps.schema);
+  // Tập biến hợp lệ = schema ∪ initvar (đồng biến 2 nguồn). Thiếu initvar thì biến chỉ khai
+  // trong initvar sẽ bị báo "bịa" oan, còn thiếu chốt error thì biến bịa lọt lưới.
+  const schemaVars = [...new Set([
+    ...collectSchemaVarNames(deps.schema),
+    ...collectInitVarNames(deps.initVarConfig),
+  ])];
   let loops = 0;
   let consecutiveFails = 0;
   let pendingInject: string | null = null;
@@ -52,7 +59,7 @@ export async function runGameUiTurn(userMessage: string, deps: GameUiAgentDeps):
       st().setPhase('thinking');
       st().setStatus(isFix ? `AI tự sửa (vòng ${consecutiveFails})…` : `AI đang nghĩ (lượt ${loops})…`);
 
-      const system = buildGameUiSystemPrompt(deps.schema, st().components, st().regexDraft, st().sampleOutput, st().validation);
+      const system = buildGameUiSystemPrompt(deps.schema, st().components, st().regexDraft, st().sampleOutput, st().validation, schemaVars);
       const history: ChatMessage[] = st().messages
         .filter((m) => m.role === 'user' || m.role === 'assistant')
         .map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content }));

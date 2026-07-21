@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  validateRegexDraft, parseFindRegex, buildRenderableHtml, collectSchemaVarNames, reportToXml,
+  validateRegexDraft, parseFindRegex, buildRenderableHtml, collectSchemaVarNames, collectInitVarNames, reportToXml,
   type DraftScript,
 } from '../gameUiValidator';
 import type { MVUZODSchema } from '../../../types/mvuzod.types';
@@ -73,14 +73,18 @@ describe('validateRegexDraft — V2 match thật (điểm ăn tiền)', () => {
   });
 });
 
-describe('validateRegexDraft — V4 khớp schema', () => {
-  it('biến bịa không có trong schema → UNKNOWN_VAR (warn)', () => {
+describe('validateRegexDraft — V4 đồng biến schema + initvar', () => {
+  // Trước đây UNKNOWN_VAR chỉ là 'warn' nên report vẫn ok=true → vòng tự sửa KHÔNG chạy,
+  // widget dùng biến bịa vẫn được báo "✅ qua kiểm" rồi render ra undefined ("bảng không
+  // ăn biến"). Nay phải là ERROR để chặn và bắt AI sửa.
+  it('biến bịa không có trong schema/initvar → UNKNOWN_VAR là ERROR và CHẶN', () => {
     const r = validateRegexDraft(
       [mk({ replaceString: '<div>{{getvar::fakevar}}</div>' })],
       '<x>a</x>', ['hp', 'mp'],
     );
     expect(codes(r)).toContain('UNKNOWN_VAR');
-    expect(r.ok).toBe(true); // warn không chặn
+    expect(r.issues.find((i) => i.code === 'UNKNOWN_VAR')?.level).toBe('error');
+    expect(r.ok).toBe(false); // phải chặn để kích hoạt vòng tự sửa
   });
   it('biến có trong schema → không cảnh báo', () => {
     const r = validateRegexDraft(
@@ -88,6 +92,71 @@ describe('validateRegexDraft — V4 khớp schema', () => {
       '<x>a</x>', ['hp', 'mp'],
     );
     expect(codes(r)).not.toContain('UNKNOWN_VAR');
+  });
+  it('biến CHỈ có trong initvar (không có trong schema) → hợp lệ, không báo bịa', () => {
+    const allowed = [...collectSchemaVarNames(null), ...collectInitVarNames({
+      entries: [{ data: { 'Người Chơi': { 'Máu': 100, 'Vàng': 5 } } }],
+    })];
+    const r = validateRegexDraft(
+      [mk({ replaceString: '<div>{{getvar::Máu}}</div>' })],
+      '<x>a</x>', allowed,
+    );
+    expect(codes(r)).not.toContain('UNKNOWN_VAR');
+  });
+});
+
+describe('collectInitVarNames — gom biến từ initvar lồng nhau', () => {
+  it('lấy cả leaf name lẫn full path, mọi cấp', () => {
+    const names = collectInitVarNames({
+      entries: [{ data: { 'Người Chơi': { 'Máu': 100, 'Túi Đồ': { 'Vàng': 5 } } } }],
+    });
+    expect(names).toContain('Người Chơi');
+    expect(names).toContain('Máu');
+    expect(names).toContain('Vàng');
+    expect(names).toContain('Người Chơi.Túi Đồ.Vàng');
+  });
+  it('initvar rỗng/null → mảng rỗng, không crash', () => {
+    expect(collectInitVarNames(null)).toEqual([]);
+    expect(collectInitVarNames({ entries: [] })).toEqual([]);
+  });
+});
+
+describe('tên biến Unicode (Việt/Trung) — \\w cũ làm đứt tên', () => {
+  it('{{getvar::Máu}} khớp đúng biến "Máu", không báo bịa', () => {
+    const r = validateRegexDraft(
+      [mk({ replaceString: '<div>{{getvar::Máu}}</div>' })],
+      '<x>a</x>', ['Máu', 'Thể Lực'],
+    );
+    expect(codes(r)).not.toContain('UNKNOWN_VAR');
+  });
+  it('tên biến có KHOẢNG TRẮNG: {{getvar::Thể Lực}} vẫn khớp', () => {
+    const r = validateRegexDraft(
+      [mk({ replaceString: '<div>{{getvar::Thể Lực}}</div>' })],
+      '<x>a</x>', ['Máu', 'Thể Lực'],
+    );
+    expect(codes(r)).not.toContain('UNKNOWN_VAR');
+  });
+  it("stat_data['Thế Giới.Chương'] lấy leaf 'Chương'", () => {
+    const r = validateRegexDraft(
+      [mk({ replaceString: "<div>${stat_data['Thế Giới.Chương']}</div>" })],
+      '<x>a</x>', ['Chương'],
+    );
+    expect(codes(r)).not.toContain('UNKNOWN_VAR');
+  });
+  it('biến Unicode BỊA vẫn bị bắt (không phải cứ Unicode là cho qua)', () => {
+    const r = validateRegexDraft(
+      [mk({ replaceString: '<div>{{getvar::Biến Bịa}}</div>' })],
+      '<x>a</x>', ['Máu'],
+    );
+    expect(codes(r)).toContain('UNKNOWN_VAR');
+  });
+});
+
+describe('NO_VAR_BOUND — widget không bind biến nào', () => {
+  it('widget dài mà không tham chiếu biến MVU nào → cảnh báo bảng chết', () => {
+    const longHardcoded = '<div class="stat">' + 'HP: 100 / MP: 50 / Vàng: 999 '.repeat(12) + '</div>';
+    const r = validateRegexDraft([mk({ replaceString: longHardcoded })], '<x>a</x>', ['hp', 'mp']);
+    expect(codes(r)).toContain('NO_VAR_BOUND');
   });
 });
 

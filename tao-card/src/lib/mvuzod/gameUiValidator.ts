@@ -24,7 +24,7 @@ export interface ValidationIssue {
   level: 'error' | 'warn';
   code:
     | 'REGEX_SYNTAX' | 'SCRIPT_SYNTAX' | 'PLACEMENT' | 'MEANINGLESS_FLAGS' | 'HTML_QUALITY'
-    | 'NO_SAMPLE' | 'NO_MATCH' | 'MISSING_GROUP' | 'UNKNOWN_VAR' | 'EDIT_MISMATCH';
+    | 'NO_SAMPLE' | 'NO_MATCH' | 'MISSING_GROUP' | 'UNKNOWN_VAR' | 'NO_VAR_BOUND' | 'EDIT_MISMATCH';
   message: string;      // tiếng Việt, kèm gợi ý sửa
   scriptIndex?: number; // script nào trong regexDraft
 }
@@ -61,12 +61,15 @@ function referencedGroups(replaceString: string): number[] {
   return [...out];
 }
 
+// LƯU Ý UNICODE: tên biến MVU trong card Việt/Trung là "Máu", "Người Chơi", "Thế Giới"…
+// `\w` chỉ khớp [A-Za-z0-9_] nên {{getvar::Máu}} trước đây chỉ bắt được "M" rồi đứt ở "á"
+// → so khớp schema luôn trượt → báo biến bịa oan (hoặc bỏ lọt biến bịa thật).
+// Nay dùng lớp ký tự Unicode và cho phép khoảng trắng trong tên biến.
 const VAR_TOKEN_RES = [
-  /getvar::([\w.\-]+)/g,
-  /\{\{\s*getvar::([\w.\-]+)\s*\}\}/g,
-  /stat_data\.([\w]+)/g,
-  /stat_data\[['"]([^'"\]]+)['"]\]/g,
-  /_\.get\([^,]+,\s*['"]([^'"]+)['"]/g,
+  /getvar::([^}\n|]+)/g,                    // {{getvar::Tên Biến}} — tên có dấu + khoảng trắng
+  /stat_data\.([\p{L}\p{N}_\-]+)/gu,        // stat_data.TênBiến
+  /stat_data\[['"]([^'"\]]+)['"]\]/g,       // stat_data['Tên Biến']
+  /_\.get\([^,]+,\s*['"]([^'"]+)['"]/g,     // _.get(obj, 'a.b.c')
 ];
 
 /** Rút các biến MVU mà replaceString tham chiếu (leaf name). */
@@ -76,9 +79,10 @@ function referencedVars(replaceString: string): string[] {
     re.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = re.exec(replaceString)) !== null) {
-      const raw = m[1];
+      const raw = (m[1] || '').trim();
+      if (!raw) continue;
       // lấy đoạn cuối của đường dẫn (a.b.c → c) để so khớp mềm với tên biến trong schema
-      const leaf = raw.split(/[.\[\]']/).filter(Boolean).pop();
+      const leaf = raw.split(/[.[\]']/).map((s) => s.trim()).filter(Boolean).pop();
       if (leaf) out.add(leaf);
     }
   }
@@ -98,6 +102,30 @@ export function collectSchemaVarNames(schema?: MVUZODSchema | null): string[] {
     }
   };
   walk(schema?.fields);
+  return [...out];
+}
+
+/**
+ * Gom tên biến từ INITVAR (giá trị khởi tạo thật lúc chạy).
+ *
+ * Vì sao cần: UI phải ĐỒNG BIẾN với CẢ schema LẪN initvar. Trước đây chỉ đối chiếu schema
+ * nên biến chỉ có trong initvar bị coi là "bịa" (cảnh báo oan), còn biến AI tự nghĩ ra thì
+ * lọt lưới — sinh ra "bảng không ăn biến".
+ */
+export function collectInitVarNames(initVarConfig?: { entries?: { data?: Record<string, unknown> }[] } | null): string[] {
+  const out = new Set<string>();
+  const walk = (obj: unknown, prefix: string) => {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return;
+    for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+      // MVU hay kèm meta dạng [value, "mô tả"] — bỏ khoá meta nội bộ
+      if (k.startsWith('$')) continue;
+      out.add(k);                                   // leaf name
+      const path = prefix ? `${prefix}.${k}` : k;
+      out.add(path);                                // full path
+      walk(v, path);
+    }
+  };
+  for (const e of initVarConfig?.entries || []) walk(e.data, '');
   return [...out];
 }
 
@@ -189,12 +217,20 @@ export function validateRegexDraft(
       }
     }
 
-    // ─── V4: KHỚP SCHEMA ───
+    // ─── V4: ĐỒNG BIẾN VỚI SCHEMA + INITVAR ───
+    // Đây là chốt chặn cho lỗi "bảng không ăn biến": AI bịa tên biến không có thật thì
+    // widget render ra ô trống/undefined. TRƯỚC ĐÂY chỉ là 'warn' nên report vẫn ok=true,
+    // vòng tự sửa KHÔNG chạy và bản lỗi được báo "✅ qua kiểm". Nay là ERROR để AI phải sửa.
     if (schemaSet.size > 0) {
-      for (const v of referencedVars(s.replaceString || '')) {
+      const used = referencedVars(s.replaceString || '');
+      for (const v of used) {
         if (!schemaSet.has(v.toLowerCase())) {
-          push('warn', 'UNKNOWN_VAR', `Script #${i + 1} "${s.scriptName}": tham chiếu biến "${v}" KHÔNG có trong schema → có thể bịa. Dùng đúng tên biến trong schema hoặc bỏ.`, i);
+          push('error', 'UNKNOWN_VAR', `Script #${i + 1} "${s.scriptName}": tham chiếu biến "${v}" KHÔNG có trong schema/initvar → widget sẽ render ra rỗng (undefined). Phải dùng ĐÚNG tên biến đã khai báo, hoặc thêm biến đó vào schema trước.`, i);
         }
+      }
+      // Widget bám biến mà không tham chiếu biến nào = bảng chết (hardcode), không đồng biến.
+      if (used.length === 0 && (s.replaceString || '').length > 200) {
+        push('warn', 'NO_VAR_BOUND', `Script #${i + 1} "${s.scriptName}": KHÔNG tham chiếu biến MVU nào (không có getvar::/stat_data/_.get) → bảng chỉ là chữ chết, số liệu sẽ không bao giờ đổi. Nếu đây là widget hiển thị chỉ số thì phải bind biến từ schema.`, i);
       }
     }
   });

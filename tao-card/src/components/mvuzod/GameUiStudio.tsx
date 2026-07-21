@@ -11,7 +11,7 @@ import {
   Loader2, CheckCircle2, AlertTriangle, Info, Sparkles,
 } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
-import type { MVUZODSchema } from '../../types/mvuzod.types';
+import type { MVUZODSchema, InitVarConfig } from '../../types/mvuzod.types';
 import type { RegexScript } from '../../types';
 import { useCardStore } from '../../store/cardStore';
 import { useSettingsStore } from '../../store/settingsStore';
@@ -21,7 +21,7 @@ import { buildRenderableHtml } from '../../lib/mvuzod/gameUiValidator';
 import { buildProgrammaticRegex, isProgrammaticComponent, formatBytes } from '../../lib/mvuzod/programmaticRegexBuilder';
 import { DEFAULT_THEME_ID } from '../../lib/mvuzod/gameHtmlTemplates';
 
-interface Props { schema: MVUZODSchema | null; }
+interface Props { schema: MVUZODSchema | null; initVarConfig?: InitVarConfig | null; }
 
 type ProductTab = 'preview' | 'regex' | 'sample';
 
@@ -31,7 +31,7 @@ const QUICK_PROMPTS = [
   'Tạo bộ đầy đủ: màn hình game chính + status + inventory.',
 ];
 
-export function GameUiStudio({ schema }: Props) {
+export function GameUiStudio({ schema, initVarConfig }: Props) {
   const updateCard = useCardStore((s) => s.updateCard);
 
   // ─── store phiên (giữ khi đổi tab) ───
@@ -89,7 +89,7 @@ export function GameUiStudio({ schema }: Props) {
     setApplied(false);
     const ac = store.beginTurn();
     try {
-      await runGameUiTurn(text, { schema, profile, params, signal: ac.signal });
+      await runGameUiTurn(text, { schema, initVarConfig, profile, params, signal: ac.signal });
     } catch (e) {
       if ((e as Error)?.name !== 'AbortError') {
         store.appendMessage({ id: uuidv4(), role: 'system-note', content: `❌ Lỗi: ${(e as Error)?.message || e}`, tone: 'error' });

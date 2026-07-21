@@ -697,6 +697,9 @@ const t: CardUiKeys = {
   cpMemoryDelete: '删除',
   cpMemoryToggle: '启用/停用',
   cpMemoryProjectUnsaved: '项目尚未保存 — 请先保存项目才能为此卡附加记忆。',
+  cpMemoryScopeOtherProject: '其他卡',
+  cpMemoryEdit: '编辑',
+  cpMemorySaveEdit: '保存',
   cpApply: '应用',
   cpSkip: '跳过',
 

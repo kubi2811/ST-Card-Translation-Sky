@@ -1,5 +1,6 @@
 import type { CopilotContext } from './ai/agentLoop';
 import { cascadeSearch } from './ai/webScraper';
+import { getSessionId } from './ai/memoryContext';
 import { useMemoryStore } from '../store/memoryStore';
 import { useCardStore } from '../store/cardStore';
 
@@ -106,7 +107,7 @@ export const toolsEngine: Record<string, AITool> = {
         key,
         value,
         projectId: scope === 'project' ? projectId : undefined,
-        sessionId: scope === 'session' ? 'current' : undefined,
+        sessionId: scope === 'session' ? getSessionId() : undefined,
       });
       return `Đã ghi nhớ "${key}" (phạm vi ${scope}).`;
     },

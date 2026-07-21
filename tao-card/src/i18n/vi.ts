@@ -699,6 +699,9 @@ const t: CardUiKeys = {
   cpMemoryDelete: 'Xoá',
   cpMemoryToggle: 'Bật/tắt',
   cpMemoryProjectUnsaved: 'Dự án chưa lưu — lưu dự án trước để gắn ký ức cho thẻ này.',
+  cpMemoryScopeOtherProject: 'Thẻ khác',
+  cpMemoryEdit: 'Sửa',
+  cpMemorySaveEdit: 'Lưu',
   cpApply: 'Áp dụng',
   cpSkip: 'Bỏ qua',
 

@@ -6,7 +6,7 @@ function mem(p: Partial<MemoryEntry>): MemoryEntry {
   return {
     id: p.id ?? 'x', scope: p.scope ?? 'global', key: p.key ?? 'k', value: p.value ?? 'v',
     projectId: p.projectId, sessionId: p.sessionId,
-    createdAt: 0, updatedAt: 0, disabled: p.disabled ?? false,
+    createdAt: p.createdAt ?? 0, updatedAt: p.updatedAt ?? 0, disabled: p.disabled ?? false,
   };
 }
 
@@ -41,5 +41,33 @@ describe('buildMemoryBlock', () => {
 
   it('tất cả mục đều disabled → chuỗi rỗng', () => {
     expect(buildMemoryBlock([mem({ disabled: true })])).toBe('');
+  });
+
+  it('sortByRecent → giữ mục MỚI nhất, không phải mục cũ nhất khi cắt topN', () => {
+    // Danh sách theo thứ tự chèn: cũ trước, mới sau (đúng như store trả khi query rỗng).
+    const list = [
+      mem({ id: '1', key: 'cu', value: 'cu-nhat', updatedAt: 100 }),
+      mem({ id: '2', key: 'giua', value: 'o-giua', updatedAt: 200 }),
+      mem({ id: '3', key: 'moi', value: 'moi-nhat', updatedAt: 300 }),
+    ];
+
+    // Không bật cờ → giữ nguyên thứ tự chèn, mục mới nhất bị cắt mất.
+    const asIs = buildMemoryBlock(list, 1);
+    expect(asIs).toContain('cu-nhat');
+    expect(asIs).not.toContain('moi-nhat');
+
+    // Bật cờ → mục mới nhất được ưu tiên.
+    const recent = buildMemoryBlock(list, 1, true);
+    expect(recent).toContain('moi-nhat');
+    expect(recent).not.toContain('cu-nhat');
+  });
+
+  it('sortByRecent KHÔNG làm biến đổi mảng đầu vào', () => {
+    const list = [
+      mem({ id: '1', key: 'a', value: 'a', updatedAt: 100 }),
+      mem({ id: '2', key: 'b', value: 'b', updatedAt: 300 }),
+    ];
+    buildMemoryBlock(list, 12, true);
+    expect(list.map(m => m.id)).toEqual(['1', '2']);
   });
 });

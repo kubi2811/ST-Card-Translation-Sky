@@ -7,7 +7,7 @@ import type { ChatMessage, CharacterCardV3, ProxyProfile, GenerationParams, Lore
 import type { AIAction, AIResponse, WorldbuildingMode, CopilotMessage } from './copilotTypes';
 import { callAI } from './client';
 import { buildCopilotSystemPrompt } from './copilotPrompts';
-import { buildMemoryBlock } from './memoryContext';
+import { buildMemoryBlock, getSessionId } from './memoryContext';
 import { shouldSummarize, summarizeHistory, buildCompressedHistory, KEEP_RECENT } from './memorySummarizer';
 import { useMemoryStore } from '../../store/memoryStore';
 import { useCardStore } from '../../store/cardStore';
@@ -94,8 +94,10 @@ export async function runCopilotLoop(userMessage: string, ctx: CopilotContext): 
   let memoryBlock = '';
   try {
     const projectId = useCardStore.getState().currentProjectId ?? undefined;
-    const found = useMemoryStore.getState().searchMemory(userMessage, { projectId, sessionId: 'current' });
-    memoryBlock = buildMemoryBlock(found);
+    const found = useMemoryStore.getState().searchMemory(userMessage, { projectId, sessionId: getSessionId() });
+    // Tin rỗng (vd chỉ đính file) → store trả nguyên kho theo thứ tự chèn, không phải theo độ
+    // liên quan; khi đó phải ưu tiên ký ức mới nhất thay vì 12 mục cũ nhất.
+    memoryBlock = buildMemoryBlock(found, 12, userMessage.trim() === '');
   } catch (e) {
     console.warn('[memory] truy hồi lỗi, bỏ qua:', e);
   }
@@ -272,6 +274,17 @@ async function handleAction(
 
     case 'continue_signal': {
       // Just continue the loop
+      break;
+    }
+
+    // `save_memory` KHÔNG phải action áp lên thẻ: executeAction không có case cho nó,
+    // nên nếu để rơi xuống default thì hệ thống báo "applied successfully" trong khi
+    // không có gì được lưu → AI tin nhầm, panel trống. Chặn tường minh và bắt AI tự sửa.
+    case 'save_memory': {
+      messages.push({
+        role: 'user',
+        content: '[System Tool Error] Dùng tool propose_memory để ghi nhớ, KHÔNG phát action save_memory trực tiếp.',
+      });
       break;
     }
 

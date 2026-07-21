@@ -698,6 +698,9 @@ const t = {
   cpMemoryDelete: 'Delete',
   cpMemoryToggle: 'Enable/disable',
   cpMemoryProjectUnsaved: 'Project not saved yet — save it first to attach memories to this card.',
+  cpMemoryScopeOtherProject: 'Another card',
+  cpMemoryEdit: 'Edit',
+  cpMemorySaveEdit: 'Save',
   cpApply: 'Apply',
   cpSkip: 'Skip',
 

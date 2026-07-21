@@ -1312,5 +1312,9 @@ export function assembleHtmlDocument(
     js + '\n' +
     '    </script>\n' +
     '</body>\n' +
-    '</html>';
+    // (bug 72 - user tu soi ra) Khoi mo bang fence html ma THIEU fence dong o cuoi thi
+    // SillyTavern khong dong code fence => khong render HTML. Card MVU that: 100%
+    // replaceString ket thuc bang xuong dong + fence dong.
+    '</html>\n' +
+    '```';
 }

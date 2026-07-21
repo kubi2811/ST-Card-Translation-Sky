@@ -327,13 +327,27 @@ ${response.text}`;
     case 'lorebook': {
       const lbConfig = config.stepConfigs.lorebook;
       const topicPrompt = buildLorebookBatchPrompt(config.idea, freshCardStr, blueprint, lbConfig.promptOverride, lbConfig.promptMode);
-      
+
+      // (User 21/07 — bug 71) Thế giới lớn mà lorebook chỉ vài entry. Ba chốt chặn:
+      // 1) TRẦN nới theo QUY MÔ thật của thế giới — blueprint đã liệt kê bao nhiêu thực thể
+      //    (chủ đề gợi ý + phe phái + hệ thống) thì cần chừng đó entry, đừng kẹt ở mặc định 20.
+      const entityCount =
+        (blueprint?.suggestedEntryTopics?.length ?? 0) +
+        (blueprint?.worldStructure?.factions?.length ?? 0) +
+        (blueprint?.worldStructure?.systems?.length ?? 0);
+      const totalEntries = Math.min(100, Math.max(lbConfig.totalEntries, entityCount + 5));
+      // 2) SÀN mặc định = 80% trần (card cũ lưu minEntries=0 cũng được nâng) → thiếu thì tự nối batch bù.
+      const minEntries = Math.max(lbConfig.minEntries ?? 0, Math.floor(totalEntries * 0.8));
+      if (totalEntries > lbConfig.totalEntries) {
+        store.addLog({ step, level: 'info', message: `📐 Thế giới có ~${entityCount} thực thể → nâng mục tiêu lorebook ${lbConfig.totalEntries} → ${totalEntries} entry (sàn ${minEntries}).` });
+      }
+
       let createdCount = 0;
       await runBatchGeneration({
         topicPrompt,
         useCardContext: true,
-        totalEntries: lbConfig.totalEntries,
-        minEntries: lbConfig.minEntries,
+        totalEntries,
+        minEntries,
         entriesPerBatch: lbConfig.entriesPerBatch,
         concurrentBatches: lbConfig.concurrentBatches,
         defaultPosition: 0,
@@ -365,7 +379,13 @@ ${response.text}`;
           createdCount++;
         },
       });
-      store.setStepResult(step, `Đã tạo ${createdCount} entries.`);
+      // 3) KHÔNG THẤT BẠI ÂM THẦM: dưới sàn an toàn thì ném lỗi để pipeline chạy lại bước này
+      //    (giống bước mvuzod), thay vì log "✅ Hoàn thành" trong khi lorebook rỗng hoác.
+      const floor = Math.max(1, Math.floor(minEntries * 0.6));
+      if (createdCount < floor) {
+        throw new Error(`Lorebook chỉ tạo được ${createdCount}/${totalEntries} entry (sàn ${floor}) — nhiều entry bị loại trùng hoặc AI trả thiếu. Đang thử lại...`);
+      }
+      store.setStepResult(step, `Đã tạo ${createdCount}/${totalEntries} entries.`);
       break;
     }
 
@@ -421,6 +441,14 @@ ${response.text}`;
         themeId: uiCfg.themeId,
         gameName: cardStore.card?.data?.name || 'Game',
       });
+      // (bug 72) Form 0 field = wizard chỉ có trang bìa + trang xác nhận, user không nhập được
+      // gì. Trước đây lỗi này im lặng đi thẳng vào card. Ném lỗi để vòng retry chạy lại bước.
+      if (built.fieldsRendered === 0 && uiCfg.component !== 'status_bar') {
+        throw new Error(
+          'Game UI dựng ra 0 ô nhập — schema MVU không có field nào nhập được ' +
+          '(toàn readOnly/hidden, hoặc schema rỗng). Chạy lại bước MVUZOD Schema để sinh schema đủ field.',
+        );
+      }
       const preview: StepPreview = {
         rawOutput: `Programmatic Game UI (${uiCfg.component}) — ${built.scripts.length} regex script, ${built.fieldsRendered} field, ${Math.round(built.totalSize / 1024)}KB`,
         parsedData: built.scripts,
@@ -552,8 +580,20 @@ async function buildFinalCheckReport(
       lines.push(`❌ Schema MVU KHÔNG dựng được Zod code: ${e instanceof Error ? e.message : String(e)}`);
       problems++;
     }
-    const hasInit = entries.some(en => String(en.content || '').includes('[initvar]') || String(en.comment || '').toLowerCase().includes('initvar'));
-    if (hasInit) lines.push('✅ Có entry [initvar] (khởi tạo biến)');
+    const initEntry = entries.find(en => String(en.content || '').includes('[initvar]') || String(en.comment || '').toLowerCase().includes('initvar'));
+    if (initEntry) {
+      lines.push('✅ Có entry [initvar] (khởi tạo biến)');
+      // (bug 72) Entry khởi tạo BẬT là lỗi im lặng nguy hiểm nhất: card nhìn có vẻ đủ, nhưng
+      // engine MVU không nhận nó làm template nên biến không bao giờ khởi tạo → vào game là lỗi.
+      const initOn = (initEntry as { enabled?: boolean; disable?: boolean }).enabled !== false
+        && (initEntry as { disable?: boolean }).disable !== true;
+      if (initOn) {
+        lines.push('❌ Entry [initvar] đang BẬT — phải TẮT nó. Đang bật thì MVU không đọc làm template khởi tạo biến, vào game sẽ lỗi "变量更新失败".');
+        problems++;
+      } else {
+        lines.push('✅ Entry [initvar] đã tắt đúng chuẩn (MVU đọc làm template)');
+      }
+    }
     else { lines.push('⚠️ Có schema nhưng KHÔNG thấy entry [initvar] — biến sẽ không khởi tạo, MVU dễ báo "变量更新失败"'); problems++; }
     const hasUpdate = entries.some(en => /mvu_update/i.test(String(en.comment || '')) || /mvu_update/i.test(String(en.content || '')));
     if (hasUpdate) lines.push('✅ Có entry quy tắc cập nhật biến ([mvu_update])');
@@ -583,6 +623,33 @@ async function buildFinalCheckReport(
   }
   if (badRegex > 0) { lines.push(`❌ ${badRegex}/${regexScripts.length} regex có findRegex KHÔNG compile được`); problems++; }
   else if (regexScripts.length > 0) lines.push(`✅ ${regexScripts.length} regex compile OK`);
+
+  // 3b. (bug 72) Giao diện không hiện — 2 nguyên nhân im lặng nhất, kiểm thẳng ở đây:
+  //  - khối HTML mở fence ```html mà thiếu ``` đóng ⇒ SillyTavern không render;
+  //  - nhiều script cùng bám một mỏ neo ⇒ cái chạy trước ăn mất, cái sau vô hình.
+  const FENCE = '`'.repeat(3);
+  const unclosed = regexScripts.filter(rs => {
+    const rep = String(rs.replaceString || '');
+    return rep.startsWith(FENCE + 'html') && !new RegExp('\\n' + FENCE + '\\s*$').test(rep);
+  });
+  if (unclosed.length > 0) {
+    lines.push(`❌ ${unclosed.length} script mở fence ${FENCE}html nhưng THIẾU ${FENCE} đóng ở cuối — ST sẽ không render giao diện: ${unclosed.map(s => s.scriptName || '?').slice(0, 3).join(', ')}`);
+    problems++;
+  }
+  const renderByAnchor = new Map<string, number>();
+  for (const rs of regexScripts) {
+    const r = rs as { findRegex?: string; promptOnly?: boolean; markdownOnly?: boolean };
+    if (r.promptOnly && !r.markdownOnly) continue; // vế ẩn, không tranh chỗ render
+    if (!r.findRegex) continue;
+    renderByAnchor.set(r.findRegex, (renderByAnchor.get(r.findRegex) ?? 0) + 1);
+  }
+  const clashed = [...renderByAnchor].filter(([, n]) => n > 1);
+  if (clashed.length > 0) {
+    lines.push(`❌ ${clashed.length} mỏ neo bị NHIỀU script render cùng bám (${clashed.map(([a, n]) => `${a} ×${n}`).join(', ')}) — chỉ cái đầu chạy, các giao diện còn lại biến mất`);
+    problems++;
+  } else if (renderByAnchor.size > 0) {
+    lines.push('✅ Mỗi mỏ neo giao diện chỉ có đúng 1 script render');
+  }
 
   // 4. Lorebook: chất lượng + cấu hình
   if (entries.length > 0) {
@@ -651,8 +718,21 @@ function applyParsedDataToCard(
       cardStore.updateCard((c) => {
         if (!c.data.extensions) c.data.extensions = {} as unknown as CardExtensions;
         if (!c.data.extensions.regex_scripts) c.data.extensions.regex_scripts = [];
+        // (bug 72) Trước đây push thẳng: bước mvuzod đã tạo sẵn vế "ẩn" cho cùng mỏ neo, rồi
+        // mỗi lần Apply/retry lại chồng thêm một bộ nữa. Hai script cùng mỏ neo thì cái chạy
+        // trước ăn mất mỏ neo, cái sau không tìm thấy gì — giao diện im lặng biến mất.
+        // Ghi đè theo (mỏ neo + vai trò) để Apply bao nhiêu lần cũng ra đúng một bộ.
+        const roleOf = (s: { promptOnly?: boolean; markdownOnly?: boolean }) =>
+          s.promptOnly && !s.markdownOnly ? 'hide' : 'render';
         for (const s of scripts) {
-          c.data.extensions.regex_scripts.push({ ...(s as object), id: uuidv4() } as (typeof c.data.extensions.regex_scripts)[number]);
+          const incoming = s as { findRegex?: string; promptOnly?: boolean; markdownOnly?: boolean };
+          const rs = c.data.extensions.regex_scripts;
+          const dupAt = rs.findIndex(
+            e => e.findRegex === incoming.findRegex && roleOf(e) === roleOf(incoming),
+          );
+          const next = { ...(s as object), id: uuidv4() } as (typeof rs)[number];
+          if (dupAt >= 0) rs[dupAt] = next;
+          else rs.push(next);
         }
       });
       break;
@@ -750,12 +830,14 @@ function applyParsedDataToCard(
         const entries = c.data.character_book.entries;
 
         if (config.stepConfigs.mvuzod.createInitVar && result.initVarEntry) {
+          // (bug 72) Đúng chuẩn card MVU thật: entry khởi tạo phải TẮT (engine MVU đọc nội
+          // dung nó làm template, KHÔNG được bơm vào prompt) và constant = true.
           entries.push(materializeEntry({
             comment: '[initvar]初始化',
             keys: [''],
             content: result.initVarEntry as string,
-            constant: false,
-          }, {}, nextEntryId(entries)));
+            constant: true,
+          }, { enabled: false, defaultRole: 0, insertionOrderStart: 0 }, nextEntryId(entries)));
         }
 
         if (config.stepConfigs.mvuzod.createUpdateRules && result.updateRulesEntry) {
@@ -764,7 +846,7 @@ function applyParsedDataToCard(
             keys: [''],
             content: result.updateRulesEntry as string,
             constant: true,
-          }, { defaultDepth: 0 }, nextEntryId(entries)));
+          }, { defaultPosition: 4, defaultDepth: 0, defaultRole: 0 }, nextEntryId(entries)));
         }
 
         if (config.stepConfigs.mvuzod.createVarList && result.varListEntry) {

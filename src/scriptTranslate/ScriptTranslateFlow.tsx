@@ -272,7 +272,7 @@ export default function ScriptTranslateFlow() {
       <section style={card}>
         <h3 style={cardTitle}>1 · {ui.scrTrInputTitle}</h3>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          <label style={{ ...btn, cursor: running ? 'not-allowed' : 'pointer', opacity: running ? 0.5 : 1 }}>
+          <label style={{ ...tint(C.import), cursor: running ? 'not-allowed' : 'pointer', opacity: running ? 0.45 : 1 }}>
             📂 {ui.scrTrPickFile}
             <input type="file" accept=".js,.txt,.mjs" style={{ display: 'none' }} disabled={running}
               onChange={(e) => { void onFile(e.target.files?.[0]); e.target.value = ''; }} />
@@ -337,35 +337,40 @@ export default function ScriptTranslateFlow() {
         <h3 style={cardTitle}>3 · {ui.scrTrPha0Title}</h3>
         <p style={{ margin: '0 0 10px', fontSize: '0.8rem', color: 'var(--text-muted, #b6b2c9)' }}>{ui.scrTrPha0Desc}</p>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button onClick={() => void runPha0()} disabled={!source || glossaryBusy || running} style={btn}>
+          {/* Hành động chính của khối — vàng vì có tốn lượt AI */}
+          <button
+            onClick={() => void runPha0()}
+            disabled={!source || glossaryBusy || running}
+            style={{ ...tint(C.ai, true), opacity: (!source || glossaryBusy || running) ? 0.45 : 1 }}
+          >
             {glossaryBusy ? `⏳ ${ui.scrTrPha0Running}` : `🏷️ ${ui.scrTrPha0Btn}`}
           </button>
           <button onClick={() => setGlossary((g) => [...g, { source: '', target: '' }])} style={btn}>➕ {ui.scrTrPha0Add}</button>
-          {/* Mượn thẳng từ điển của thẻ đang mở bên Dịch Card — khỏi xuất/nhập file */}
+          {/* Mượn thẳng từ điển của thẻ đang mở bên Dịch Card — tím = màu tab Dịch Card */}
           <button
             onClick={importFromCard}
             disabled={running}
             title={fmt(ui.scrTrGlsFromCardTip, { n: countUsable(cardGlossary) })}
-            style={{ ...btn, opacity: running ? 0.5 : 1 }}
+            style={{ ...tint(C.card, true), opacity: running ? 0.45 : 1 }}
           >
             🔗 {ui.scrTrGlsFromCard}
             {countUsable(cardGlossary) > 0 && (
               <span style={{
-                marginLeft: 4, padding: '0 5px', borderRadius: 8, fontSize: '0.7rem',
-                background: 'rgba(78,205,196,0.18)', color: '#4ecdc4',
+                marginLeft: 2, padding: '1px 7px', borderRadius: 9, fontSize: '0.7rem', fontWeight: 700,
+                background: C.card, color: '#fff',
               }}>{countUsable(cardGlossary)}</span>
             )}
           </button>
           {/* Nhập file .json — dùng thẳng được bộ xuất ra từ Dịch Card */}
-          <label style={{ ...btn, cursor: running ? 'not-allowed' : 'pointer', opacity: running ? 0.5 : 1 }} title={ui.scrTrGlsImportTip}>
+          <label style={{ ...tint(C.import), cursor: running ? 'not-allowed' : 'pointer', opacity: running ? 0.45 : 1 }} title={ui.scrTrGlsImportTip}>
             📥 {ui.scrTrGlsImport}
             <input type="file" accept=".json" style={{ display: 'none' }} disabled={running}
               onChange={(e) => { void importGlossaryFile(e.target.files?.[0]); e.target.value = ''; }} />
           </label>
           {glossary.length > 0 && (
             <>
-              <button onClick={exportGlossaryFile} title={ui.scrTrGlsExportTip} style={btn}>📤 {ui.scrTrGlsExport}</button>
-              <button onClick={() => setGlossary([])} style={{ ...btn, color: '#ffb4a6' }}>🗑️ {ui.scrTrPha0Clear}</button>
+              <button onClick={exportGlossaryFile} title={ui.scrTrGlsExportTip} style={tint(C.export)}>📤 {ui.scrTrGlsExport}</button>
+              <button onClick={() => setGlossary([])} style={tint(C.danger)}>🗑️ {ui.scrTrPha0Clear}</button>
             </>
           )}
           <span style={{ fontSize: '0.8rem', color: 'var(--text-muted, #b6b2c9)' }}>{fmt(ui.scrTrPha0Count, { n: glossary.length })}</span>
@@ -401,13 +406,13 @@ export default function ScriptTranslateFlow() {
         <h3 style={cardTitle}>4 · {ui.scrTrRunTitle}</h3>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           {!running ? (
-            <button onClick={() => void handleRun()} disabled={!source || glossaryBusy} title={glossaryBusy ? ui.scrTrPha0Running : undefined} style={{ ...btn, fontWeight: 700, borderColor: '#38bdf8', color: '#38bdf8', opacity: (!source || glossaryBusy) ? 0.5 : 1 }}>
+            <button onClick={() => void handleRun()} disabled={!source || glossaryBusy} title={glossaryBusy ? ui.scrTrPha0Running : undefined} style={{ ...tint(C.import, true), opacity: (!source || glossaryBusy) ? 0.45 : 1 }}>
               ▶️ {ui.scrTrRunBtn}
             </button>
           ) : (
             <>
               <button onClick={() => setPaused((p) => !p)} style={btn}>{paused ? `▶️ ${ui.scrTrResume}` : `⏸️ ${ui.scrTrPause}`}</button>
-              <button onClick={handleStop} style={{ ...btn, color: '#ffb4a6' }}>⏹️ {ui.scrTrStopBtn}</button>
+              <button onClick={handleStop} style={tint(C.danger)}>⏹️ {ui.scrTrStopBtn}</button>
             </>
           )}
           {progress.stage !== 'idle' && (
@@ -445,12 +450,12 @@ export default function ScriptTranslateFlow() {
             <li>⏱️ {fmt(ui.scrTrRepTime, { s: Math.round(report.durationMs / 1000) })} · {Math.round(report.bytesIn / 1024)}KB → {Math.round(report.bytesOut / 1024)}KB</li>
           </ul>
           <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
-            <button onClick={handleDownload} disabled={!output} style={{ ...btn, fontWeight: 700, borderColor: '#22c55e', color: '#22c55e' }}>
+            <button onClick={handleDownload} disabled={!output} style={{ ...tint(C.export, true), opacity: output ? 1 : 0.45 }}>
               💾 {ui.scrTrDownload}
             </button>
             <button onClick={() => { void navigator.clipboard.writeText(output); }} disabled={!output} style={btn}>📋 {ui.scrTrCopy}</button>
             {report.residualTokens > 0 && !running && (
-              <button onClick={() => void handleRun()} style={btn}>🔁 {ui.scrTrRetryFailed}</button>
+              <button onClick={() => void handleRun()} style={tint(C.ai)}>🔁 {ui.scrTrRetryFailed}</button>
             )}
           </div>
           {output && (
@@ -482,6 +487,27 @@ const btn: React.CSSProperties = {
   border: '1px solid var(--border-subtle, #2a2a3e)', borderRadius: 7,
   background: 'var(--bg-elevated, #252536)', color: 'var(--text-secondary, #d6d3e4)', cursor: 'pointer',
 };
+
+/**
+ * Nút CÓ MÀU theo chức năng — nhìn phát biết ngay nút nào làm gì, thay vì một dãy nút xám
+ * giống hệt nhau. `strong` dành cho hành động chính của khối (nền đậm hơn, chữ đậm hơn).
+ */
+const tint = (color: string, strong = false): React.CSSProperties => ({
+  ...btn,
+  border: `1px solid ${color}${strong ? '99' : '55'}`,
+  background: `${color}${strong ? '26' : '14'}`,
+  color,
+  fontWeight: strong ? 700 : 600,
+});
+
+/** Màu theo chức năng, dùng chung cả trang cho nhất quán */
+const C = {
+  ai: '#f59e0b',        // hành động tốn lượt AI (vàng — nhắc user là có chi phí)
+  card: '#7c6af0',      // liên quan tab Dịch Card (tím — đúng màu tab đó)
+  import: '#38bdf8',    // nhập vào (xanh dương — màu tab Dịch Script)
+  export: '#22c55e',    // xuất ra / tải về (xanh lá)
+  danger: '#ef4444',    // xoá (đỏ)
+} as const;
 const checkLabel: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.86rem', cursor: 'pointer' };
 const mono: React.CSSProperties = {
   fontFamily: 'var(--font-mono, monospace)', fontSize: '0.78rem',

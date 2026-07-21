@@ -13,7 +13,11 @@ import { TFIDFIndex } from '../rag/tfidfIndexer';
 export function checkKeyOverlap(
   newKeys: string[],
   existingEntries: LorebookEntry[],
-  threshold = 0.5,
+  // (User 21/07 — bug 71) Ngưỡng cũ 0.5 quá gắt: entry 2 key chỉ cần TRÙNG 1 key với entry
+  // đã có là bị loại. Thế giới nhiều phe phái/NPC hay dùng chung một tên riêng (vd cùng nhắc
+  // "Thiên Kiếm Tông") ⇒ rơi hàng loạt, kế hoạch 20 entry còn 6-10. Nâng lên 0.8 = phải trùng
+  // gần hết key mới coi là một.
+  threshold = 0.8,
 ): { isDuplicate: boolean; conflictWith?: string; overlapRatio: number } {
   const newSet = new Set(newKeys.map(k => k.toLowerCase().trim()));
   if (newSet.size === 0) return { isDuplicate: false, overlapRatio: 0 };
@@ -22,6 +26,10 @@ export function checkKeyOverlap(
     const existSet = new Set(entry.keys.map(k => k.toLowerCase().trim()));
     const intersection = [...newSet].filter(k => existSet.has(k));
     const ratio = intersection.length / Math.max(newSet.size, existSet.size, 1);
+    // Hai bên đều ÍT key mà chỉ chạm nhau 1 key → chưa đủ bằng chứng là trùng thực thể...
+    // ...TRỪ KHI trùng trọn vẹn (ratio = 1, vd cả hai chỉ có đúng 1 key giống hệt) — lúc đó
+    // là một thực thể thật. (Ca này do test bắt được, guard ban đầu làm lọt entry trùng.)
+    if (Math.min(newSet.size, existSet.size) <= 2 && intersection.length < 2 && ratio < 1) continue;
     if (ratio >= threshold) {
       return { isDuplicate: true, conflictWith: entry.comment, overlapRatio: ratio };
     }
@@ -123,7 +131,9 @@ export function isDuplicateEntry(
 
   // Layer 3: RAG semantic
   if (ragIndex) {
-    const s = checkSemanticSimilarity(newEntry, ragIndex);
+    // (bug 71) 0.85 loại nhầm nhiều entry cùng CHỦ ĐỀ nhưng khác THỰC THỂ (các môn phái
+    // trong cùng một thế giới viết văn phong giống nhau) → nâng lên 0.92.
+    const s = checkSemanticSimilarity(newEntry, ragIndex, 0.92);
     if (s.isDuplicate) {
       return {
         isDuplicate: true,

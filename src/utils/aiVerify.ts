@@ -475,6 +475,33 @@ function extractMacros(text: string): string[] {
   return (text.match(/\{\{[^}]+\}\}/g) || []);
 }
 
+/**
+ * (Bug 70) Thay tên biến MVU AN TOÀN — KHÔNG cắn vào giữa định danh JS.
+ *
+ * Bản cũ dùng `text.split(from).join(to)` trần. Thẻ có biến MVU tên 1 chữ như "B" thì
+ * `getElement**B**yId` → `getElementTuổiyId`: code hỏng thật (nếu user bấm Fix), và bước
+ * đếm API ngay sau đó thấy 0 lần ⇒ báo lỗi giả "appears 5x but only 0x".
+ *
+ * Quy tắc: tên ASCII chỉ được thay khi ĐỨNG RIÊNG (hai đầu không phải ký tự định danh).
+ * Tên CJK thay trực tiếp (không có khái niệm word-boundary), nhưng caller phải xếp key
+ * DÀI trước để 好感度 không bị 好感 ăn mất một nửa.
+ */
+export function replaceVarSafe(text: string, from: string, to: string): string {
+  if (!from || !to || from === to) return text;
+  const esc = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (/[一-鿿㐀-䶿぀-ヿ가-힯]/.test(from)) {
+    return text.split(from).join(to);
+  }
+  return text.replace(new RegExp(`(?<![A-Za-z0-9_$])${esc}(?![A-Za-z0-9_$])`, 'g'), to);
+}
+
+/** Cặp [từ, sang] xếp theo tên nguồn DÀI trước — chống key ngắn ăn mất key dài. */
+export function sortedVarPairs(dict: Record<string, string>): Array<[string, string]> {
+  return Object.entries(dict)
+    .filter(([k, v]) => k && v && k !== v)
+    .sort((a, b) => b[0].length - a[0].length);
+}
+
 /** Check if text looks like it contains JSON */
 function hasJsonContent(text: string): boolean {
   return /^\s*[\[{]/.test(text.trim()) && /[\]}]\s*$/.test(text.trim());
@@ -949,11 +976,12 @@ export function verifyFields(
 
     // ─── 7. MVU variable consistency ───
     if (Object.keys(mvuDictionary).length > 0 && (field.group === 'tavern_helper' || field.group === 'lorebook' || field.group === 'regex')) {
-      for (const [origVar, transVar] of Object.entries(mvuDictionary)) {
-        if (!origVar || !transVar || origVar === transVar) continue;
-        // If original has this variable and translation still has the original name (not renamed)
-        if (orig.includes(origVar) && currentAutoFix.includes(origVar) && !currentAutoFix.includes(transVar)) {
-          currentAutoFix = currentAutoFix.split(origVar).join(transVar);
+      for (const [origVar, transVar] of sortedVarPairs(mvuDictionary)) {
+        // (Bug 70) Chỉ tính là "chưa đổi tên" khi tên biến ĐỨNG RIÊNG trong bản dịch —
+        // trước đây includes() trần khiến biến tên "B" khớp cả chữ B trong getElementById.
+        const stillHasOld = replaceVarSafe(currentAutoFix, origVar, ' ') !== currentAutoFix;
+        if (orig.includes(origVar) && stillHasOld && !currentAutoFix.includes(transVar)) {
+          currentAutoFix = replaceVarSafe(currentAutoFix, origVar, transVar);
           issues.push({
             id: crypto.randomUUID(), fieldPath: field.path,
             severity: 'warning', category: 'mvu_inconsistent',
@@ -1132,12 +1160,12 @@ export function verifyFields(
         const val = m.match(/["']([^"']+)["']/)?.[1] || '';
         return val.split(/\s+/);
       }));
-      const transClasses = new Set((currentAutoFix.match(/class\s*=\s*["']([^"']+)["']/g) || []).flatMap(m => {
+      const transClasses = new Set((trans.match(/class\s*=\s*["']([^"']+)["']/g) || []).flatMap(m => {
         const val = m.match(/["']([^"']+)["']/)?.[1] || '';
         return val.split(/\s+/);
       }));
       const origIds = new Set((orig.match(/\bid\s*=\s*["']([^"']+)["']/g) || []).map(m => m.match(/["']([^"']+)["']/)?.[1] || ''));
-      const transIds = new Set((currentAutoFix.match(/\bid\s*=\s*["']([^"']+)["']/g) || []).map(m => m.match(/["']([^"']+)["']/)?.[1] || ''));
+      const transIds = new Set((trans.match(/\bid\s*=\s*["']([^"']+)["']/g) || []).map(m => m.match(/["']([^"']+)["']/)?.[1] || ''));
 
       // CSS classes should NOT be translated
       for (const cls of origClasses) {
@@ -1187,7 +1215,7 @@ export function verifyFields(
       if (origFuncDefs.length > 0) {
         const transFuncDefRegex = /\bfunction\s+(\w+)\s*\(/g;
         const transFuncDefs: string[] = [];
-        while ((fm = transFuncDefRegex.exec(currentAutoFix)) !== null) transFuncDefs.push(fm[1]);
+        while ((fm = transFuncDefRegex.exec(trans)) !== null) transFuncDefs.push(fm[1]);
         
         for (const fn of origFuncDefs) {
           if (!transFuncDefs.includes(fn)) {
@@ -1211,7 +1239,7 @@ export function verifyFields(
         'getElementById', 'getElementsByClassName', 'createElement', 'appendChild'];
       for (const api of apiCalls) {
         const origCount = (orig.match(new RegExp(`\\b${api}\\b`, 'g')) || []).length;
-        const transCount = (currentAutoFix.match(new RegExp(`\\b${api}\\b`, 'g')) || []).length;
+        const transCount = (trans.match(new RegExp(`\\b${api}\\b`, 'g')) || []).length;
         if (origCount > 0 && transCount < origCount) {
           issues.push({
             id: crypto.randomUUID(), fieldPath: field.path,
@@ -1238,7 +1266,7 @@ export function verifyFields(
     // bản dịch → cảnh báo (warning). Tuyệt đối KHÔNG ghép cặp đoán mò, KHÔNG động tới chuỗi literal
     // hay biến MVU đổi tên (đã có covariance lo).
     if (field.group === 'tavern_helper' || field.group === 'regex' || field.group === 'lorebook') {
-      for (const expr of findMissingCodeInterpolations(orig, currentAutoFix)) {
+      for (const expr of findMissingCodeInterpolations(orig, trans)) {
         issues.push({
           id: crypto.randomUUID(), fieldPath: field.path,
           severity: 'warning', category: 'template_literal_content',

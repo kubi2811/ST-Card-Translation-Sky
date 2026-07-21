@@ -78,8 +78,12 @@ export function buildMVUZODSystemEntries(
   }, {
     defaultPosition: 0,
     insertionOrderStart: 14,
+    // (bug 72) Entry khởi tạo phải TẮT: engine MVU đọc nội dung nó làm template biến.
+    // Để bật thì khối YAML bị bơm vào prompt như lore thường, còn biến thì không bao giờ
+    // được khởi tạo — đúng triệu chứng "tạo xong card không chơi được MVU".
+    enabled: false,
   }, baseId));
-  entries[entries.length - 1].constant = false;
+  entries[entries.length - 1].constant = true;
   entries[entries.length - 1].selective = false;
 
   return entries;

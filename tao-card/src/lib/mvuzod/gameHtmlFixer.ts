@@ -111,6 +111,18 @@ function fixDocumentStructure(html: string, fixes: FixEntry[]): string {
     }
   }
 
+  // (bug 72 — user tự soi ra: "mới bọc được ```html, chưa có ``` nằm cuối")
+  // Mở fence mà không đóng thì SillyTavern coi phần còn lại của tin nhắn là code chưa kết thúc
+  // → không render HTML → giao diện không bao giờ hiện. Đóng fence luôn cho đối xứng.
+  if (result.startsWith('```html') && !/\n```\s*$/.test(result)) {
+    result = result.replace(/\s*$/, '') + '\n```';
+    fixes.push({
+      type: 'error',
+      category: 'structure',
+      description: 'Thêm ``` đóng ở cuối (thiếu fence đóng thì ST không render HTML)',
+    });
+  }
+
   // Ensure has <meta charset="UTF-8">
   if (result.includes('<head>') && !result.includes('charset')) {
     result = result.replace('<head>', '<head>\n    <meta charset="UTF-8">');

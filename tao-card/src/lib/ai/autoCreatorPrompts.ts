@@ -82,6 +82,23 @@ export function buildLorebookBatchPrompt(idea: string, cardContext: string, bp: 
     ?.map(t => `- [${t.category}] ${t.title}: ${t.description} (priority: ${t.priority})`)
     .join('\n') ?? '';
 
+  // (User 21/07 - bug 71) Truoc day chi "goi y" chu de nen AI tu do gop nhieu thuc the vao 1 entry
+  // roi dung => lorebook thieu tram trong. Nay liet ke DANH SACH BAT BUOC PHU va cam gop.
+  const mustCover = [
+    ...(bp?.suggestedEntryTopics?.map(t => t.title) ?? []),
+    ...(bp?.worldStructure?.factions ?? []),
+    ...(bp?.worldStructure?.systems ?? []),
+    ...(bp?.characterProfile?.relationships ?? []),
+    ...(bp?.characterProfile?.abilities ?? []),
+  ].map(x => String(x || '').trim()).filter(Boolean);
+  const coverBlock = mustCover.length
+    ? '\n--- DANH SÁCH THỰC THỂ BẮT BUỘC PHỦ (' + mustCover.length + ' mục) ---\n'
+      + mustCover.map((t, i) => (i + 1) + '. ' + t).join('\n')
+      + '\n[LỆNH]: MỖI mục trên PHẢI có ÍT NHẤT 1 entry RIÊNG. TUYỆT ĐỐI KHÔNG gộp nhiều thực thể vào chung 1 entry, KHÔNG bỏ sót mục nào.'
+      + '\nLô này phải nhắm vào các mục CHƯA có trong "NGỮ CẢNH HIỆN TẠI" bên dưới — không viết lại thứ đã có.'
+      + '\nKeys mỗi entry phải ĐẶC TRƯNG cho đúng thực thể đó (tên riêng + biệt danh của CHÍNH nó), tránh key chung chung khiến entry bị coi là trùng.\n'
+    : '';
+
   const base = `
 Đây là tiến trình tạo hàng loạt Lorebook tự động cho ý tưởng card sau:
 Ý TƯỞNG: "${idea}"
@@ -89,6 +106,7 @@ ${blueprintContext(bp)}
 
 ${topicHints ? `--- CHỦ ĐỀ GỢI Ý TỪ BLUEPRINT ---\n${topicHints}\n` : ''}
 
+${coverBlock}
 NGỮ CẢNH HIỆN TẠI:
 ${cardContext}
 `;
@@ -177,6 +195,12 @@ QUY TẮC BẮT BUỘC VỀ SCHEMA:
 - MỌI field (kể cả field lồng trong "children") BẮT BUỘC phải có key "constraints" — nếu không có ràng buộc nào thì dùng object rỗng {}.
 - "constraints.enumValues" (nếu dùng) phải là MẢNG chuỗi, ví dụ ["Thấp","Trung","Cao"].
 - MỌI field phải có đủ "path", "type", "label", "defaultValue".
+- PHẢI trả về dạng CÂY: field nhóm có "type": "object" và mảng "children" chứa field con, KHÔNG
+  trả danh sách phẳng chỉ dựa vào dấu "/" trong "path". Bảng nhập liệu đầu game dựng trang theo
+  "children" — trả phẳng thì người chơi không có ô nào để nhập. Ví dụ đúng:
+  { "path": "/Nhân vật", "type": "object", "label": "Nhân vật", "defaultValue": {}, "constraints": {},
+    "children": [ { "path": "/Nhân vật/Tên", "type": "string", "label": "Tên", "defaultValue": "", "constraints": {} } ] }
+- Ít nhất vài field phải cho người chơi nhập (KHÔNG đặt "constraints.readOnly" hay "hidden" cho tất cả).
 ${JSON_FORMAT_REQUIREMENT}
 `;
   return applyOverride(base, config.promptOverride, config.promptMode);

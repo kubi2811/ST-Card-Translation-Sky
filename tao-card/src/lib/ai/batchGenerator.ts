@@ -601,6 +601,9 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
   // RPM limiter (chốt-giờ-bắt-đầu) ở client.ts đảm bảo không vượt trần 429 dù luồng cao.
   const concurrency = Math.max(1, Math.min(computePoolConcurrency(ctx.profile), totalBatches));
   let created = 0;
+  // (bug 71) Entry bị dedup loại trước đây MẤT TRẮNG: số batch cố định nên không sinh bù,
+  // kế hoạch 20 entry thực tế còn 6-10. Nay đếm để nối batch bù đúng phần đã rơi.
+  let droppedDup = 0;
   let consecutiveErrors = 0;
   const seen: Array<{ comment: string; keys: string[] }> = (
     ctx.card.data.character_book?.entries ?? []
@@ -674,7 +677,7 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
       const categoryDirective = buildCategoryDirective(config.category, config.cardType);
       const tokenBudgetDirective = buildTokenBudgetDirective(config.tokensPerEntry);
       // Lô lớn → ép phần lớn entry "ngủ", chỉ bật theo từ khoá, cho khỏi cháy context mỗi lượt chat.
-      const largeBatchDirective = buildLargeBatchBudgetDirective(config.count ?? 0);
+      const largeBatchDirective = buildLargeBatchBudgetDirective(config.totalEntries ?? 0);
       const messages: ChatMessage[] = [
         { role: 'system', content: BATCH_SYSTEM_PROMPT + tokenBudgetDirective + largeBatchDirective + (config.autoConfig ? AUTO_CONFIG_ADDON : '\n\nCHỈ trả về MỘT MẢNG JSON hợp lệ:\n[{"comment":"...","keys":["..."],"content":"..."},...  ]') + categoryDirective + schemaAddon + getProfileExtractionContext(profile) },
         { role: 'user', content: userMessage + '\n\n[LỆNH CUỐI CÙNG]: TUYỆT ĐỐI CHỈ TRẢ VỀ MẢNG JSON. KHÔNG markdown, KHÔNG text giải thích, KHÔNG code block. Xoá mọi format Markdown đi, chỉ xuất đúng chuẩn mảng JSON (Bắt đầu bằng `[` và kết thúc bằng `]`).' },
@@ -728,6 +731,7 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
         // 3-layer duplicate check
         const dupCheck = isDuplicateEntry(ai, ctx.card.data.character_book?.entries ?? [], ragIndex);
         if (dupCheck.isDuplicate) {
+          droppedDup++;   // ghi nợ để cuối vòng nối batch bù đúng phần đã rơi
           ctx.log(`⏭️ Bỏ qua "${ai.comment}" — trùng với "${dupCheck.conflictWith}" (${dupCheck.reason})`);
           continue;
         }
@@ -788,15 +792,17 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
 
     // (User 2026 — SÀN entry) Sắp hết batch kế hoạch mà CHƯA đạt tối thiểu (AI trả thiếu / trùng bị
     // loại) → nối thêm batch bù. Trần an toàn = 2× kế hoạch để không lặp vô hạn khi AI cạn ý.
-    if (wantMin > 0 && roundStart + concurrency > totalBatches && created < wantMin && !ctx.stopped) {
-      const safetyCap = plannedBatches * 2;
-      const needed = Math.ceil((wantMin - created) / config.entriesPerBatch);
+    // Mục tiêu = SÀN user đặt, hoặc bù đúng số entry bị dedup ăn mất (không vượt trần totalEntries).
+    const target = Math.min(config.totalEntries, Math.max(wantMin, created + droppedDup));
+    if (target > 0 && roundStart + concurrency > totalBatches && created < target && !ctx.stopped) {
+      const safetyCap = Math.max(plannedBatches * 3, plannedBatches + 6);
+      const needed = Math.ceil((target - created) / config.entriesPerBatch);
       const nextTotal = Math.min(totalBatches + needed, safetyCap);
       if (nextTotal > totalBatches) {
-        ctx.log(`➕ Mới ${created}/${wantMin} entries tối thiểu → nối thêm ${nextTotal - totalBatches} batch bù (trần an toàn ${safetyCap}).`);
+        ctx.log(`➕ Mới ${created}/${target} entries (${droppedDup} bị loại trùng) → nối thêm ${nextTotal - totalBatches} batch bù (trần an toàn ${safetyCap}).`);
         totalBatches = nextTotal;
-      } else if (created < wantMin) {
-        ctx.log(`⚠️ Đã chạm trần an toàn ${safetyCap} batch mà chưa đạt tối thiểu ${wantMin} — dừng để không lặp vô hạn.`);
+      } else if (created < target) {
+        ctx.log(`⚠️ Đã chạm trần an toàn ${safetyCap} batch mà mới ${created}/${target} — dừng để không lặp vô hạn.`);
       }
     }
   }

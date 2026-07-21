@@ -61,6 +61,8 @@ export interface MaterializeConfig {
   defaultRole?: 0 | 1 | 2 | null;
   insertionOrderStart?: number;
   scanDepth?: number | null;
+  /** (bug 72) Entry hệ thống như [initvar] phải TẮT — MVU đọc nó làm template, không phải lore. */
+  enabled?: boolean;
 }
 
 export function materializeEntry(
@@ -94,7 +96,10 @@ export function materializeEntry(
     constant,
     selective,
     insertion_order: insertionOrder,
-    enabled: true,
+    enabled: config.enabled ?? true,
+    // SillyTavern đọc cờ `disable` (ngược nghĩa `enabled`) — trước đây không nơi nào ghi ra
+    // nên entry tắt vẫn xuất ra file ở trạng thái bật.
+    disable: !(config.enabled ?? true),
     position: posExt === 0 ? 'before_char' : 'after_char',
     use_regex: true,
     extensions: {

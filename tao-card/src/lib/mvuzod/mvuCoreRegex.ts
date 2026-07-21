@@ -55,16 +55,23 @@ function renderScript(name: string, anchor: string, html: string): CoreScript {
     disabled: false,
     markdownOnly: true,
     promptOnly: false,
-    runOnEdit: false,
-    substituteRegex: 1,
+    runOnEdit: true,
+    // (bug 72) Macro in Find Regex phải TẮT: bật lên thì SillyTavern chạy macro
+    // substitution trên cả khối HTML/JS và làm hỏng mọi {{...}} nằm trong code.
+    substituteRegex: 0,
     minDepth: null,
     maxDepth: null,
   };
 }
 
 /**
- * Dựng bộ regex lõi MVU. HTML để trống thì script render vẫn được tạo (đúng cặp) —
- * phần HTML sẽ do bước Game UI ghi đè sau, nhưng cấu trúc cặp thì luôn đầy đủ.
+ * Dựng bộ regex lõi MVU.
+ *
+ * (bug 72) Khi chưa có HTML, script render vẫn được sinh nhưng để RỖNG — nó đóng vai chỗ
+ * giữ chỗ: che mỏ neo khỏi màn hình (vế ẩn là promptOnly nên chỉ lọc prompt, không lọc
+ * hiển thị). Bước Game UI chạy sau sẽ GHI ĐÈ đúng chỗ này theo cặp (mỏ neo + vai trò) —
+ * xem `applyParsedDataToCard` case 'game_ui'. Không được để tồn tại 2 script render cùng
+ * bám một mỏ neo: cái chạy trước ăn mất, cái sau không tìm thấy gì để thay.
  */
 export function buildMvuCoreRegexScripts(opts?: {
   statusBarHtml?: string;

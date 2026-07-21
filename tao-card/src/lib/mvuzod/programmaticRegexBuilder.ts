@@ -7,6 +7,7 @@
  * Supports: status_bar, opening_form, full_set
  */
 
+import { OPENING_FORM_ANCHOR, STATUS_BAR_ANCHOR } from './regexAnchors';
 import type { MVUZODSchema, MVUZODField } from '../../types/mvuzod.types';
 import type { RegexScript } from '../../types/regex.types';
 import {
@@ -657,7 +658,7 @@ function buildStatusBarResult(
   const scripts: Omit<RegexScript, 'id'>[] = [
     {
       scriptName: '[AI] Ẩn StatusPlaceHolder',
-      findRegex: '<StatusPlaceHolderImpl/>',
+      findRegex: STATUS_BAR_ANCHOR,
       replaceString: '',
       trimStrings: [],
       placement: [2],
@@ -671,7 +672,7 @@ function buildStatusBarResult(
     },
     {
       scriptName: '[Render] Status Bar',
-      findRegex: '<StatusPlaceHolderImpl/>',
+      findRegex: STATUS_BAR_ANCHOR,
       replaceString: fullHtml,
       trimStrings: [],
       placement: [2],
@@ -679,7 +680,7 @@ function buildStatusBarResult(
       markdownOnly: true,
       promptOnly: false,
       runOnEdit: false,
-      substituteRegex: 1,
+      substituteRegex: 0,
       minDepth: null,
       maxDepth: null,
     },
@@ -703,19 +704,40 @@ function buildOpeningFormResult(
   const fullHtml = assembleHtmlDocument(css, html, js, theme.fontImport);
 
   const scripts: Omit<RegexScript, 'id'>[] = [
+    // Vế ẨN: mỏ neo phải bị gỡ khỏi prompt gửi AI, không thì mỗi lượt chat đều bẩn context.
+    {
+      scriptName: '[AI] Ẩn Opening Form',
+      findRegex: OPENING_FORM_ANCHOR,
+      replaceString: '',
+      trimStrings: [],
+      placement: [2],
+      disabled: false,
+      markdownOnly: false,
+      promptOnly: true,
+      runOnEdit: true,
+      substituteRegex: 0,
+      minDepth: null,
+      maxDepth: null,
+    },
+    // Vế RENDER: thay mỏ neo bằng giao diện thật.
     {
       scriptName: '[Render] Opening Form',
-      findRegex: '<StatusPlaceHolderImpl/>',
+      // (bug 72) Trước đây dùng NHẦM mỏ neo của Status Bar nên hai giao diện tranh nhau
+      // một chỗ bám — cái nào chạy trước thì cái kia mất tích.
+      findRegex: OPENING_FORM_ANCHOR,
       replaceString: fullHtml,
       trimStrings: [],
       placement: [2],
       disabled: false,
       markdownOnly: true,
       promptOnly: false,
-      runOnEdit: false,
-      substituteRegex: 1,
-      minDepth: 0,
-      maxDepth: 0,
+      runOnEdit: true,
+      // Macro in Find Regex phải TẮT: bật lên là SillyTavern chạy macro trên cả khối HTML/JS.
+      substituteRegex: 0,
+      // Ephemerality null = áp dụng mọi lượt. Để 0/0 thì form chỉ sống đúng tin nhắn mới nhất
+      // rồi biến mất — đúng triệu chứng "form không hiện".
+      minDepth: null,
+      maxDepth: null,
     },
   ];
 

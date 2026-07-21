@@ -64,6 +64,20 @@ BƯỚC 4 — RULE MATCHING:
   - Có match với rule nào không? Rule nào? Tại sao?
   - Mức độ match: STRONG (nhiều điểm khớp) / WEAK (vài điểm) / NONE
 
+  ⚠️ QUÉT CẠN KIỆT — BẮT BUỘC (đây là nguyên nhân mod hay THẤT BẠI):
+  Mod chỉ thành công khi XOÁ SẠCH dấu vết của thứ cần đổi. Sót MỘT chỗ là card vẫn
+  chạy theo logic cũ và toàn bộ bản mod coi như hỏng.
+  a) Từ MOD RULES, rút ra DANH SÁCH TỪ KHOÁ của thứ cần đổi — gồm cả biến thể:
+     số + đơn vị ("7 ngày", "day 7", "Ngày 7", "第7天", "7-day"), tên mốc/sự kiện
+     ("Phán Xét Cuối Cùng", "Endgame", "Game Over"), và tên biến/field liên quan.
+  b) DUYỆT QUA TỪNG section MỘT (kể cả entry nằm cuối danh sách, script, HTML/UI,
+     Zod schema, mvu_update rules, initvar) và tự hỏi: "section này có chứa BẤT KỲ
+     từ khoá nào ở (a) không?"
+  c) Chứa dù chỉ 1 từ khoá → BẮT BUỘC đánh NEEDS_MOD (không được hạ xuống WEAK/NONE
+     chỉ vì section đó "chủ yếu là chuyện khác").
+  d) Trong phần văn xuôi trước JSON, liệt kê rõ: "Từ khoá đã quét: [...]" và
+     "Section chứa từ khoá: [danh sách]" để tự đối chiếu, tránh bỏ sót.
+
 BƯỚC 5 — RISK ASSESSMENT:
   Với mỗi section NEEDS_MOD, đánh giá:
   - Nếu sửa sai, hậu quả là gì?

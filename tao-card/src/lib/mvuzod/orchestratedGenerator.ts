@@ -565,22 +565,40 @@ function buildRegexScripts(
   const scripts: Omit<RegexScript, 'id'>[] = [];
 
   if (component === 'opening_form') {
-    scripts.push({
-      // Mỏ neo RIÊNG, không dùng chung với Status Bar (trước đây trùng nên 2 script đè nhau).
-      // Thẻ này do card tự đặt trong First Message / Alternate Greetings.
-      scriptName: '[Render] Opening Form (Orchestrated)',
-      findRegex: OPENING_FORM_ANCHOR,
-      replaceString: fullHtml,
-      trimStrings: [],
-      placement: [2],
-      disabled: false,
-      markdownOnly: true,
-      promptOnly: false,
-      runOnEdit: false,
-      substituteRegex: 1,
-      minDepth: 0,
-      maxDepth: 0,
-    });
+    // MỖI giao diện cần ĐỦ MỘT CẶP: 1 script ẩn mỏ neo khỏi prompt + 1 script render ra màn hình.
+    // Trước đây opening_form CHỈ có vế render ⇒ mỏ neo lọt vào prompt gửi AI mỗi lượt.
+    scripts.push(
+      {
+        scriptName: '[AI] Ẩn Opening Form',
+        findRegex: OPENING_FORM_ANCHOR,
+        replaceString: '',
+        trimStrings: [],
+        placement: [1],
+        disabled: false,
+        markdownOnly: false,
+        promptOnly: true,
+        runOnEdit: false,
+        substituteRegex: 0,
+        minDepth: null,
+        maxDepth: null,
+      },
+      {
+        // Mỏ neo RIÊNG, không dùng chung với Status Bar (trước đây trùng nên 2 script đè nhau).
+        // Thẻ này do card tự đặt trong First Message / Alternate Greetings.
+        scriptName: '[Render] Opening Form (Orchestrated)',
+        findRegex: OPENING_FORM_ANCHOR,
+        replaceString: fullHtml,
+        trimStrings: [],
+        placement: [2],
+        disabled: false,
+        markdownOnly: true,
+        promptOnly: false,
+        runOnEdit: false,
+        substituteRegex: 1,
+        minDepth: 0,
+        maxDepth: 0,
+      },
+    );
   } else {
     // Status bar, game screen, full set
     scripts.push(

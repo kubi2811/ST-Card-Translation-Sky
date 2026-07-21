@@ -12,6 +12,7 @@ import { buildSchemaContextForBatch } from '../mvuzod/schemaContextBuilder';
 import { normalizeMVUZODSchema } from '../mvuzod/normalizeSchema';
 import { buildMVUZODScripts } from '../mvuzod/tavernScriptBuilder';
 import { OPENING_FORM_ANCHOR } from '../mvuzod/regexAnchors';
+import { buildMvuCoreRegexScripts } from '../mvuzod/mvuCoreRegex';
 import { schemaToZodCode } from '../mvuzod/schemaInferencer';
 import { buildProgrammaticRegex } from '../mvuzod/programmaticRegexBuilder';
 import { collectSchemaVarNames, parseFindRegex } from '../mvuzod/gameUiValidator';
@@ -727,6 +728,22 @@ function applyParsedDataToCard(
           }
           th.scripts = existing;
           ext.tavern_helper = th;
+
+          // (User 21/07 — "MVU có 4 file mà card tui mới có 2 cái")
+          // Bộ regex lõi MVU gồm 2 CẶP (ẩn khỏi prompt + render ra màn hình) cho thanh trạng
+          // thái và bảng khởi đầu, cộng script xoá khối <UpdateVariable>. Thiếu vế render thì
+          // user chỉ thấy mỏ neo trơ; thiếu vế ẩn thì mỏ neo lọt vào prompt mỗi lượt.
+          // Bổ sung THEO findRegex+vai trò, không đụng script đã có (Game UI ghi HTML sau).
+          if (!c.data.extensions.regex_scripts) c.data.extensions.regex_scripts = [];
+          const rs = c.data.extensions.regex_scripts;
+          const roleOf = (s: { promptOnly?: boolean; markdownOnly?: boolean }) =>
+            s.promptOnly && !s.markdownOnly ? 'hide' : 'render';
+          for (const core of buildMvuCoreRegexScripts()) {
+            const already = rs.some(
+              s => s.findRegex === core.findRegex && roleOf(s) === roleOf(core),
+            );
+            if (!already) rs.push({ ...core, id: uuidv4() } as (typeof rs)[number]);
+          }
         }
         
         if (!c.data.character_book) c.data.character_book = { name: c.data.name, entries: [] };

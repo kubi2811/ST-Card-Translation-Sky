@@ -14,6 +14,7 @@ import { useCardStore } from '../../store/cardStore';
 import { parseAIResponseJSON } from './jsonExtract';
 import { materializeEntry, nextEntryId } from '../converters/cardDefaults';
 import { toolsEngine } from '../toolsEngine';
+import { sanitizeAiKeys } from '../worldbook/keyInput';
 import { v4 as uuidv4 } from 'uuid';
 
 
@@ -382,6 +383,9 @@ export function executeAction(
       // Force recursion prevention
       const patch = {
         ...action.data,
+        // AI hay ra key dính "_" (giao_hàng) hoặc gộp nhiều key vào 1 chuỗi. Người chơi gõ
+        // "giao hàng" có khoảng trắng nên key sai kiểu đó không bao giờ kích hoạt → entry chết.
+        ...(action.data?.keys ? { keys: sanitizeAiKeys(action.data.keys) } : {}),
         prevent_recursion: true,
         exclude_recursion: true
       };
@@ -396,7 +400,12 @@ export function executeAction(
         break;
       }
       if (action.data?.id !== undefined) {
-        updateEntry(Number(action.data.id), action.data.patch as Partial<LorebookEntry>);
+        const rawPatch = (action.data.patch ?? {}) as Partial<LorebookEntry>;
+        // Sửa entry cũng phải dọn key (cùng lý do như create_entry).
+        const cleanPatch = rawPatch.keys
+          ? { ...rawPatch, keys: sanitizeAiKeys(rawPatch.keys) }
+          : rawPatch;
+        updateEntry(Number(action.data.id), cleanPatch);
       }
       break;
     }

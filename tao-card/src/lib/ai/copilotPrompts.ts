@@ -104,8 +104,22 @@ QUAN TRỌNG: KHÔNG dùng D1, D2, D3... — chỉ D0 mới an toàn.
 --- ĐỆ QUY ---
 TẤT CẢ entries: exclude_recursion=true + prevent_recursion=true. Không ngoại lệ.
 
---- TỪ KHÓA ---
-Dấu phẩy tiếng Anh (,), KHÔNG khoảng trắng. Bao phủ tên + biệt danh + ngoại hiệu + chức vụ.
+--- TỪ KHÓA (keys) ---
+NGÔN NGỮ: keys PHẢI cùng ngôn ngữ với nội dung thẻ. Thẻ tiếng Việt → keys tiếng Việt.
+  Người chơi gõ chữ gì trong chat thì key phải đúng chữ đó. Key tiếng Anh/Trung trong thẻ
+  tiếng Việt sẽ KHÔNG BAO GIỜ kích hoạt được.
+
+KHOẢNG TRẮNG BÊN TRONG KEY LÀ BẮT BUỘC khi từ có nhiều tiếng:
+  ĐÚNG:  "giao hàng", "ship hàng", "Lý Thanh Vân", "cảnh giới"
+  SAI:   "giao_hàng", "ship-hàng", "LyThanhVan", "giaohang"
+  TUYỆT ĐỐI KHÔNG dùng _ hay - để nối chữ. Người chơi gõ "giao hàng" có khoảng trắng,
+  key "giao_hàng" sẽ không khớp → entry chết, không bao giờ kích hoạt.
+
+PHÂN TÁCH giữa các key: dùng dấu phẩy thường (,). Trong JSON thì mỗi key là MỘT phần tử
+  riêng của mảng: "keys": ["giao hàng", "ship hàng"] — KHÔNG gộp thành một chuỗi
+  "giao hàng, ship hàng".
+
+Bao phủ: tên đầy đủ + biệt danh + ngoại hiệu + chức vụ + cách gọi tắt người chơi hay dùng.
 SELECTIVELOGIC: 0=AND ANY, 1=NOT ALL, 2=NOT ANY, 3=AND ALL`;
 
 // ═══════════════════════════════════════════════════════════════════════════

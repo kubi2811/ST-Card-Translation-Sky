@@ -52,10 +52,12 @@ function ActionCard({ action, onApply, onSkip }: {
     set_variable: { icon: '⚙️', label: 'Set variable', color: 'text-amber-400' },
     create_tavern_script: { icon: '📜', label: ui.cpActCreateScript, color: 'text-violet-400' },
     generate_game_ui: { icon: '🎮', label: ui.cpActGameUi, color: 'text-cyan-400' },
+    save_memory: { icon: '🧠', label: ui.cpActSaveMemory, color: 'text-amber-400' },
   };
 
   const info = labels[action.type] ?? { icon: '❓', label: action.type, color: 'text-muted-foreground' };
-  const summary = action.type === 'create_entry' ? `"${(action.data as Record<string, unknown>).comment}"`
+  const summary = action.type === 'save_memory' ? `[${(action.data as Record<string, unknown>).scope}] "${(action.data as Record<string, unknown>).key}": ${(action.data as Record<string, unknown>).value}`
+    : action.type === 'create_entry' ? `"${(action.data as Record<string, unknown>).comment}"`
     : action.type === 'update_entry' ? `ID: ${(action.data as Record<string, unknown>).id}`
     : action.type === 'delete_entry' ? `"${(action.data as Record<string, unknown>).comment ?? `ID ${(action.data as Record<string, unknown>).id}`}"`
     : action.type === 'update_field' ? (action.data as Record<string, unknown>).path as string

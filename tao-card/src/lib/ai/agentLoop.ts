@@ -7,6 +7,9 @@ import type { ChatMessage, CharacterCardV3, ProxyProfile, GenerationParams, Lore
 import type { AIAction, AIResponse, WorldbuildingMode, CopilotMessage } from './copilotTypes';
 import { callAI } from './client';
 import { buildCopilotSystemPrompt } from './copilotPrompts';
+import { buildMemoryBlock } from './memoryContext';
+import { useMemoryStore } from '../../store/memoryStore';
+import { useCardStore } from '../../store/cardStore';
 import { parseAIResponseJSON } from './jsonExtract';
 import { materializeEntry, nextEntryId } from '../converters/cardDefaults';
 import { toolsEngine } from '../toolsEngine';
@@ -59,7 +62,19 @@ function sleep(ms: number) {
 
 export async function runCopilotLoop(userMessage: string, ctx: CopilotContext): Promise<void> {
   const isPipelineMode = ctx.mode === 'genesis' || ctx.mode === 'evolution' || ctx.mode === 'document_extraction';
-  const systemPrompt = buildCopilotSystemPrompt(ctx.mode, ctx.getCard(), ctx.contextChip) + 
+  // ─── Truy hồi ký ức liên quan tới câu user vừa hỏi ───
+  // Lỗi ở đây KHÔNG được làm hỏng chat: nuốt lỗi, coi như không có ký ức.
+  let memoryBlock = '';
+  try {
+    const projectId = useCardStore.getState().currentProjectId ?? undefined;
+    const found = useMemoryStore.getState().searchMemory(userMessage, { projectId, sessionId: 'current' });
+    memoryBlock = buildMemoryBlock(found);
+  } catch (e) {
+    console.warn('[memory] truy hồi lỗi, bỏ qua:', e);
+  }
+
+  const systemPrompt = buildCopilotSystemPrompt(ctx.mode, ctx.getCard(), ctx.contextChip) +
+    (memoryBlock ? '\n\n' + memoryBlock : '') +
     (isPipelineMode ? '\n\n' + CRITICAL_ABSOLUTE_COMPLETENESS_PROTOCOL : '');
 
   const messages: ChatMessage[] = [

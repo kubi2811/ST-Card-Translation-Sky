@@ -14,6 +14,29 @@ export function shouldSummarize(history: ChatMessage[]): boolean {
   return history.length >= SUMMARIZE_THRESHOLD;
 }
 
+/** Bản nén đang giữ: `coveredUpTo` lượt đầu đã được gói vào `summary`. */
+export interface SummaryCache {
+  coveredUpTo: number;
+  summary: string;
+}
+
+/**
+ * Ghép lịch sử gửi cho AI từ bản tóm lược + các lượt CHƯA được nén.
+ *
+ * Hai bẫy mà hàm này tồn tại để chặn:
+ * 1. Tóm lược PHẢI đi dưới role 'user' với tiền tố [System: …]. Nếu dùng role 'system' thì
+ *    client Claude/Gemini (chỉ lấy system message ĐẦU TIÊN rồi filter bỏ phần còn lại) sẽ
+ *    vứt im lặng khối này — chat mất trí nhớ mà không báo lỗi gì.
+ * 2. Phải cắt từ `coveredUpTo` của lịch sử HIỆN TẠI, không dùng lại mảng `kept` cũ — nếu không
+ *    các lượt phát sinh sau lần nén sẽ rơi mất.
+ */
+export function buildCompressedHistory(history: ChatMessage[], cache: SummaryCache): ChatMessage[] {
+  return [
+    { role: 'user', content: `[System: TÓM LƯỢC PHẦN TRƯỚC CỦA HỘI THOẠI]\n${cache.summary}` } as ChatMessage,
+    ...history.slice(cache.coveredUpTo),
+  ];
+}
+
 /**
  * Nén phần đầu của lịch sử chat thành 1 đoạn tóm lược, giữ nguyên KEEP_RECENT lượt cuối.
  * Trả null khi chưa cần nén HOẶC khi gọi AI lỗi — người gọi cứ dùng lịch sử gốc, chat không đứt.

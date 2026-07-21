@@ -133,6 +133,25 @@ Chạy bằng vitest (đã có sẵn, 69 test đang pass).
 | Ký ức global sai lan âm thầm | QĐ4 tắt/bật từng mục + panel liệt kê minh bạch |
 | Token phình do chèn ký ức | Top-N + bỏ khối khi rỗng + `pruneMemory` |
 
+### Phát hiện khi triển khai — BẪY `accessedAt` (chưa kích hoạt)
+
+Điều tra trong lúc làm cho thấy: **không có chỗ nào trong `memoryStore` từng ghi `accessedAt`.**
+`addMemory` không set, `updateMemory` chỉ set `updatedAt`, `searchMemory`/`getVisibleMemories` là hàm
+thuần đọc. Trong khi `pruneMemory` lại dùng `const lastAccess = m.accessedAt || m.updatedAt;`
+
+Hệ quả NẾU có ai đó nối `pruneMemory` vào app: một ký ức được nạp vào prompt mỗi ngày nhưng không sửa
+nội dung sẽ bị xoá sau 30 ngày — đúng loại "dọn nhầm thứ đang hữu ích".
+
+**Hiện chưa gây hại** vì `pruneMemory` được định nghĩa nhưng **không nơi nào gọi**. Cố ý không sửa ở
+bản này (spec chốt: không đụng `memoryStore.ts`).
+
+Nếu sau này bật `pruneMemory`, PHẢI xử lý trước:
+1. Thêm action riêng `touchMemory(id)` — KHÔNG tái dụng `updateMemory` vì nó luôn ghi đè `updatedAt`,
+   sẽ làm mờ ranh giới "sửa nội dung" vs "vừa đọc".
+2. Gọi `touchMemory` cho các ký ức thực sự được chèn vào prompt (ở `agentLoop`).
+3. Lưu ý `searchMemory` trả object dựng từ `storeFields` của MiniSearch, KHÔNG phải object trong
+   `state.memories` — phải cập nhật theo `id`, mutate object trả về sẽ chỉ đổi bản copy trong index.
+
 ## 9. Không làm (YAGNI)
 
 - Không port `ragEngine`/`memoryStore` từ app dịch sang (sẽ thành 2 hệ chồng nhau, phải migrate).

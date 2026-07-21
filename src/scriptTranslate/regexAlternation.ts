@@ -129,10 +129,17 @@ export function alternateRegexBody(body: string, dict: Record<string, string>): 
   for (let i = hits.length - 1; i >= 0; i--) {
     const { start, end, run } = hits[i];
     if (inClass(start)) { skippedInClass.add(run); continue; }
-    // Idempotent: run đã nằm trong alternation có sẵn (`(?:run|` / `|run` / `run|`) → thôi.
-    const before = out.slice(Math.max(0, start - 3), start);
-    const after = out.slice(end, end + 1);
-    if ((before.endsWith('(?:') && after === '|') || before.endsWith('|') || after === '|') continue;
+
+    // IDEMPOTENT đúng nghĩa: chỉ bỏ qua khi BẢN DỊCH của chính run này đã nằm sát bên
+    // (tức đã được thêm nhánh ở lần chạy trước). Trước đây chỉ cần thấy ký tự `|` là bỏ qua
+    // ⇒ regex kiểu /秋青子|明月/ (khớp nhiều tên — rất phổ biến) KHÔNG bao giờ được thêm
+    // nhánh tiếng Việt, tính năng im lặng không chạy. (Bug do review chéo phát hiện.)
+    const vi = dict[run]?.trim();
+    if (vi) {
+      const win = out.slice(Math.max(0, start - vi.length - 8), Math.min(out.length, end + vi.length + 8));
+      if (win.includes(vi)) continue;
+    }
+
     const rewritten = rewriteRun(run);
     if (rewritten === null || rewritten === run) continue;
     out = out.slice(0, start) + rewritten + out.slice(end);

@@ -10,7 +10,7 @@
 param([Parameter(ValueFromRemainingArguments = $true)][int[]]$Ports)
 
 $ErrorActionPreference = 'Stop'
-if (-not $Ports) { $Ports = 5173, 5174, 5175, 5176 }
+if (-not $Ports) { $Ports = 5173, 5174, 5175, 5176, 5177 }
 
 $failed = $false
 
@@ -32,7 +32,9 @@ foreach ($port in $Ports) {
                 $failed = $true
             }
         } else {
-            Write-Host ("[Launcher] Port {0} dang bi '{1}' (PID {2}) giu - KHONG phai node." -f $port, $proc.ProcessName, $procId) -ForegroundColor Red
+            $msg = "[Launcher] Port {0} dang bi '{1}' (PID {2}) giu - KHONG phai node." -f $port, $proc.ProcessName, $procId
+            Write-Host $msg -ForegroundColor Red
+            [Console]::Error.WriteLine($msg)   # stderr: de Hub doc duoc ly do that va hien cho user
             Write-Host "[Launcher] Hay tu dong chuong trinh do roi chay lai." -ForegroundColor Red
             $failed = $true
         }

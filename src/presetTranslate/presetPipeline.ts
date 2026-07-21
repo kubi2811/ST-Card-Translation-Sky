@@ -15,6 +15,12 @@ import {
 } from '../utils/apiClient';
 import { runWorkerPool } from '../utils/runWorkerPool';
 import { runScriptTranslation } from '../scriptTranslate/pipeline';
+import {
+  runSig as scriptRunSig,
+  loadTokenMap as loadScriptTokenMap,
+  saveTokenMap as saveScriptTokenMap,
+  tokensToMap as scriptTokensToMap,
+} from '../scriptTranslate/persist';
 import type { ScriptPipelineDeps, ScriptRunControl } from '../scriptTranslate/types';
 import { applyPresetDict } from './consistencyPass';
 import { transformRegex, decideRegex } from './regexScriptPass';
@@ -114,7 +120,7 @@ export async function runPresetTranslation(
   cb({ stage: 'parse' });
   const parsed = JSON.parse(rawJson) as unknown;
   const preset = parsePresetJSON(parsed);
-  if (!preset) throw new Error('File không phải preset SillyTavern hợp lệ (thiếu prompts/temperature).');
+  if (!preset) throw new Error('NOT_PRESET');
   const pristine = JSON.parse(rawJson) as STPreset;
 
   // 2) Gom đơn vị + resume
@@ -150,7 +156,7 @@ export async function runPresetTranslation(
       try {
         const resp = await callProviderHedged(deps.proxy, system, user, {
           signal: ctl.signal,
-          meta: { label: `preset-lô-${i + 1}`, charCount: user.length, preferSecondary },
+          meta: { label: `preset-batch-${i + 1}`, charCount: user.length, preferSecondary },
         });
         const map = parseUnitResponse(resp, batch.length);
         batch.forEach((b, j) => {
@@ -211,14 +217,33 @@ export async function runPresetTranslation(
       si++;
       cb({ stage: 'scripts', done: si, total: jobs.length, note: h.name });
       if (ctl.signal.aborted) throw new Error('Cancelled');
+      // Resume riêng cho từng script nhúng (384KB = nhiều lô AI — đứt giữa chừng phải nối được)
+      const scriptSig = scriptRunSig(h.content!, false);
+      const savedTokens = (await loadScriptTokenMap(scriptSig)) || undefined;
       const r = await runScriptTranslation(
         h.content!,
         { beautify: false, nsfw: opts.nsfw, regexAlternation: true },
         scriptDeps,
-        { signal: ctl.signal, isPaused: ctl.isPaused },
-        () => { /* progress con gộp vào stage scripts */ },
+        {
+          signal: ctl.signal,
+          isPaused: ctl.isPaused,
+          onTokensUpdated: (tokens) => {
+            const map = scriptTokensToMap(tokens);
+            if (Object.keys(map).length) void saveScriptTokenMap(scriptSig, map);
+          },
+        },
+        (p) => {
+          // Nối tiến độ lô của script con vào note để user thấy nó đang chạy thật
+          if (p.stage === 'translate' && p.total) {
+            cb({ stage: 'scripts', done: si, total: jobs.length, note: `${h.name} — ${p.done ?? 0}/${p.total}` });
+          }
+        },
+        savedTokens,
       );
-      h.content = applyPresetDict(r.output, dict);
+      // KHÔNG applyPresetDict lên code JS: thay tag "trần" trong code có thể đổi cả object key
+      // tiếng Trung (hợp đồng dữ liệu) — tag trong CHUỖI đã được dịch đúng qua glossary của
+      // script pipeline rồi. (Bug tự soi khi rà trước khi giao client.)
+      h.content = r.output;
       scriptsTranslated++;
     }
   }

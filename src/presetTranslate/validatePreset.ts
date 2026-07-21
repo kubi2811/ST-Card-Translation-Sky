@@ -28,30 +28,32 @@ export function validatePreset(
 
   const oP = original.prompts || [];
   const tP = translated.prompts || [];
-  if (oP.length !== tP.length) errs.push(`prompts: ${oP.length} → ${tP.length} (lệch số lượng)`);
+  // Lỗi trả về dạng MÃ MÁY `KEY|k=v|k=v` — Flow dịch sang ngôn ngữ đang chọn (i18n),
+  // không nhét câu tiếng Việt vào báo cáo của user EN/中文.
+  if (oP.length !== tP.length) errs.push(`psTrVdCount|before=${oP.length}|after=${tP.length}`);
   const n = Math.min(oP.length, tP.length);
   for (let i = 0; i < n; i++) {
     if (oP[i].identifier !== tP[i].identifier) {
-      errs.push(`prompts[${i}]: identifier đổi ${oP[i].identifier} → ${tP[i].identifier}`);
+      errs.push(`psTrVdIdentifier|i=${i}|before=${oP[i].identifier}|after=${tP[i].identifier}`);
       continue;
     }
     for (const f of FROZEN_PROMPT_FIELDS) {
       if (JSON.stringify(oP[i][f]) !== JSON.stringify(tP[i][f])) {
-        errs.push(`prompts[${i}].${String(f)}: field đóng băng bị đổi`);
+        errs.push(`psTrVdFrozen|i=${i}|field=${String(f)}`);
       }
     }
     const issues = validateMacroParity(oP[i].content || '', tP[i].content || '', varRenameMap);
     for (const is of issues) {
       macroErrs.push(
         is.kind === 'brace'
-          ? `prompts[${i}] (${oP[i].identifier}): {{ }} mất cân bằng`
-          : `prompts[${i}] (${oP[i].identifier}): {{${is.kind}::${is.name}}} ${is.before}→${is.after}`,
+          ? `psTrVdBrace|i=${i}|id=${oP[i].identifier}`
+          : `psTrVdMacro|i=${i}|id=${oP[i].identifier}|kind=${is.kind}|name=${is.name}|before=${is.before}|after=${is.after}`,
       );
     }
   }
 
   if (JSON.stringify(original.prompt_order) !== JSON.stringify(translated.prompt_order)) {
-    errs.push('prompt_order bị đổi');
+    errs.push('psTrVdOrder');
   }
 
   // ─── Subtree KHÔNG ĐỤNG phải deep-equal: mask các field được phép dịch rồi so cả cây ───
@@ -64,7 +66,7 @@ export function validatePreset(
     return clone;
   };
   if (JSON.stringify(mask(original)) !== JSON.stringify(mask(translated))) {
-    errs.push('Có thay đổi NGOÀI các field được phép dịch (name/content/scriptName/findRegex)');
+    errs.push('psTrVdOutside');
   }
 
   return {

@@ -12,8 +12,12 @@ const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
  */
 export function applyVarRenames(text: string, vars: Record<string, string>): string {
   let out = text;
-  for (const [zh, en] of Object.entries(vars)) {
-    if (!zh || !en || zh === en) continue;
+  // Key DÀI thay trước: nếu từ điển có cả 好感 và 好感度 mà thay 好感 trước thì
+  // {{setvar::好感度}} biến thành {{setvar::affection度}} — tên biến hỏng, dây setvar/getvar
+  // đứt câm lặng. (Bug do review chéo phát hiện, đã có test khoá.)
+  const keys = Object.keys(vars).filter((k) => k && vars[k] && k !== vars[k]).sort((a, b) => b.length - a.length);
+  for (const zh of keys) {
+    const en = vars[zh];
     out = out.split(`{{setvar::${zh}`).join(`{{setvar::${en}`);
     out = out.split(`{{getvar::${zh}`).join(`{{getvar::${en}`);
   }

@@ -40,6 +40,10 @@ function getWorker(): Worker {
     _worker.onerror = (e) => {
       for (const [, p] of _pending) p.reject(new Error(e.message || 'worker crashed'));
       _pending.clear();
+      // Worker chết (OOM prettier trên file bệnh hoạn…) → vứt xác, lần gọi sau spawn con mới —
+      // không thì mọi thao tác về sau treo vĩnh viễn trên worker hỏng.
+      try { _worker?.terminate(); } catch { /* ignore */ }
+      _worker = null;
     };
   }
   return _worker;
@@ -76,7 +80,7 @@ export async function runScriptTranslation(
   deps: ScriptPipelineDeps,
   ctl: ScriptRunControl,
   cb: (p: ScriptProgress) => void,
-  preTranslated?: Record<number, string>,
+  preTranslated?: import('./persist').TokenMap,
 ): Promise<ScriptTranslateResult> {
   const t0 = Date.now();
   const bytesIn = source.length;
@@ -102,12 +106,13 @@ export async function runScriptTranslation(
   const { tokens } = await extractInWorker(working);
   throwIfAborted(ctl.signal);
 
-  // Resume: áp bản dịch đã lưu từ lần chạy trước (đúng id — id sinh theo thứ tự offset,
-  // cùng nguồn + cùng beautify ⇒ cùng id; sig nguồn đã khoá điều đó ở tầng persist).
+  // Resume: áp bản dịch đã lưu từ lần chạy trước. Hai dây an toàn chống áp nhầm:
+  // (1) sig đã gồm cờ beautify (tầng persist), (2) ĐỐI CHIẾU chuỗi gốc — token.text phải
+  // khớp `o` đã lưu mới áp; lệch (prettier đổi version, id trôi…) thì bỏ, dịch lại còn hơn sai.
   if (preTranslated) {
     for (const t of tokens) {
       const saved = preTranslated[t.id];
-      if (saved && isTranslatableToken(t)) t.translated = saved;
+      if (saved && saved.o === t.text && isTranslatableToken(t)) t.translated = saved.t;
     }
   }
 
@@ -144,7 +149,7 @@ export async function runScriptTranslation(
         try {
           const resp = await callProviderHedged(deps.proxy, system, user, {
             signal: ctl.signal,
-            meta: { label: `script-lô-${round}-${i + 1}`, charCount: user.length, preferSecondary },
+            meta: { label: `script-batch-${round}-${i + 1}`, charCount: user.length, preferSecondary },
           });
           const { translations } = parseTokenBatchResponse(resp, batch);
           for (const item of batch) {
@@ -170,6 +175,13 @@ export async function runScriptTranslation(
   cb({ stage: 'reinsert' });
   let output = await callWorker<string>('reinsert', { code: working, tokens });
   throwIfAborted(ctl.signal);
+
+  // Kiểm PARITY ngay tại đây — TRƯỚC bước alternation. Mỗi nhánh `(?:Hán|Việt)` thêm 1 cặp
+  // ngoặc HỢP LỆ, kiểm sau sẽ luôn kêu "code lệch cấu trúc" dù mọi thứ đúng ⇒ báo động giả
+  // mỗi lần tính năng regex chạy (bắt được khi chạy thật end-to-end với API).
+  const parityCheck = await callWorker<{ parityOk: boolean; parityDetail?: string }>(
+    'validate', { code: output, original: working },
+  );
 
   // 5) Regex alternation (giữ Hán + thêm nhánh Việt); thuật ngữ lạ → 1 lô AI bổ sung dict
   let regexChanged = 0;
@@ -216,8 +228,8 @@ export async function runScriptTranslation(
     parseOkBefore: preValidate.parseOk,
     parseOk: v.parseOk,
     parseError: v.parseError,
-    parityOk: v.parityOk,
-    parityDetail: v.parityDetail,
+    parityOk: parityCheck.parityOk,
+    parityDetail: parityCheck.parityDetail,
     residualTokens: residual.length,
     residualSamples: residual.slice(0, 20).map((t) => t.text),
     preservedTokens: tokens.length - translatable.length,

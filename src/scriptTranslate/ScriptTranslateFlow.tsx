@@ -13,9 +13,8 @@ import { runScriptTranslation, scanStats, extractInWorker, beautifyInWorker, typ
 import type { ScriptProgress, ScriptTranslateReport, ScriptTranslateOptions } from './types';
 import {
   loadOpts, saveOpts, loadGlossary, saveGlossary,
-  sourceSig, saveTokenMap, loadTokenMap, deleteTokenMap, type TokenMap,
+  runSig, saveTokenMap, loadTokenMap, deleteTokenMap, tokensToMap,
 } from './persist';
-import { isTranslatableToken } from './tokenBatcher';
 
 export default function ScriptTranslateFlow() {
   const ui = useUi();
@@ -45,6 +44,15 @@ export default function ScriptTranslateFlow() {
   useEffect(() => { saveOpts(opts); }, [opts]);
   useEffect(() => { saveGlossary(glossary); }, [glossary]);
   useEffect(() => { pausedRef.current = paused; }, [paused]);
+  // Sig tiến độ phụ thuộc cờ beautify → user lật toggle thì tra lại map tương ứng
+  useEffect(() => {
+    if (!source) return;
+    let cancelled = false;
+    void loadTokenMap(runSig(source, opts.beautify)).then((m) => {
+      if (!cancelled) setResumeInfo(m ? Object.keys(m).length : 0);
+    });
+    return () => { cancelled = true; };
+  }, [opts.beautify, source]);
 
   const deps = useMemo(() => ({
     proxy, providers, glossary,
@@ -52,6 +60,10 @@ export default function ScriptTranslateFlow() {
   }), [proxy, providers, glossary, tc.nameStyle, tc.fandomMode, tc.fandomName]);
 
   // ─── Nạp file / dán ───
+  const beautifyRef = useRef(opts.beautify);
+  useEffect(() => { beautifyRef.current = opts.beautify; }, [opts.beautify]);
+  const scanSeq = useRef(0);
+
   const acceptSource = useCallback(async (text: string, name: string) => {
     setSource(text);
     setFileName(name);
@@ -59,10 +71,16 @@ export default function ScriptTranslateFlow() {
     setOutput('');
     setErrorMsg('');
     setResumeInfo(0);
+    // Gõ/dán liên tục → chỉ lần quét CUỐI được ghi kết quả (chống dội worker + fetch mỗi phím)
+    const seq = ++scanSeq.current;
+    await new Promise((r) => setTimeout(r, 350));
+    if (seq !== scanSeq.current) return;
     try {
-      setStats(await scanStats(text));
-      const saved = await loadTokenMap(sourceSig(text));
-      if (saved) setResumeInfo(Object.keys(saved).length);
+      const st = await scanStats(text);
+      if (seq !== scanSeq.current) return;
+      setStats(st);
+      const saved = await loadTokenMap(runSig(text, beautifyRef.current));
+      if (seq === scanSeq.current && saved) setResumeInfo(Object.keys(saved).length);
     } catch { setStats(null); }
   }, []);
 
@@ -96,13 +114,14 @@ export default function ScriptTranslateFlow() {
   }, [source, opts.beautify, stats, deps, glossaryBusy]);
 
   // ─── Chạy dịch ───
-  const persistTokens = useCallback((sig: string, tokens?: CJKToken[]) => {
+  const persistTokens = useCallback((sig: string, tokens?: CJKToken[], force = false) => {
     if (tokens) tokensRef.current = tokens; // pipeline đẩy token qua callback từng lô
     const now = Date.now();
-    if (now - lastSaveRef.current < 4000) return; // throttle 4s — map MB, đừng dội fs
+    if (!force && now - lastSaveRef.current < 4000) return; // throttle 4s — map MB, đừng dội fs
     lastSaveRef.current = now;
-    const map: TokenMap = {};
-    for (const t of tokensRef.current) if (t.translated) map[t.id] = t.translated;
+    const map = tokensToMap(tokensRef.current);
+    // KHÔNG bao giờ ghi map rỗng đè lên tiến độ tốt (vd run vỡ ngay trước lô đầu tiên)
+    if (Object.keys(map).length === 0) return;
     void saveTokenMap(sig, map);
   }, []);
 
@@ -113,9 +132,10 @@ export default function ScriptTranslateFlow() {
     setErrorMsg('');
     setReport(null);
     setOutput('');
+    tokensRef.current = [];
     const ctl = new AbortController();
     abortRef.current = ctl;
-    const sig = sourceSig(source);
+    const sig = runSig(source, opts.beautify);
     try {
       const preTranslated = (await loadTokenMap(sig)) || undefined;
       const result = await runScriptTranslation(
@@ -129,9 +149,6 @@ export default function ScriptTranslateFlow() {
         preTranslated,
       );
       tokensRef.current = result.tokens;
-      // Lưu chốt lần cuối (không throttle) để resume/dịch-lại chính xác tuyệt đối
-      lastSaveRef.current = 0;
-      persistTokens(sig);
       setOutput(result.output);
       setReport(result.report);
     } catch (e) {
@@ -139,6 +156,9 @@ export default function ScriptTranslateFlow() {
       if (msg !== 'Cancelled') setErrorMsg(msg);
       setProgress({ stage: msg === 'Cancelled' ? 'idle' : 'error' });
     } finally {
+      // Lưu chốt KHÔNG throttle ở mọi lối ra (xong / Dừng / lỗi) — mấy lô cuối cùng
+      // trong cửa sổ throttle 4s không được phép bay màu khi user bấm Dừng.
+      persistTokens(sig, undefined, true);
       setRunning(false);
       abortRef.current = null;
     }
@@ -158,9 +178,9 @@ export default function ScriptTranslateFlow() {
 
   const handleClearProgress = useCallback(() => {
     if (!source) return;
-    void deleteTokenMap(sourceSig(source));
+    void deleteTokenMap(runSig(source, opts.beautify));
     setResumeInfo(0);
-  }, [source]);
+  }, [source, opts.beautify]);
 
   const stageLabel: Record<string, string> = {
     idle: '', beautify: ui.scrTrStBeautify, extract: ui.scrTrStExtract, translate: ui.scrTrStTranslate,
@@ -179,9 +199,9 @@ export default function ScriptTranslateFlow() {
       <section style={card}>
         <h3 style={cardTitle}>1 · {ui.scrTrInputTitle}</h3>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          <label style={{ ...btn, cursor: 'pointer' }}>
+          <label style={{ ...btn, cursor: running ? 'not-allowed' : 'pointer', opacity: running ? 0.5 : 1 }}>
             📂 {ui.scrTrPickFile}
-            <input type="file" accept=".js,.txt,.mjs" style={{ display: 'none' }}
+            <input type="file" accept=".js,.txt,.mjs" style={{ display: 'none' }} disabled={running}
               onChange={(e) => { void onFile(e.target.files?.[0]); e.target.value = ''; }} />
           </label>
           {fileName && <span style={{ fontSize: '0.85rem' }}>📄 {fileName}</span>}
@@ -198,7 +218,7 @@ export default function ScriptTranslateFlow() {
         </div>
         <textarea
           value={source.length > 200_000 ? source.slice(0, 200_000) : source}
-          readOnly={source.length > 200_000}
+          readOnly={source.length > 200_000 || running}
           onChange={(e) => { void acceptSource(e.target.value, fileName || 'pasted.js'); }}
           placeholder={ui.scrTrPastePh}
           style={{ ...mono, width: '100%', height: 120, marginTop: 10 }}
@@ -274,7 +294,7 @@ export default function ScriptTranslateFlow() {
         <h3 style={cardTitle}>4 · {ui.scrTrRunTitle}</h3>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           {!running ? (
-            <button onClick={() => void handleRun()} disabled={!source} style={{ ...btn, fontWeight: 700, borderColor: '#38bdf8', color: '#38bdf8' }}>
+            <button onClick={() => void handleRun()} disabled={!source || glossaryBusy} title={glossaryBusy ? ui.scrTrPha0Running : undefined} style={{ ...btn, fontWeight: 700, borderColor: '#38bdf8', color: '#38bdf8', opacity: (!source || glossaryBusy) ? 0.5 : 1 }}>
               ▶️ {ui.scrTrRunBtn}
             </button>
           ) : (

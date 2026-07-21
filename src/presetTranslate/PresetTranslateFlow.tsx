@@ -96,11 +96,15 @@ export default function PresetTranslateFlow() {
     }
   }, [preset, deps, dictBusy]);
 
-  const persistUnits = useCallback((sig: string, units: PresetUnit[]) => {
+  const unitsRef = useRef<PresetUnit[]>([]);
+  const persistUnits = useCallback((sig: string, units?: PresetUnit[], force = false) => {
+    if (units) unitsRef.current = units;
     const now = Date.now();
-    if (now - lastSaveRef.current < 4000) return;
+    if (!force && now - lastSaveRef.current < 4000) return;
     lastSaveRef.current = now;
-    void saveUnitMap(sig, unitsToMap(units));
+    const map = unitsToMap(unitsRef.current);
+    if (Object.keys(map).length === 0) return; // không ghi map rỗng đè tiến độ tốt
+    void saveUnitMap(sig, map);
   }, []);
 
   const handleRun = useCallback(async () => {
@@ -129,9 +133,12 @@ export default function PresetTranslateFlow() {
       setReport(result.report);
     } catch (e) {
       const msg = (e as Error)?.message || String(e);
-      if (msg !== 'Cancelled') setErrorMsg(msg);
+      if (msg === 'NOT_PRESET') setErrorMsg(ui.psTrErrNotPreset);
+      else if (msg !== 'Cancelled') setErrorMsg(msg);
       setProgress({ stage: msg === 'Cancelled' ? 'idle' : 'error' });
     } finally {
+      // Lưu chốt không throttle ở mọi lối ra — mấy lô cuối trong cửa sổ 4s không được bay màu
+      persistUnits(sig, undefined, true);
       setRunning(false);
       abortRef.current = null;
     }
@@ -149,6 +156,18 @@ export default function PresetTranslateFlow() {
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   }, [output, fileName]);
 
+  /** Dịch mã lỗi validate (`psTrVdX|k=v|…`) sang câu theo ngôn ngữ đang chọn. */
+  const vdText = useCallback((code: string): string => {
+    const [key, ...pairs] = code.split('|');
+    const vars: Record<string, string | number> = {};
+    for (const p of pairs) {
+      const eq = p.indexOf('=');
+      if (eq > 0) vars[p.slice(0, eq)] = p.slice(eq + 1);
+    }
+    const tpl = (ui as unknown as Record<string, string>)[key];
+    return tpl ? fmt(tpl, vars) : code;
+  }, [ui]);
+
   const stageLabel: Record<string, string> = {
     idle: '', parse: ui.psTrStParse, translate: ui.psTrStTranslate, consistency: ui.psTrStConsistency,
     regex: ui.psTrStRegex, scripts: ui.psTrStScripts, validate: ui.psTrStValidate, done: ui.psTrStDone, error: ui.psTrStError,
@@ -165,9 +184,9 @@ export default function PresetTranslateFlow() {
       <section style={card}>
         <h3 style={cardTitle}>1 · {ui.psTrInputTitle}</h3>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          <label style={{ ...btn, cursor: 'pointer' }}>
+          <label style={{ ...btn, cursor: running ? 'not-allowed' : 'pointer', opacity: running ? 0.5 : 1 }}>
             📂 {ui.psTrPickFile}
-            <input type="file" accept=".json" style={{ display: 'none' }}
+            <input type="file" accept=".json" style={{ display: 'none' }} disabled={running}
               onChange={(e) => { void onFile(e.target.files?.[0]); e.target.value = ''; }} />
           </label>
           {fileName && <span style={{ fontSize: '0.85rem' }}>📄 {fileName}</span>}
@@ -274,7 +293,7 @@ export default function PresetTranslateFlow() {
         <h3 style={cardTitle}>4 · {ui.scrTrRunTitle}</h3>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           {!running ? (
-            <button onClick={() => void handleRun()} disabled={!rawJson} style={{ ...btn, fontWeight: 700, borderColor: '#f472b6', color: '#f472b6' }}>
+            <button onClick={() => void handleRun()} disabled={!rawJson || dictBusy} title={dictBusy ? ui.scrTrPha0Running : undefined} style={{ ...btn, fontWeight: 700, borderColor: '#f472b6', color: '#f472b6', opacity: (!rawJson || dictBusy) ? 0.5 : 1 }}>
               ▶️ {ui.scrTrRunBtn}
             </button>
           ) : (
@@ -303,14 +322,14 @@ export default function PresetTranslateFlow() {
           <ul style={{ margin: 0, paddingLeft: 18, fontSize: '0.86rem', lineHeight: 1.9 }}>
             <li>{report.structureOk ? '✅' : '❌'} {ui.psTrRepStructure}
               {report.structureErrors.length > 0 && (
-                <pre style={{ ...mono, maxHeight: 100, overflow: 'auto' }}>{report.structureErrors.join('\n')}</pre>
+                <pre style={{ ...mono, maxHeight: 100, overflow: 'auto' }}>{report.structureErrors.map(vdText).join('\n')}</pre>
               )}
             </li>
             <li>{report.macroParityOk ? '✅' : '⚠️'} {ui.psTrRepMacro}
               {report.macroParityErrors.length > 0 && (
                 <details style={{ marginTop: 4 }}>
                   <summary style={{ cursor: 'pointer', fontSize: '0.78rem' }}>{ui.psTrRepMacroList}</summary>
-                  <pre style={{ ...mono, maxHeight: 120, overflow: 'auto' }}>{report.macroParityErrors.join('\n')}</pre>
+                  <pre style={{ ...mono, maxHeight: 120, overflow: 'auto' }}>{report.macroParityErrors.map(vdText).join('\n')}</pre>
                 </details>
               )}
             </li>
@@ -334,7 +353,11 @@ export default function PresetTranslateFlow() {
   );
 }
 
-/** Editor 1 bảng key→value đơn giản (tags / vars). */
+/**
+ * Editor bảng key→value (tags / vars). Giữ hàng đang gõ trong STATE MẢNG nội bộ —
+ * không map thẳng từ object: object rớt key rỗng, làm hàng mới biến mất ngay khi user
+ * gõ cột giá trị trước cột key (bug tự soi khi rà UX trước khi giao client).
+ */
 function DictEditor({ title, entries, onChange, phSrc, phDst }: {
   title: string;
   entries: Record<string, string>;
@@ -342,28 +365,42 @@ function DictEditor({ title, entries, onChange, phSrc, phDst }: {
   phSrc: string;
   phDst: string;
 }) {
-  const rows = Object.entries(entries);
-  const set = (i: number, k: string, v: string) => {
-    const next: Record<string, string> = {};
-    rows.forEach(([rk, rv], j) => {
-      if (j === i) { if (k.trim()) next[k] = v; }
-      else next[rk] = rv;
-    });
-    onChange(next);
+  const [rows, setRows] = useState<Array<{ k: string; v: string }>>(() =>
+    Object.entries(entries).map(([k, v]) => ({ k, v })));
+  const lastPushed = useRef(JSON.stringify(entries));
+
+  // Đổi TỪ BÊN NGOÀI (Pha 0 đổ về / nút Xoá hết) → đồng bộ lại mảng; đổi do chính mình gõ thì thôi
+  useEffect(() => {
+    const sig = JSON.stringify(entries);
+    if (sig !== lastPushed.current) {
+      setRows(Object.entries(entries).map(([k, v]) => ({ k, v })));
+      lastPushed.current = sig;
+    }
+  }, [entries]);
+
+  const push = (next: Array<{ k: string; v: string }>) => {
+    setRows(next);
+    const obj: Record<string, string> = {};
+    for (const r of next) if (r.k.trim()) obj[r.k.trim()] = r.v;
+    lastPushed.current = JSON.stringify(obj);
+    onChange(obj);
   };
+
   return (
     <details open={rows.length > 0} style={{ marginTop: 8 }}>
-      <summary style={{ cursor: 'pointer', fontSize: '0.82rem' }}>{title} ({rows.length})</summary>
+      <summary style={{ cursor: 'pointer', fontSize: '0.82rem' }}>{title} ({rows.filter((r) => r.k.trim()).length})</summary>
       <div style={{ maxHeight: 180, overflow: 'auto', marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
-        {rows.map(([k, v], i) => (
+        {rows.map((r, i) => (
           <div key={i} style={{ display: 'flex', gap: 6 }}>
-            <input value={k} placeholder={phSrc} style={{ ...mono, flex: 1 }} onChange={(e) => set(i, e.target.value, v)} />
+            <input value={r.k} placeholder={phSrc} style={{ ...mono, flex: 1 }}
+              onChange={(e) => push(rows.map((x, j) => j === i ? { ...x, k: e.target.value } : x))} />
             <span style={{ alignSelf: 'center' }}>→</span>
-            <input value={v} placeholder={phDst} style={{ ...mono, flex: 1 }} onChange={(e) => set(i, k, e.target.value)} />
-            <button onClick={() => { const n = { ...entries }; delete n[k]; onChange(n); }} style={{ ...btn, padding: '2px 8px' }}>✕</button>
+            <input value={r.v} placeholder={phDst} style={{ ...mono, flex: 1 }}
+              onChange={(e) => push(rows.map((x, j) => j === i ? { ...x, v: e.target.value } : x))} />
+            <button onClick={() => push(rows.filter((_, j) => j !== i))} style={{ ...btn, padding: '2px 8px' }}>✕</button>
           </div>
         ))}
-        <button onClick={() => onChange({ ...entries, '': '' })} style={{ ...btn, alignSelf: 'flex-start', fontSize: '0.74rem', padding: '3px 10px' }}>➕</button>
+        <button onClick={() => push([...rows, { k: '', v: '' }])} style={{ ...btn, alignSelf: 'flex-start', fontSize: '0.74rem', padding: '3px 10px' }}>➕</button>
       </div>
     </details>
   );

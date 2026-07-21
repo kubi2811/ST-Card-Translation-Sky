@@ -36,6 +36,11 @@ export interface ToolStatus {
   lastError: string | null;
   /** ~10 dòng log cuối (stdout+stderr) để hiện trong màn chờ / màn lỗi */
   logTail: string[];
+  /**
+   * User vừa CHỦ ĐỘNG bấm Dừng (server nhớ, mọi tab đều thấy). Cần vì state React là
+   * cục bộ từng tab: mở hub ở 2 cửa sổ, cửa sổ kia sẽ auto-start lại cái vừa bị dừng.
+   */
+  manuallyStopped: boolean;
 }
 
 export const getToolById = (id: string): ToolServerDef | undefined =>

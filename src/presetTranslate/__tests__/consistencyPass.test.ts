@@ -16,6 +16,13 @@ describe('applyVarRenames — nguyên tử tuyệt đối', () => {
     expect(out).not.toContain('美型化');
   });
 
+  it('key là TIỀN TỐ của key khác → thay key DÀI trước (chống 好感度 → affection度)', () => {
+    // Review chéo bắt được: thay 好感 trước sẽ băm nát 好感度 thành affection度 → dây biến đứt câm.
+    const vars = { 好感: 'affection', 好感度: 'affection_level' };
+    const out = applyVarRenames('{{setvar::好感度::10}} {{getvar::好感度}} {{setvar::好感::a}}', vars);
+    expect(out).toBe('{{setvar::affection_level::10}} {{getvar::affection_level}} {{setvar::affection::a}}');
+  });
+
   it('không đụng biến khác / văn bản thường', () => {
     const t = '{{setvar::mood::vui}} 美型化 ngoài macro';
     const out = applyVarRenames(t, { 美型化: 'beautify' });

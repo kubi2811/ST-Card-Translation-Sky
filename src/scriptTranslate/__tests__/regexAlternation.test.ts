@@ -33,6 +33,19 @@ describe('alternateRegexBody', () => {
     expect(r.changed).toBe(true);
   });
 
+  it('regex vốn đã là alternation nhiều tên → VẪN thêm nhánh Việt cho từng tên', () => {
+    // Review chéo bắt được: cũ chỉ cần thấy ký tự `|` là bỏ qua ⇒ /秋青子|明月/ (khớp nhiều
+    // tên, rất phổ biến) không bao giờ được dịch — tính năng im lặng không chạy.
+    const r = alternateRegexBody('秋青子|明月', DICT);
+    expect(r.changed).toBe(true);
+    expect(r.body).toBe('(?:秋青子|Thu Thanh Tử)|(?:明月|Minh Nguyệt)');
+    expect(() => new RegExp(r.body)).not.toThrow();
+
+    const g = alternateRegexBody('(秋青子|明月)[:：]', DICT);
+    expect(g.changed).toBe(true);
+    expect(() => new RegExp(g.body)).not.toThrow();
+  });
+
   it('idempotent: đã có nhánh rồi thì KHÔNG bọc thêm lần nữa', () => {
     const once = alternateRegexBody('秋青子', DICT).body;
     const twice = alternateRegexBody(once, DICT).body;

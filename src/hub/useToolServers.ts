@@ -10,13 +10,19 @@ interface ToolServersState {
   /** Thao tác đang bay (start/stop) — để disable nút + poll nhanh */
   pending: Record<string, 'start' | 'stop' | undefined>;
   refresh: () => Promise<void>;
-  start: (id: string) => Promise<void>;
+  /** auto=true khi do bấm tab (tự khởi động); false = user bấm nút Khởi động tường minh */
+  start: (id: string, auto?: boolean) => Promise<void>;
   stop: (id: string) => Promise<boolean>;
+  /** Lỗi thao tác gần nhất theo tool (start/stop fail) — UI hiện băng đỏ, tự tắt sau 8s */
+  opError: Record<string, string | undefined>;
+  clearOpError: (id: string) => void;
 }
 
 export const useToolServers = create<ToolServersState>((set, get) => ({
   status: {},
   pending: {},
+  opError: {},
+  clearOpError: (id) => set((s) => ({ opError: { ...s.opError, [id]: undefined } })),
 
   refresh: async () => {
     try {
@@ -30,21 +36,31 @@ export const useToolServers = create<ToolServersState>((set, get) => ({
     } catch { /* hub dev server đang restart — lần poll sau sẽ tự khỏi */ }
   },
 
-  start: async (id) => {
+  start: async (id, auto = false) => {
     const { pending, status } = get();
     if (pending[id]) return;
-    set({ pending: { ...pending, [id]: 'start' } });
+    set({ pending: { ...pending, [id]: 'start' }, opError: { ...get().opError, [id]: undefined } });
     // Optimistic: hiện "đang khởi động" NGAY để bấm tab là thấy phản hồi tức thì.
     const cur = status[id];
     if (cur) set({ status: { ...status, [id]: { ...cur, phase: 'starting', lastError: null, startedAt: Date.now() } } });
+    let err = '';
     try {
-      await fetch('/api/tools/start', {
+      const res = await fetch('/api/tools/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id }),
+        body: JSON.stringify({ id, auto }),
       });
-    } catch { /* status poll sẽ phản ánh thực tế */ }
-    set((s) => ({ pending: { ...s.pending, [id]: undefined } }));
+      // PHẢI đọc kết quả: start fail mà im lặng thì effect auto-start cứ 2-8s lại spawn
+      // một lần nữa (loop vô hình, user không thấy lỗi gì).
+      const data = await res.json().catch(() => null);
+      if (data && data.ok === false) err = String(data.error || 'START_FAILED');
+    } catch (e) { err = (e as Error)?.message || 'START_FAILED'; }
+    set((s) => ({
+      pending: { ...s.pending, [id]: undefined },
+      opError: { ...s.opError, [id]: err || undefined },
+      // Không có phản hồi tốt → gỡ trạng thái "starting" lạc quan để UI không quay mãi
+      status: err && s.status[id] ? { ...s.status, [id]: { ...s.status[id], phase: 'error', lastError: err } } : s.status,
+    }));
     void get().refresh();
   },
 
@@ -62,15 +78,13 @@ export const useToolServers = create<ToolServersState>((set, get) => ({
       });
       const data = await res.json().catch(() => null);
       ok = !!data?.ok;
-      error = data?.error || '';
+      // detail = lý do người-đọc-được từ free-ports (vd "port bị obs64 giữ, KHÔNG phải node")
+      error = [data?.error, data?.detail].filter(Boolean).join(' — ');
     } catch (e: any) { error = e?.message || String(e); }
-    set((s) => {
-      const cur = s.status[id];
-      return {
-        pending: { ...s.pending, [id]: undefined },
-        status: cur && !ok ? { ...s.status, [id]: { ...cur, lastError: error || cur.lastError } } : s.status,
-      };
-    });
+    set((s) => ({
+      pending: { ...s.pending, [id]: undefined },
+      opError: { ...s.opError, [id]: ok ? undefined : (error || 'STOP_FAILED') },
+    }));
     void get().refresh();
     return ok;
   },

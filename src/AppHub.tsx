@@ -126,6 +126,29 @@ export default function AppHub() {
   );
 }
 
+/**
+ * Dịch MÃ LỖI từ server sang câu tiếng người theo ngôn ngữ đang chọn.
+ * Server chỉ trả mã máy (MISSING_DIR:crawler, PORT_BUSY:5177…) nên user EN/中文 không
+ * còn thấy lỗi tiếng Việt lẫn vào giao diện.
+ */
+function useSrvErrorText() {
+  const ui = useUi();
+  return (raw: string | null | undefined): string => {
+    if (!raw) return '';
+    const [code, ...rest] = String(raw).split(':');
+    const arg = rest.join(':');
+    switch (code) {
+      case 'MISSING_DIR': return fmt(ui.toolSrvErrMissingDir, { dir: arg });
+      case 'SPAWN_FAILED': return fmt(ui.toolSrvErrSpawn, { code: arg });
+      case 'EXITED_EARLY': return fmt(ui.toolSrvErrExited, { code: arg });
+      case 'PORT_BUSY': return fmt(ui.toolSrvErrPortBusy, { port: arg.split(' — ')[0] }) + (arg.includes(' — ') ? ` (${arg.split(' — ').slice(1).join(' ')})` : '');
+      case 'STILL_LISTENING': return fmt(ui.toolSrvErrStillListening, { port: arg });
+      case 'TOOL_NOT_FOUND': return fmt(ui.toolSrvErrNotFound, { id: arg });
+      default: return String(raw);
+    }
+  };
+}
+
 /** Màn chờ tải chunk của flow native lazy (Dịch Script/Dịch Preset). */
 function NativeFlowLoading({ color }: { color?: string }) {
   return (
@@ -331,8 +354,11 @@ function IframeFlow({ flow, active }: { flow: FlowDef; active: boolean }) {
   const toolId = flow.serverToolId;
   const st = useToolServers((s) => (toolId ? s.status[toolId] : undefined));
   const pending = useToolServers((s) => (toolId ? s.pending[toolId] : undefined));
+  const opError = useToolServers((s) => (toolId ? s.opError[toolId] : undefined));
   const startSrv = useToolServers((s) => s.start);
   const stopSrv = useToolServers((s) => s.stop);
+  const clearOpError = useToolServers((s) => s.clearOpError);
+  const srvErrText = useSrvErrorText();
 
   // The tool's dev server may still be booting. Poll the URL until it's reachable, THEN mount
   // the iframe — so the user never sees a permanent "refused to connect".
@@ -361,7 +387,10 @@ function IframeFlow({ flow, active }: { flow: FlowDef; active: boolean }) {
     if (!active || !toolId || manuallyStopped) return;
     if (!st) return;                                     // chưa có status đầu tiên → chờ poll
     if (st.running || st.phase === 'starting' || st.phase === 'error' || pending) return;
-    void startSrv(toolId);
+    // Cửa sổ/tab KHÁC vừa bấm Dừng → tôn trọng, không bật lại (server là tài nguyên chung,
+    // còn `manuallyStopped` phía trên chỉ là state cục bộ của chính tab này).
+    if (st.manuallyStopped) return;
+    void startSrv(toolId, true); // auto=true → server còn một lớp chặn nữa
   }, [active, toolId, manuallyStopped, st, pending, startSrv]);
 
   // Đồng hồ giây trên màn "Đang khởi động…"
@@ -420,7 +449,25 @@ function IframeFlow({ flow, active }: { flow: FlowDef; active: boolean }) {
         <span style={{ fontWeight: 700, fontSize: '0.95rem', color: flow.color || 'var(--accent-primary)', display: 'flex', alignItems: 'center', gap: 6 }}>
           <span style={{ fontSize: '1.15rem' }}>{flow.emoji}</span> {label}
         </span>
-        <span style={{ opacity: 0.85 }}>{ready ? ui.toolbarHintReady : ui.toolbarHintWaiting}</span>
+        {/* Lỗi thao tác (Dừng không ăn vì port bị app khác giữ…) — hiện NGAY trên toolbar,
+            kể cả khi iframe vẫn chạy; trước đây lỗi này không có chỗ nào hiển thị. */}
+        {opError ? (
+          <span
+            title={opError}
+            onClick={() => toolId && clearOpError(toolId)}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer',
+              padding: '3px 10px', borderRadius: 6, maxWidth: 460,
+              background: 'rgba(255,90,70,0.15)', border: '1px solid rgba(255,90,70,0.4)',
+              color: '#ffb4a6', fontSize: '0.78rem',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}
+          >
+            ⚠️ {srvErrText(opError)} ✕
+          </span>
+        ) : (
+          <span style={{ opacity: 0.85 }}>{ready ? ui.toolbarHintReady : ui.toolbarHintWaiting}</span>
+        )}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
           {toolId && st?.running && (
             <button
@@ -456,13 +503,17 @@ function IframeFlow({ flow, active }: { flow: FlowDef; active: boolean }) {
           <button onClick={handleStart} disabled={pending === 'stop'} style={{ ...bigStartBtn, borderColor: flow.color || 'var(--accent-primary)', color: flow.color || 'var(--accent-primary)' }}>
             <Play size={18} /> {fmt(ui.toolSrvStartTool, { name: label })}
           </button>
-          {st?.lastError && <div style={{ fontSize: '0.8rem', color: '#ffb4a6' }}>{fmt(ui.toolSrvStopFailed, { error: st.lastError })}</div>}
+          {(opError || st?.lastError) && (
+            <div style={{ fontSize: '0.8rem', color: '#ffb4a6', maxWidth: 560, textAlign: 'center' }}>
+              {fmt(ui.toolSrvStopFailed, { error: srvErrText(opError || st?.lastError) })}
+            </div>
+          )}
         </div>
       ) : toolId && st?.phase === 'error' ? (
         /* ─── Server chết non → hiện lý do + log + Thử lại ─── */
         <div style={waitScreen}>
           <div style={{ fontSize: '1.05rem', fontWeight: 700, color: '#ffb4a6' }}>{fmt(ui.toolSrvErrorTitle, { name: label })}</div>
-          {st.lastError && <div style={{ fontSize: '0.85rem', maxWidth: 560, textAlign: 'center' }}>{st.lastError}</div>}
+          {st.lastError && <div style={{ fontSize: '0.85rem', maxWidth: 560, textAlign: 'center' }}>{srvErrText(st.lastError)}</div>}
           {st.logTail.length > 0 && (
             <pre style={logTailBox}>{st.logTail.join('\n')}</pre>
           )}

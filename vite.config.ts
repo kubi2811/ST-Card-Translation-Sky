@@ -113,7 +113,9 @@ export default defineConfig({
                 const id = body && typeof body.id === 'string' ? body.id : '';
                 if (!getToolById(id)) return sendJson(400, { ok: false, error: `Tool không tồn tại: ${id || '(thiếu id)'}` });
                 if (route.kind === 'start') {
-                  const r = await startTool(id, process.cwd());
+                  // auto=true: do bấm tab (tự khởi động) → tôn trọng ý muốn "vừa dừng tay"
+                  // của cửa sổ khác. Bấm nút Khởi động tường minh thì auto=false, luôn chạy.
+                  const r = await startTool(id, process.cwd(), { auto: body?.auto === true });
                   return sendJson(r.ok ? 200 : 500, r);
                 }
                 const r = await stopTool(id, process.cwd());

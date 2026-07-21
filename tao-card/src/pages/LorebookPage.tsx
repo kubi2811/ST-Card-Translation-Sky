@@ -16,6 +16,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { useCardStore } from '../store/cardStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { useToastStore } from '../store/toastStore';
+import { splitKeyInput } from '../lib/worldbook/keyInput';
 import { BatchGeneratorPanel } from '../components/lorebook/BatchGeneratorPanel';
 import { DocExtractPanel } from '../components/lorebook/DocExtractPanel';
 import { WikiScraperPanel } from '../components/lorebook/WikiScraperPanel';
@@ -588,9 +589,15 @@ function EntryEditor({ entry, onChange, onSave, onCancel, onDelete }: {
   }, [entry, onChange]);
 
   const addKey = useCallback((field: 'keys' | 'secondary_keys', input: string, setInput: (v: string) => void) => {
-    const key = input.trim();
-    if (!key || entry[field].includes(key)) return;
-    update({ [field]: [...entry[field], key] });
+    // Gõ "giao hàng, ship hàng" phải ra HAI key riêng. Trước đây cả chuỗi thành một key
+    // dính dấu phẩy — key đó không bao giờ khớp trong SillyTavern.
+    const incoming = splitKeyInput(input).filter(k => !entry[field].includes(k));
+    if (incoming.length === 0) {
+      // Toàn trùng hoặc rỗng → vẫn dọn ô nhập cho khỏi kẹt chữ cũ.
+      if (input.trim()) setInput('');
+      return;
+    }
+    update({ [field]: [...entry[field], ...incoming] });
     setInput('');
   }, [entry, update]);
 

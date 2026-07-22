@@ -159,24 +159,61 @@ function buildUpdateRulesContent(schema: MVUZODSchema): string {
   return lines.join('\n');
 }
 
-function buildOutputFormatContent(): string {
-  return `variables_update_format:
+/**
+ * (User 22/07 — bug 75) Nội dung entry "[mvu_update] Định dạng đầu ra biến".
+ *
+ * ĐÂY LÀ HỢP ĐỒNG VỚI ENGINE MVU, KHÔNG PHẢI VĂN BẢN TỰ DO. Khối `<UpdateVariable>` phải có
+ * ĐÚNG HAI thẻ con `<Analysis>` và `<JSONPatch>`; mảng JSON nằm TRONG `<JSONPatch>`.
+ *
+ * Bản cũ nhét thẳng mảng JSON vào `<UpdateVariable>`, thiếu cả hai thẻ con ⇒ engine MVU không
+ * bóc ra được lệnh ⇒ SillyTavern báo "[MVU额外模型解析]变量更新失败".
+ *
+ * Cấu trúc dưới đây chép theo entry `[mvu_update]变量输出格式` của card MVU thật đang chạy
+ * (đối chiếu 3 card: bugNeedFix/1/_raw.json, /8, /9 — cả 3 đều có entry này, thẻ của Auto
+ * Creator thì không).
+ */
+export function buildOutputFormatContent(): string {
+  return `变量输出格式:
   rule:
-    - Xuất JSON Patch ở CUỐI mỗi reply, không được bỏ qua
-    - Dùng 5 operators: replace, delta, insert, remove, move
-    - delta PHẢI là number (không có quotes)
-    - Không cập nhật field bắt đầu bằng _ (readonly)
-    - Khi tạo NPC mới: insert TOÀN BỘ data, không bỏ sót field
-  format: |
+    - Xuất phần phân tích VÀ lệnh cập nhật MỘT LẦN ở CUỐI mỗi reply, không được bỏ qua.
+    - Lệnh cập nhật theo chuẩn **JSON Patch (RFC 6902)**: một mảng JSON hợp lệ gồm các object
+      thao tác, nhưng dùng bộ operator sau:
+      - replace: thay giá trị của đường dẫn đã có
+      - delta: cộng/trừ một lượng vào đường dẫn kiểu SỐ (value là number, KHÔNG có nháy)
+      - insert: thêm mục mới vào object hoặc mảng (dùng \`-\` làm chỉ số để nối vào cuối mảng)
+      - remove
+      - move
+    - KHÔNG cập nhật field bắt đầu bằng \`_\` — đó là field chỉ đọc.
+    - Khi tạo NPC mới: insert TOÀN BỘ dữ liệu, không bỏ sót field nào.
+    - Nếu lượt này không có gì thay đổi: vẫn xuất khối, với mảng rỗng [].
+  format: |-
     <UpdateVariable>
-    [{"op":"replace","path":"/Trạng thái thế giới/Loại cảnh hiện tại","value":"Chiến đấu"},
-     {"op":"delta","path":"/Người chơi/Trạng thái tu luyện/Cấp bậc hồn lực","value":1}]
+    <Analysis>$(VIẾT NGẮN, tối đa 80 từ)
+    - \${thời gian đã trôi qua: ...}
+    - \${có được phép cập nhật mạnh tay không (tình huống đặc biệt / thời gian trôi nhiều hơn thường lệ): có/không}
+    - \${xét từng biến theo \`check\` của nó, CHỈ dựa vào reply hiện tại chứ không dựa vào tình tiết cũ: ...}
+    </Analysis>
+    <JSONPatch>
+    [
+      { "op": "replace", "path": "\${/đường/dẫn/tới/biến}", "value": "\${giá_trị_mới}" },
+      { "op": "delta", "path": "\${/đường/dẫn/tới/biến/số}", "value": \${lượng_tăng_hoặc_giảm} },
+      { "op": "insert", "path": "\${/đường/dẫn/tới/khoá_mới}", "value": "\${giá_trị_mới}" }
+    ]
+    </JSONPatch>
     </UpdateVariable>`;
 }
 
-function buildEmphasisContent(): string {
-  return `Nhấn mạnh: Sau MỖI reply, BẮT BUỘC xuất block <UpdateVariable>...</UpdateVariable>
-Không được bỏ qua dù chỉ 1 lượt. Nếu không có thay đổi, xuất mảng rỗng [].`;
+/**
+ * (bug 75) Entry nhấn mạnh — card MVU thật có entry riêng cho việc này
+ * (`[mvu_update]变量输出格式强调`), rất ngắn, chỉ để nhắc AI không được quên khối.
+ */
+export function buildEmphasisContent(): string {
+  return `变量输出格式强调:
+  rule: Khối dưới đây BẮT BUỘC phải được chèn vào CUỐI mỗi reply, không được phép bỏ qua.
+  format: |-
+    <UpdateVariable>
+    ...
+    </UpdateVariable>`;
 }
 
 function buildInitVarContent(schema: MVUZODSchema): string {

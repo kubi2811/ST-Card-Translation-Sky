@@ -661,9 +661,15 @@ export default function MvuSyncPanel() {
       }
       return f;
     });
-    const total = fieldRes.fixCount + cardRes.fixCount + casingFixes;
-    const dictChanged = JSON.stringify(cleanDict) !== JSON.stringify(dict);
-    if (total > 0 || dictChanged) {
+    // (bug 76) Đếm CẢ mục từ điển bị đổi. Trước đây chỉ đếm số chỗ thay trong text nên khi nút
+    // chỉ sửa từ điển thì toast báo "chuẩn hoá 0 chỗ" — user thấy nút như không làm gì, rồi ngay
+    // sau đó lại thấy cảnh báo xung đột, không hiểu chuyện gì xảy ra.
+    let dictChangedCount = 0;
+    for (const k of new Set([...Object.keys(dict), ...Object.keys(cleanDict)])) {
+      if (dict[k] !== cleanDict[k]) dictChangedCount++;
+    }
+    const total = fieldRes.fixCount + cardRes.fixCount + casingFixes + dictChangedCount;
+    if (total > 0) {
       pushDictionaryHistory(dict);
       setTranslationConfig({ mvuDictionary: cleanDict });
       if (fieldRes.fixCount > 0 || casingFixes > 0) setFields(casedFields);
@@ -671,6 +677,14 @@ export default function MvuSyncPanel() {
       addToast('success', fmt(ui.msUnifyDone, { count: total }));
     } else {
       addToast('info', ui.msConsistent);
+    }
+
+    // (bug 76) Xung đột CÓ SẴN (AI dịch 2 biến khác nhau ra cùng một tên) thì nút này KHÔNG tự
+    // sửa được — nói thẳng cho user biết là nó có từ trước, không phải nút vừa gây ra, và chỉ
+    // đường sang nút "gọi AI dịch lại" ngay phía trên.
+    const conflicts = validateDictionaryConflicts(cleanDict);
+    if (conflicts.length > 0) {
+      addToast('error', fmt(ui.msUnifyConflictLeft, { count: conflicts.length }));
     }
   };
 

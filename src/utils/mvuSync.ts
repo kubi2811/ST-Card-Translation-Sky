@@ -1490,87 +1490,50 @@ export function enforceExactConsistency(
   const fixedDict = { ...dict };
   const fixes: string[] = [];
 
-  // Group values by normalized form
-  const normalize = (s: string) => s.toLowerCase().replace(/[\s_-]+/g, ' ').trim();
-  const groups = new Map<string, { origKey: string; transValue: string }[]>();
+  // ═══ (User 22/07 — bug 76) VÌ SAO KHÔNG GOM THEO BẢN DỊCH NỮA ═══
+  //
+  // Bản cũ gom cụm theo GIÁ TRỊ ĐÃ DỊCH, dùng khoảng cách Levenshtein ≤ 2, rồi ép cả cụm về
+  // một tên. Với tiếng Việt Hán-Việt thì đó là suy luận SAI: hai thực thể khác hẳn nhau rất
+  // hay chỉ lệch 1-2 ký tự. Đo thật trên chính ca user gặp:
+  //
+  //     "Bạch Thược" ↔ "Xích Thược"   Levenshtein = 2  → BỊ GỘP   (白芍 vs 赤芍!)
+  //     "Thanh Vân"  ↔ "Thành Vân"    Levenshtein = 1  → BỊ GỘP
+  //     "Đông Cung"  ↔ "Đồng Cung"    Levenshtein = 1  → BỊ GỘP
+  //     "Hỏa Linh"   ↔ "Hàn Linh"     Levenshtein = 2  → BỊ GỘP
+  //
+  // Nút "Đồng nhất tên biến MVU" vì thế TỰ TAY tạo ra xung đột rồi mới báo có xung đột.
+  //
+  // Nguyên tắc đúng: chỉ được gom khi hai mục là CÙNG MỘT BIẾN ở phía NGUỒN (chỉ khác dấu
+  // nối/hoa thường, ví dụ 好感度 vs 好感_度). Hai nguồn KHÁC NHAU thì bản dịch phải giữ
+  // riêng — nếu chúng trùng nhau thì đó là XUNG ĐỘT cần báo cho user (validateDictionaryConflicts
+  // + nút "gọi AI dịch lại"), tuyệt đối không được im lặng gộp.
+  const normSource = (s: string) =>
+    canonicalizeMvuVarName(String(s)).toLowerCase().replace(/[\s_-]+/g, '').trim();
 
+  // Gom theo NGUỒN: mỗi nhóm = một biến, có thể được viết vài kiểu khác nhau.
+  const bySource = new Map<string, { origKey: string; transValue: string }[]>();
   for (const [origKey, transValue] of Object.entries(dict)) {
     if (!transValue || origKey === transValue) continue;
-    const norm = normalize(transValue);
-    if (!groups.has(norm)) groups.set(norm, []);
-    groups.get(norm)!.push({ origKey, transValue });
+    const norm = normSource(origKey);
+    if (!norm) continue;
+    if (!bySource.has(norm)) bySource.set(norm, []);
+    bySource.get(norm)!.push({ origKey, transValue });
   }
 
-  // Also check Levenshtein-close groups that normalize differently
-  const normKeys = [...groups.keys()];
-  const mergedGroups = new Map<string, string[]>(); // canonical norm → all similar norms
-  const visited = new Set<string>();
-
-  for (let i = 0; i < normKeys.length; i++) {
-    if (visited.has(normKeys[i])) continue;
-    const cluster = [normKeys[i]];
-    visited.add(normKeys[i]);
-    for (let j = i + 1; j < normKeys.length; j++) {
-      if (visited.has(normKeys[j])) continue;
-      if (levenshteinDistance(normKeys[i], normKeys[j]) <= 2) {
-        cluster.push(normKeys[j]);
-        visited.add(normKeys[j]);
-      }
-    }
-    if (cluster.length > 1) {
-      mergedGroups.set(normKeys[i], cluster);
-    }
-  }
-
-  // For each cluster of similar normalized forms, pick canonical and fix
-  for (const [, clusterNorms] of mergedGroups) {
-    // Collect all entries from all norms in this cluster
-    const allEntries: { origKey: string; transValue: string }[] = [];
-    for (const norm of clusterNorms) {
-      const entries = groups.get(norm);
-      if (entries) allEntries.push(...entries);
-    }
-    if (allEntries.length < 2) continue;
-
-    // Pick canonical: prefer schema confidence, then frequency
-    let canonical = allEntries[0].transValue;
-    if (metadata) {
-      const schemaEntry = allEntries.find(e => metadata[e.origKey]?.confidence === 'schema');
-      if (schemaEntry) canonical = schemaEntry.transValue;
-    }
-    if (!metadata) {
-      // Pick most frequent form
-      const freq = new Map<string, number>();
-      for (const e of allEntries) {
-        freq.set(e.transValue, (freq.get(e.transValue) || 0) + 1);
-      }
-      let maxCount = 0;
-      for (const [val, count] of freq) {
-        if (count > maxCount) { maxCount = count; canonical = val; }
-      }
-    }
-
-    // Fix all non-canonical to canonical
-    for (const entry of allEntries) {
-      if (entry.transValue !== canonical) {
-        fixedDict[entry.origKey] = canonical;
-        fixes.push(`"${entry.origKey}": "${entry.transValue}" → "${canonical}"`);
-      }
-    }
-  }
-
-  // Also fix exact-normalize duplicates within single groups
-  for (const [, entries] of groups) {
+  for (const [, entries] of bySource) {
     if (entries.length < 2) continue;
-    // Check if any entries have different exact strings
-    const uniqueValues = new Set(entries.map(e => e.transValue));
-    if (uniqueValues.size <= 1) continue;
+    if (new Set(entries.map(e => e.transValue)).size <= 1) continue;
 
-    // Pick canonical
+    // Chọn bản chuẩn: ưu tiên bản đến từ schema, không có thì lấy bản phổ biến nhất.
     let canonical = entries[0].transValue;
-    if (metadata) {
-      const schemaEntry = entries.find(e => metadata[e.origKey]?.confidence === 'schema');
-      if (schemaEntry) canonical = schemaEntry.transValue;
+    const schemaEntry = metadata && entries.find(e => metadata[e.origKey]?.confidence === 'schema');
+    if (schemaEntry) {
+      canonical = schemaEntry.transValue;
+    } else {
+      const freq = new Map<string, number>();
+      for (const e of entries) freq.set(e.transValue, (freq.get(e.transValue) || 0) + 1);
+      let maxCount = 0;
+      for (const [val, count] of freq) if (count > maxCount) { maxCount = count; canonical = val; }
     }
 
     for (const entry of entries) {

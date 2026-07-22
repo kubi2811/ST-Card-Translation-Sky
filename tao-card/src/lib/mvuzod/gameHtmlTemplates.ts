@@ -1284,6 +1284,34 @@ export function generateOpeningFormSharedJS(totalPages: number): string {
  * Assemble CSS + HTML body + JS into a complete HTML document string.
  * Output format matches regex JSON replaceString convention.
  */
+/**
+ * (User 22/07 — bug 75) "Opening Form giao diện đã hiện ra nhưng lại không tương tác nút bấm được."
+ *
+ * GỐC RỄ: khối JS nằm trong `<script type="module">` (bắt buộc, vì TavernHelper cần `import`),
+ * nhưng nút lại gắn handler bằng thuộc tính inline `onclick="goToPage(1)"`. Hàm khai báo bên
+ * trong module chỉ sống trong SCOPE CỦA MODULE, không bao giờ trở thành thuộc tính của `window`.
+ * Trình duyệt lại đánh giá nội dung `onclick=` ở GLOBAL scope ⇒ mỗi lần bấm là
+ * `ReferenceError: goToPage is not defined`. Nút vẫn hiện, hover vẫn đổi màu (CSS chạy bình
+ * thường), nhưng bấm không làm gì — đúng y triệu chứng user mô tả.
+ *
+ * Cách chữa: quét chính HTML để lấy mọi tên hàm đang được gọi từ handler inline, rồi gán chúng
+ * lên `window` ở cuối module. Quét tự động nên sau này thêm nút mới cũng không tái phát.
+ */
+export function exportInlineHandlersToWindow(bodyHtml: string, js: string): string {
+  const names = new Set<string>();
+  for (const m of bodyHtml.matchAll(/\son(?:click|change|input|submit|blur|focus)\s*=\s*["']([A-Za-z_$][\w$]*)\s*\(/g)) {
+    names.add(m[1]);
+  }
+  // Chỉ xuất hàm THẬT SỰ có khai báo trong khối JS — tránh gán window.X = undefined rồi
+  // che mất lỗi "thiếu hàm" (lỗi đó phải để nó nổ ra cho thấy).
+  const declared = [...names].filter(n =>
+    new RegExp(`(?:function\\s+${n}\\b|(?:const|let|var)\\s+${n}\\s*=)`).test(js),
+  );
+  if (declared.length === 0) return '';
+  return '\n    // (bug 75) Đưa handler ra global — `onclick=` inline không thấy được scope của module.\n' +
+    declared.map(n => `    window.${n} = ${n};`).join('\n') + '\n';
+}
+
 export function assembleHtmlDocument(
   css: string,
   bodyHtml: string,
@@ -1293,6 +1321,7 @@ export function assembleHtmlDocument(
   const fontLink = fontImport
     ? `\n    <link rel="stylesheet" href="${fontImport}">`
     : '';
+  const handlerExports = exportInlineHandlersToWindow(bodyHtml, js);
 
   return '```html\n' +
     '<!DOCTYPE html>\n' +
@@ -1310,6 +1339,7 @@ export function assembleHtmlDocument(
     '    </div>\n' +
     '    <script type="module">\n' +
     js + '\n' +
+    handlerExports +
     '    </script>\n' +
     '</body>\n' +
     // (bug 72 - user tu soi ra) Khoi mo bang fence html ma THIEU fence dong o cuoi thi

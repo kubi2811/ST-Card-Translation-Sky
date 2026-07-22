@@ -10,6 +10,7 @@ import type { RegexPlacement } from '../../types';
 import { useCardStore } from '../../store/cardStore';
 import { buildSchemaContextForBatch } from '../mvuzod/schemaContextBuilder';
 import { normalizeMVUZODSchema } from '../mvuzod/normalizeSchema';
+import { buildOutputFormatContent, buildEmphasisContent } from '../mvuzod/systemEntriesBuilder';
 import { buildMVUZODScripts } from '../mvuzod/tavernScriptBuilder';
 import { OPENING_FORM_ANCHOR } from '../mvuzod/regexAnchors';
 import { buildMvuCoreRegexScripts } from '../mvuzod/mvuCoreRegex';
@@ -599,6 +600,28 @@ async function buildFinalCheckReport(
     if (hasUpdate) lines.push('✅ Có entry quy tắc cập nhật biến ([mvu_update])');
     else { lines.push('⚠️ KHÔNG thấy entry quy tắc cập nhật biến — AI trong game không biết cách cập nhật, dễ lỗi "变量更新失败"'); problems++; }
 
+    // (User 22/07 — bug 75) HỢP ĐỒNG VỚI ENGINE MVU — phần trước đây lọt lưới hoàn toàn.
+    // Phép kiểm cũ chỉ hỏi "có entry nào chứa chữ mvu_update không", nên một entry rỗng cũng
+    // PASS. Thẻ user gửi có đủ 3 entry đầu, báo cáo xanh mướt, mà vào game vẫn lỗi.
+    // Card MVU thật (đối chiếu bugNeedFix/1, /8, /9) bắt buộc có khối <UpdateVariable> với
+    // ĐÚNG hai thẻ con <Analysis> và <JSONPatch>.
+    const allContent = entries.map(en => String(en.content || '')).join('\n');
+    if (!/<UpdateVariable>/i.test(allContent)) {
+      lines.push('❌ Không có entry nào dạy AI khối <UpdateVariable> — đây là ĐỊNH DẠNG ĐẦU RA của biến. Thiếu nó thì MVU không bóc được lệnh cập nhật, vào game báo "变量更新失败".');
+      problems++;
+    } else if (!/<JSONPatch>/i.test(allContent) || !/<Analysis>/i.test(allContent)) {
+      lines.push('❌ Khối <UpdateVariable> THIẾU thẻ con <Analysis> và/hoặc <JSONPatch> — MVU đọc mảng lệnh bên trong <JSONPatch>, để trần mảng JSON là parse không ra.');
+      problems++;
+    } else {
+      lines.push('✅ Có định dạng đầu ra biến đầy đủ (<UpdateVariable> + <Analysis> + <JSONPatch>)');
+    }
+
+    // Entry [initvar] phải có nội dung THẬT, không chỉ đúng cái tên.
+    if (initEntry && String(initEntry.content || '').trim().length < 10) {
+      lines.push('❌ Entry [initvar] rỗng — biến không có giá trị khởi tạo, MVU sẽ chạy trên object trống.');
+      problems++;
+    }
+
     const varNames = new Set(collectSchemaVarNames(schema));
     const badVars = new Set<string>();
     for (const rs of regexScripts) {
@@ -651,6 +674,42 @@ async function buildFinalCheckReport(
     lines.push('✅ Mỗi mỏ neo giao diện chỉ có đúng 1 script render');
   }
 
+  // 3c. (User 22/07 — bug 75) "Opening Form đã hiện ra nhưng không bấm được nút."
+  // Trước đây báo cáo không đọc JS một dòng nào, nên lỗi này lọt 100%.
+  // Hai lỗi im lặng làm giao diện "hiện mà chết":
+  //   (a) handler gọi từ `onclick=` inline nhưng hàm khai báo trong <script type="module">
+  //       → hàm chỉ sống trong scope module, `onclick=` chạy ở global ⇒ ReferenceError;
+  //   (b) script render có replaceString RỖNG — nó vẫn "compile OK" và vẫn "đúng 1 script mỗi
+  //       mỏ neo", nên báo cáo xanh mướt trong khi màn hình trắng trơn.
+  const brokenHandlers: string[] = [];
+  const emptyRender: string[] = [];
+  for (const rs of regexScripts) {
+    const r = rs as { findRegex?: string; replaceString?: string; scriptName?: string; promptOnly?: boolean; markdownOnly?: boolean };
+    const rep = String(r.replaceString || '');
+    if (r.promptOnly && !r.markdownOnly) continue; // vế ẩn, không render gì
+
+    if (r.findRegex && rep.trim() === '') { emptyRender.push(r.scriptName || r.findRegex); continue; }
+    if (!/<script/i.test(rep)) continue;
+
+    const isModule = /<script[^>]*type\s*=\s*["']module["']/i.test(rep);
+    if (!isModule) continue;
+    for (const m of rep.matchAll(/\son(?:click|change|input|submit|blur|focus)\s*=\s*["']([A-Za-z_$][\w$]*)\s*\(/g)) {
+      const fn = m[1];
+      const exported = new RegExp(`(?:window|globalThis)\\s*\\.\\s*${fn}\\s*=`).test(rep);
+      if (!exported && !brokenHandlers.includes(fn)) brokenHandlers.push(fn);
+    }
+  }
+  if (emptyRender.length > 0) {
+    lines.push(`❌ ${emptyRender.length} script render có nội dung RỖNG (${emptyRender.slice(0, 3).join(', ')}) — mỏ neo bị nuốt, giao diện sẽ trắng trơn dù báo cáo nhìn có vẻ ổn.`);
+    problems++;
+  }
+  if (brokenHandlers.length > 0) {
+    lines.push(`❌ ${brokenHandlers.length} nút sẽ BẤM KHÔNG CHẠY: ${brokenHandlers.slice(0, 5).join(', ')} — gọi từ onclick= nhưng hàm nằm trong <script type="module"> nên không lên global. Cần gán window.<tên hàm> = <tên hàm>.`);
+    problems++;
+  } else if (regexScripts.some(rs => /<script[^>]*type\s*=\s*["']module["']/i.test(String((rs as { replaceString?: string }).replaceString || '')))) {
+    lines.push('✅ Mọi handler gọi từ onclick= đều đã được đưa ra global (nút bấm chạy được)');
+  }
+
   // 4. Lorebook: chất lượng + cấu hình
   if (entries.length > 0) {
     try {
@@ -673,23 +732,55 @@ async function buildFinalCheckReport(
   return { lines, problems };
 }
 
-/** (User 19/07) Prompt cho lượt AI đọc báo cáo kiểm tra + nhận xét tổng thể. */
+/**
+ * (User 22/07 — bug 75) "Nâng lại độ thông minh của Kiểm tra tổng thể: toàn thấy nó nói Card
+ * đã chơi được."
+ *
+ * Prompt cũ có 4 chỗ đẩy AI về phía lạc quan, sửa hết:
+ *  1. Khung "nhận xét" (comment) chứ không phải phán xử — không một chữ nào bắt AI hoài nghi.
+ *  2. NEO: báo cáo tự động đặt TRƯỚC nội dung thẻ. Báo cáo cũ dễ toàn ✅ nên AI đọc xong là
+ *     đã tin card ổn rồi mới nhìn tới thẻ. Nay đảo thứ tự: THẺ trước, báo cáo sau.
+ *  3. "NGẮN GỌN ~300 từ" ép tóm tắt lạc quan thay vì liệt kê lỗi.
+ *  4. Câu hỏi "card chơi được chưa?" không có tiêu chí trượt nào.
+ *
+ * Cũng liệt kê thẳng những lỗi ĐÃ TỪNG lọt lưới để AI biết chỗ mà soi.
+ */
 function buildFinalCheckReviewPrompt(reportText: string, cardContext: string, userRules: string): string {
-  return `Bạn là chuyên gia thẩm định character card SillyTavern (MVU/Zod, regex dashboard, lorebook).
-Dưới đây là BÁO CÁO KIỂM TRA TỰ ĐỘNG của card vừa tạo xong, kèm nội dung card.
-
-═══ BÁO CÁO KIỂM TRA ═══
-${reportText}
+  return `Bạn là người NGHIỆM THU character card SillyTavern (MVU/Zod, regex dashboard, lorebook).
+Vai của bạn là người HOÀI NGHI, không phải người khen. Mặc định coi card là CHƯA đạt cho tới khi
+tự tìm thấy bằng chứng ngược lại trong chính nội dung thẻ bên dưới.
 
 ═══ NỘI DUNG CARD (JSON, có thể bị cắt) ═══
 ${cardContext.slice(0, 60_000)}
 ${userRules?.trim() ? `\n═══ QUY TẮC NGƯỜI DÙNG ĐẶT RA ═══\n${userRules.trim()}` : ''}
 
-NHIỆM VỤ: nhận xét NGẮN GỌN bằng tiếng Việt (tối đa ~300 từ):
-1. Card đã CHƠI ĐƯỢC chưa? Các mảnh (schema ↔ initvar ↔ update rules ↔ regex UI ↔ lorebook) có ăn khớp không?
-2. Với từng dòng ❌/⚠️ trong báo cáo: nên sửa thế nào (chỉ đúng bước Auto Creator cần chạy lại hoặc panel cần mở).
-3. Có vi phạm quy tắc người dùng đặt ra không?
-KHÔNG trả JSON, KHÔNG viết lại card — chỉ nhận xét và hướng dẫn sửa.`;
+═══ BÁO CÁO KIỂM TRA TỰ ĐỘNG (chỉ là gợi ý, KHÔNG phải kết luận) ═══
+${reportText}
+
+Báo cáo trên chỉ bắt được lỗi máy kiểm được. NÓ ĐÃ TỪNG BÁO "ĐẠT" CHO CARD HỎNG. Đừng tin nó.
+
+═══ NHỮNG LỖI TỪNG LỌT LƯỚI — SOI ĐÚNG NHỮNG CHỖ NÀY ═══
+1. Entry [mvu_update] có tên đúng nhưng nội dung KHÔNG dạy khối <UpdateVariable> với đủ hai thẻ
+   con <Analysis> và <JSONPatch> ⇒ vào game báo "变量更新失败".
+2. Entry [initvar] còn BẬT (phải tắt), hoặc nội dung rỗng, hoặc thiếu biến mà schema có.
+3. Nút trong Opening Form gọi từ onclick= nhưng hàm nằm trong <script type="module"> mà không
+   gán ra window ⇒ giao diện hiện nhưng bấm không chạy.
+4. Script render có replaceString rỗng ⇒ mỏ neo bị nuốt, màn hình trắng.
+5. Khối HTML mở fence \`\`\`html mà thiếu fence đóng ở cuối.
+6. Mỏ neo (<OpeningFormImpl/>, <StatusPlaceHolderImpl/>) không hề xuất hiện trong first_mes
+   ⇒ không có chỗ nào để giao diện bám vào.
+7. data-var trong regex không khớp tên biến trong schema ⇒ ô hiển thị trống.
+
+═══ TRẢ LỜI (tiếng Việt) ═══
+A. PHÁN QUYẾT: chọn đúng một trong ba — CHƠI ĐƯỢC / CHƠI ĐƯỢC NHƯNG LỖI VẶT / CHƯA CHƠI ĐƯỢC.
+   Quy tắc: chỉ cần MỘT trong 7 mục trên dính ⇒ CHƯA CHƠI ĐƯỢC. Không được nói "có vẻ ổn".
+B. BẰNG CHỨNG: với mỗi mục bạn kết luận là hỏng, trích ĐÚNG đoạn trong thẻ chứng minh. Không
+   trích được thì đừng kết luận.
+C. CÁCH SỬA: mỗi lỗi một dòng — chạy lại bước nào của Auto Creator, hoặc mở panel nào.
+D. NẾU BẠN KHÔNG NHÌN THẤY ĐỦ: nội dung thẻ bị cắt bớt. Nói rõ phần nào bạn không kiểm được,
+   thay vì đoán là nó ổn.
+
+Viết đủ dài để nói hết ý. KHÔNG trả JSON, KHÔNG viết lại card.`;
 }
 
 // ═══ APPLY DATA TO CARD (shared by auto-apply and manual apply) ═══
@@ -856,6 +947,37 @@ function applyParsedDataToCard(
             content: result.varListEntry as string,
             constant: true,
           }, { defaultDepth: 1 }, nextEntryId(entries)));
+        }
+
+        // (User 22/07 — bug 75) HAI ENTRY BẮT BUỘC MÀ AUTO CREATOR TRƯỚC GIỜ KHÔNG HỀ TẠO.
+        //
+        // Card MVU thật có 5 entry hệ thống; Auto Creator chỉ đẻ ra 3 cái đầu — khớp 100% với
+        // thẻ lỗi user gửi. Thiếu entry "định dạng đầu ra" thì AI không biết phải bọc mảng JSON
+        // trong <Analysis> + <JSONPatch>, engine MVU bóc không ra lệnh nào ⇒ SillyTavern báo
+        // "[MVU额外模型解析]变量更新失败". Đối chiếu 3 card thật (bugNeedFix/1, /8, /9): cả 3
+        // đều có entry này, đặt ở position 4 (@depth), depth 0, role system.
+        //
+        // Không phụ thuộc AI — nội dung là HỢP ĐỒNG cố định với engine, sinh bằng luật.
+        if (config.stepConfigs.mvuzod.createUpdateRules) {
+          const hasFormat = entries.some(e => /输出格式|Định dạng đầu ra/i.test(String(e.comment || '')));
+          if (!hasFormat) {
+            entries.push(materializeEntry({
+              comment: '[mvu_update]Định dạng đầu ra biến',
+              keys: [''],
+              content: buildOutputFormatContent(),
+              constant: true,
+            }, { defaultPosition: 4, defaultDepth: 0, defaultRole: 0, insertionOrderStart: 200 }, nextEntryId(entries)));
+            entries.push(materializeEntry({
+              comment: '[mvu_update]Nhấn mạnh định dạng đầu ra',
+              keys: [''],
+              content: buildEmphasisContent(),
+              constant: true,
+            }, { defaultPosition: 4, defaultDepth: 0, defaultRole: 0, insertionOrderStart: 200 }, nextEntryId(entries)));
+            useAutoCreatorStore.getState().addLog({
+              step, level: 'success',
+              message: '📐 Đã thêm 2 entry định dạng đầu ra biến (bắt buộc để MVU đọc được lệnh cập nhật).',
+            });
+          }
         }
       });
       break;

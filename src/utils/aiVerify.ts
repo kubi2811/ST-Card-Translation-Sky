@@ -1,3 +1,4 @@
+import { compareInitvarKeys } from './initvarKeyCollision';
 import { countCjkText } from './cjk';
 import { fandomNameOverride } from './fandomMode';
 import type { CharacterCard, ProxySettings, TranslationField } from '../types/card';
@@ -331,6 +332,55 @@ export function quickVerify(
           }
         }
       }
+    }
+  }
+
+  // (User 22/07 — bug 77) TRÙNG KHOÁ trong [initvar] sau khi dịch — lỗi LÀM MẤT DỮ LIỆU.
+  //
+  // Hai chữ Hán khác nhau dịch ra cùng một từ ⇒ hai khoá YAML anh em trùng tên ⇒ node sau đè
+  // node trước ⇒ stat_data mất hẳn một field ⇒ mọi lệnh JSONPatch trỏ vào đó thất bại ⇒ MVU
+  // báo "变量更新失败". Đo trên thẻ thật (bugNeedFix/1): initvar gốc 36 khoá distinct, bản dịch
+  // còn 35 — 口 và 臀 cùng ra "Miệng" (臀 đúng ra là "Mông").
+  //
+  // Không tự sửa được: máy không biết 臀 phải là "Mông", đoán bừa thì hỏng nặng hơn. Việc của
+  // phép kiểm này là CHẶN thẻ hỏng lọt ra ngoài và chỉ đúng chỗ để user gọi AI dịch lại.
+  const initvarOf = (c: CharacterCard): string => {
+    for (const e of (c?.data?.character_book?.entries ?? [])) {
+      const cm = String((e as { comment?: string })?.comment ?? '');
+      const ct = String((e as { content?: string })?.content ?? '');
+      if (/initvar/i.test(cm) || cm.includes('初始化') || ct.includes('[initvar]')) return ct;
+    }
+    return '';
+  };
+  const origInit = initvarOf(originalCard);
+  const transInit = initvarOf(translatedCard);
+  if (origInit && transInit) {
+    const col = compareInitvarKeys(origInit, transInit);
+    for (const c of col.introduced) {
+      issues.push({
+        id: `initvar-dup-${c.name}`,
+        severity: 'error',
+        location: `lorebook[initvar]${c.parentPath ? ' → ' + c.parentPath.replace(/ /g, '/') : ''}`,
+        description:
+          `Tên biến "${c.name}" bị ${c.count} biến khác nhau cùng dùng (dòng ${c.lines.join(', ')}). ` +
+          `Hai khoá trùng tên thì cái sau đè cái trước — thẻ MẤT HẲN một biến, vào game MVU sẽ báo "变量更新失败".`,
+        original: '(mỗi biến một tên riêng)',
+        current: c.name,
+        suggestion: `Mở entry [initvar], sửa một trong ${c.count} chỗ thành tên khác (đối chiếu chữ Hán gốc để dịch đúng), hoặc gọi AI dịch lại riêng entry này.`,
+        autoFixable: false,
+      });
+    }
+    if (col.lostFields > 0 && col.introduced.length === 0) {
+      issues.push({
+        id: 'initvar-lost-fields',
+        severity: 'error',
+        location: 'lorebook[initvar]',
+        description: `Bản dịch mất ${col.lostFields} biến so với bản gốc (gốc ${col.origDistinct} → dịch ${col.transDistinct}).`,
+        original: `${col.origDistinct} biến`,
+        current: `${col.transDistinct} biến`,
+        suggestion: 'Đối chiếu entry [initvar] bản gốc với bản dịch, tìm biến bị mất rồi bổ sung lại.',
+        autoFixable: false,
+      });
     }
   }
 

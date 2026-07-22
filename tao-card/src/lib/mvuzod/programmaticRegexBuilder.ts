@@ -95,6 +95,20 @@ interface SchemaAnalysis {
   editableFields: FieldAnalysis[];
 }
 
+/**
+ * (User 22/07 — bug 78) TÊN BIẾN nằm ở `path`, KHÔNG phải ở `label`.
+ *
+ * `label` là chữ hiển thị cho người đọc ("Thông tin Người Chơi"), còn tên biến thật MVU dùng
+ * nằm trong `path` ("/Player/Name"). Bản cũ dựng keyPath từ `label`, nên Opening Form ghi
+ * biến tên tiếng Việt trong khi schema/initvar khai tên tiếng Anh — đo trên thẻ thật
+ * (bugNeedFix/41): giao nhau giữa tên biến của Form và của Schema là ĐÚNG 0.
+ * Vì thế nhập form xong biến chẳng vào đâu cả.
+ */
+function varNameOf(field: { path?: string; label?: string }): string {
+  const seg = String(field.path ?? '').split('/').filter(Boolean).pop();
+  return seg || String(field.label ?? '');
+}
+
 function analyzeSchema(schema: MVUZODSchema): SchemaAnalysis {
   const sections: SectionAnalysis[] = [];
   let globalFieldCount = 0;
@@ -102,7 +116,8 @@ function analyzeSchema(schema: MVUZODSchema): SchemaAnalysis {
 
   for (const field of schema.fields) {
     if (field.constraints?.hidden) continue;
-    const section = analyzeSection(field, [field.label], `stcs-${sanitizeId(field.label)}`);
+    // keyPath phải theo TÊN BIẾN (path), không theo nhãn hiển thị — xem varNameOf.
+    const section = analyzeSection(field, [varNameOf(field)], `stcs-${sanitizeId(field.label)}`);
     sections.push(section);
     globalFieldCount += section.allLeafFields.length;
     editableFields.push(
@@ -137,7 +152,7 @@ function analyzeSection(
   for (const child of children) {
     if (child.constraints?.hidden) continue;
 
-    const childKeyPath = [...parentKeyPath, child.label];
+    const childKeyPath = [...parentKeyPath, varNameOf(child)];
     const childElementId = `${sectionIdPrefix}-${sanitizeId(child.label)}`;
 
     const fa: FieldAnalysis = {

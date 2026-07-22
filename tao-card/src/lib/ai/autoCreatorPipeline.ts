@@ -11,6 +11,7 @@ import { useCardStore } from '../../store/cardStore';
 import { buildSchemaContextForBatch } from '../mvuzod/schemaContextBuilder';
 import { normalizeMVUZODSchema } from '../mvuzod/normalizeSchema';
 import { buildOutputFormatContent, buildEmphasisContent } from '../mvuzod/systemEntriesBuilder';
+import { nestFlatInitvarKeys } from '../mvuzod/nestFlatInitvar';
 import { buildMVUZODScripts } from '../mvuzod/tavernScriptBuilder';
 import { OPENING_FORM_ANCHOR, STATUS_BAR_ANCHOR } from '../mvuzod/regexAnchors';
 import { buildMvuCoreRegexScripts } from '../mvuzod/mvuCoreRegex';
@@ -934,7 +935,11 @@ function applyParsedDataToCard(
           entries.push(materializeEntry({
             comment: '[initvar]初始化',
             keys: [''],
-            content: result.initVarEntry as string,
+            // (bug 78) AI hay viết khoá PHẲNG có dấu `/` (`Player/Name: "..."`) thay vì cây YAML.
+            // MVU đọc thành MỘT khoá tên đúng chữ "Player/Name", không phải Player > Name, nên
+            // không khớp schema lẫn Opening Form. Đo trên thẻ thật (bugNeedFix/41): giao nhau
+            // giữa tên biến của initvar và của schema là ĐÚNG 0.
+            content: nestFlatInitvarKeys(result.initVarEntry as string),
             constant: true,
           }, { enabled: false, defaultRole: 0, insertionOrderStart: 0 }, nextEntryId(entries)));
         }

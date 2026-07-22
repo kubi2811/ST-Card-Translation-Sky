@@ -12,7 +12,7 @@ import { buildSchemaContextForBatch } from '../mvuzod/schemaContextBuilder';
 import { normalizeMVUZODSchema } from '../mvuzod/normalizeSchema';
 import { buildOutputFormatContent, buildEmphasisContent } from '../mvuzod/systemEntriesBuilder';
 import { buildMVUZODScripts } from '../mvuzod/tavernScriptBuilder';
-import { OPENING_FORM_ANCHOR } from '../mvuzod/regexAnchors';
+import { OPENING_FORM_ANCHOR, STATUS_BAR_ANCHOR } from '../mvuzod/regexAnchors';
 import { buildMvuCoreRegexScripts } from '../mvuzod/mvuCoreRegex';
 import { schemaToZodCode } from '../mvuzod/schemaInferencer';
 import { buildProgrammaticRegex } from '../mvuzod/programmaticRegexBuilder';
@@ -681,6 +681,13 @@ async function buildFinalCheckReport(
   //       → hàm chỉ sống trong scope module, `onclick=` chạy ở global ⇒ ReferenceError;
   //   (b) script render có replaceString RỖNG — nó vẫn "compile OK" và vẫn "đúng 1 script mỗi
   //       mỏ neo", nên báo cáo xanh mướt trong khi màn hình trắng trơn.
+  // Chỉ MỎ NEO giao diện mới được coi là "script render". Script XOÁ nội dung (ví dụ
+  // "[AI] Loại bỏ khối UpdateVariable") vốn dĩ PHẢI có replaceString rỗng — đó là việc của nó,
+  // không phải lỗi. Cờ markdownOnly+promptOnly cùng bật của nó cũng đúng chuẩn: theo
+  // engine.js:347-355 của ST, tổ hợp đó chạy ở lượt hiển thị và lượt prompt nhưng KHÔNG chạy ở
+  // lượt ghi chat[].mes — nên khối <UpdateVariable> bị giấu khỏi mắt user và khỏi prompt, mà
+  // vẫn còn nguyên trong tin nhắn thô cho MVU đọc.
+  const UI_ANCHORS = [OPENING_FORM_ANCHOR, STATUS_BAR_ANCHOR];
   const brokenHandlers: string[] = [];
   const emptyRender: string[] = [];
   for (const rs of regexScripts) {
@@ -688,7 +695,8 @@ async function buildFinalCheckReport(
     const rep = String(r.replaceString || '');
     if (r.promptOnly && !r.markdownOnly) continue; // vế ẩn, không render gì
 
-    if (r.findRegex && rep.trim() === '') { emptyRender.push(r.scriptName || r.findRegex); continue; }
+    const isAnchor = !!r.findRegex && UI_ANCHORS.includes(r.findRegex);
+    if (isAnchor && rep.trim() === '') { emptyRender.push(r.scriptName || r.findRegex!); continue; }
     if (!/<script/i.test(rep)) continue;
 
     const isModule = /<script[^>]*type\s*=\s*["']module["']/i.test(rep);

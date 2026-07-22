@@ -78,3 +78,51 @@ describe('bug 75b — nút trong Opening Form phải bấm được', () => {
     expect(exportInlineHandlersToWindow('<div>chỉ chữ</div>', 'function x(){}')).toBe('');
   });
 });
+
+// (User 22/07, ảnh chụp log final_check) Phép kiểm "script render rỗng" tớ vừa thêm đã báo
+// động GIẢ trên chính script "[AI] Loại bỏ khối UpdateVariable":
+//     ❌ 1 script render có nội dung RỖNG ([AI] Loại bỏ khối UpdateVariable)
+// Script đó có replaceString rỗng là ĐÚNG — việc của nó là XOÁ khối, không phải render.
+//
+// Cờ markdownOnly+promptOnly cùng bật của nó cũng đúng chuẩn. Đọc engine.js:347-355 của ST:
+//   (markdownOnly && isMarkdown) || (promptOnly && isPrompt) || (!markdownOnly && !promptOnly && !isMarkdown && !isPrompt)
+// ⇒ tổ hợp cả-hai-true chạy ở lượt HIỂN THỊ và lượt PROMPT, nhưng KHÔNG chạy ở lượt ghi
+// chat[].mes. Nghĩa là khối <UpdateVariable> bị giấu khỏi mắt user và khỏi prompt lượt sau,
+// mà vẫn còn nguyên trong tin nhắn thô để MVU đọc. Đúng như thiết kế.
+describe('bug 75c — phép kiểm không được báo động giả trên script xoá nội dung', () => {
+  const isEmptyRenderFlagged = (script: Record<string, unknown>) => {
+    const UI_ANCHORS = ['<OpeningFormImpl/>', '<StatusPlaceHolderImpl/>'];
+    const r = script as { findRegex?: string; replaceString?: string; promptOnly?: boolean; markdownOnly?: boolean };
+    if (r.promptOnly && !r.markdownOnly) return false;
+    const isAnchor = !!r.findRegex && UI_ANCHORS.includes(r.findRegex);
+    return isAnchor && String(r.replaceString || '').trim() === '';
+  };
+
+  it('script XOÁ khối UpdateVariable (replaceString rỗng có chủ ý) KHÔNG bị báo lỗi', () => {
+    expect(isEmptyRenderFlagged({
+      scriptName: '[AI] Loại bỏ khối UpdateVariable',
+      findRegex: '/<UpdateVariable>[\\s\\S]*?<\\/UpdateVariable>/g',
+      replaceString: '', markdownOnly: true, promptOnly: true,
+    })).toBe(false);
+  });
+
+  it('nhưng script RENDER bám mỏ neo mà rỗng thì VẪN bị báo (lỗi thật)', () => {
+    expect(isEmptyRenderFlagged({
+      scriptName: '[Render] Opening Form',
+      findRegex: '<OpeningFormImpl/>',
+      replaceString: '', markdownOnly: true, promptOnly: false,
+    })).toBe(true);
+    expect(isEmptyRenderFlagged({
+      scriptName: '[Render] Status Bar',
+      findRegex: '<StatusPlaceHolderImpl/>',
+      replaceString: '   ', markdownOnly: true, promptOnly: false,
+    })).toBe(true);
+  });
+
+  it('script render bám mỏ neo CÓ nội dung → không bị báo', () => {
+    expect(isEmptyRenderFlagged({
+      findRegex: '<OpeningFormImpl/>', replaceString: '```html\n<div>...</div>\n```',
+      markdownOnly: true, promptOnly: false,
+    })).toBe(false);
+  });
+});

@@ -28,6 +28,7 @@
     "dexie": "^4.4.3",
     "diff": "^9.0.0",
     "gpt-tokenizer": "^3.4.0",
+    "jszip": "^3.10.1",
     "lodash": "^4.18.1",
     "lucide-react": "^1.20.0",
     "minisearch": "^7.2.0",

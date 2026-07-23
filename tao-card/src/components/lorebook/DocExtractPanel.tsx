@@ -17,6 +17,8 @@ import {
 } from '../../lib/worldbook/worldbookConfig';
 import { DEFAULT_STEPS } from '../../lib/ai/worldbuildingDefaults';
 import { safeSetItem } from '../../lib/safeStorage';
+import { parseEpubToText, isEpubFile } from '../../lib/ai/epubParser';
+import { useToastStore } from '../../store/toastStore';
 import { t as ui, fmt } from '../../i18n';
 
 const POSITION_LABELS: Record<number, string> = {
@@ -66,26 +68,49 @@ export function DocExtractPanel() {
 
   const activeProfile = settings.profiles.find(p => p.id === settings.activeProfileId);
 
+  const toastError = useToastStore(s => s.error);
+
   const addLog = useCallback((msg: string) => {
     setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
   }, []);
 
   // ─── File handling ──────────────────────────────────────────────────
 
-  const handleFile = useCallback((file: File) => {
+  /** Nạp text đã đọc xong vào state + báo số chunk (dùng chung cho mọi định dạng). */
+  const acceptText = useCallback((file: File, text: string) => {
+    const chunks = splitDocument(text, { chunkSize });
+    setFileInfo({ name: file.name, size: file.size, text, chunks: chunks.length });
+    addLog(fmt(ui.deLoaded, { name: file.name, kb: (file.size / 1024).toFixed(1), chunks: chunks.length, size: chunkSize.toLocaleString() }));
+  }, [addLog, chunkSize]);
+
+  const handleFile = useCallback(async (file: File) => {
+    // .epub là ZIP chứa XHTML → phải giải nén lấy chữ trước, rồi mới đi tiếp luồng chunk như .txt.
+    if (isEpubFile(file)) {
+      addLog(ui.deEpubParsing);
+      try {
+        const text = await parseEpubToText(file);
+        acceptText(file, text);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        addLog(fmt(ui.deEpubFailed, { err: msg }));
+        toastError(msg);
+      }
+      return;
+    }
+
     if (!file.name.match(/\.(txt|md|text)$/i)) {
       addLog(ui.deOnlyTxt);
+      toastError(ui.deOnlyTxt);
       return;
     }
     const reader = new FileReader();
-    reader.onload = () => {
-      const text = reader.result as string;
-      const chunks = splitDocument(text, { chunkSize });
-      setFileInfo({ name: file.name, size: file.size, text, chunks: chunks.length });
-      addLog(fmt(ui.deLoaded, { name: file.name, kb: (file.size / 1024).toFixed(1), chunks: chunks.length, size: chunkSize.toLocaleString() }));
+    reader.onload = () => acceptText(file, reader.result as string);
+    reader.onerror = () => {
+      addLog(ui.deOnlyTxt);
+      toastError(ui.deOnlyTxt);
     };
     reader.readAsText(file);
-  }, [addLog, chunkSize]);
+  }, [addLog, acceptText]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -97,7 +122,7 @@ export function DocExtractPanel() {
   const handleFileInput = useCallback(() => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.txt,.md,.text';
+    input.accept = '.txt,.md,.text,.epub,application/epub+zip';
     input.onchange = (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (file) handleFile(file);
@@ -156,7 +181,7 @@ export function DocExtractPanel() {
           dragOver ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/50'
         }`}>
         <Upload className="w-8 h-8 mx-auto mb-2 text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">{fmt(ui.deDropHint, { ext: '.txt' })}</p>
+        <p className="text-sm text-muted-foreground">{fmt(ui.deDropHint, { ext: '.txt, .epub' })}</p>
       </div>
 
       {/* File info */}

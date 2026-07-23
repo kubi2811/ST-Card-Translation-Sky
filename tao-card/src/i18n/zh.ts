@@ -762,7 +762,9 @@ const t: CardUiKeys = {
   ccVerifying: '正在 verify……',
 
   // ─── DocExtractPanel ───
-  deOnlyTxt: '❌ 只支持 .txt 和 .md 文件',
+  deOnlyTxt: '❌ 只支持 .txt、.md 和 .epub 文件',
+  deEpubParsing: '📖 正在读取 .epub（跳过图片/字体以加快速度）...',
+  deEpubFailed: '❌ 无法读取 .epub 文件：{err}',
   deLoaded: '📂 已载入「{name}」（{kb} KB，约 {chunks} 个分块 @ 每块 {size} 字符）',
   deError: '💥 出错：{msg}',
   deDropHint: '把 {ext} 文件拖到这里，或点击选择',

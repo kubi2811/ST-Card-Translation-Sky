@@ -763,7 +763,9 @@ const t = {
   ccVerifying: 'Verifying...',
 
   // ─── DocExtractPanel ───
-  deOnlyTxt: '❌ Only .txt and .md files are supported',
+  deOnlyTxt: '❌ Only .txt, .md and .epub files are supported',
+  deEpubParsing: '📖 Reading .epub (skipping images/fonts for speed)...',
+  deEpubFailed: '❌ Could not read the .epub file: {err}',
   deLoaded: '📂 Loaded "{name}" ({kb} KB, ~{chunks} chunks @ {size} chars/chunk)',
   deError: '💥 Error: {msg}',
   deDropHint: 'Drag a {ext} file here, or click to pick one',

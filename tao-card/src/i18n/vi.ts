@@ -764,7 +764,9 @@ const t: CardUiKeys = {
   ccVerifying: 'Đang verify...',
 
   // ─── DocExtractPanel ───
-  deOnlyTxt: '❌ Chỉ hỗ trợ file .txt, .md',
+  deOnlyTxt: '❌ Chỉ hỗ trợ file .txt, .md, .epub',
+  deEpubParsing: '📖 Đang đọc file .epub (bỏ qua ảnh/font cho nhanh)...',
+  deEpubFailed: '❌ Không đọc được file .epub: {err}',
   deLoaded: '📂 Đã nạp "{name}" ({kb} KB, ~{chunks} chunks @ {size} ký tự/chunk)',
   deError: '💥 Lỗi: {msg}',
   deDropHint: 'Kéo-thả file {ext} vào đây hoặc nhấn để chọn',

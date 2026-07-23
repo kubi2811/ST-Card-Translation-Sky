@@ -3,6 +3,7 @@
  * v3: Blueprint-aware, prompt override support
  */
 
+import { MVU_WORKING_CARD_EXAMPLE } from '../mvuzod/mvuReference';
 import type {
   CardBlueprint,
   BasicInfoStepConfig,
@@ -156,6 +157,8 @@ export function buildMvuzodPrompt(idea: string, cardContext: string, config: Mvu
 
   const base = `
 Bạn là chuyên gia về hệ thống biến trạng thái MVUZOD cho SillyTavern. Hãy tạo MVUZOD schema và các entries cần thiết.
+
+${MVU_WORKING_CARD_EXAMPLE}
 
 Ý TƯỞNG: "${idea}"
 ${blueprintContext(bp)}

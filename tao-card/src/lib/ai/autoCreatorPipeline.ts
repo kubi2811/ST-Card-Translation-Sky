@@ -15,6 +15,7 @@ import { nestFlatInitvarKeys } from '../mvuzod/nestFlatInitvar';
 import { buildMVUZODScripts } from '../mvuzod/tavernScriptBuilder';
 import { OPENING_FORM_ANCHOR, STATUS_BAR_ANCHOR } from '../mvuzod/regexAnchors';
 import { autoRepairCard } from './cardAutoRepair';
+import { checkMvuOutputContract } from '../mvuzod/mvuReference';
 import { buildMvuCoreRegexScripts } from '../mvuzod/mvuCoreRegex';
 import { schemaToZodCode } from '../mvuzod/schemaInferencer';
 import { buildProgrammaticRegex } from '../mvuzod/programmaticRegexBuilder';
@@ -678,12 +679,16 @@ async function buildFinalCheckReport(
     // PASS. Thẻ user gửi có đủ 3 entry đầu, báo cáo xanh mướt, mà vào game vẫn lỗi.
     // Card MVU thật (đối chiếu bugNeedFix/1, /8, /9) bắt buộc có khối <UpdateVariable> với
     // ĐÚNG hai thẻ con <Analysis> và <JSONPatch>.
+    // (User 23/07 — việc 87) Dùng CHUNG `checkMvuOutputContract` với bộ sinh entry. Trước đây hai
+    // bên tự định nghĩa riêng: bộ sinh xuất mảng JSON để trần, bộ kiểm đòi <Analysis>/<JSONPatch>
+    // → mọi thẻ Auto Creator tạo ra đều đỏ mà chẳng ai phát hiện hai bên lệch nhau.
     const allContent = entries.map(en => String(en.content || '')).join('\n');
-    if (!/<UpdateVariable>/i.test(allContent)) {
+    const contract = checkMvuOutputContract(allContent);
+    if (contract.missing.includes('UpdateVariable')) {
       lines.push('❌ Không có entry nào dạy AI khối <UpdateVariable> — đây là ĐỊNH DẠNG ĐẦU RA của biến. Thiếu nó thì MVU không bóc được lệnh cập nhật, vào game báo "变量更新失败".');
       problems++;
-    } else if (!/<JSONPatch>/i.test(allContent) || !/<Analysis>/i.test(allContent)) {
-      lines.push('❌ Khối <UpdateVariable> THIẾU thẻ con <Analysis> và/hoặc <JSONPatch> — MVU đọc mảng lệnh bên trong <JSONPatch>, để trần mảng JSON là parse không ra.');
+    } else if (!contract.ok) {
+      lines.push(`❌ Khối <UpdateVariable> THIẾU thẻ con ${contract.missing.map(m => `<${m}>`).join(' và ')} — MVU đọc mảng lệnh bên trong <JSONPatch>, để trần mảng JSON là parse không ra.`);
       problems++;
     } else {
       lines.push('✅ Có định dạng đầu ra biến đầy đủ (<UpdateVariable> + <Analysis> + <JSONPatch>)');

@@ -14,6 +14,7 @@
  * - 前端項目改造指南.md
  */
 
+import { buildMvuOutputBlock } from './mvuReference';
 import type { MVUZODSchema, MVUZODField, InitVarEntry } from '../../types/mvuzod.types';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -479,25 +480,38 @@ export function generateOutputFormatEntry(schema: MVUZODSchema): string {
     sampleOps.push('{"op":"replace","path":"/例子/值","value":"mới"}');
   }
 
+  // (User 23/07 — việc 87) TRƯỚC ĐÂY xuất mảng JSON ĐỂ TRẦN trong <UpdateVariable>. MVU đọc mảng
+  // lệnh BÊN TRONG <JSONPatch> nên để trần là parse không ra — mọi thẻ Auto Creator tạo đều dính
+  // ❌ "thiếu thẻ con <Analysis>/<JSONPatch>". Đối chiếu thẻ thật đang chạy được (bug/) và dùng
+  // chung khuôn ở mvuReference.ts để bộ sinh, bộ kiểm và prompt không bao giờ lệch nhau nữa.
+  const block = buildMvuOutputBlock(sampleOps)
+    .split('\n').map(l => `    ${l}`).join('\n');
   return `variables_update_format:
   rule:
     - Xuất JSON Patch ở CUỐI mỗi reply, không được bỏ qua
+    - Mảng lệnh PHẢI nằm trong <JSONPatch>, và phải có <Analysis> đi kèm
     - Dùng 5 operators: replace, delta, insert, remove, move
     - delta PHẢI là number (không có quotes)
     - Không cập nhật field bắt đầu bằng _ (readonly)
     - Khi tạo entry mới trong record: insert TOÀN BỘ data, không bỏ sót field
+    - Đường dẫn giữ NGUYÊN tên biến (có dấu, có khoảng trắng), không đổi sang snake_case
   format: |
-    <UpdateVariable>
-    [${sampleOps.join(',\n     ')}]
-    </UpdateVariable>`;
+${block}`;
 }
 
 /**
  * Generate emphasis entry — reminds AI to always output UpdateVariable block.
  */
 export function generateEmphasisEntry(): string {
-  return `Nhấn mạnh: Sau MỖI reply, BẮT BUỘC xuất block <UpdateVariable>...</UpdateVariable>
-Không được bỏ qua dù chỉ 1 lượt. Nếu không có thay đổi, xuất mảng rỗng [].`;
+  // Nhắc lại ĐỦ cấu trúc chứ không chỉ tên thẻ ngoài cùng: entry này nằm ở D0 (cuối prompt) nên
+  // là thứ model đọc sau chót — nói thiếu ở đây là model quên mất hai thẻ con.
+  return `Nhấn mạnh: Sau MỖI reply, BẮT BUỘC xuất khối cập nhật biến đầy đủ:
+<UpdateVariable>
+  <Analysis>…tóm tắt bằng tiếng Anh những gì vừa đổi…</Analysis>
+  <JSONPatch>[ …lệnh… ]</JSONPatch>
+</UpdateVariable>
+Mảng lệnh PHẢI nằm trong <JSONPatch> — để trần là không cập nhật được biến.
+Không được bỏ qua dù chỉ 1 lượt. Nếu không có thay đổi, xuất <JSONPatch>[]</JSONPatch>.`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

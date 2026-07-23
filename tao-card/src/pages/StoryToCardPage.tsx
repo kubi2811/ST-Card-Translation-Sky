@@ -26,7 +26,10 @@ export function StoryToCardPage() {
 
   // Persist inputs + outputs qua localStorage → F5 / đóng tab / đổi tab không mất việc.
   const [story, setStory] = usePersistedState('s2c.story', '');
-  const [opts, setOpts] = usePersistedState<StoryCardOptions>('s2c.opts', { detail: 'vừa phải', nsfw: false, template: 'chuẩn', splitByStage: true, autoContinue: true });
+  // (User 23/07 — việc 89) `withWorldEntries` TRƯỚC ĐÂY KHÔNG có trong đây → luôn undefined →
+  // prompt không hề yêu cầu world entries → chạy xong lorebook trống trơn. Sinh lore từ truyện
+  // chính là lý do tồn tại của tab này nên phải BẬT SẴN.
+  const [opts, setOpts] = usePersistedState<StoryCardOptions>('s2c.opts', { detail: 'vừa phải', nsfw: false, template: 'chuẩn', splitByStage: true, autoContinue: true, withWorldEntries: true });
   // Tuỳ chọn quét
   const [chunkSize, setChunkSize] = usePersistedState('s2c.chunkSize', 40000);
   const [maxChunks, setMaxChunks] = usePersistedState('s2c.maxChunks', 12);
@@ -113,17 +116,24 @@ export function StoryToCardPage() {
     abortRef.current = new AbortController();
     const signal = abortRef.current.signal;
     try {
+      let madeEntries = 0;
       if (names.length === 1) {
         const c = await generateCardFromStory(story, names[0], profile!, settings.generationParams, opts, signal);
         setCard(c);
+        madeEntries = c.worldEntries.length;
       } else {
         setBatchProg({ d: 0, t: names.length, name: '' });
         const res = await generateCardsForMany(story, names, profile!, settings.generationParams, opts, signal,
           (d, t, name) => setBatchProg({ d, t, name }));
         setBatch(res);
         const ok = res.filter((r) => r.card).length;
+        madeEntries = res.reduce((n, r) => n + (r.card?.worldEntries.length ?? 0), 0);
         toast.success(fmt(ui.s2cGenerated, { ok, total: names.length }));
       }
+      // (User 23/07 — việc 89) Trước đây không có lore thì màn hình chỉ đơn giản là không hiện gì,
+      // user tưởng tool hỏng. Nói thẳng lý do: tắt tuỳ chọn, hay AI không trả về entry nào.
+      if (!opts.withWorldEntries) toast.info(ui.s2cWorldOffHint);
+      else if (madeEntries === 0) toast.info(ui.s2cWorldEmptyHint);
     } catch (e) { if (isAbortErr(e)) toast.error(ui.s2cGenStopped); else toast.error(e instanceof Error ? e.message : String(e)); }
     finally { setGenerating(false); setBatchProg(null); }
   };

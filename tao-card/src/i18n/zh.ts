@@ -372,6 +372,8 @@ const t: CardUiKeys = {
   s2cOmitEmpty: '省略小说里没有的字段',
   s2cAutoContinue: '被截断时自动续写',
   s2cWithWorld: '附带 world/lore 条目',
+  s2cWorldOffHint: '未勾选"附带 world/lore 条目"，所以没有生成任何 lorebook 条目。勾选后重新生成。',
+  s2cWorldEmptyHint: 'AI 没有为这篇故事返回任何 lorebook 条目。可提高细节等级，或粘贴含地名/势力/物品的段落后重试。',
   s2cHide: '隐藏',
   s2cShow: '显示',
   s2cAdvancedOpts: '进阶选项',

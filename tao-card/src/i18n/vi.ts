@@ -374,6 +374,8 @@ const t: CardUiKeys = {
   s2cOmitEmpty: 'Lược bỏ trường không có trong truyện',
   s2cAutoContinue: 'Tự viết tiếp khi bị cắt',
   s2cWithWorld: 'Kèm world/lore entries',
+  s2cWorldOffHint: 'Chưa bật "Kèm world/lore entries" nên không có entry lorebook nào được tạo. Bật ô đó rồi tạo lại.',
+  s2cWorldEmptyHint: 'AI không trả về entry lorebook nào cho truyện này. Thử tăng mức chi tiết, hoặc dán thêm đoạn truyện có địa danh/thế lực/vật phẩm rồi tạo lại.',
   s2cHide: 'Ẩn',
   s2cShow: 'Hiện',
   s2cAdvancedOpts: ' tuỳ chọn nâng cao',

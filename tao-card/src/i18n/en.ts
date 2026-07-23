@@ -373,6 +373,8 @@ const t = {
   s2cOmitEmpty: 'Omit fields absent from the story',
   s2cAutoContinue: 'Auto-continue when cut off',
   s2cWithWorld: 'Include world/lore entries',
+  s2cWorldOffHint: '"Include world/lore entries" is off, so no lorebook entries were created. Turn it on and generate again.',
+  s2cWorldEmptyHint: 'The AI returned no lorebook entries for this story. Try a higher detail level, or paste story text with places/factions/items and generate again.',
   s2cHide: 'Hide',
   s2cShow: 'Show',
   s2cAdvancedOpts: ' advanced options',

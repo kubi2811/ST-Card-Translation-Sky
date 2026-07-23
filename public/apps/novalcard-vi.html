@@ -174,7 +174,7 @@
       <div class="faint" style="font-size:11px;margin-top:6px;line-height:1.5"><b>Provider 1</b> = cấu hình chính phía trên. Thêm provider khác (mỗi cái Base URL/Key/Model riêng) để engine rải call <b>round-robin</b> và chạy <b>song song</b>. Các ô model phụ/RPM/ngưỡng dưới đây áp cho <b>Provider 1</b>.</div>
       <div class="row" style="margin-top:6px">
         <div class="field"><label title="Số call/phút tối đa cho model chính của Provider 1 (nhân số key). 0 = không giới hạn.">RPM model chính (P1)</label><input type="number" id="primaryRpm" value="10" min="0" step="1"></div>
-        <div class="field"><label title="Model phụ (rẻ/nhanh hơn) cho Provider 1 — để trống nếu không dùng">Model phụ P1 (tùy chọn)</label><input type="text" id="secondaryModel" class="mono" placeholder="vd gemini-2.5-flash" autocomplete="off"></div>
+        <div class="field"><label title="Model phụ (rẻ/nhanh hơn) cho Provider 1 — để trống nếu không dùng">Model phụ P1 (tùy chọn) <button type="button" id="fetchModels2" class="mini">Tải danh sách mô hình</button> <span id="modelMsg2" class="faint" style="font-size:11px"></span></label><input type="text" id="secondaryModel" class="mono" placeholder="vd gemini-2.5-flash" autocomplete="off"><select id="modelSelect2" class="mono" style="display:none;margin-top:8px"></select></div>
       </div>
       <div class="row">
         <div class="field"><label title="Số call/phút tối đa cho model phụ (nhân số key). 0 = không giới hạn.">RPM model phụ (P1)</label><input type="number" id="secondaryRpm" value="20" min="0" step="1"></div>
@@ -537,11 +537,11 @@
     <div class="field"><label>Base URL</label><input type="text" id="pmBaseUrl" class="mono" placeholder="http://127.0.0.1:2156" autocomplete="off"></div>
     <div class="field"><label>API Key (nhiều key: mỗi dòng hoặc dấu phẩy)</label><textarea id="pmApiKey" class="mono" rows="2" placeholder="sk-... hoặc key1, key2" style="resize:vertical"></textarea></div>
     <div class="row">
-      <div class="field"><label>Model chính</label><input type="text" id="pmModel" class="mono" placeholder="gemini-2.5-pro / gpt-..." autocomplete="off"></div>
+      <div class="field"><label>Model chính <button type="button" id="pmFetchModels" class="mini">Tải danh sách</button> <span id="pmModelMsg" class="faint" style="font-size:11px"></span></label><input type="text" id="pmModel" class="mono" placeholder="gemini-2.5-pro / gpt-..." autocomplete="off"><select id="pmModelSelect" class="mono" style="display:none;margin-top:8px"></select></div>
       <div class="field"><label title="Call/phút cho model chính (× số key). 0 = không giới hạn.">RPM chính</label><input type="number" id="pmPrimaryRpm" value="10" min="0" step="1"></div>
     </div>
     <div class="row">
-      <div class="field"><label>Model phụ (tùy chọn)</label><input type="text" id="pmSecondaryModel" class="mono" placeholder="vd gemini-2.5-flash" autocomplete="off"></div>
+      <div class="field"><label>Model phụ (tùy chọn) <button type="button" id="pmFetchModels2" class="mini">Tải danh sách</button> <span id="pmModelMsg2" class="faint" style="font-size:11px"></span></label><input type="text" id="pmSecondaryModel" class="mono" placeholder="vd gemini-2.5-flash" autocomplete="off"><select id="pmModelSelect2" class="mono" style="display:none;margin-top:8px"></select></div>
       <div class="field"><label title="Call/phút cho model phụ (× số key). 0 = không giới hạn.">RPM phụ</label><input type="number" id="pmSecondaryRpm" value="20" min="0" step="1"></div>
     </div>
     <div class="field"><label title="Entry ngắn hơn ngưỡng (SỐ KÝ TỰ) → ưu tiên model phụ. 0 = tắt.">Ngưỡng ký tự → dùng model phụ</label><input type="number" id="pmCharThreshold" value="0" min="0" step="500"></div>
@@ -617,7 +617,9 @@ renderApiSelect(); applyProfileToFields();
 { const jb=store.get("cc_jailbreak"); els.jailbreak.checked=(jb!=="false"); }
 { const gm=store.get("cc_gomorrahNsfw"); els.gomorrahNsfw.checked=(gm!=="false"); }
 
-$("apiProfile").onchange=e=>{ curApiIdx=parseInt(e.target.value)||0; applyProfileToFields(); persistApi(); $("modelSelect").style.display="none"; };
+// Đổi profile ⇒ Base URL/Key khác ⇒ danh sách model cũ không còn đúng. Ẩn CẢ HAI dropdown
+// (trước đây quên ô model phụ, để lại danh sách của provider trước — chọn nhầm là call lỗi).
+$("apiProfile").onchange=e=>{ curApiIdx=parseInt(e.target.value)||0; applyProfileToFields(); persistApi(); $("modelSelect").style.display="none"; $("modelSelect2").style.display="none"; };
 $("apiNew").onclick=()=>{
   const name=(prompt("Tên cấu hình mới:","Cấu hình "+(apiProfiles.length+1))||"").trim();
   if(!name) return;
@@ -681,6 +683,9 @@ function openProvModal(idx){
   $("pmSecondaryRpm").value=p.secondaryRpm||"20";
   $("pmCharThreshold").value=p.charThreshold||"0";
   $("pmDelete").style.display = idx>=0 ? "" : "none";
+  // Mở provider khác ⇒ endpoint khác ⇒ danh sách model vừa tải của provider trước không còn đúng.
+  for(const id of ["pmModelSelect","pmModelSelect2"]) $(id).style.display="none";
+  for(const id of ["pmModelMsg","pmModelMsg2"]) $(id).textContent="";
   $("provModal").style.display="flex";
 }
 function closeProvModal(){ $("provModal").style.display="none"; _pmEditIdx=-1; }
@@ -1112,42 +1117,68 @@ $("testCfg").onclick=async()=>{
 };
 
 // ---------- 拉取模型列表 ----------
-function modelsEndpoint(){
-  let b=els.baseUrl.value.trim().replace(/\/+$/,"");
-  if(!b) throw new Error("Vui lòng điền Base URL trước");
-  if(/\/chat\/completions$/.test(b)) return b.replace(/\/chat\/completions$/,"/models");
-  return b+"/models";
+/* (User 23/07 — việc 84) Trước đây CHỈ ô "Tên mô hình" (model chính của Provider 1) có nút tải
+   danh sách; ô Model phụ P1 và cả hai ô model trong modal Provider 2+ thì phải gõ tay tên model —
+   gõ sai một ký tự là call lỗi mà chẳng biết vì sao. Cùng một Base URL/Key nên chẳng có lý do gì
+   ô này có nút mà ô kia không.
+   Tách phần gọi API ra dùng chung, rồi lắp cho cả 4 ô. Mỗi ô lấy Base URL/Key/định dạng từ ĐÚNG
+   provider của nó: ô P1 lấy từ cấu hình chính, ô trong modal lấy từ chính modal đó. */
+async function fetchModelIds(conn){
+  const baseUrl=String(conn.baseUrl||"").trim();
+  if(!baseUrl) throw new Error("Vui lòng điền Base URL trước");
+  const key=String(conn.apiKey||"").split(/[\n,]+/).map(k=>k.trim()).filter(Boolean)[0]||"";
+  let ids;
+  if(conn.apiFormat==="gemini"){
+    const b=baseUrl.replace(/\/+$/,"").replace(/\/v1beta$/,"").replace(/\/v1$/,"");
+    const res=await fetch(b+"/v1beta/models", { headers:{ "x-goog-api-key":key } });
+    if(!res.ok){ let t=""; try{t=await res.text();}catch(e){} throw new Error("HTTP "+res.status+" "+t.slice(0,200)); }
+    const data=await res.json();
+    ids=(data.models||[]).map(m=>(m.name||"").replace(/^models\//,"")).filter(Boolean);
+  }else{
+    let b=baseUrl.replace(/\/+$/,"");
+    b = /\/chat\/completions$/.test(b) ? b.replace(/\/chat\/completions$/,"/models") : b+"/models";
+    const res=await fetch(b,{ headers:{ "Authorization":"Bearer "+key } });
+    if(!res.ok){ let t=""; try{t=await res.text();}catch(e){} throw new Error("HTTP "+res.status+" "+t.slice(0,200)); }
+    const data=await res.json();
+    const list = Array.isArray(data) ? data : (data.data || data.models || []);
+    ids = list.map(m=> typeof m==="string" ? m : (m.id||m.name||m.model)).filter(Boolean);
+  }
+  ids=[...new Set(ids)].sort();
+  if(!ids.length) throw new Error("Danh sách mô hình rỗng");
+  return ids;
 }
-$("fetchModels").onclick=async()=>{
-  const btn=$("fetchModels"), msg=$("modelMsg");
-  if(!els.baseUrl.value.trim()){ msg.style.color="var(--danger)"; msg.textContent="Vui lòng điền Base URL trước"; return; }
-  btn.disabled=true; msg.style.color="var(--muted)"; msg.textContent="Đang tải...";
-  try{
-    let ids;
-    if(fmt()==="gemini"){
-      const res=await fetch(gbase()+"/v1beta/models", { headers:{ "x-goog-api-key":pickApiKey() } });
-      if(!res.ok){ let t=""; try{t=await res.text();}catch(e){} throw new Error("HTTP "+res.status+" "+t.slice(0,200)); }
-      const data=await res.json();
-      ids=(data.models||[]).map(m=>(m.name||"").replace(/^models\//,"")).filter(Boolean);
-    }else{
-      const res=await fetch(modelsEndpoint(),{ headers:{ "Authorization":"Bearer "+pickApiKey() } });
-      if(!res.ok){ let t=""; try{t=await res.text();}catch(e){} throw new Error("HTTP "+res.status+" "+t.slice(0,200)); }
-      const data=await res.json();
-      let list = Array.isArray(data) ? data : (data.data || data.models || []);
-      ids = list.map(m=> typeof m==="string" ? m : (m.id||m.name||m.model)).filter(Boolean);
-    }
-    ids=[...new Set(ids)].sort();
-    if(!ids.length) throw new Error("Danh sách mô hình rỗng");
-    const sel=$("modelSelect"); sel.innerHTML="";
-    ids.forEach(id=>{ const o=document.createElement("option"); o.value=id; o.textContent=id; sel.appendChild(o); });
-    sel.style.display="block";
-    const cur=els.model.value.trim();
-    if(cur && ids.includes(cur)) sel.value=cur; else els.model.value=sel.value;
-    msg.style.color="var(--ok)"; msg.textContent="Tìm thấy "+ids.length+" mô hình";
-  }catch(e){ msg.style.color="var(--danger)"; msg.textContent="Thất bại: "+e.message; }
-  finally{ btn.disabled=false; }
-};
-$("modelSelect").onchange=e=>{ els.model.value=e.target.value; };
+
+/** Lắp nút "tải danh sách" cho một ô model. `getConn` trả về Base URL/Key/định dạng của ĐÚNG provider chứa ô đó. */
+function wireModelFetch(btnId, msgId, selectId, inputId, getConn){
+  const btn=$(btnId); if(!btn) return;
+  const msg=$(msgId), sel=$(selectId), input=$(inputId);
+  btn.onclick=async()=>{
+    btn.disabled=true; msg.style.color="var(--muted)"; msg.textContent="Đang tải...";
+    try{
+      const ids=await fetchModelIds(getConn());
+      sel.innerHTML="";
+      ids.forEach(id=>{ const o=document.createElement("option"); o.value=id; o.textContent=id; sel.appendChild(o); });
+      sel.style.display="block";
+      // Đang có sẵn model hợp lệ thì CHỌN nó, đừng ghi đè lựa chọn của user bằng phần tử đầu danh sách.
+      const cur=String(input.value||"").trim();
+      if(cur && ids.includes(cur)) sel.value=cur; else input.value=sel.value;
+      msg.style.color="var(--ok)"; msg.textContent="Tìm thấy "+ids.length+" mô hình";
+    }catch(e){ msg.style.color="var(--danger)"; msg.textContent="Thất bại: "+e.message; }
+    finally{ btn.disabled=false; }
+  };
+  sel.onchange=e=>{ input.value=e.target.value; };
+}
+
+// Provider 1 — cả model chính lẫn model phụ đều dùng chung Base URL/Key ở trên.
+const connP1 = ()=>({ apiFormat: fmt(), baseUrl: els.baseUrl.value, apiKey: els.apiKey.value });
+wireModelFetch("fetchModels",  "modelMsg",  "modelSelect",  "model",          connP1);
+wireModelFetch("fetchModels2", "modelMsg2", "modelSelect2", "secondaryModel", connP1);
+
+// Provider 2+ (modal) — lấy Base URL/Key/định dạng từ chính các ô đang mở trong modal,
+// KHÔNG lấy của Provider 1 (mỗi provider một endpoint khác nhau).
+const connPm = ()=>({ apiFormat: $("pmFormat").value, baseUrl: $("pmBaseUrl").value, apiKey: $("pmApiKey").value });
+wireModelFetch("pmFetchModels",  "pmModelMsg",  "pmModelSelect",  "pmModel",          connPm);
+wireModelFetch("pmFetchModels2", "pmModelMsg2", "pmModelSelect2", "pmSecondaryModel", connPm);
 
 // ---------- 日志 ----------
 function logTo(elId,msg,cls){

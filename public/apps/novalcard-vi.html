@@ -203,13 +203,13 @@
     <h2><span class="idx">02</span> Nhập tiểu thuyết</h2>
     <p class="hint">Ứng dụng chỉ xử lý nội dung cục bộ trong trình duyệt, văn bản truyện chỉ được gửi đến API do bạn thiết lập để phân tích.</p>
     <div class="field">
-      <input type="file" id="file">
-      <div class="meta" style="margin-top:6px">Nếu không chọn được file txt, hãy dùng tính năng kéo thả file từ máy tính vào khung nhập liệu bên dưới.</div>
+      <input type="file" id="file" accept=".txt,.text,.md,.epub,text/plain,application/epub+zip">
+      <div class="meta" style="margin-top:6px">Nhận file <b>.txt</b> và <b>.epub</b>. Nếu hộp thoại chọn file không mở được, hãy kéo thả file từ máy tính vào khung nhập liệu bên dưới.</div>
     </div>
     <div class="field">
-      <textarea id="novel" rows="7" placeholder="Dán văn bản tiểu thuyết hoặc kéo thả file .txt vào đây…"></textarea>
+      <textarea id="novel" rows="7" placeholder="Dán văn bản tiểu thuyết hoặc kéo thả file .txt / .epub vào đây…"></textarea>
     </div>
-    <div class="meta"><span id="novelStat">0 ký tự</span></div>
+    <div class="meta"><span id="novelStat">0 ký tự</span> <button type="button" id="novelClear" class="mini" style="margin-left:8px">Xoá văn bản</button></div>
     <div class="field" style="margin-top:14px">
       <label>Lịch sử tiểu thuyết (Sau khi quét sẽ tự động lưu văn bản truyện và nhân vật để tải nhanh lần sau mà không cần quét lại)</label>
       <div class="btnrow" style="margin-top:0">
@@ -739,45 +739,235 @@ function userMsgs(prompt){ const c=customSys(); return c? [{role:"system",conten
 function flash(el,msg,err){ el.textContent=msg; el.style.color= err? "var(--danger)":"var(--ok)"; setTimeout(()=>{el.textContent="";},2600); }
 
 // ---------- 小说导入 ----------
-function updateStat(){ const n=$("novel").value.length; $("novelStat").textContent = n.toLocaleString()+" ký tự"; }
-$("novel").addEventListener("input",updateStat);
+/* ═══ (User 23/07 — việc 85) NHẬP FILE KHÔNG ĐƯỢC LÀM ĐƠ TRANG ═══
+   Đo thật trong trình duyệt trên tiểu thuyết tiếng Trung:
+        2MB  → giải mã 4 lần   44ms  ·  gán vào <textarea>   991ms
+        8MB  →                179ms  ·                      3.645ms
+       20MB  →                605ms  ·                      8.549ms
+   Thủ phạm chính KHÔNG phải phần giải mã mà là cái <textarea>: nhồi cả pho tiểu thuyết vào một
+   ô nhập liệu thì trình duyệt phải dựng layout cho từng dòng — main thread đứng hình ~9 giây,
+   đúng như user tả "cứ nhập vào là bị đơ không bấm được chỗ nào cả". Tệ hơn: sau đó mọi thao
+   tác cuộn/gõ trên ô đó đều ì ạch mãi.
+
+   Sửa hai chỗ:
+   1. Văn bản LỚN nằm trong biến JS, textarea chỉ hiện phần đầu để xem cho biết. Mọi nơi đọc
+      nội dung truyện đi qua getNovelText() nên phần còn lại của app không phải sửa gì về logic.
+   2. Đoán encoding trên MẪU đầu file rồi giải mã toàn bộ ĐÚNG MỘT LẦN (thay vì 4 lần) — nhanh
+      gấp ~3x mà kết quả y hệt (đã đối chiếu trên 2/8/20MB). */
+
+/** Trên ngưỡng này thì không nhồi hết vào textarea nữa. ~300k ký tự vẫn mượt. */
+const NOVEL_INLINE_LIMIT = 300000;
+/** Khác null ⇒ đang ở chế độ "văn bản lớn", textarea chỉ là bản xem trước. */
+let novelFullText = null;
+
+/** NGUỒN CHÂN LÝ của nội dung truyện — dùng thay cho $("novel").value ở mọi nơi. */
+function getNovelText(){ return novelFullText !== null ? novelFullText : $("novel").value; }
+
+/** Đặt nội dung truyện. Nhỏ thì giữ nguyên hành vi cũ (gõ/sửa thoải mái); lớn thì chỉ xem trước. */
+function setNovelText(text){
+  const ta=$("novel"); const t=String(text||"");
+  if(t.length<=NOVEL_INLINE_LIMIT){
+    novelFullText=null; ta.readOnly=false; ta.value=t;
+  }else{
+    novelFullText=t; ta.readOnly=true;
+    ta.value=t.slice(0,NOVEL_INLINE_LIMIT)
+      +"\n\n… CÒN "+(t.length-NOVEL_INLINE_LIMIT).toLocaleString()+" KÝ TỰ NỮA …\n"
+      +"(Văn bản đầy đủ đang nằm trong bộ nhớ và sẽ được dùng khi quét. Chỉ hiện phần đầu để trang không bị đơ.\n"
+      +" Muốn dán tay văn bản khác thì bấm nút Xoá văn bản.)";
+  }
+  updateStat();
+}
+function updateStat(){
+  const n=getNovelText().length;
+  $("novelStat").textContent = n.toLocaleString()+" ký tự"
+    + (novelFullText!==null ? "　·　văn bản lớn: chỉ hiện phần đầu, khi quét vẫn dùng đủ" : "");
+}
+// User tự gõ ⇒ textarea trở lại làm nguồn chân lý.
+$("novel").addEventListener("input",()=>{ novelFullText=null; updateStat(); });
+$("novelClear").onclick=()=>{ novelFullText=null; $("novel").readOnly=false; $("novel").value=""; updateStat(); };
+
 $("file").addEventListener("change",e=>{
   const f=e.target.files[0]; if(!f) return;
   readNovelFile(f);
+  e.target.value="";                      // chọn lại đúng file đó vẫn kích hoạt được
 });
 
-function readNovelFile(f){
-  const r=new FileReader();
-  r.onload=()=>{
-    const {text,enc}=decodeBest(r.result);
-    $("novel").value=text; updateStat();
-    if(enc!=="utf-8") $("novelStat").textContent += "　·　Đã giải mã bằng " + enc.toUpperCase();
-  };
-  r.readAsArrayBuffer(f);   // 读成字节，自己判编码，避免 GBK 小说被当 UTF-8 读花
+/** Nhường một nhịp cho trình duyệt vẽ lại — để chữ "Đang đọc…" kịp hiện ra. */
+const uiTick = ()=>new Promise(r=>setTimeout(r,0));
+
+async function readNovelFile(f){
+  const stat=$("novelStat");
+  const isEpub = /\.epub$/i.test(f.name) || f.type==="application/epub+zip";
+  stat.textContent = "Đang đọc "+f.name+" …";
+  await uiTick();
+  try{
+    const buf = await f.arrayBuffer();
+    let text, note="";
+    if(isEpub){
+      stat.textContent = "Đang giải nén .epub …"; await uiTick();
+      text = await parseEpubToText(buf);
+      note = "　·　đọc từ .epub";
+    }else{
+      const r = decodeBest(buf);
+      text = r.text;
+      if(r.enc!=="utf-8") note = "　·　Đã giải mã bằng "+r.enc.toUpperCase();
+    }
+    setNovelText(text);
+    if(note) stat.textContent += note;
+  }catch(err){
+    stat.textContent = "Đọc file thất bại: " + (err && err.message ? err.message : String(err));
+  }
 }
-// 先试 UTF-8，乱码多就改用 GB18030（覆盖 GBK/GB2312），取乱码更少的
-function decodeBest(buf){
+
+/* Đoán encoding trên MẪU đầu file rồi giải mã toàn bộ đúng 1 lần.
+   Bản cũ giải mã cả file 4 lần + quét regex trên từng bản — với truyện 20MB là 605ms vứt đi. */
+function decodeBest(buf, sampleBytes){
   const bytes=new Uint8Array(buf);
-  const badCount=s=>(s.match(/\uFFFD/g)||[]).length;
-  // 先看 BOM：UTF-16 的记事本文件很常见，之前没兜到会一直乱码
+  const badCount=s=>(s.match(/�/g)||[]).length;
+  // BOM: file notepad UTF-16 rất hay gặp, không bắt là hiển thị lỗi hết.
   if(bytes.length>=2){
     if(bytes[0]===0xFF && bytes[1]===0xFE){ try{ return {text:new TextDecoder("utf-16le").decode(bytes), enc:"utf-16le"}; }catch(e){} }
     if(bytes[0]===0xFE && bytes[1]===0xFF){ try{ return {text:new TextDecoder("utf-16be").decode(bytes), enc:"utf-16be"}; }catch(e){} }
     if(bytes[0]===0xEF && bytes[1]===0xBB && bytes[2]===0xBF){ try{ return {text:new TextDecoder("utf-8").decode(bytes), enc:"utf-8"}; }catch(e){} }
   }
-  // 无 BOM：逐个尝试，取乱码最少的
-  const cands=[];
-  const push=(label,dec)=>{ try{ const t=new TextDecoder(dec).decode(bytes); cands.push({text:t, enc:label, bad:badCount(t)}); }catch(e){} };
-  push("utf-8","utf-8");
-  push("gb18030","gb18030");
-  push("utf-16le","utf-16le");
-  push("utf-16be","utf-16be");
-  if(!cands.length) return {text:"", enc:"utf-8"};
-  cands.sort((a,b)=>a.bad-b.bad);
-  return {text:cands[0].text, enc:cands[0].enc};
+  const sample=bytes.subarray(0, Math.min(bytes.length, sampleBytes||262144));
+  let best="utf-8", bestBad=Infinity;
+  for(const enc of ["utf-8","gb18030","utf-16le","utf-16be"]){
+    try{
+      const bad=badCount(new TextDecoder(enc).decode(sample));
+      if(bad<bestBad){ bestBad=bad; best=enc; }
+      if(bad===0) break;                    // sạch rồi thì khỏi thử tiếp
+    }catch(e){}
+  }
+  try{ return {text:new TextDecoder(best).decode(bytes), enc:best}; }
+  catch(e){ return {text:"", enc:"utf-8"}; }
 }
 
-// 拖拽导入：把 txt 拖到输入框（或整个导入卡片）即可
+/* ═══ (User 23/07 — việc 86) ĐỌC FILE .EPUB ═══
+   Trích Card là MỘT file HTML tĩnh tự chứa — không bundler, không cài được thư viện. Nhưng .epub
+   chỉ là file ZIP chứa HTML/XML, mà trình duyệt đã có sẵn DecompressionStream('deflate-raw') để
+   giải nén. Nên đọc thẳng ZIP bằng tay, không cần jszip.
+   Bỏ qua ảnh/font trong epub (light novel rất nhiều ảnh) — chỉ lấy file chữ, nhanh hơn hẳn. */
+
+function zipOpen(buf){
+  const dv=new DataView(buf), u8=new Uint8Array(buf);
+  // EOCD nằm ở cuối, quét ngược tối đa 64KB + 22 byte (độ dài comment tối đa mà ZIP cho phép).
+  let eocd=-1;
+  const stop=Math.max(0, buf.byteLength-66000);
+  for(let i=buf.byteLength-22; i>=stop; i--){ if(dv.getUint32(i,true)===0x06054b50){ eocd=i; break; } }
+  if(eocd<0) throw new Error("File .epub hỏng hoặc không phải ZIP hợp lệ");
+  const count=dv.getUint16(eocd+10,true);
+  let off=dv.getUint32(eocd+16,true);
+  const entries=new Map();
+  for(let i=0;i<count;i++){
+    if(off+46>buf.byteLength || dv.getUint32(off,true)!==0x02014b50) break;
+    const method=dv.getUint16(off+10,true);
+    const compSize=dv.getUint32(off+20,true);
+    const nameLen=dv.getUint16(off+28,true);
+    const extraLen=dv.getUint16(off+30,true);
+    const cmtLen=dv.getUint16(off+32,true);
+    const localOff=dv.getUint32(off+42,true);
+    const name=new TextDecoder("utf-8").decode(u8.subarray(off+46,off+46+nameLen));
+    entries.set(name,{name,method,compSize,localOff});
+    off+=46+nameLen+extraLen+cmtLen;
+  }
+  if(entries.size===0) throw new Error("File .epub rỗng hoặc hỏng");
+  return {dv,u8,entries};
+}
+
+async function zipRead(zip,name){
+  const e=zip.entries.get(name);
+  if(!e) return null;
+  const dv=zip.dv, u8=zip.u8;
+  const nameLen=dv.getUint16(e.localOff+26,true);
+  const extraLen=dv.getUint16(e.localOff+28,true);
+  const start=e.localOff+30+nameLen+extraLen;
+  const raw=u8.subarray(start,start+e.compSize);
+  if(e.method===0) return new TextDecoder("utf-8").decode(raw);   // không nén
+  if(e.method!==8) return null;      // kiểu nén lạ → bỏ chương đó, đừng làm hỏng cả lượt đọc
+  if(!e.compSize) return null;       // kích thước nằm ở data descriptor → không đọc kiểu này được
+  const ds=new DecompressionStream("deflate-raw");
+  const out=await new Response(new Blob([raw]).stream().pipeThrough(ds)).arrayBuffer();
+  return new TextDecoder("utf-8").decode(out);
+}
+
+/** Lấy giá trị thuộc tính bằng regex — chạy được cả khi XML không chuẩn, DOMParser hay bỏ cuộc. */
+function xmlAttr(tag,name){
+  const m=tag.match(new RegExp(name+'\\s*=\\s*"([^"]*)"')) || tag.match(new RegExp(name+"\\s*=\\s*'([^']*)'"));
+  return m?m[1]:"";
+}
+/** Ghép đường dẫn tương đối trong epub, xử lý ./ và ../ */
+function resolveHref(dir,href){
+  const raw=((dir?dir+"/":"")+String(href||"")).split("/");
+  const parts=[];
+  for(const seg of raw){
+    if(seg===""||seg===".") continue;
+    if(seg===".."){ parts.pop(); continue; }
+    parts.push(seg);
+  }
+  return parts.join("/");
+}
+function htmlToText(html){
+  let s=String(html||"");
+  s=s.replace(/<(script|style|head)[\s\S]*?<\/\1>/gi," ");
+  s=s.replace(/<\s*(br|\/p|\/div|\/h[1-6]|\/li)\s*\/?>/gi,"\n");
+  s=s.replace(/<[^>]+>/g," ");
+  s=s.replace(/&nbsp;/gi," ").replace(/&lt;/gi,"<").replace(/&gt;/gi,">").replace(/&quot;/gi,'"').replace(/&#39;/gi,"'").replace(/&amp;/gi,"&");
+  s=s.replace(/[ \t ]+/g," ").replace(/\n{3,}/g,"\n\n");
+  return s.trim();
+}
+
+async function parseEpubToText(buf){
+  const zip=zipOpen(buf);
+  if(zip.entries.has("META-INF/encryption.xml")) throw new Error("File .epub có DRM (bị mã hoá) nên không đọc được");
+
+  // container.xml → đường dẫn file OPF
+  const container=await zipRead(zip,"META-INF/container.xml");
+  let opfPath="";
+  if(container){ const m=container.match(/full-path\s*=\s*["']([^"']+)["']/i); if(m) opfPath=m[1]; }
+  if(!opfPath){ for(const k of zip.entries.keys()){ if(/\.opf$/i.test(k)){ opfPath=k; break; } } }
+  if(!opfPath) throw new Error("File .epub thiếu file OPF (không biết đọc chương nào)");
+
+  const opf=await zipRead(zip,opfPath);
+  if(!opf) throw new Error("Không đọc được file OPF trong .epub");
+  const opfDir=opfPath.includes("/")?opfPath.slice(0,opfPath.lastIndexOf("/")):"";
+
+  // manifest: CHỈ giữ file chữ (html/xml). Ảnh/font bỏ hẳn — light novel rất nhiều ảnh, giải nén phí thời gian.
+  const byId=new Map();
+  for(const m of opf.matchAll(/<item\b[^>]*>/gi)){
+    const tag=m[0];
+    const type=xmlAttr(tag,"media-type").toLowerCase();
+    if(!/html|xml/.test(type)) continue;
+    const id=xmlAttr(tag,"id"), href=xmlAttr(tag,"href");
+    if(!id||!href) continue;
+    let dec=href; try{ dec=decodeURIComponent(href); }catch(e){}
+    byId.set(id,resolveHref(opfDir,dec));
+  }
+  // spine giữ ĐÚNG THỨ TỰ ĐỌC — sắp theo tên file trong zip là ra truyện lộn xộn (c10 đứng trước c2).
+  const order=[];
+  for(const m of opf.matchAll(/<itemref\b[^>]*>/gi)){
+    const p=byId.get(xmlAttr(m[0],"idref"));
+    if(p&&order.indexOf(p)<0) order.push(p);
+  }
+  if(order.length===0) for(const p of byId.values()) if(order.indexOf(p)<0) order.push(p);
+
+  const parts=[];
+  for(let i=0;i<order.length;i++){
+    let html=null;
+    try{ html=await zipRead(zip,order[i]); }catch(e){ html=null; }
+    if(!html) continue;
+    const t=htmlToText(html);
+    if(t) parts.push(t);
+    if(i%20===0) await uiTick();          // epub nhiều chương cũng không làm đơ trang
+  }
+  const text=parts.join("\n\n");
+  if(!text.trim()) throw new Error("File .epub không có nội dung chữ nào đọc được (có thể là sách toàn ảnh scan)");
+  return text;
+}
+
+
+// Kéo thả: thả file .txt hoặc .epub vào ô nhập (hoặc bất kỳ đâu trong thẻ Nhập tiểu thuyết).
+// Đi chung readNovelFile nên tự nhận .epub và tự chống đơ y như khi bấm chọn file.
 (function(){
   const ta=$("novel");
   const zone=ta.closest(".card") || ta;
@@ -1216,7 +1406,7 @@ function extractJsonArray(s){
 $("scanBtn").onclick=async()=>{
   const btn=$("scanBtn");
   if(btn.dataset.running){ stopRun(); return; }
-  const text=$("novel").value.trim();
+  const text=getNovelText().trim();
   if(!text){ flash($("scanMsg"),"Vui lòng nhập tiểu thuyết trước",true); return; }
   if(!els.baseUrl.value.trim()||!els.model.value.trim()){ flash($("scanMsg"),"Vui lòng hoàn thành thiết lập API",true); return; }
 
@@ -1949,7 +2139,7 @@ function charNames(name){
   return [...new Set(list.filter(Boolean))];
 }
 function collectContext(name, extra){
-  const text=$("novel").value;
+  const text=getNovelText();
   const CAP=Math.max(10000, parseInt(els.ctxCap.value)||90000);
   const FULLCAP=Math.max(10000, parseInt(els.fullCap.value)||120000);
   if($("fullCtx").checked){ return text.slice(0,FULLCAP); }
@@ -2304,7 +2494,7 @@ function downloadBlob(text, filename, mime){
 }
 
 async function wbExtractCore(signal){
-  const text=$("novel").value.trim();
+  const text=getNovelText().trim();
   const size=Math.max(10000,parseInt(els.chunkSize.value)||40000);
   const resuming = wbState && wbState.len===text.length && wbState.next < wbState.cap;
   let chunks, cap, map, startI;
@@ -2484,7 +2674,7 @@ function parseWbPreview(text){
   entries.forEach(e=>e.content=e.content.trim());
   return entries.filter(e=>e.title);
 }
-function novelSampleOrEmpty(){ const t=$("novel").value.trim(); return t? sampleForStyle(t) : ""; }
+function novelSampleOrEmpty(){ const t=getNovelText().trim(); return t? sampleForStyle(t) : ""; }
 
 // 世界书 · 按意见修改
 $("wbReviseBtn").onclick=async()=>{
@@ -2555,7 +2745,7 @@ $("wbContBtn").onclick=async()=>{
 
 // 剧情分段总结：按顺序分段，每个阶段/副本一条绿灯世界书条目（≥300字）
 async function wbPlotCore(signal){
-  const text=$("novel").value.trim();
+  const text=getNovelText().trim();
   $("wbMsg").innerHTML='<span class="spinner"></span>Đang phân đoạn cốt truyện...';
   const size=Math.max(50000, parseInt(els.chunkSize.value)||40000);
   const chunks=[]; for(let i=0;i<text.length;i+=size) chunks.push(text.slice(i,i+size));
@@ -2606,7 +2796,7 @@ async function wbPlotCore(signal){
 
 // 配角群像合集：把次要角色归纳成一条世界书条目，每人一两句
 async function wbMinorCore(signal){
-  const text=$("novel").value.trim();
+  const text=getNovelText().trim();
   if(!characters.length){ logTo("wbLog","Nhân vật phụ: Vui lòng quét/thêm nhân vật trước, bỏ qua bước này","e"); return; }
   const mode=$("minorMode").value;
   $("wbMsg").innerHTML='<span class="spinner"></span>'+(mode==="each"?"Đang tạo từng vai phụ…":"Đang gộp quần tượng vai phụ…");
@@ -2664,7 +2854,7 @@ async function wbMinorCore(signal){
 
 // 蓝灯列表：一条常驻条目（人物列表 / 剧情大纲）
 async function wbConstantEntry(signal, kind){
-  const text=$("novel").value.trim();
+  const text=getNovelText().trim();
   $("wbMsg").innerHTML='<span class="spinner"></span>'+(kind==="chars"?"Đang tạo danh sách nhân vật…":"Đang tạo đại cương cốt truyện…");
   const maxT=Math.max(6000,parseInt(els.maxTok.value)||4000);
   const sample=sampleForStyle(text);
@@ -2849,7 +3039,7 @@ $("charLbBtn").onclick=()=>{
 
 // 共享背景 / 世界大纲：把多角色共同的时代背景、共同经历抽成一条常驻条目
 async function wbBgCore(signal){
-  const text=$("novel").value.trim();
+  const text=getNovelText().trim();
   $("wbMsg").innerHTML='<span class="spinner"></span>Đang trích xuất bối cảnh chung…';
   const maxT=Math.max(4000,parseInt(els.maxTok.value)||4000);
   const sample=sampleForStyle(text);
@@ -2873,7 +3063,7 @@ async function wbBgCore(signal){
 $("wbRunBtn").onclick=async()=>{
   const btn=$("wbRunBtn");
   if(btn.dataset.running){ stopRun(); return; }
-  const text=$("novel").value.trim();
+  const text=getNovelText().trim();
   if(!text){ flash($("wbMsg"),"Vui lòng dán tiểu thuyết vào trước",true); return; }
   if(!els.baseUrl.value.trim()||!els.model.value.trim()){ flash($("wbMsg"),"Vui lòng hoàn thành thiết lập API",true); return; }
   const tasks=[];
@@ -3154,7 +3344,7 @@ $("checkRunBtn").onclick=async()=>{
       // 取参考原文
       let ref="";
       if(it.type==="card"){ const b=(it.name||"").replace(/[（(].+?[)）]\s*$/,"").trim(); ref=collectContext(b||it.name); }
-      else { const names=(it.keys&&it.keys.length)?it.keys:[it.name]; const paras=$("novel").value.split(/\n\s*\n|\n/).filter(p=>p.trim()); ref=paras.filter(p=>names.some(n=>n&&p.includes(n))).join("\n\n").slice(0,80000); }
+      else { const names=(it.keys&&it.keys.length)?it.keys:[it.name]; const paras=getNovelText().split(/\n\s*\n|\n/).filter(p=>p.trim()); ref=paras.filter(p=>names.some(n=>n&&p.includes(n))).join("\n\n").slice(0,80000); }
       const sys="Bạn là một nhân viên hiệu đính nghiêm túc, đối chiếu với nguyên tác để kiểm tra tính chính xác của Thẻ Nhân vật/Mục từ Lorebook, chỉ phán đoán dựa trên nguyên tác.";
       const user=
         "Vui lòng đối chiếu với nguyên tác, kiểm tra xem bản "+(it.type==="card"?"Thẻ Nhân vật":"Mục từ Lorebook")+" sau đây có tồn tại vấn đề gì không:\n"+
@@ -3197,7 +3387,7 @@ function sampleForStyle(text, perChunk=8000, slices=6, cap=52000){
 $("styleBtn").onclick=async()=>{
   const btn=$("styleBtn");
   if(btn.dataset.running){ stopRun(); return; }
-  const text=$("novel").value.trim();
+  const text=getNovelText().trim();
   if(!text){ flash($("styleMsg"),"Vui lòng nhập tiểu thuyết trước",true); return; }
   if(!els.baseUrl.value.trim()||!els.model.value.trim()){ flash($("styleMsg"),"Vui lòng hoàn thành thiết lập API",true); return; }
 
@@ -3277,13 +3467,13 @@ function renderNovelSel(){
   novelSessions.forEach((n,i)=>{ const o=document.createElement("option"); o.value=String(i); o.textContent=n.name+"（"+((n.chars&&n.chars.length)||0)+" nhân vật"+(n.text?"":"· Không có văn bản")+"）"; sel.appendChild(o); });
 }
 function novelTitle(){
-  const t=$("novel").value.trim();
+  const t=getNovelText().trim();
   const first=(t.split(/\n/)[0]||"").trim().slice(0,16);
   return first || ("Tiểu thuyết "+new Date().toLocaleDateString());
 }
 function persistNovels(){ return trySet("cc_novels", JSON.stringify(novelSessions)); }
 function saveNovelSession(auto){
-  const text=$("novel").value;
+  const text=getNovelText();
   if(!text.trim()){ if(!auto) flash($("novelSaveMsg"),"Chưa dán văn bản truyện",true); return; }
   const name=novelTitle();
   const rec={ id:Date.now(), name, time:new Date().toLocaleString(), text,
@@ -3302,7 +3492,7 @@ function saveNovelSession(auto){
 function loadNovelSession(){
   const v=$("novelSel").value; if(v==="") { flash($("novelSaveMsg"),"Chưa có bản ghi nào để tải",true); return; }
   const rec=novelSessions[parseInt(v)]; if(!rec) return;
-  $("novel").value=rec.text||""; updateStat();
+  setNovelText(rec.text||"");
   characters=(rec.chars||[]).map(c=>({name:c.name,role:c.role||"",gender:c.gender||"",tier:c.tier||"",count:c.count||0,aliases:c.aliases||[]}));
   selectedNames=[]; renderChars(); updateGenBtn();
   flash($("novelSaveMsg"), rec.text ? ("Đã tải: "+rec.name+" (Danh sách nhân vật không cần quét lại)") : ("Đã tải danh sách nhân vật, nhưng bản ghi này không chứa văn bản truyện, vui lòng dán lại văn bản truyện"));

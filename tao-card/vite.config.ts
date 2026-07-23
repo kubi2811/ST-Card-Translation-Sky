@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import type { ViteDevServer } from 'vite'
 import react from '@vitejs/plugin-react'
-import { exec } from 'child_process'
+import { exec, execSync } from 'child_process'
 import { request as httpRequest } from 'http'
 import { request as httpsRequest } from 'https'
 import type { IncomingMessage, ServerResponse } from 'http'
@@ -154,6 +154,49 @@ const corsProxyPlugin = () => ({
   },
 });
 
+/**
+ * (User 22/07) Đồng bộ mã nguồn RỒI CÀI THƯ VIỆN — trước đây hai endpoint dưới đây chạy
+ * `git reset --hard` xong là xong, KHÔNG cài gì cả. Đây là đường cập nhật tệ nhất trong ba
+ * đường của repo: kéo mã mới về mà thư viện mới thì không có, nên vừa thêm `jszip` vào
+ * tao-card là Vite nổ "Failed to resolve import jszip", trắng màn hình.
+ *
+ * `git` tự đi ngược lên gốc repo nên phần đồng bộ vẫn đúng dù cwd là tao-card; chỉ phần cài
+ * là phải làm ở CẢ gốc lẫn tao-card (mỗi nơi một package.json riêng).
+ */
+function syncThenInstall(gitCmd: string, res: ServerResponse) {
+  res.setHeader('Content-Type', 'application/json');
+  const fail = (msg: string) => {
+    res.statusCode = 500;
+    res.end(JSON.stringify({ success: false, error: msg }));
+  };
+
+  exec(gitCmd, (err, stdout, stderr) => {
+    if (err) return fail(stderr || err.message);
+
+    let repoRoot = '..';
+    try {
+      repoRoot = execSync('git rev-parse --show-toplevel').toString().trim() || '..';
+    } catch { /* không lấy được thì dùng thư mục cha */ }
+
+    // Cài tuần tự: gốc trước (Hub hỏng thì chẳng mở được tool nào), rồi tới tao-card.
+    const dirs = [repoRoot, process.cwd()];
+    let log = stdout;
+    const next = (i: number) => {
+      if (i >= dirs.length) {
+        return res.end(JSON.stringify({ success: true, message: log }));
+      }
+      exec('npm install --no-audit --no-fund', { cwd: dirs[i], maxBuffer: 32 * 1024 * 1024 }, (e, out, errOut) => {
+        log += `\n── npm install: ${dirs[i]} ──\n${out || ''}`;
+        // Cài lỗi thì BÁO RÕ chứ không nuốt: nuốt đi thì user nhận "thành công" rồi mở tool
+        // ra mới thấy trắng màn hình, không hiểu vì sao.
+        if (e) return fail(`Đồng bộ mã nguồn xong nhưng cài thư viện ở "${dirs[i]}" thất bại:\n${errOut || e.message}`);
+        next(i + 1);
+      });
+    };
+    next(0);
+  });
+}
+
 // Custom plugin to handle Git commands
 const appUpdaterPlugin = () => ({
   name: 'app-updater',
@@ -172,28 +215,12 @@ const appUpdaterPlugin = () => ({
 
       if (req.method === 'POST' && req.url === '/api/app/upgrade') {
         // fetch + reset --hard: đồng bộ cứng về GitHub, không kẹt vì package-lock bị npm install sửa.
-        exec('git fetch origin main && git reset --hard origin/main', (err, stdout, stderr) => {
-          res.setHeader('Content-Type', 'application/json');
-          if (err) {
-            res.statusCode = 500;
-            res.end(JSON.stringify({ success: false, error: stderr || err.message }));
-          } else {
-            res.end(JSON.stringify({ success: true, message: stdout }));
-          }
-        });
+        syncThenInstall('git fetch origin main && git reset --hard origin/main', res);
         return;
       }
-      
+
       if (req.method === 'POST' && req.url === '/api/app/downgrade') {
-        exec('git reset --hard HEAD~1', (err, stdout, stderr) => {
-          res.setHeader('Content-Type', 'application/json');
-          if (err) {
-            res.statusCode = 500;
-            res.end(JSON.stringify({ success: false, error: stderr || err.message }));
-          } else {
-            res.end(JSON.stringify({ success: true, message: stdout }));
-          }
-        });
+        syncThenInstall('git reset --hard HEAD~1', res);
         return;
       }
       

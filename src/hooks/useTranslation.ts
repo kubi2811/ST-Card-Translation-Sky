@@ -1,6 +1,7 @@
 import { splitLorebookBatches } from '../utils/batchSplit';
 import { stripUrlsForCjkCheck } from '../utils/cjk';
-import { useCallback, useRef } from 'react';
+import { scanFieldsForResidualCjk, buildResidualRetryInstruction } from '../utils/residualCjkScan';
+import { useCallback, useEffect, useRef } from 'react';
 import { useStore } from '../store';
 import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookEntries, ChunkError, ApiError, setExtraProviders, resetProviderPool, computePoolConcurrency, callProvider, setNameStyle, setFandomMode } from '../utils/apiClient';
 import { extractNameCandidates, buildNameGlossaryPrompt, parseNameGlossaryResponse, mergeGlossary, harvestGlossaryFromFields } from '../utils/nameGlossary';
@@ -177,6 +178,9 @@ export function useTranslation() {
   const inFlightPaths = useRef<Set<string>>(new Set());
   // Which flow last ran, so Resume (after a hard pause) continues the correct one.
   const lastRunModeRef = useRef<'translate' | 'mod'>('translate');
+  // (Việc 80) Bộ quét chữ Trung sót được khai báo SAU startTranslation (nó cần retranslateField)
+  // → startTranslation gọi ngược qua ref này.
+  const residualSweepRef = useRef<((maxRounds?: number) => Promise<number>) | null>(null);
   // Late-bound reference to applyModToAllFields (defined later in this hook) so Resume
   // can call it without a use-before-define / dep-array TDZ issue.
   const applyModRef = useRef<((isContinue: boolean) => void) | null>(null);
@@ -2821,6 +2825,19 @@ export function useTranslation() {
       }
     } catch { /* harvest chỉ tăng cường — lỗi thì bỏ qua */ }
 
+    // ═══ (User 2026 — việc 80) QUÉT CHỮ TRUNG CÒN SÓT → TỰ DỊCH LẠI ═══
+    // Đặt TRƯỚC sweep đồng nhất EJS bên dưới: field vừa dịch lại phải được chuẩn hoá từ điển
+    // như mọi field khác, nếu chạy sau thì bản vá lọt lưới enforce. Cũng chạy trước khi chốt
+    // 'done' để con số "x thành công / y lỗi" báo ra là con số SAU khi vá.
+    if (!checkAbort()) {
+      try {
+        await residualSweepRef.current?.(2);
+      } catch (sweepErr) {
+        const m = sweepErr instanceof Error ? sweepErr.message : String(sweepErr);
+        if (m !== 'Cancelled') store.addLog('warning', `⚠️ Quét chữ Trung sót lỗi (không nghiêm trọng): ${m}`);
+      }
+    }
+
     // ═══ (User 2026) SWEEP CUỐI: ĐỒNG NHẤT TỪ ĐIỂN EJS (Chiến lược C) ═══
     // Làm sạch value (bỏ dấu/ký tự lạ, gộp hoa-thường) + gom cụm gần-giống → 1 dạng, rồi ENFORCE LẠI
     // mọi field code/lorebook với dict đã sạch → hết cảnh cùng keyword ra nhiều dạng gây EJS/MVU gãy.
@@ -3105,7 +3122,11 @@ export function useTranslation() {
     store.addLog('info', `⏹ Cancelled all in-flight translations (${stuckFields.length} fields reset)`);
   }, [store]);
 
-  const retranslateField = useCallback(async (path: string, resume = false) => {
+  /**
+   * `extraInstruction` (User 2026 — việc 80): câu nhắc gắn thêm vào cuối prompt cho lượt dịch lại.
+   * Dịch lại y nguyên prompt cũ thì AI rất dễ ra đúng kết quả cũ — phải chỉ mặt chỗ hỏng.
+   */
+  const retranslateField = useCallback(async (path: string, resume = false, extraInstruction?: string) => {
     const field = store.fields.find((f) => f.path === path);
     if (!field) return;
 
@@ -3196,7 +3217,7 @@ export function useTranslation() {
         effectiveProxy,
         store.translationConfig.targetLanguage,
         store.translationConfig.sourceLanguage,
-        promptResult.effectivePrompt,
+        extraInstruction ? `${promptResult.effectivePrompt}\n${extraInstruction}` : promptResult.effectivePrompt,
         promptResult.schemaForApi,
         controller.signal,
         contextHint,
@@ -3277,6 +3298,63 @@ export function useTranslation() {
       fieldAbortMap.current.delete(path);
     }
   }, [store]);
+
+  /**
+   * ═══ (User 2026 — việc 80) QUÉT CHỮ TRUNG CÒN SÓT SAU KHI DỊCH → TỰ DỊCH LẠI ═══
+   *
+   * Guard trong vòng dịch chỉ chặn theo TỶ LỆ sống sót (>35%, và nguồn phải ≥20 chữ Hán) — nó
+   * sinh ra để bắt ca "AI trả lại nguyên văn", KHÔNG bắt được dịch SÓT. Field dịch được 90%,
+   * còn lơ thơ vài chục chữ Hán rải rác, vẫn được đánh 'done'. Đây là lưới cuối cùng: đếm
+   * CHÍNH XÁC chữ Hán còn lại rồi dịch lại đúng những field đó, kèm chỉ rõ đoạn nào còn sót.
+   *
+   * KHÔNG đếm chữ Hán trong LINK (yêu cầu của user) và trong giá trị CSS giữ nguyên có chủ ý —
+   * đếm mấy thứ đó thì dịch kiểu gì cũng còn, thành retry vô tận.
+   */
+  const residualCjkSweep = useCallback(async (maxRounds = 2): Promise<number> => {
+    const cssMode = useStore.getState().translationConfig.cssCjkHandling || 'preserve';
+    let totalFixed = 0;
+
+    for (let round = 1; round <= maxRounds; round++) {
+      if (checkAbort()) return totalFixed;
+
+      const hits = scanFieldsForResidualCjk(useStore.getState().fields, { cssCjkHandling: cssMode });
+      if (hits.length === 0) {
+        if (round === 1) store.addLog('success', '🔍 Quét chữ Trung sót: sạch, không mục nào còn tiếng Trung (link không tính).');
+        return totalFixed;
+      }
+
+      const totalHan = hits.reduce((s, h) => s + h.count, 0);
+      store.addLog('warning',
+        `🔍 Quét chữ Trung sót (lượt ${round}/${maxRounds}): ${hits.length} mục còn tổng ${totalHan} chữ Hán chưa dịch — đang dịch lại…`
+      );
+      for (const h of hits.slice(0, 10)) {
+        store.addLog('info', `   • ${h.label}: còn ${h.count} chữ — ${h.samples[0] || ''}`);
+      }
+      if (hits.length > 10) store.addLog('info', `   … và ${hits.length - 10} mục nữa`);
+
+      for (const h of hits) {
+        if (checkAbort()) return totalFixed;
+        if (await waitForPause()) return totalFixed;
+        await retranslateField(h.path, false, buildResidualRetryInstruction(h));
+        totalFixed++;
+      }
+    }
+
+    // Hết lượt mà vẫn còn → báo rõ chứ không im lặng nuốt (user cần biết để sửa tay).
+    const left = scanFieldsForResidualCjk(useStore.getState().fields, { cssCjkHandling: cssMode });
+    if (left.length > 0) {
+      store.addLog('error',
+        `❌ Sau ${maxRounds} lượt dịch lại vẫn còn ${left.length} mục có tiếng Trung ` +
+        `(${left.reduce((s, h) => s + h.count, 0)} chữ). Cần xem tay: ${left.slice(0, 5).map(h => h.label).join(', ')}`
+      );
+    } else {
+      store.addLog('success', `✅ Quét chữ Trung sót: đã dịch lại ${totalFixed} mục, giờ sạch hoàn toàn.`);
+    }
+    return totalFixed;
+  }, [store, retranslateField, checkAbort, waitForPause]);
+
+  // startTranslation được khai báo TRƯỚC hàm này nên không gọi thẳng được → đi qua ref.
+  useEffect(() => { residualSweepRef.current = residualCjkSweep; }, [residualCjkSweep]);
 
   const getExportCard = useCallback(() => {
     if (!store.card) return null;

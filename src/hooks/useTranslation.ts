@@ -199,6 +199,12 @@ export function useTranslation() {
     const enabledGroups = store.translationConfig.fieldGroups
       .filter((g: FieldGroupConfig) => g.enabled)
       .map((g: FieldGroupConfig) => g.id) as FieldGroup[];
+    // (Chiến lược A) Field Mythic KHÔNG nằm trong bảng nhóm ở UI — chúng chỉ tồn tại khi user bật
+    // Chiến lược A, y như Chiến lược B/C chỉ chạy khi được bật. Trích ở đây (lúc bấm Dịch) thay vì
+    // lúc nạp thẻ, để thẻ Mythic không tự nhiên phình thêm ~2.6k field mà user không hề yêu cầu.
+    if (store.translationConfig.enableMythicSync && !enabledGroups.includes('mythic')) {
+      enabledGroups.push('mythic');
+    }
     const newFields = extractTranslatableFields(store.card, enabledGroups);
 
     // In continue mode: preserve already-done fields from previous runs.
@@ -4075,7 +4081,9 @@ export function useTranslation() {
     // Get all fields that have content (translated or original)
     const enabledGroups = store.translationConfig.fieldGroups
       .filter((g: FieldGroupConfig) => g.enabled)
-      .map((g: FieldGroupConfig) => g.id);
+      .map((g: FieldGroupConfig) => g.id) as string[];
+    // (Chiến lược A) Cho field Mythic qua bộ lọc — chúng không có mục trong bảng nhóm.
+    if (store.translationConfig.enableMythicSync) enabledGroups.push('mythic');
 
     const targetFields = currentFields.filter(f => {
       if (f.status === 'ignored') return false;

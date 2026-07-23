@@ -11,6 +11,7 @@ import {
   buildSourceHash, buildSkillHash, parseMythicComment, detectMythicCard,
   extractMythicFields, applyMythicTranslation, titleHasEraKeyword, titleTranslationIsSafe,
 } from '../mythicSkill';
+import { extractTranslatableFields, applyMythicToCard } from '../cardFields';
 
 describe('fnv1a — chép đúng thuật toán trong script Agent', () => {
   it('trùng giá trị tham chiếu của FNV-1a 32-bit', () => {
@@ -206,5 +207,82 @@ describe.skipIf(!hasFixture)('Chiến lược A trên CARD THẬT (Reborn V1.5)'
     const fields = extractMythicFields(card);
     expect(fields.length).toBeGreaterThan(1000);
     expect(new Set(fields.map(f => f.field))).toEqual(new Set(['description', 'triggerWhen']));
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────
+// ĐƯỜNG ĐI THẬT CỦA DỮ LIỆU: trích field qua extractTranslatableFields (đúng hàm mà
+// nút Dịch gọi) → giả lập AI dịch → applyMythicToCard → thẻ xuất ra.
+// Test này tồn tại vì lỗi thật đã xảy ra: hàm dịch/ghép chạy đúng nhưng field Mythic
+// không bao giờ ĐƯỢC TRÍCH ra, nên cả chiến lược lặng lẽ không làm gì cả.
+// ─────────────────────────────────────────────────────────────────────────────────
+describe.skipIf(!hasFixture)('Chiến lược A — đi trọn đường trích → dịch → ghép', () => {
+  const card = hasFixture ? JSON.parse(fs.readFileSync(CARD, 'utf8')) : null;
+
+  it('nhóm "mythic" phải cho ra field, và TẮT thì không ra field nào', () => {
+    const off = extractTranslatableFields(card, ['lorebook']);
+    expect(off.some((f) => f.group === 'mythic')).toBe(false);
+
+    const on = extractTranslatableFields(card, ['lorebook', 'mythic']);
+    const my = on.filter((f) => f.group === 'mythic');
+    expect(my.length).toBeGreaterThan(1000);
+    expect(my.every((f) => f.original.trim().length > 0)).toBe(true);
+    expect(new Set(my.map((f) => f.path.split('.').pop()))).toEqual(
+      new Set(['description', 'triggerWhen']),
+    );
+  });
+
+  it('ghép bản dịch xong: meta còn đọc được, hash MỚI khớp nội dung MỚI', () => {
+    const copy = JSON.parse(JSON.stringify(card));
+    const fields = extractTranslatableFields(copy, ['lorebook', 'mythic'])
+      .filter((f) => f.group === 'mythic')
+      .map((f) => ({ ...f, translated: 'VI::' + f.original, status: 'done' as const }));
+
+    const res = applyMythicToCard(copy, fields as never);
+    expect(res.entriesTouched).toBeGreaterThan(500);
+    expect(res.metaFields).toBe(fields.length);
+
+    const entries = copy.data.character_book.entries as { comment?: string }[];
+    let checked = 0;
+    for (const e of entries) {
+      const parsed = parseMythicComment(String(e.comment ?? ''));
+      for (const b of parsed.blocks) {
+        // 1. Bản dịch đã vào đúng chỗ.
+        expect(String(b.data.description ?? '').startsWith('VI::')).toBe(true);
+        // 2. Hash được TÍNH LẠI theo nội dung mới — không còn là hash cũ.
+        if (typeof b.data.sourceSkillHash === 'string') {
+          expect(buildSkillHash(b.data as never)).toBe(b.data.sourceSkillHash);
+        }
+        if (typeof b.data.sourceHash === 'string') {
+          expect(buildSourceHash(e as never, b.data.eras)).toBe(b.data.sourceHash);
+        }
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(500);
+  });
+
+  it('field kỹ thuật (eras, tk) sống sót y nguyên qua cả vòng', () => {
+    // Khoá tra cứu là CHỈ SỐ entry, không phải nội dung comment: card thật có 3 cặp entry
+    // trùng nhau 40 ký tự đầu, lấy nội dung làm khoá là hai entry đè lên nhau.
+    const techOf = (c: unknown) => {
+      const out: string[] = [];
+      for (const b of parseMythicComment(String(c ?? '')).blocks) {
+        out.push(b.name + '=' + JSON.stringify({ eras: b.data.eras, tk: b.data.tk }));
+      }
+      return out.join('|');
+    };
+
+    const copy = JSON.parse(JSON.stringify(card));
+    const before = (card.data.character_book.entries as { comment?: string }[]).map((e) => techOf(e.comment));
+
+    const fields = extractTranslatableFields(copy, ['lorebook', 'mythic'])
+      .filter((f) => f.group === 'mythic')
+      .map((f) => ({ ...f, translated: 'VI::' + f.original, status: 'done' as const }));
+    applyMythicToCard(copy, fields as never);
+
+    const after = (copy.data.character_book.entries as { comment?: string }[]).map((e) => techOf(e.comment));
+    expect(after).toEqual(before);
+    expect(before.filter((x) => x.length > 0).length).toBeGreaterThan(500);
   });
 });

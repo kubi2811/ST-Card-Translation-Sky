@@ -21,6 +21,7 @@ import type { TranslationField, GlossaryEntry } from '../types/card';
 import { fandomNameOverride } from './fandomMode';
 import { buildUnifiedRAGContext, type TranslationMemoryHit } from './ragContext';
 import { buildLorebookRefDictionary, buildLorebookRefPromptBlock } from './lorebookRefSync';
+import { buildTextTagMap, buildFormatTagPromptBlock } from './formatTagSync';
 import { buildEjsPromptBlock } from './ejsSync';
 import { filterGlossaryForText } from './nameGlossary';
 
@@ -1412,6 +1413,12 @@ ${modInstructionsBlock}`;
     if (touchesCode && allFields) {
       const refBlock = buildLorebookRefPromptBlock(buildLorebookRefDictionary(allFields));
       if (refBlock) prompt = (prompt || '') + '\n' + refBlock + '\n';
+
+      // (User 23/07 — việc 83) Mốc định dạng: dặn AI dịch findRegex theo ĐÚNG chữ mà phần văn bản
+      // đã dịch dùng, thay vì để bước ép mốc sau khi dịch xong phải dọn. Chỉ có tác dụng khi văn
+      // bản đã dịch trước regex; sweep hậu kiểm vẫn là chốt chặn cuối.
+      const tagBlock = buildFormatTagPromptBlock(buildTextTagMap(allFields));
+      if (tagBlock) prompt = (prompt || '') + '\n' + tagBlock + '\n';
     }
   }
 

@@ -2,6 +2,7 @@ import { splitLorebookBatches } from '../utils/batchSplit';
 import { stripUrlsForCjkCheck } from '../utils/cjk';
 import { scanFieldsForResidualCjk, buildResidualRetryInstruction } from '../utils/residualCjkScan';
 import { buildLorebookRefDictionary, enforceLorebookRefs, validateLorebookRefs } from '../utils/lorebookRefSync';
+import { enforceFormatTagSync, findFormatTagMismatches } from '../utils/formatTagSync';
 import { useCallback, useEffect, useRef } from 'react';
 import { useStore } from '../store';
 import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookEntries, ChunkError, ApiError, setExtraProviders, resetProviderPool, computePoolConcurrency, callProvider, setNameStyle, setFandomMode } from '../utils/apiClient';
@@ -2894,6 +2895,26 @@ export function useTranslation() {
       }
     } catch { /* đồng bộ chỉ tăng cường — lỗi thì bỏ qua, không chặn dịch */ }
 
+    // ═══ (User 23/07 — việc 83) ÉP findRegex BÁM ĐÚNG MỐC MÀ VĂN BẢN ĐÃ DỊCH DÙNG ═══
+    // Thẻ bắt AI xuất ra khuôn cố định (<hồ sơ nhân vật>…</hồ sơ nhân vật>) rồi có regex bám mốc
+    // đó để làm đẹp. Mốc nằm ở HAI nơi — văn bản dạy AI và findRegex — do HAI lượt gọi AI khác
+    // nhau dịch, nên ra hai chữ khác nhau là chuyện thường; regex hết khớp, im lặng không chạy.
+    // KHÔNG khoá sau cờ MVU/EJS: thẻ loại này thường chẳng dùng cái nào trong hai, đó chính là
+    // lý do trước giờ không có bộ nào canh giúp.
+    try {
+      const tagFields = useStore.getState().fields;
+      const { fixes } = enforceFormatTagSync(tagFields);
+      if (fixes.length > 0) {
+        for (const fx of fixes) {
+          store.updateField(fx.path, { translated: fx.findRegex });
+          store.addLog('warning',
+            `🎯 Mốc định dạng lệch: "${fx.label}" bám "${fx.from}" nhưng nội dung thẻ xuất ra "${fx.to}" — đã sửa regex cho khớp.`
+          );
+        }
+        store.addLog('success', `🎯 Đã ép ${fixes.length} script regex bám đúng mốc định dạng của thẻ.`);
+      }
+    } catch { /* ép mốc chỉ tăng cường — lỗi thì bỏ qua */ }
+
     runningRef.current = false;
     store.setPhase('done');
     store.saveTranslationCache();
@@ -2980,6 +3001,21 @@ export function useTranslation() {
         if (mismatches.length > 12) store.addLog('error', `   … và ${mismatches.length - 12} chỗ nữa`);
       }
     } catch { /* soi lỗi chỉ để báo cáo — hỏng thì bỏ qua */ }
+
+    // ═══ (User 23/07 — việc 83) BÁO CÁO MỐC ĐỊNH DẠNG ═══
+    // Sweep ở trên đã vá được phần lớn; phần nào không dóng hàng được thì phải nói ra, vì đây là
+    // lỗi user chỉ phát hiện sau khi dịch xong rồi phải sửa tay.
+    try {
+      const left = findFormatTagMismatches(useStore.getState().fields);
+      if (left.length === 0) {
+        store.addLog('success', '✅ Mốc định dạng: regex bám đúng khuôn mà thẻ dạy AI xuất ra.');
+      } else {
+        store.addLog('error', `❌ Mốc định dạng: còn ${left.length} chỗ regex bám sai — phần làm đẹp sẽ không chạy.`);
+        for (const m of left.slice(0, 10)) {
+          store.addLog('error', `   • ${m.label}: regex bám "${m.inRegex}" nhưng thẻ xuất ra "${m.inText}" (gốc "${m.original}")`);
+        }
+      }
+    } catch { /* báo cáo hỏng thì bỏ qua */ }
 
     // ═══ Post-Translation Entry Name ↔ Text Sync Verification ═══
     {

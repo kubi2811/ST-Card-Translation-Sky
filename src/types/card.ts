@@ -168,7 +168,8 @@ export type FieldGroup =
   | 'lorebook_keys'
   | 'regex'
   | 'depth_prompt'
-  | 'tavern_helper';
+  | 'tavern_helper'
+  | 'mythic';
 
 export interface FieldGroupConfig {
   id: FieldGroup;
@@ -398,6 +399,19 @@ export interface TranslationConfig {
   /** Tên tác phẩm gốc (vd "Oregairu", "Genshin Impact") — giúp AI tra đúng tên chính tắc. */
   fandomName: string;
   enableMvuSync: boolean; // Enable Strategy B (Sync MVU Variables)
+  /**
+   * (User 23/07) Chiến lược A — card dùng **Mythic** (Auto Database).
+   *
+   * Card Mythic kích hoạt entry bằng AGENT NGỮ NGHĨA chứ không bằng keyword: mỗi entry mang
+   * một khối JSON trong `comment` với `description` + `triggerWhen`, và script Agent đọc hai
+   * field đó để quyết định nạp entry nào. Người chơi chat tiếng Việt mà `triggerWhen` còn
+   * tiếng Trung ⇒ Agent không khớp ⇒ entry không bao giờ được nạp ⇒ card như chết.
+   *
+   * B và C không đụng tới hai field này (chúng nằm trong JSON nhúng trong HTML comment).
+   * Bật A để dịch chúng và TÍNH LẠI hash (sourceHash/sourceSkillHash) — giữ hash cũ thì
+   * script coi entry đã bị sửa ngoài. Chạy độc lập hoặc song song với B/C đều được.
+   */
+  enableMythicSync: boolean;
   mvuDictionary: Record<string, string>; // Dictionary for Strategy B
   /**
    * (User 2026) 🔒 KHOÁ từ điển MVU: khi bật, PIPELINE DỊCH TỰ ĐỘNG bị cấm ghi vào mvuDictionary

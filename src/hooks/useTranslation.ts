@@ -9,6 +9,7 @@ import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookE
 import { extractNameCandidates, buildNameGlossaryPrompt, parseNameGlossaryResponse, mergeGlossary, harvestGlossaryFromFields } from '../utils/nameGlossary';
 import { GLOSSARY_PRESETS } from '../utils/glossaryPresets';
 import { extractTranslatableFields, applyTranslationsToCard, autoTranslateLorebookTriggerKeys, injectNewLorebookEntries, isMvuUpdateField } from '../utils/cardFields';
+import { applyMythicToCard } from '../utils/cardFields';
 import { syncEmbeddedWorldLink } from '../utils/worldLink';
 import { syncMvuVariables, postProcessRegexHtml, normalizeSmartQuotesInCode, fixNestedQuoteBracketPaths, fixBrokenLodashPaths, fixDotNotationPaths, extractPotentialMvuKeyStrings, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, enforceInitvarCovariance, extractMappingFromTranslatedInitvar, enforceExactConsistency, enforceVariableCasing, fixZodSyntaxErrors, validateDictionaryConflicts, aiResolveMvuConflicts, recanonicalizeMvuInFields, unifyVietnameseUnderscoresInText } from '../utils/mvuSync';
 import { shouldSkipTranslation, detectLanguage, detectResidualCjk } from '../utils/langDetect';
@@ -3488,6 +3489,19 @@ export function useTranslation() {
       store.fields,
       store.translationConfig.enableMvuSync ? store.translationConfig.mvuDictionary : undefined
     );
+
+    // (Chiến lược A) Ghép bản dịch skill Mythic + TÍNH LẠI hash. Đặt ở đây, SAU khi
+    // applyTranslationsToCard đã ghi title/content đã dịch, vì `sourceHash` lấy chính
+    // title + content làm đầu vào — tính trước là ra hash của bản cũ.
+    if (store.translationConfig.enableMythicSync) {
+      const my = applyMythicToCard(exportCard, store.fields);
+      if (my.entriesTouched > 0) {
+        store.addLog(
+          'info',
+          `🧠 Chiến lược A: đã dịch ${my.metaFields} field skill Mythic, tính lại ${my.hashes} mã kiểm tra trên ${my.entriesTouched} entry.`,
+        );
+      }
+    }
 
     // (bug 73) Nối lại sợi dây lorebook ↔ nhân vật. Ta CÓ dịch data.character_book.name
     // nhưng data.extensions.world thì trước giờ không ai đụng, nên card dịch ra luôn lệch:

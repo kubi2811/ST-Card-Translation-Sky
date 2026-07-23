@@ -547,6 +547,8 @@ export const useStore = create<AppState>((set) => ({
     fandomMode: LS.get('st-translator-fandom-mode', false),
     fandomName: LS.get('st-translator-fandom-name', ''),
     enableMvuSync: LS.get('st-translator-mvu-sync-enabled', true),
+    // (Chiến lược A) Mặc định TẮT — chỉ card Mythic mới cần, bật nhầm là tốn quota vô ích.
+    enableMythicSync: LS.get('st-translator-mythic-sync-enabled', false),
     mvuDictionary: LS.get('st-translator-mvu-dict', {}) as Record<string, string>,
     mvuDictLocked: LS.get('st-translator-mvu-dict-locked', false),
     enableRAGContext: LS.get('st-translator-rag-enabled', true),
@@ -638,6 +640,9 @@ export const useStore = create<AppState>((set) => ({
       }
       if ('enablePatchMode' in partial) {
         LS.set('st-translator-patch-mode', next.enablePatchMode);
+      }
+      if ('enableMythicSync' in partial) {
+        LS.set('st-translator-mythic-sync-enabled', next.enableMythicSync);
       }
       if ('enableMvuSync' in partial) {
         LS.set('st-translator-mvu-sync-enabled', next.enableMvuSync);
@@ -801,6 +806,7 @@ export const useStore = create<AppState>((set) => ({
       fandomMode: false,
       fandomName: '',
       enableMvuSync: false,
+      enableMythicSync: false,
       mvuDictionary: {},
       mvuDictLocked: false,
       enableRAGContext: true,

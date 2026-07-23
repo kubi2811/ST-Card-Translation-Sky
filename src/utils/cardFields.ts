@@ -1,3 +1,4 @@
+import { parseMythicComment, TRANSLATABLE_META_FIELDS, applyMythicTranslation } from './mythicSkill';
 import type { CharacterCard, CharacterBookEntry, TranslationField, FieldGroup, FieldGroupConfig } from '../types/card';
 
 /* ─── Default Field Group Configs ─── */
@@ -250,6 +251,27 @@ export function extractTranslatableFields(
           entry.comment,
           eType
         );
+        // (Chiến lược A) Skill Mythic: `description` + `triggerWhen` nằm trong JSON nhúng
+        // trong `comment`. Đây là thứ Agent đọc để quyết định nạp entry — không dịch thì người
+        // chơi chat tiếng Việt sẽ không bao giờ kích hoạt được entry.
+        if (enabledGroups.includes('mythic')) {
+          for (const b of parseMythicComment(String(entry.comment ?? '')).blocks) {
+            for (const mf of TRANSLATABLE_META_FIELDS) {
+              const v = b.data[mf];
+              if (typeof v !== 'string' || !v.trim()) continue;
+              fields.push({
+                path: `data.character_book.entries[${i}].__mythic.${b.name}.${mf}`,
+                label: `mythic[${i}].${mf}`,
+                group: 'mythic',
+                original: v,
+                translated: '',
+                status: 'pending',
+                retries: 0,
+                entryType: eType,
+              });
+            }
+          }
+        }
         // Primary keys as joined string
         if (enabledGroups.includes('lorebook_keys') && Array.isArray(entry.keys) && entry.keys.length > 0) {
           const keysText = entry.keys.join(', ');
@@ -741,4 +763,48 @@ export function getCardSummary(card: CharacterCard) {
   })();
 
   return { name, lorebookCount, altGreetingsCount, regexCount, hasDepthPrompt, spec, tavernHelperCount };
+}
+
+/**
+ * (User 23/07 — Chiến lược A) Ghép bản dịch meta Mythic vào thẻ và TÍNH LẠI hash.
+ *
+ * Phải chạy SAU khi title/content đã được dịch: `sourceHash` lấy chính title + content làm
+ * đầu vào, nên tính hash trước khi dịch xong là ra hash của bản cũ.
+ *
+ * Hash được tính lại cho MỌI entry Mythic, kể cả entry không có field meta nào được dịch —
+ * vì content của nó vẫn có thể đã đổi ở nhánh dịch khác.
+ */
+export function applyMythicToCard(
+  card: CharacterCard,
+  fields: TranslationField[],
+): { card: CharacterCard; entriesTouched: number; metaFields: number; hashes: number } {
+  const entries = card?.data?.character_book?.entries;
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return { card, entriesTouched: 0, metaFields: 0, hashes: 0 };
+  }
+
+  // Gom bản dịch theo entry: entryIndex -> Map('BLOCK.field' -> bản dịch)
+  const byEntry = new Map<number, Map<string, string>>();
+  for (const f of fields) {
+    if (f.group !== 'mythic' || f.status !== 'done' || !f.translated) continue;
+    const m = /entries\[(\d+)\]\.__mythic\.(.+)$/.exec(f.path);
+    if (!m) continue;
+    const idx = Number(m[1]);
+    if (!byEntry.has(idx)) byEntry.set(idx, new Map());
+    byEntry.get(idx)!.set(m[2], f.translated);
+  }
+
+  let entriesTouched = 0, metaFields = 0, hashes = 0;
+  entries.forEach((entry, i) => {
+    const comment = String((entry as { comment?: string }).comment ?? '');
+    if (!comment.includes('_START')) return; // không phải entry Mythic
+    const r = applyMythicTranslation(comment, byEntry.get(i) ?? new Map(), entry as never);
+    if (r.comment === comment) return;
+    (entry as { comment?: string }).comment = r.comment;
+    entriesTouched++;
+    metaFields += r.metaFieldsApplied;
+    hashes += r.hashesRebuilt.length;
+  });
+
+  return { card, entriesTouched, metaFields, hashes };
 }

@@ -19,6 +19,7 @@ import { safeSetItem } from '../utils/safeStorage';
 import { estimateLorebookBatchLoad } from '../utils/estimateBatchTokens';
 import { usePresetApply } from '../hooks/usePresetApply';
 import MvuSyncPanel from './MvuSyncPanel';
+import MythicPanel from './MythicPanel';
 import EjsSyncPanel from './EjsSyncPanel';
 
 /** Map field group IDs to i18n keys */
@@ -34,6 +35,9 @@ function useGroupLabels() {
     regex: { label: t.groupRegex, desc: t.groupRegexDesc },
     depth_prompt: { label: t.groupDepthPrompt, desc: t.groupDepthPromptDesc },
     tavern_helper: { label: t.groupTavernHelper, desc: t.groupTavernHelperDesc },
+    // (Chiến lược A) Nhóm này KHÔNG hiện như nhóm chọn được — nó do cờ enableMythicSync bật
+    // và chỉ tồn tại trên card Mythic. Vẫn cần nhãn để bảng tiến trình hiển thị tử tế.
+    mythic: { label: t.groupMythic, desc: t.groupMythicDesc },
   };
   return map;
 }
@@ -1388,6 +1392,7 @@ export default function TranslateConfig() {
 
             {/* MVU Sync Panel (Chiến Lược B) */}
             <div style={{ marginTop: '8px' }}>
+              <MythicPanel />
               <MvuSyncPanel />
             </div>
 

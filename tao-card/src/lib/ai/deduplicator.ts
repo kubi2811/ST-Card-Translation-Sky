@@ -337,7 +337,10 @@ export async function runSemanticDeduplication(
     return null;
   }
 
-  const BATCH_SIZE = 5;
+  // (User 23/07 — bug 92) 5 → 10 cặp mỗi lượt AI. Card thế giới lớn sinh hàng trăm cặp nghi
+  // trùng, chia lô 5 nghĩa là gấp đôi số lượt gọi API và gấp đôi thời gian chờ. Prompt mỗi cặp
+  // đã ngắn (comment + keys + content), 10 cặp vẫn thừa chỗ trong context.
+  const BATCH_SIZE = 10;
   for (let idx = 0; idx < candidatePairs.length; idx += BATCH_SIZE) {
     const currentBatch = candidatePairs.slice(idx, idx + BATCH_SIZE);
     const activeBatch = currentBatch.filter(([E1, E2]) => !deletedIds.has(E1.id) && !deletedIds.has(E2.id));

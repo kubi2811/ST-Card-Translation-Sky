@@ -14,6 +14,7 @@
  *
  * Dùng callAI của tao-card → hưởng multi-key + chạy song song theo RPM.
  */
+import { hasCjk, scanCjkResidue, buildCjkRetryHint } from './cjkResidue';
 import type { ProxyProfile, GenerationParams } from '../../types';
 import { callAI, computePoolConcurrency } from './client';
 
@@ -176,6 +177,11 @@ export async function scanCharacters(
   const system = `Bạn là trợ lý phân tích truyện để tạo thẻ nhân vật SillyTavern.
 Nhiệm vụ: đọc ${multi ? 'ĐOẠN truyện' : 'truyện'} và LIỆT KÊ các nhân vật ĐÁNG tạo thẻ (chính/phụ quan trọng), kèm bí danh và mô tả nhận diện.
 Bỏ qua nhân vật thoáng qua/không tên. Gộp các bí danh của cùng một người vào một mục.${multi ? '\nĐây chỉ là một phần truyện — chỉ liệt kê nhân vật XUẤT HIỆN trong đoạn này.' : ''}
+
+${LANGUAGE_RULE}
+【ÁP DỤNG RIÊNG CHO BƯỚC NÀY】TÊN và BÍ DANH nhân vật phải viết bằng tiếng Việt NGAY TỪ ĐÂY.
+Tên ở bước này là tên được dùng cho MỌI bước sau (dựng thẻ, lorebook, biến) — để sót chữ Hán ở
+đây là cả thẻ dính chữ Hán. Ví dụ: 夏冬 → "Hạ Đông" (KHÔNG viết "夏冬" hay "夏冬 (Hạ Đông)").
 CHỈ xuất đúng khối sau, mọi tag đóng, ngoài tag không viết gì:
 <roster>
 <char><name>Tên chính</name><aliases>bí danh 1, bí danh 2</aliases><brief>${briefRule}</brief></char>
@@ -202,7 +208,39 @@ CHỈ xuất đúng khối sau, mọi tag đóng, ngoài tag không viết gì:
     opts.onProgress?.(++done, chunks.length);
     return list;
   });
-  return mergeRosters(lists);
+  const merged = mergeRosters(lists);
+
+  // (bug 91) Tên ở bước này được dùng cho MỌI bước sau — sót chữ Hán ở đây là cả thẻ dính.
+  // Gom những tên còn sót rồi nhờ AI dịch MỘT LƯỢT (rẻ hơn quét lại từng đoạn truyện).
+  const dirty = merged.filter((c) => hasCjk(c.name) || c.aliases.some(hasCjk));
+  if (dirty.length > 0) {
+    try {
+      const { text } = await callAI({
+        profile, params, signal: opts.signal, label: 'Dịch nốt tên nhân vật còn chữ Hán',
+        messages: [
+          { role: 'system', content: `Bạn dịch TÊN RIÊNG sang tiếng Việt. Chữ Hán → âm Hán Việt (夏冬 → Hạ Đông), tên Nhật → Romaji, tên Hàn → Romanization.
+CHỈ xuất đúng khối sau, mỗi tên một dòng, không giải thích:
+<names>
+<n><old>tên gốc</old><new>tên tiếng Việt</new></n>
+</names>` },
+          { role: 'user', content: dirty.flatMap((c) => [c.name, ...c.aliases]).filter(hasCjk).join('\n') },
+        ],
+      });
+      const map = new Map<string, string>();
+      for (const n of allTags(tag(text, 'names') || text, 'n')) {
+        const o = tag(n, 'old').trim(), v = tag(n, 'new').trim();
+        if (o && v && !hasCjk(v)) map.set(o, v);
+      }
+      for (const c of merged) {
+        c.name = map.get(c.name.trim()) ?? c.name;
+        c.aliases = c.aliases.map((a) => map.get(a.trim()) ?? a);
+      }
+    } catch {
+      // Dịch tên hỏng thì vẫn trả danh sách — user tự sửa được ở bảng chọn nhân vật,
+      // chặn cả luồng vì một lượt phụ thất bại thì tệ hơn.
+    }
+  }
+  return merged;
 }
 
 // ─── Build system prompt cho sinh thẻ ───
@@ -287,6 +325,33 @@ export async function generateCardFromStory(
       });
       text += cont.text;
     }
+  }
+
+  // (User 23/07 — bug 91) Prompt đã dặn dịch, nhưng dặn không phải là bảo đảm — model vẫn hay
+  // bê nguyên tên/câu tiếng gốc. Đo lại bằng luật, còn sót thì bắt làm lại kèm ĐÍCH DANH chữ
+  // còn sót (nhắc chung chung thì model hay trả lại y nguyên). Tối đa 2 lượt để không đốt quota.
+  for (let pass = 0; pass < 2; pass++) {
+    const blk = tag(text, 'card') || text;
+    const rep = scanCjkResidue({
+      'Tên': tag(blk, 'name'),
+      'Thông tin cơ bản': tag(blk, 'basic'),
+      'Tính cách': tag(blk, 'persona'),
+      'Bối cảnh': tag(blk, 'scenario'),
+      'Lời mở đầu': tag(blk, 'first_mes'),
+      'Lore': tag(blk, 'world_entries'),
+    });
+    if (rep.clean) break;
+    const fixed = await callAI({
+      profile, params, signal,
+      label: `Tạo thẻ: ${characterName} (dịch nốt chữ Hán ${pass + 1})`,
+      messages: [
+        ...messages,
+        { role: 'assistant' as const, content: text },
+        { role: 'user' as const, content: buildCjkRetryHint(rep) },
+      ],
+    });
+    if (!fixed.text.trim()) break;
+    text = fixed.text;
   }
 
   const block = tag(text, 'card') || text;

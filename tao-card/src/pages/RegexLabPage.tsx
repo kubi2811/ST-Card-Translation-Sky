@@ -17,6 +17,7 @@ import { cn } from '../lib/utils';
 import { applyRegex, applyAllRegex, validateRegex } from '../lib/regexEngine/applyRegex';
 import { analyzeReplaceString, structureSummary } from '../lib/regexEngine/regexInjector';
 import { renderSafeHtml, processCaptureGroups } from '../lib/regexEngine/renderSafeHtml';
+import { stripHtmlFence } from '../lib/regexEngine/stripHtmlFence';
 import { validateReplaceString } from '../lib/regexEngine/regexValidator';
 import type { RegexScript, RegexPlacement } from '../types';
 import { PLACEMENT_LABELS, SUBSTITUTE_REGEX_LABELS } from '../types';
@@ -136,18 +137,25 @@ export function RegexLabPage() {
     [previewResult.result],
   );
 
-  // Safe HTML for iframe — process capture groups, then wrap in full HTML document
-  const iframeSrcDoc = useMemo(() => {
-    const processed = processCaptureGroups(previewResult.result);
-    return renderSafeHtml(processed);
-  }, [previewResult.result]);
+  // (User 23/07 - bug 93) BOC FENCE truoc khi render. Card MVU goi giao dien trong khoi
+  // ```html ... ``` va SillyTavern boc fence roi moi render. Truoc day Regex Lab nhet NGUYEN
+  // chuoi (ke ca dau fence) vao iframe nen user thay chu "```html" chinh inh, phan HTML thi
+  // hien nhu van ban - khong xem truoc duoc giao dien that.
+  const previewFence = useMemo(
+    () => stripHtmlFence(processCaptureGroups(previewResult.result)),
+    [previewResult.result],
+  );
+  const iframeSrcDoc = useMemo(() => renderSafeHtml(previewFence.html), [previewFence.html]);
 
   // Safe HTML for template preview - only for selectedScript (with capture groups processed with dummy values)
-  const templateIframeSrcDoc = useMemo(() => {
-    if (!selectedScript) return '';
-    const processed = processCaptureGroups(selectedScript.replaceString);
-    return renderSafeHtml(processed);
-  }, [selectedScript]);
+  const templateFence = useMemo(
+    () => (selectedScript ? stripHtmlFence(processCaptureGroups(selectedScript.replaceString)) : null),
+    [selectedScript],
+  );
+  const templateIframeSrcDoc = useMemo(
+    () => (templateFence ? renderSafeHtml(templateFence.html) : ''),
+    [templateFence],
+  );
 
   const handlePreviewSourceChange = useCallback((source: 'ai_output' | 'user_input' | 'world_info') => {
     setPreviewSource(source);
@@ -369,6 +377,19 @@ export function RegexLabPage() {
                 {previewResult.result === previewText && (
                   <div className="absolute top-2 right-2 z-20 px-2 py-1 rounded bg-amber-500/10 border border-amber-500/20 text-[10px] text-amber-400 flex items-center gap-1">
                     <AlertTriangle className="w-3 h-3 text-amber-400" /> {ui.rlNoChange}
+                  </div>
+                )}
+                {/* (bug 93) Trang thai fence — cho user biet dang xem dung thu ST se render */}
+                {previewFence.hadFence && !previewFence.unclosed && (
+                  <div className="absolute top-2 left-2 z-20 px-2 py-1 rounded bg-emerald-500/10 border border-emerald-500/25 text-[10px] text-emerald-400"
+                       title={ui.rlFenceOkTip}>
+                    {ui.rlFenceOk}
+                  </div>
+                )}
+                {previewFence.unclosed && (
+                  <div className="absolute top-2 left-2 z-20 px-2 py-1 rounded bg-red-500/10 border border-red-500/30 text-[10px] text-red-400 flex items-center gap-1"
+                       title={ui.rlFenceUnclosedTip}>
+                    <AlertTriangle className="w-3 h-3" /> {ui.rlFenceUnclosed}
                   </div>
                 )}
                 <iframe

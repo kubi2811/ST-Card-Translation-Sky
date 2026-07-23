@@ -19,6 +19,7 @@ import { findReusableTwin } from '../utils/translationReuse';
 import { getMvuCardSummary } from '../utils/mvuDetector';
 import { validateMvuVariables, autoFixMvuVariables, generateSyncReport, buildEntryNameDictionary, buildRegexTriggerDictionary, validateEntryNameSync } from '../utils/mvuValidator';
 import { buildEffectivePrompt } from '../utils/promptBuilder';
+import { applyRegexAlternation } from '../scriptTranslate/regexAlternation';
 import { surgicalTranslate, verifyCodeStructureParity, detectInventedDeclarations } from '../utils/surgical';
 import { parsePatchOutput, applyPatches, validatePatchResult } from '../utils/patchEngine';
 import { injectMvuZodSystem } from '../utils/mvuGenerator';
@@ -69,6 +70,41 @@ function writeMvuDictAuto(dict: Record<string, string>, why: string): boolean {
  * completed field's `original` becomes its modded value (translated cleared).
  * This ensures subsequent mod operations scan the updated card as the base.
  */
+
+/**
+ * (User 23/07) Vá regex trong SCRIPT sau khi dịch.
+ *
+ * Script thẻ hay có regex khớp đúng NHÃN tiếng Trung mà chính nó render ra. Ví dụ card Mythic:
+ * `/(小总结|大总结)\s*#\s*(\d+)/` dùng để dựng "memory chip", trong khi `小总结` cũng là nhãn
+ * hiển thị, xuất hiện 36 lần trong script. Dịch nhãn mà không vá regex thì regex hết khớp —
+ * chức năng chết IM LẶNG: không lỗi, không cảnh báo, người chơi chỉ thấy nó biến mất.
+ *
+ * Cách vá giống tab Dịch Script: THÊM nhánh tiếng Việt, GIỮ nguyên nhánh Hán (thẻ vẫn chạy được
+ * với dữ liệu cũ), compile thử từng literal — literal nào vỡ thì hoàn nguyên chứ không để liều.
+ */
+function patchScriptRegexAfterTranslate(
+  code: string,
+  dict: Record<string, string> | undefined,
+  label: string,
+  addLog: (level: 'info' | 'warning' | 'active' | 'error' | 'success', msg: string) => void,
+): string {
+  if (!code || !dict || Object.keys(dict).length === 0) return code;
+  try {
+    const r = applyRegexAlternation(code, dict);
+    if (r.changed > 0 || r.reverted > 0) {
+      addLog(
+        r.reverted > 0 ? 'warning' : 'info',
+        `🧩 ${label}: vá ${r.changed} regex khớp nhãn tiếng Trung để khớp cả bản dịch` +
+          (r.reverted > 0 ? ` (${r.reverted} literal hoàn nguyên vì không biên dịch được)` : ''),
+      );
+    }
+    return r.code;
+  } catch {
+    return code; // vá được thì tốt, không vá được thì tuyệt đối không làm hỏng bản dịch
+  }
+}
+
+
 /**
  * Sort fields to enforce Multi-Pass Covariant Translation.
  * Precedence: Phase 1 (Technical: Schema/Initvars) -> Phase 2 (Interaction: Regex/Keys) -> Phase 3 (Narrative & Prose)
@@ -466,6 +502,7 @@ export function useTranslation() {
           field.label
         );
         translated = sResult.translated;
+        translated = patchScriptRegexAfterTranslate(translated, sResult.dict, field.label, store.addLog);
         
         if (sResult.success) {
           store.updateField(field.path, { 
@@ -2431,6 +2468,7 @@ export function useTranslation() {
                 rf.label
               );
               regexTranslated = sResult.translated;
+              regexTranslated = patchScriptRegexAfterTranslate(regexTranslated, sResult.dict, field.label, store.addLog);
 
               if (sResult.success) {
                 store.updateField(rf.path, {

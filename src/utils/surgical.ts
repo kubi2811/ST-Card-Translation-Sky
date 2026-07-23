@@ -998,8 +998,23 @@ export async function surgicalTranslate(
   customSchema?: string,
   customPrompt?: string,
   fieldLabel?: string
-): Promise<{ translated: string; success: boolean; fallbackTriggered: boolean }> {
+): Promise<{ translated: string; success: boolean; fallbackTriggered: boolean; dict?: Record<string, string> }> {
   const { callProvider, computePoolConcurrency } = await import('./apiClient');
+  // Bang Hán → Việt cua chinh lan dich nay. Nguoi goi can no de va regex trong code:
+  // regex khop nhan tieng Trung ma khong duoc va thi sau khi dich literal se het khop,
+  // chuc nang chet im lang (khong loi, khong canh bao).
+  const dictOf = (ts: CJKToken[]): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (const t of ts) {
+      const a = String(t.text ?? '').trim();
+      const b = String(t.translated ?? '').trim();
+      // Identifier / object key / class CSS la khoa may doc, khong phai nhan hien thi —
+      // khong dua vao bang de tranh va regex bang thu khong bao gio xuat hien tren man.
+      if (t.isIdentifier || t.isObjectKey || t.isCssClass || t.isDotNotation) continue;
+      if (a && b && a !== b) out[a] = b;
+    }
+    return out;
+  };
 
   // ── Step 1: Extract CSS + URL protected zones, then CJK tokens ─────────────
   const cssZones = extractCSSPropertyZones(text);
@@ -1051,7 +1066,7 @@ export async function surgicalTranslate(
   if (pendingTokens.length === 0) {
     const { text: reinserted } = repairScriptSyntaxCorruption(text, reinsertTranslations(text, tokens));
     onProgress?.(tokens.length, tokens.length, 'Done (local)');
-    return { translated: reinserted, success: true, fallbackTriggered: false };
+    return { translated: reinserted, success: true, fallbackTriggered: false, dict: dictOf(tokens) };
   }
 
   // ── Step 3: Deduplicate pending tokens ────────────────────────────────────
@@ -1536,14 +1551,14 @@ CHỈ trả về JSON object ánh xạ nguyên bản gốc → bản dịch mớ
         console.warn(`[surgicalTranslate] ${missedCount} token(s) untranslated (sample):`, samples);
       }
       writeDebugLog('[surgicalTranslate] Verification PASSED.');
-      return { translated: reinserted, success: true, fallbackTriggered: false };
+      return { translated: reinserted, success: true, fallbackTriggered: false, dict: dictOf(tokens) };
     } else if (!strictVerification) {
       console.warn(
         `[surgicalTranslate] Verification FAILED but strictVerification=false` +
         ` — accepting with ${translatedCount} translations applied`
       );
       writeDebugLog('[surgicalTranslate] Verification FAILED (lenient). Accepting result.');
-      return { translated: reinserted, success: true, fallbackTriggered: false };
+      return { translated: reinserted, success: true, fallbackTriggered: false, dict: dictOf(tokens) };
     } else {
       console.warn('[surgicalTranslate] Verification FAILED (strict) — falling back to original text');
       writeDebugLog('[surgicalTranslate] Verification FAILED (strict). Returning original.');

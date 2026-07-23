@@ -18,6 +18,7 @@ import { buildEffectivePrompt } from '../utils/promptBuilder';
 import { surgicalTranslate, verifyCodeStructureParity, detectInventedDeclarations } from '../utils/surgical';
 import { parsePatchOutput, applyPatches, validatePatchResult } from '../utils/patchEngine';
 import { injectMvuZodSystem } from '../utils/mvuGenerator';
+import { unifyCrossStrategyDicts } from '../utils/crossStrategySync';
 import { detectEjsCard, extractEjsEntryNames, extractEjsKeywords, aiTranslateEjsEntries, validateEjsSync, autoFixEjsEntryNames, autoFixEjsKeywords, enforceEjsEntryName, enforceEjsCovariance, enforceEjsKeywordCasing, autoFixEjsKeywordsExtended, enforceEjsDictConsistency } from '../utils/ejsSync';
 import { isEjsProseField, maskEjsCode, unmaskEjsCode, countEjsBlocks } from '../utils/ejsSegmenter';
 import { isLikelyJsScript, jsParseErrorAny, isImportOnlyScript } from '../utils/scriptSafety';
@@ -2169,6 +2170,39 @@ export function useTranslation() {
       }
     } else if (skipEjsBuild) {
       store.addLog('info', `🔮 Chiến lược C: dùng lại từ điển EJS đã có (${Object.keys(existingEjsDictForCheck || {}).length} mục + ${Object.keys(existingKwDictForCheck || {}).length} từ khoá) — không dịch lại bằng AI`);
+    }
+
+    // ═══ (User 2026 — việc 79) ĐỐI CHIẾU CHÉO B ↔ C trước khi dịch ═══
+    // Hai chiến lược gọi AI riêng, không bên nào thấy từ điển bên kia → cùng một từ gốc rất
+    // hay ra hai bản dịch lệch nhau (B: "Tu Vi", C: "Cảnh Giới"). Dịch xong thì biến MVU tên
+    // một đằng, getwi()/từ khoá EJS gọi một nẻo → bảng trống, lorebook không kích hoạt.
+    // Chạy ở ĐÂY vì cả hai dict đã chốt mà chưa được áp xuống card — chỉ cần sửa từ điển.
+    {
+      const cfg = useStore.getState().translationConfig;
+      if (cfg.enableMvuSync && cfg.enableEjsSync) {
+        const unified = unifyCrossStrategyDicts(
+          cfg.mvuDictionary,
+          cfg.ejsEntryNameDict,
+          cfg.ejsKeywordDict,
+          { mvuDictLocked: cfg.mvuDictLocked },
+        );
+        if (unified.conflicts.length > 0) {
+          store.addLog('active', `🔗 Đối chiếu B↔C: ${unified.conflicts.length} từ bị hai bên dịch lệch nhau — đang thống nhất…`);
+          for (const c of unified.conflicts.slice(0, 12)) {
+            store.addLog('info', `   • "${c.source}": B="${c.mvuValue}" / C="${c.ejsValue}" → chọn "${c.unified}" (${c.reason})`);
+          }
+          if (unified.conflicts.length > 12) {
+            store.addLog('info', `   … và ${unified.conflicts.length - 12} từ nữa`);
+          }
+          // Dict B đang KHOÁ thì chỉ được sửa phía C — writeMvuDictAuto tự chặn ghi vào B.
+          writeMvuDictAuto(unified.mvuDictionary, 'thống nhất B↔C');
+          store.setTranslationConfig({
+            ejsEntryNameDict: unified.ejsEntryNameDict,
+            ejsKeywordDict: unified.ejsKeywordDict,
+          });
+          store.addLog('success', `✅ Đối chiếu B↔C: đã thống nhất ${unified.fixedCount} ô từ điển`);
+        }
+      }
     }
 
     store.setLogPhase('translate'); // gom log giai đoạn Dịch (vòng lặp từng trường)

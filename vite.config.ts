@@ -3,10 +3,11 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 import httpProxy from 'http-proxy';
-import { exec } from 'child_process';
+import { exec, execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { parseToolsRoute, isToolsMutating, getToolById } from './src/hub/toolCatalog';
+import { parseToolsRoute, isToolsMutating, getToolById, TOOL_SERVERS } from './src/hub/toolCatalog';
+import { planInstallTargets, toolsNeedingRestart, describeInstallPlan } from './src/hub/updatePlan';
 import { statusAll, startTool, stopTool, getLogTail } from './scripts/tool-server-manager';
 
 // ─── Translation progress cache (filesystem, in the project folder) ───
@@ -23,6 +24,100 @@ const readJsonBody = (req: import('http').IncomingMessage): Promise<any> =>
     req.on('end', () => { try { resolve(body ? JSON.parse(body) : {}); } catch { resolve(null); } });
     req.on('error', () => resolve(null));
   });
+
+// ═══ CẬP NHẬT / HẠ CẤP + CÀI THƯ VIỆN CHO GỐC **VÀ MỌI TOOL CON** ═══
+// (User 22/07) Trước đây hai endpoint này chỉ chạy `npm install` ở thư mục GỐC. Repo là
+// monorepo: Tạo Card / Tạo Preset / Mod Card / Crawler mỗi tool có package.json riêng. Thêm
+// `jszip` vào tao-card, user bấm "Cập nhật" xong mở Tạo Card thì Vite nổ
+// "Failed to resolve import jszip" — trắng màn hình, tưởng hỏng app.
+// `update.bat` vốn đã lặp qua từng tool; đường trong app thì không. Nay gộp về một hành vi.
+
+/** Chạy một lệnh, đẩy output thẳng ra response. Trả về mã thoát. */
+function runStreamed(cmd: string, cwd: string, res: import('http').ServerResponse): Promise<number> {
+  return new Promise((resolve) => {
+    const child = exec(cmd, { cwd, maxBuffer: 32 * 1024 * 1024 });
+    child.stdout?.on('data', (d) => res.write(d));
+    child.stderr?.on('data', (d) => res.write(d));
+    child.on('close', (code) => resolve(code ?? 1));
+    child.on('error', (e) => { res.write(`\n${e.message}\n`); resolve(1); });
+  });
+}
+
+async function runUpdateAndInstall(
+  res: import('http').ServerResponse,
+  opts: { mode: 'update' | 'downgrade' },
+) {
+  const root = process.cwd();
+  const isUpdate = opts.mode === 'update';
+  const label = isUpdate ? 'Cập nhật' : 'Hạ cấp';
+
+  // Mốc TRƯỚC khi đổi mã nguồn — để biết file nào vừa đổi mà chỉ cài đúng chỗ cần.
+  let oldHead = '';
+  try {
+    oldHead = execSync('git rev-parse HEAD', { cwd: root }).toString().trim();
+  } catch { /* không lấy được thì lát nữa cài hết cho chắc */ }
+
+  res.write(isUpdate
+    ? 'Đang tải bản mới nhất từ GitHub...\n'
+    : 'Đang hạ cấp phiên bản xuống 1 commit (git reset --hard HEAD~1)...\n');
+
+  const gitCmd = isUpdate
+    ? 'git fetch origin main && git reset --hard origin/main'
+    : 'git reset --hard HEAD~1';
+  const gitCode = await runStreamed(gitCmd, root, res);
+  if (gitCode !== 0) {
+    res.write(isUpdate
+      ? `\n${label} thất bại (mã lỗi ${gitCode}). Kiểm tra mạng/GitHub. Nếu vẫn lỗi: mở thư mục cài đặt, chạy "git fetch origin main && git reset --hard origin/main" một lần rồi khởi động lại.\n`
+      : `\n${label} thất bại (mã lỗi ${gitCode}).\n`);
+    res.end();
+    return;
+  }
+
+  // Những file vừa đổi. Không lấy được ⇒ null ⇒ cài hết (thà chậm còn hơn app hỏng).
+  let changedFiles: string[] | null = null;
+  if (oldHead) {
+    try {
+      const out = execSync(`git diff --name-only ${oldHead} HEAD`, { cwd: root }).toString();
+      changedFiles = out.split('\n').map((s: string) => s.trim()).filter(Boolean);
+    } catch { changedFiles = null; }
+  }
+
+  const targets = planInstallTargets({
+    changedFiles,
+    toolDirs: TOOL_SERVERS.map(t => t.dir),
+    hasPackageJson: (d) => fs.existsSync(path.join(root, d, 'package.json')),
+    hasNodeModules: (d) => fs.existsSync(path.join(root, d, 'node_modules')),
+  });
+
+  res.write(`\n${describeInstallPlan(targets)}\n`);
+
+  // Trên Windows, npm không ghi đè được file đang bị tiến trình node giữ → phải DỪNG dev server
+  // của tool sắp cài lại. User bấm lại tab tool là nó tự khởi động với thư viện mới.
+  const toStop = toolsNeedingRestart(targets, TOOL_SERVERS);
+  for (const id of toStop) {
+    res.write(`Dừng server "${id}" trước khi cài (Windows khoá file đang chạy)...\n`);
+    try { await stopTool(id, root); } catch { /* chưa chạy thì thôi */ }
+  }
+
+  let failed = 0;
+  for (const t of targets) {
+    res.write(`\n── npm install: ${t.dir === '.' ? '(gốc)' : t.dir} ──\n`);
+    const code = await runStreamed('npm install --no-audit --no-fund', path.join(root, t.dir), res);
+    if (code !== 0) {
+      failed++;
+      res.write(`\n[LỖI] Cài thư viện ở "${t.dir}" thất bại (mã ${code}).\n`);
+    }
+  }
+
+  if (failed > 0) {
+    res.write(`\n${label} xong phần mã nguồn nhưng ${failed} nơi cài thư viện LỖI. Mở thư mục cài đặt và chạy update.bat một lần để cài lại.\n`);
+  } else {
+    res.write(`\n${label} hoàn tất thành công.`);
+    if (toStop.length > 0) res.write(` Các tool ${toStop.join(', ')} đã được dừng — bấm lại tab tool đó để khởi động với thư viện mới.`);
+    res.write(' Vui lòng tải lại trang.\n');
+  }
+  res.end();
+}
 
 // ─── Same-origin guard (chống CSRF) ───
 // Các endpoint dev-server dưới đây gây SIDE-EFFECT (git pull/reset, ghi file, hoặc proxy tới
@@ -258,29 +353,19 @@ export default defineConfig({
           if (req.url === '/api/update' && req.method === 'POST') {
             res.setHeader('Content-Type', 'text/plain; charset=utf-8');
             res.setHeader('Cache-Control', 'no-cache');
-            
-            res.write('Đang tải bản mới nhất từ GitHub...\n');
+
             // ĐỒNG BỘ CỨNG về bản trên GitHub: fetch + reset --hard (thay cho "git pull" trơn).
             // Lý do: mỗi lần cập nhật, "npm install" tự sửa package-lock.json (file được TRACK) →
             // lần pull sau, merge TỪ CHỐI ghi đè ("local changes would be overwritten") → update KẸT
             // mãi. reset --hard bỏ các thay đổi cục bộ đó (chỉ file đã track; dữ liệu user KHÔNG track
             // — thẻ, cache, progress — vẫn được giữ) nên cập nhật LUÔN chạy được.
-            const child = exec('git fetch origin main && git reset --hard origin/main && npm install');
-            
-            child.stdout?.on('data', (data) => {
-              res.write(data);
-            });
-            child.stderr?.on('data', (data) => {
-              res.write(data);
-            });
-            child.on('close', (code) => {
-              if (code === 0) {
-                res.write(`\nCập nhật hoàn tất thành công. Vui lòng tải lại trang hoặc khởi động lại app nếu cần.\n`);
-              } else {
-                res.write(`\nCập nhật thất bại (mã lỗi ${code}). Kiểm tra mạng/GitHub. Nếu vẫn lỗi: mở thư mục cài đặt, chạy "git fetch origin main && git reset --hard origin/main" một lần rồi khởi động lại.\n`);
-              }
-              res.end();
-            });
+            //
+            // (User 22/07) Sau đó cài thư viện cho GỐC **và MỌI TOOL CON**. Trước đây chỉ chạy
+            // `npm install` ở gốc, trong khi repo là monorepo — mỗi tool có package.json riêng.
+            // Thêm `jszip` vào tao-card xong bấm Cập nhật thì Tạo Card nổ
+            // "Failed to resolve import jszip", trắng màn hình. `update.bat` vốn làm đúng; hai
+            // đường cập nhật lệch nhau mà đường trong app mới là đường user hay bấm.
+            runUpdateAndInstall(res, { mode: 'update' });
             return;
           }
 
@@ -288,23 +373,9 @@ export default defineConfig({
             res.setHeader('Content-Type', 'text/plain; charset=utf-8');
             res.setHeader('Cache-Control', 'no-cache');
             
-            res.write('Đang hạ cấp phiên bản xuống 1 commit (git reset --hard HEAD~1)...\n');
-            const child = exec('git reset --hard HEAD~1 && npm install');
-            
-            child.stdout?.on('data', (data) => {
-              res.write(data);
-            });
-            child.stderr?.on('data', (data) => {
-              res.write(data);
-            });
-            child.on('close', (code) => {
-              if (code === 0) {
-                res.write(`\nHạ cấp hoàn tất thành công. Vui lòng tải lại trang hoặc khởi động lại app nếu cần.\n`);
-              } else {
-                res.write(`\nHạ cấp thất bại (mã lỗi ${code}).\n`);
-              }
-              res.end();
-            });
+            // Hạ cấp cũng phải cài lại thư viện cho mọi tool con: bản cũ có thể dùng bộ thư viện
+            // KHÁC bản mới (thiếu, hoặc thừa mà sai phiên bản) — cùng một cái bẫy với Cập nhật.
+            runUpdateAndInstall(res, { mode: 'downgrade' });
             return;
           }
 

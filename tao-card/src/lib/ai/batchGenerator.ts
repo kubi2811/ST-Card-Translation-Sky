@@ -42,6 +42,14 @@ export interface BatchGenConfig {
   autoConfig?: boolean;        // true = AI tự quyết order/position/depth per entry
   schemaContext?: string;      // MVUZOD schema context — inject vào prompt khi có schema
   tokensPerEntry?: number;     // Số token mục tiêu cho mỗi entry (0 = không giới hạn)
+  /**
+   * (User 23/07 — việc 90) YÊU CẦU/QUY TẮC TOÀN CỤC của user.
+   * Trước đây bước lorebook KHÔNG hề nhận cái này: `callAIAndExtract` của pipeline mới là chỗ
+   * bơm userRules, mà batchGenerator gọi `callAI` THẲNG nên đi vòng qua nó. Hệ quả đúng như user
+   * báo: gõ "không tạo nhân vật/NPC" mà bước sinh lorebook — bước tạo ra NHIỀU entry nhất —
+   * vẫn đẻ hàng loạt nhân vật, vì nó chưa bao giờ đọc được câu đó.
+   */
+  userRules?: string;
 }
 
 export interface BatchProgress {
@@ -84,6 +92,10 @@ KHÔNG TRÙNG LẶP với danh sách "Entries đã có".
 5. THÔNG TIN CỤ THỂ: Ghi đầy đủ số liệu, tên riêng, mô tả chi tiết.
 6. NÉN KHÔNG PHẢI XÓA: Dùng ít chữ nhất để nói rõ mọi thiết lập.
    Thay "là một", "tồn tại", "được cấu thành từ" bằng dấu hai chấm và liệt kê.
+7. ĐỦ CHẤT, KHÔNG SƠ SÀI: mỗi entry NHÂN VẬT phải nêu được ít nhất — lai lịch/xuất thân,
+   ngoại hình nhận diện, tính cách qua HÀNH VI cụ thể (không chỉ tính từ suông), năng lực/vai trò,
+   và quan hệ với các thực thể khác. Entry chỉ vài dòng chung chung kiểu "X là một kiếm khách
+   mạnh mẽ, tính tình lạnh lùng" sẽ BỊ LOẠI và bạn phải sinh lại — viết đủ ngay từ đầu.
 
 --- HƯỚNG DẪN KỸ THUẬT SILLYTAVERN ---
 • keys: Bao phủ TẤT CẢ cách xưng hô có thể:
@@ -376,6 +388,8 @@ function buildBatchUserMessage(
   batchIndex: number,
   totalBatches: number,
   previouslyCreatedEntries: Array<{ comment: string; keys: string[]; content: string; constant?: boolean; selective?: boolean }>,
+  /** (việc 90) Luồng thứ mấy trong vòng chạy song song — để chia phần, tránh các luồng đụng nhau. */
+  lane?: { index: number; total: number },
 ): string {
   const parts: string[] = [];
 
@@ -434,6 +448,35 @@ ${coherenceInjection ? `\n[TÍNH NHẤT QUÁN COHERENCE]:\n${coherenceInjection}
 ${webInjection ? `\n[KIẾN THỨC TỪ WEB (LIVE)]:\n<web_search_results>\n${webInjection}\n</web_search_results>` : ''}
 
 [SỐ LƯỢNG YÊU CẦU LẦN NÀY]: Hãy sinh ra đúng ${countThisBatch} entries hợp lệ (batch ${batchIndex}/${totalBatches}).`);
+
+  // (việc 90) CHỐNG TRÙNG TỪ GỐC. Các batch trong cùng một vòng chạy SONG SONG và đều nhận
+  // ngữ cảnh y hệt nhau (trạng thái thẻ TRƯỚC vòng) — không luồng nào thấy anh em đang viết gì,
+  // nên ba luồng cùng chọn một nhân vật là chuyện tất nhiên. Bộ lọc trùng chỉ dọn được phần
+  // ngọn (và dọn xong thì phí trắng lượt gọi API đó). Chia phần TRƯỚC bằng một quy tắc tất định
+  // mà model theo được: mỗi luồng chỉ nhận các mục cách nhau đúng `lane.total` trong danh sách.
+  if (lane && lane.total > 1) {
+    parts.push(`### 🚦 BẠN LÀ LUỒNG ${lane.index}/${lane.total} ĐANG CHẠY SONG SONG
+Có ${lane.total} luồng cùng sinh entry CÙNG LÚC trên cùng ngữ cảnh này. Các luồng kia KHÔNG nhìn
+thấy kết quả của bạn và bạn cũng không thấy của họ — nếu ai cũng chọn thực thể "nổi bật nhất"
+thì sẽ ra nhiều entry trùng nhau về CÙNG một nhân vật.
+
+CHIA PHẦN (bắt buộc): trong "DANH SÁCH THỰC THỂ BẮT BUỘC PHỦ" ở trên, đánh số từ 1, bạn CHỈ được
+lấy các mục số ${lane.index}, ${lane.index + lane.total}, ${lane.index + lane.total * 2}, … (cách đều ${lane.total} mục).
+Nếu phần của bạn đã hết hoặc danh sách không có, hãy chọn thực thể ÍT NỔI BẬT hơn, tránh nhân vật
+chính và những cái tên hiển nhiên nhất — để dành chúng cho luồng khác.`);
+  }
+
+  // (việc 90) Luật của user đặt CUỐI CÙNG — phần model đọc sau chót có trọng lượng cao nhất, và
+  // nó phải thắng mọi gợi ý chủ đề ở trên (blueprint hay đề xuất bao nhiêu nhân vật mà user bảo
+  // đừng tạo nhân vật thì KHÔNG tạo).
+  if (config.userRules?.trim()) {
+    parts.push(`### ⛔ QUY TẮC BẮT BUỘC TỪ NGƯỜI DÙNG — ƯU TIÊN CAO NHẤT, THẮNG MỌI YÊU CẦU Ở TRÊN
+${config.userRules.trim()}
+
+Nếu quy tắc trên MÂU THUẪN với danh sách chủ đề/thực thể gợi ý phía trên thì NGHE THEO QUY TẮC NÀY:
+bỏ hẳn những mục vi phạm, KHÔNG tạo entry cho chúng, và dùng phần hạn ngạch đó cho loại nội dung
+mà quy tắc CHO PHÉP. Thà trả về ít entry hơn còn hơn tạo thứ user đã cấm.`);
+  }
 
   return parts.join('\n\n');
 }
@@ -670,7 +713,8 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
         }
       }
 
-      const userMessage = buildBatchUserMessage(config, ctx.card, seen, ragCtx.injectionText, coherenceCtx, webInjection, countThisBatch, i, totalBatches, createdEntries);
+      const userMessage = buildBatchUserMessage(config, ctx.card, seen, ragCtx.injectionText, coherenceCtx, webInjection, countThisBatch, i, totalBatches, createdEntries,
+        { index: i - roundStart + 1, total: batchIndices.length });
       const schemaAddon = config.schemaContext
         ? '\n\n--- SCHEMA-AWARE MODE (BẮT BUỘC) ---\nCard này có hệ biến MVU-ZOD (xem "### Schema biến" ở trên). Entry mô tả NHÂN VẬT/NPC PHẢI gán giá trị cụ thể cho các chỉ số của nhân vật có trong schema (vd võ lực/trí lực/thể lực… → ghi rõ từng con số). Entry địa điểm/vật phẩm/thế lực thì đề cập các biến liên quan tương ứng. Dùng ĐÚNG TÊN biến trong schema, KHÔNG bịa biến ngoài schema, KHÔNG viết code EJS/getvar trong content (chỉ ghi giá trị bằng ngôn ngữ tự nhiên).'
         : '';
@@ -733,6 +777,21 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
         if (dupCheck.isDuplicate) {
           droppedDup++;   // ghi nợ để cuối vòng nối batch bù đúng phần đã rơi
           ctx.log(`⏭️ Bỏ qua "${ai.comment}" — trùng với "${dupCheck.conflictWith}" (${dupCheck.reason})`);
+          continue;
+        }
+
+        // (User 23/07 — việc 90) "Nội dung entry của các nhân vật hơi ngắn và sơ sài."
+        // checkAntiSummarization chỉ dò TÍN HIỆU tóm tắt ("v.v.", "…") và so tỉ lệ với bản CŨ —
+        // sinh mới thì không có bản cũ để so, nên entry 40 ký tự vẫn lọt êm, chỉ ghi một dòng
+        // cảnh báo rồi vẫn nhận. Thêm SÀN TUYỆT ĐỐI: dưới sàn thì LOẠI và ghi nợ để vòng sau
+        // sinh bù (dùng chung cơ chế bù với entry bị loại vì trùng).
+        const minChars = config.tokensPerEntry && config.tokensPerEntry > 0
+          ? Math.round(config.tokensPerEntry * 3.5 * 0.6)   // 60% ngân sách đã hứa với user
+          : 200;                                            // không đặt ngân sách → sàn tối thiểu
+        const contentLen = (ai.content || '').trim().length;
+        if (contentLen < minChars) {
+          droppedDup++;
+          ctx.log(`⏭️ Bỏ qua "${ai.comment}" — nội dung quá sơ sài (${contentLen}/${minChars} ký tự), sẽ sinh bù.`);
           continue;
         }
 

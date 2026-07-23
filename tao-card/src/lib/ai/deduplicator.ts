@@ -7,6 +7,71 @@ import type { LorebookEntry, AIGeneratedEntry, ChatMessage } from '../../types';
 import { TFIDFIndex } from '../rag/tfidfIndexer';
 
 // ═══════════════════════════════════════════════════════════════════════════
+// LAYER 0: Trùng DANH TÍNH — tên entry / tên riêng
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * (User 23/07 — việc 90) "Một nhân vật lại được tạo tới 3 entry có nội dung y hệt nhau."
+ *
+ * Các batch chạy SONG SONG đều nhận cùng ngữ cảnh thẻ (trạng thái TRƯỚC vòng) nên không batch
+ * nào biết anh em đang viết gì — ba batch cùng chọn một nhân vật là chuyện thường. Bộ lọc trùng
+ * là chốt chặn duy nhất, mà nó lại THIẾU HẲN phép so hiển nhiên nhất: TÊN ENTRY.
+ *
+ * Ca lọt lưới (test tái hiện được): hai entry cùng tên "Lý Tiêu Dao", key lệch nhẹ
+ * (['Lý Tiêu Dao'] vs ['Lý Tiêu Dao','Tiêu Dao']), nội dung viết lại bằng chữ khác:
+ *   - lớp key   : ratio 1/2 = 0.5 < 0.8 ⇒ thoát;
+ *   - lớp nội dung: viết lại nên bigram khác nhau ⇒ thoát;
+ *   - lớp ngữ nghĩa: ngưỡng 0.92 quá cao cho văn viết lại ⇒ thoát.
+ * Kết quả: cùng một nhân vật nằm 3 entry.
+ */
+
+/** Chuẩn hoá tên để so danh tính: bỏ dấu câu/khoảng trắng thừa, hạ chữ thường. */
+export function normalizeIdentity(s: string): string {
+  return String(s || '')
+    .normalize('NFC')
+    .toLowerCase()
+    .replace(/[[\]()（）【】「」『』:：,，.。\-–—_/\\|]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Bỏ tiền tố phân loại mà AI hay thêm ("Nhân vật: X", "[NPC] X") để so đúng phần TÊN. */
+function stripCategoryPrefix(s: string): string {
+  return normalizeIdentity(s).replace(
+    /^(nhân vật|npc|character|địa danh|location|thế lực|phe phái|faction|vật phẩm|item|sự kiện|event|khái niệm|concept)\s+/,
+    '',
+  );
+}
+
+export function checkIdentityDuplicate(
+  newEntry: AIGeneratedEntry,
+  existingEntries: LorebookEntry[],
+): { isDuplicate: boolean; conflictWith?: string; matchedOn?: string } {
+  const newTitle = stripCategoryPrefix(newEntry.comment || '');
+  const newKeys = (newEntry.keys ?? []).map(normalizeIdentity).filter(Boolean);
+  if (!newTitle && newKeys.length === 0) return { isDuplicate: false };
+
+  for (const e of existingEntries) {
+    const oldTitle = stripCategoryPrefix(e.comment || '');
+    const oldKeys = (e.keys ?? []).map(normalizeIdentity).filter(Boolean);
+
+    // a) Trùng TÊN ENTRY — bằng chứng mạnh nhất, đây chính là chỗ trước giờ bỏ sót.
+    if (newTitle && oldTitle && newTitle === oldTitle) {
+      return { isDuplicate: true, conflictWith: e.comment, matchedOn: `tên entry "${e.comment}"` };
+    }
+    // b) Tên entry bên này chính là một KEY bên kia (và ngược lại) — cùng thực thể, khác cách gọi.
+    //    Chỉ tính khi tên đủ dài để là tên riêng, tránh dính key chung chung như "vật phẩm".
+    if (newTitle.length >= 4 && oldKeys.includes(newTitle)) {
+      return { isDuplicate: true, conflictWith: e.comment, matchedOn: `tên "${newEntry.comment}" là từ khoá của entry đã có` };
+    }
+    if (oldTitle.length >= 4 && newKeys.includes(oldTitle)) {
+      return { isDuplicate: true, conflictWith: e.comment, matchedOn: `entry đã có tên "${e.comment}" nằm trong từ khoá mới` };
+    }
+  }
+  return { isDuplicate: false };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // LAYER 1: Key Overlap (O(n), real-time)
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -93,9 +158,10 @@ export function checkSemanticSimilarity(
 
 export interface DuplicateCheckResult {
   isDuplicate: boolean;
-  reason?: 'key_overlap' | 'content_similarity' | 'semantic_similarity';
+  reason?: 'identity' | 'key_overlap' | 'content_similarity' | 'semantic_similarity';
   conflictWith?: string;
   details?: {
+    matchedOn?: string;
     keyOverlapRatio?: number;
     contentSimilarity?: number;
     semanticSimilarity?: number;
@@ -107,6 +173,17 @@ export function isDuplicateEntry(
   existingEntries: LorebookEntry[],
   ragIndex?: TFIDFIndex,
 ): DuplicateCheckResult {
+  // Layer 0: trùng DANH TÍNH (tên entry) — chốt chặn cho ca nhiều luồng cùng viết một nhân vật.
+  const ident = checkIdentityDuplicate(newEntry, existingEntries);
+  if (ident.isDuplicate) {
+    return {
+      isDuplicate: true,
+      reason: 'identity',
+      conflictWith: ident.conflictWith,
+      details: { matchedOn: ident.matchedOn },
+    };
+  }
+
   // Layer 1: Key overlap
   const k = checkKeyOverlap(newEntry.keys ?? [], existingEntries);
   if (k.isDuplicate) {

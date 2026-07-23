@@ -420,6 +420,9 @@ ${response.text}`;
       let createdCount = 0;
       await runBatchGeneration({
         topicPrompt,
+        // (việc 90) Bước lorebook trước đây đi vòng qua callAIAndExtract nên KHÔNG nhận được
+        // quy tắc của user — gõ "không tạo nhân vật" mà vẫn đẻ hàng loạt nhân vật.
+        userRules: config.userRules,
         useCardContext: true,
         totalEntries,
         minEntries,

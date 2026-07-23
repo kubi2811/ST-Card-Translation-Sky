@@ -4,19 +4,19 @@ import {
   CheckCircle2, Circle, Loader2, ChevronRight, ChevronDown,
   AlertTriangle, Settings2, Hash, BookOpen, User, Terminal,
   MessageSquare, Sparkles, SkipForward, Edit3, Zap, Moon, Cog,
-  Maximize2, X,
+  Maximize2, X, Wrench,
   type LucideIcon
 } from 'lucide-react';
 import { useAutoCreatorStore } from '../store/autoCreatorStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { useToastStore } from '../store/toastStore';
-import { runAutoCreatorPipeline, retrySingleStep, skipStep, applyStepPreview } from '../lib/ai/autoCreatorPipeline';
+import { runAutoCreatorPipeline, retrySingleStep, skipStep, applyStepPreview, runAutoRepair } from '../lib/ai/autoCreatorPipeline';
 import { runMinhNguyetPipeline, retryMnStep, skipMnStep } from '../lib/ai/minhNguyetPipeline';
 import { AUTO_CREATOR_PRESETS } from '../lib/ai/autoCreatorPresets';
 import { MINH_NGUYET_STEP_LABELS } from '../prompts/minhNguyetTemplates';
 import type { AutoCreatorStep, MinhNguyetStep, AnyPipelineStep } from '../types';
 import { cn } from '../lib/utils';
-import { t as ui } from '../i18n';
+import { t as ui, fmt } from '../i18n';
 
 // (User 19/07) Thứ tự hiển thị khớp thứ tự CHẠY mới: mvuzod trước regex (regex bám schema),
 // game_ui sau mvuzod, final_check cuối cùng.
@@ -73,6 +73,7 @@ export function AutoCreatorPage() {
   const [showPromptOverride, setShowPromptOverride] = useState<AutoCreatorStep | null>(null);
   const [showMnPromptOverride, setShowMnPromptOverride] = useState<MinhNguyetStep | null>(null);
   const [ideaExpanded, setIdeaExpanded] = useState(false); // ô "Ý tưởng của bạn" phóng to toàn màn hình
+  const [repairing, setRepairing] = useState(false); // (việc 82) đang chạy vòng vá lỗi
   const logEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -95,6 +96,25 @@ export function AutoCreatorPage() {
   const handleRetry = async (step: AutoCreatorStep) => {
     if (!activeProfile) return;
     await retrySingleStep(step, { profile: activeProfile, generationParams: settings.generationParams });
+  };
+
+  /**
+   * (User 22/07 — việc 82) Vá hết lỗi cơ học mà Kiểm tra tổng thể vừa liệt kê.
+   * Không gọi AI nên không cần profile — chạy được cả khi chưa cấu hình khoá API.
+   */
+  const handleAutoRepair = async () => {
+    const toast = useToastStore.getState();
+    setRepairing(true);
+    try {
+      const r = await runAutoRepair();
+      if (r.before === 0) toast.success(ui.acRepairClean);
+      else if (r.after === 0) toast.success(fmt(ui.acRepairDone, { n: r.fixedCount }));
+      else toast.info(fmt(ui.acRepairPartial, { n: r.fixedCount, left: r.after }));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRepairing(false);
+    }
   };
 
   const handleMnRetry = async (step: MinhNguyetStep) => {
@@ -601,7 +621,19 @@ export function AutoCreatorPage() {
               </div>
             )}
             {!store.isRunning && store.logs.length > 0 && (
-              <button onClick={() => store.resetPipeline()} className="px-2 py-1 bg-white/10 hover:bg-white/20 rounded flex items-center gap-1 transition-colors"><RotateCcw className="w-3 h-3" /> Reset</button>
+              <div className="flex items-center gap-1.5">
+                {/* (User 22/07 — việc 82) Kiểm tra tổng thể xong ra một đống lỗi cơ học mà user
+                    phải tự sửa tay. Nút này chạy vòng vá tất định cho tới khi hết vá được. */}
+                <button
+                  onClick={handleAutoRepair}
+                  disabled={repairing}
+                  className="px-2 py-1 bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 disabled:opacity-50 rounded flex items-center gap-1 transition-colors"
+                  title={ui.acRepairAllHint}
+                >
+                  <Wrench className="w-3 h-3" /> {repairing ? ui.acRepairing : ui.acRepairAll}
+                </button>
+                <button onClick={() => store.resetPipeline()} className="px-2 py-1 bg-white/10 hover:bg-white/20 rounded flex items-center gap-1 transition-colors"><RotateCcw className="w-3 h-3" /> Reset</button>
+              </div>
             )}
           </div>
           <div className="flex-1 overflow-y-auto scrollbar-thin p-3 space-y-1">

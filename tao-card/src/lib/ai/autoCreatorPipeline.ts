@@ -6,7 +6,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { AutoCreatorConfig, AutoCreatorStep, CardBlueprint, StepPreview } from '../../types';
 import type { ProxyProfile, GenerationParams, CardExtensions } from '../../types';
-import type { RegexPlacement } from '../../types';
+import type { RegexPlacement, MVUZODSchema } from '../../types';
 import { useCardStore } from '../../store/cardStore';
 import { buildSchemaContextForBatch } from '../mvuzod/schemaContextBuilder';
 import { normalizeMVUZODSchema } from '../mvuzod/normalizeSchema';
@@ -14,6 +14,7 @@ import { buildOutputFormatContent, buildEmphasisContent } from '../mvuzod/system
 import { nestFlatInitvarKeys } from '../mvuzod/nestFlatInitvar';
 import { buildMVUZODScripts } from '../mvuzod/tavernScriptBuilder';
 import { OPENING_FORM_ANCHOR, STATUS_BAR_ANCHOR } from '../mvuzod/regexAnchors';
+import { autoRepairCard } from './cardAutoRepair';
 import { buildMvuCoreRegexScripts } from '../mvuzod/mvuCoreRegex';
 import { schemaToZodCode } from '../mvuzod/schemaInferencer';
 import { buildProgrammaticRegex } from '../mvuzod/programmaticRegexBuilder';
@@ -211,6 +212,77 @@ export function applyStepPreview(step: AutoCreatorStep) {
   store.setStepStatus(step, 'done');
   store.setStepPreview(step, null);
   store.addLog({ step, level: 'success', message: `✅ Preview applied: ${step}` });
+}
+
+/**
+ * ═══ (User 22/07 — việc 82) TIẾN TRÌNH VÁ LẠI HẾT LỖI ═══
+ *
+ * "Kiểm tra tổng thể xong hiện ra 1 đống lỗi → thêm 1 nút / 1 tiến trình vá lại hết lỗi để
+ * card hoàn thiện."
+ *
+ * Phần lớn lỗi mà báo cáo bắt được là lỗi CƠ HỌC, biết chính xác phải sửa thế nào — bắt user
+ * đi sửa tay từng cái là vô lý. Chạy vòng lặp: đếm lỗi → vá → đếm lại, tối đa 3 lượt và dừng
+ * ngay khi một lượt không giảm được lỗi nào (chống lặp vô tận nếu có lỗi không tự vá nổi).
+ *
+ * Chỉ vá TẤT ĐỊNH, không gọi mạng. Lỗi cần sáng tác nội dung được liệt kê riêng để user biết
+ * phải chạy lại bước nào của Auto Creator.
+ */
+export async function runAutoRepair(): Promise<{ before: number; after: number; fixedCount: number }> {
+  const store = useAutoCreatorStore.getState();
+  const step: AutoCreatorStep = 'final_check';
+  const log = (level: 'info' | 'success' | 'warning' | 'error', message: string) =>
+    store.addLog({ step, level, message });
+
+  const cardStore = useCardStore.getState();
+  const before = (await buildFinalCheckReport(cardStore)).problems;
+  if (before === 0) {
+    log('success', '✅ Không có lỗi nào để vá — card đã sạch.');
+    return { before: 0, after: 0, fixedCount: 0 };
+  }
+
+  log('info', `🔧 Bắt đầu vá lỗi tự động — báo cáo đang có ${before} vấn đề.`);
+
+  let fixedCount = 0;
+  let remaining = before;
+  const pendingAi = new Set<string>();
+
+  for (let round = 1; round <= 3; round++) {
+    const fresh = useCardStore.getState();
+    const schema = ((fresh.card?.data?.extensions as unknown as Record<string, any>)?.mvuzod?.schema ?? null) as MVUZODSchema | null;
+    const result = autoRepairCard(fresh.card, schema);
+
+    for (const n of result.needsAi) pendingAi.add(n);
+
+    if (result.fixed.length === 0) {
+      if (round === 1) log('warning', '⚠️ Không có lỗi nào tự vá được bằng máy.');
+      break;
+    }
+
+    // Ghi card đã vá về store.
+    fresh.updateCard((c) => {
+      c.data = result.card.data;
+    });
+
+    for (const f of result.fixed) log('success', `   ✔ ${f.description}`);
+    fixedCount += result.fixed.length;
+
+    const after = (await buildFinalCheckReport(useCardStore.getState())).problems;
+    log('info', `🔧 Lượt ${round}: vá ${result.fixed.length} chỗ — còn ${after}/${remaining} vấn đề.`);
+    if (after >= remaining) { remaining = after; break; }  // không tiến triển ⇒ dừng
+    remaining = after;
+    if (remaining === 0) break;
+  }
+
+  if (pendingAi.size > 0) {
+    log('warning', `⚠️ ${pendingAi.size} lỗi cần AI sáng tác nội dung, máy không tự vá được:`);
+    for (const n of pendingAi) log('warning', `   • ${n}`);
+    log('info', 'Chạy lại bước tương ứng của Auto Creator (Retry) để AI sinh phần còn thiếu.');
+  }
+
+  if (remaining === 0) log('success', `🎉 Đã vá xong toàn bộ ${fixedCount} chỗ — báo cáo sạch, card hoàn thiện.`);
+  else log('warning', `⚠️ Đã vá ${fixedCount} chỗ, còn ${remaining} vấn đề cần xử lý tay hoặc chạy lại bước AI.`);
+
+  return { before, after: remaining, fixedCount };
 }
 
 // ═══ EXECUTE STEP ═══

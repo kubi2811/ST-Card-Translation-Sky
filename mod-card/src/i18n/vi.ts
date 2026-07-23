@@ -55,6 +55,22 @@ const vi: ModUiKeys = {
 
   // Kết quả
   resultTitle: 'Kết Quả (Diff Viewer & Audit)',
+
+  // (việc 88) Mod nối tiếp + xem entry lorebook sau khi mod
+  followUpTitle: 'Chưa ưng? Mod tiếp trên bản này',
+  followUpHint: 'Gõ yêu cầu chỉnh thêm rồi bấm mod tiếp — lượt sau chạy TRÊN bản vừa ra, giữ lại những gì các lượt trước đã làm đúng. Không cần tải về rồi nạp lại.',
+  followUpPh: 'Ví dụ: viết lại phần tính cách cho lạnh lùng hơn, giữ nguyên lorebook…',
+  followUpRun: 'Mod tiếp (lượt {n})',
+  followUpRoundsDone: 'đã chạy {count} lượt',
+  followUpNoRequest: '(không có yêu cầu riêng)',
+  lbViewTitle: 'Entry lorebook sau khi mod',
+  lbViewSummary: '{total} entry · {enabled} đang bật · +{added} thêm · {changed} sửa · {removed} mất',
+  lbViewSearchPh: 'Tìm theo tên entry, từ khoá hoặc nội dung…',
+  lbViewOnlyChanged: 'Chỉ hiện entry có thay đổi',
+  lbViewChars: 'ký tự',
+  lbViewOff: 'đang tắt',
+  lbViewNoMatch: 'Không có entry nào khớp bộ lọc.',
+  lbStatus: { added: 'THÊM', changed: 'SỬA', removed: 'MẤT', same: 'giữ nguyên' },
   resultEmpty: 'Hãy chạy "Mod Card Tự Động" để xem kết quả tại đây.',
   auditTitle: '1. Nhất Quán (Audit Score)',
   validationTitle: '2. Kiểm Định (Validation Status)',

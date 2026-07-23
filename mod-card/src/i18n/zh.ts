@@ -53,6 +53,22 @@ const zh: ModUiKeys = {
 
   // 结果
   resultTitle: '结果（Diff Viewer & Audit）',
+
+  // （任务 88）续跑 mod + mod 后查看 lorebook 条目
+  followUpTitle: '还不满意？在这个结果上继续 mod',
+  followUpHint: '输入新的要求再跑一轮——下一轮从当前结果开始，保留前几轮做对的部分。不用先下载再重新上传。',
+  followUpPh: '例如：把性格重写得更冷淡些，lorebook 保持不动……',
+  followUpRun: '继续 mod（第 {n} 轮）',
+  followUpRoundsDone: '已跑 {count} 轮',
+  followUpNoRequest: '（没有单独要求）',
+  lbViewTitle: 'mod 后的 lorebook 条目',
+  lbViewSummary: '{total} 条 · {enabled} 启用 · +{added} 新增 · {changed} 修改 · {removed} 丢失',
+  lbViewSearchPh: '按条目名、关键词或内容搜索……',
+  lbViewOnlyChanged: '只看有变化的条目',
+  lbViewChars: '字',
+  lbViewOff: '已关闭',
+  lbViewNoMatch: '没有条目符合筛选条件。',
+  lbStatus: { added: '新增', changed: '修改', removed: '丢失', same: '未变' },
   resultEmpty: '请运行「自动改卡」以在此查看结果。',
   auditTitle: '1. 一致性（Audit Score）',
   validationTitle: '2. 校验（Validation Status）',

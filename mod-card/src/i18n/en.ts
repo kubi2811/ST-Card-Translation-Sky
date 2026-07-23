@@ -59,6 +59,22 @@ const en = {
 
   // Kết quả
   resultTitle: 'Result (Diff Viewer & Audit)',
+
+  // (task 88) Follow-up mod rounds + lorebook entry viewer
+  followUpTitle: 'Not happy yet? Keep modding this result',
+  followUpHint: 'Type another request and run again — the next round starts FROM this result and keeps what earlier rounds got right. No need to download and re-upload.',
+  followUpPh: 'e.g. rewrite the personality to be colder, leave the lorebook alone…',
+  followUpRun: 'Mod again (round {n})',
+  followUpRoundsDone: '{count} round(s) done',
+  followUpNoRequest: '(no specific request)',
+  lbViewTitle: 'Lorebook entries after modding',
+  lbViewSummary: '{total} entries · {enabled} enabled · +{added} added · {changed} changed · {removed} lost',
+  lbViewSearchPh: 'Search by entry name, key or content…',
+  lbViewOnlyChanged: 'Only show changed entries',
+  lbViewChars: 'chars',
+  lbViewOff: 'disabled',
+  lbViewNoMatch: 'No entry matches the filter.',
+  lbStatus: { added: 'ADDED', changed: 'CHANGED', removed: 'LOST', same: 'unchanged' },
   resultEmpty: 'Run "Auto Mod Card" to see the results here.',
   auditTitle: '1. Consistency (Audit Score)',
   validationTitle: '2. Validation Status',

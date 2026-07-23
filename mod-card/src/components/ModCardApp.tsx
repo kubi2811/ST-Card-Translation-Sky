@@ -12,6 +12,7 @@ import { LLMConfig } from '@/lib/llm';
 import { usePersistedState } from '@/lib/usePersistedState';
 import { CardParser } from '@/lib/parser';
 import { ModOrchestrator, extractSections, applyModification, buildLoreDigest, OrchestratorRule } from '@/lib/orchestrator';
+import { listLorebookEntries, findRemovedEntries, summarizeLorebook } from '@/lib/lorebookView';
 import { scriptBrokeByMod } from '@/lib/scriptSafety';
 import { useT } from '@/i18n/I18nProvider';
 import { fmt } from '@/i18n';
@@ -92,6 +93,13 @@ export default function ModCardApp() {
   // Chế độ mod chỉ Lorebook (import LB riêng → mod → xuất LB riêng, không đụng cả thẻ).
   const [isLorebookOnly, setIsLorebookOnly] = usePersistedState<boolean>('modcard.isLorebookOnly', false);
 
+  // (việc 88) Mod nối tiếp: lịch sử các lượt đã chạy + ô nhập yêu cầu cho lượt sau.
+  const [modRounds, setModRounds] = usePersistedState<{ n: number; request: string }[]>('modcard.modRounds', []);
+  const [followUpPrompt, setFollowUpPrompt] = useState('');
+  // Bộ lọc cho bảng xem entry lorebook sau khi mod.
+  const [lbFilter, setLbFilter] = useState('');
+  const [lbOnlyChanged, setLbOnlyChanged] = useState(false);
+
   const handleCardLoaded = (loadedCard: CardV3, _raw?: string, isLorebook?: boolean) => {
     setCard(loadedCard);
     setIsLorebookOnly(!!isLorebook);
@@ -139,8 +147,15 @@ export default function ModCardApp() {
     }
   };
 
-  const runFullPipeline = async () => {
-    if (!card || !llmConfig.apiKey) {
+  /**
+   * (User 23/07 — việc 88) `opts.base` cho phép MOD NỐI TIẾP: lần 2, lần 3… lấy kết quả lần
+   * trước làm điểm xuất phát thay vì luôn quay về thẻ gốc. `opts.extraRequest` là yêu cầu mới
+   * user gõ thêm sau khi xem kết quả — nó được nhét vào như một rule của riêng lượt đó.
+   * Không truyền gì ⇒ y hệt hành vi cũ (mod lần đầu từ thẻ gốc).
+   */
+  const runFullPipeline = async (opts?: { base?: CardV3 | null; extraRequest?: string }) => {
+    const baseCard = opts?.base ?? card;
+    if (!baseCard || !llmConfig.apiKey) {
       alert(t.alertNeedCardKey);
       return;
     }
@@ -148,7 +163,9 @@ export default function ModCardApp() {
     setIsProcessing(true);
     setProcessStatus(t.stage1);
     setAnalysisResult(null);
-    setModdedCard(null);
+    // Lượt NỐI TIẾP thì GIỮ kết quả cũ trên màn hình cho tới khi có kết quả mới — chạy lỗi giữa
+    // chừng mà đã xoá trắng thì user mất luôn thành quả lượt trước, không cách nào lấy lại.
+    if (!opts?.base) setModdedCard(null);
     setAuditResult(null);
     setValidationResult(null);
     setScriptWarnings([]);
@@ -179,6 +196,20 @@ export default function ModCardApp() {
       });
     }
 
+    // (việc 88) Yêu cầu của lượt mod nối tiếp. Đặt CUỐI danh sách và nói rõ đây là vòng chỉnh
+    // lại trên bản đã mod — để AI hiểu là tinh chỉnh tiếp chứ không phải làm lại từ đầu.
+    if (opts?.extraRequest?.trim()) {
+      activeRules.push({
+        id: 'FOLLOW_UP_REQUEST',
+        name: `Yêu cầu chỉnh thêm (lượt ${modRounds.length + 2})`,
+        keywords: '',
+        details:
+          `Thẻ này ĐÃ được mod ở (các) lượt trước; nội dung dưới đây là bản đã mod, không phải bản gốc. ` +
+          `Hãy tinh chỉnh TIẾP theo yêu cầu sau, GIỮ LẠI những gì các lượt trước đã làm đúng:\n${opts.extraRequest.trim()}`,
+        enabled: true
+      });
+    }
+
     if (activeRules.length === 0) {
       alert(t.alertNeedRule);
       setIsProcessing(false);
@@ -190,19 +221,19 @@ export default function ModCardApp() {
       
       // Step 2: Analyze
       setProcessStatus(t.stage2);
-      const analysis = await orchestrator.analyze(card, activeRules);
+      const analysis = await orchestrator.analyze(baseCard, activeRules);
       setAnalysisResult(analysis);
 
       // Step 3: Mod
       setProcessStatus(t.stage3);
       const sectionsToMod = analysis.filter((s: AnalysisItem) => s.status === 'NEEDS_MOD');
-      const allSections = extractSections(card);
+      const allSections = extractSections(baseCard);
       
       let currentContext = '';
-      let currentCard = JSON.parse(JSON.stringify(card));
+      let currentCard = JSON.parse(JSON.stringify(baseCard));
       const moddedEntries: { index: number; content: string }[] = [];
       // Chế độ mở rộng: dựng lore digest 1 lần để mọi section bám lore toàn cảnh.
-      const loreDigest = expandMode ? buildLoreDigest(card) : '';
+      const loreDigest = expandMode ? buildLoreDigest(baseCard) : '';
       // Entry LỚN sẽ được chia phần trong orchestrator → báo tiến độ "phần i/N" để không tưởng bị treo.
       let curLabel = '';
       const modOpts = {
@@ -259,10 +290,15 @@ export default function ModCardApp() {
 
       // Step 6: Validation
       setProcessStatus(t.stage5);
-      const validation = await orchestrator.validateCard(card, currentCard, activeRules);
+      const validation = await orchestrator.validateCard(baseCard, currentCard, activeRules);
       setValidationResult(validation);
       
       setModdedCard(currentCard);
+      // (việc 88) Ghi lại lượt vừa chạy. Lượt đầu (không có base) thì bắt đầu lại lịch sử.
+      setModRounds(prev => opts?.base
+        ? [...prev, { n: prev.length + 2, request: opts.extraRequest?.trim() || '' }]
+        : [{ n: 1, request: customPrompt.trim() }]);
+      setFollowUpPrompt('');
       setProcessStatus(t.stageDone);
       setActiveTab('diff');
     } catch (error: unknown) {
@@ -445,7 +481,7 @@ export default function ModCardApp() {
 
             {!isProcessing ? (
               <button
-                onClick={runFullPipeline}
+                onClick={() => runFullPipeline()}
                 disabled={!card || (rules.filter(r => r.enabled).length === 0 && !customPrompt.trim())}
                 className="w-full py-3 bg-indigo-600 text-white rounded-lg font-semibold shadow hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
@@ -599,6 +635,119 @@ export default function ModCardApp() {
                           {isLorebookOnly ? t.downloadLorebook : t.downloadJson}
                         </button>
                       </div>
+
+                      {/* ═══ (việc 88) MOD NỐI TIẾP ═══
+                          Xem kết quả xong chưa ưng thì gõ yêu cầu mới và mod tiếp NGAY TRÊN bản
+                          vừa ra, không phải tải về rồi nạp lại từ đầu. */}
+                      <div className="p-4 rounded-lg border border-indigo-800 bg-indigo-950/30 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <h4 className="font-black text-neutral-100">{t.followUpTitle}</h4>
+                          {modRounds.length > 0 && (
+                            <span className="text-xs text-neutral-300 font-semibold">
+                              {fmt(t.followUpRoundsDone, { count: modRounds.length })}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-neutral-300">{t.followUpHint}</p>
+                        {modRounds.length > 0 && (
+                          <ul className="text-xs space-y-1 text-neutral-300">
+                            {modRounds.map((r, i) => (
+                              <li key={i} className="truncate">
+                                <span className="text-indigo-300 font-bold">#{r.n}</span>{' '}
+                                {r.request || <em className="text-neutral-500">{t.followUpNoRequest}</em>}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        <textarea
+                          value={followUpPrompt}
+                          onChange={e => setFollowUpPrompt(e.target.value)}
+                          rows={3}
+                          disabled={isProcessing}
+                          placeholder={t.followUpPh}
+                          className="w-full p-2 rounded bg-neutral-900 border border-neutral-700 text-sm text-neutral-100"
+                        />
+                        <button
+                          onClick={() => runFullPipeline({ base: moddedCard, extraRequest: followUpPrompt })}
+                          disabled={isProcessing || !followUpPrompt.trim()}
+                          className="px-4 py-2 bg-indigo-600 text-white rounded font-medium hover:bg-indigo-700 disabled:opacity-40 shadow"
+                        >
+                          {fmt(t.followUpRun, { n: modRounds.length + 1 })}
+                        </button>
+                      </div>
+
+                      {/* ═══ (việc 88) XEM ENTRY LOREBOOK SAU KHI MOD ═══
+                          Trước đây chỉ có hai khối JSON thô — muốn biết entry nào vừa bị sửa thì
+                          phải tự dò trong hàng nghìn dòng. Ghép cặp theo TIÊU ĐỀ (không theo chỉ
+                          số) nên chèn/xoá entry không làm báo nhầm hàng loạt "đã đổi". */}
+                      {(() => {
+                        const rows = listLorebookEntries(moddedCard, card);
+                        const removed = findRemovedEntries(moddedCard, card);
+                        const sum = summarizeLorebook(rows, removed);
+                        const q = lbFilter.trim().toLowerCase();
+                        const shown = rows.filter(r =>
+                          (!lbOnlyChanged || r.status !== 'same') &&
+                          (!q || r.name.toLowerCase().includes(q) || r.keys.join(' ').toLowerCase().includes(q) || r.preview.toLowerCase().includes(q)));
+                        const badge = (s: string) =>
+                          s === 'added' ? 'bg-green-900/60 text-green-200 border-green-700'
+                          : s === 'changed' ? 'bg-amber-900/60 text-amber-200 border-amber-700'
+                          : s === 'removed' ? 'bg-red-900/60 text-red-200 border-red-700'
+                          : 'bg-neutral-800 text-neutral-400 border-neutral-700';
+
+                        if (rows.length === 0 && removed.length === 0) return null;
+                        return (
+                          <div className="p-4 rounded-lg border border-neutral-700 bg-neutral-900/50 space-y-3">
+                            <div className="flex items-center gap-3 flex-wrap">
+                              <h4 className="font-black text-neutral-100">{t.lbViewTitle}</h4>
+                              <span className="text-xs text-neutral-300 font-semibold">
+                                {fmt(t.lbViewSummary, {
+                                  total: sum.total, enabled: sum.enabled,
+                                  added: sum.added, changed: sum.changed, removed: sum.removed,
+                                })}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-3 flex-wrap">
+                              <input
+                                value={lbFilter}
+                                onChange={e => setLbFilter(e.target.value)}
+                                placeholder={t.lbViewSearchPh}
+                                className="flex-1 min-w-[180px] p-2 rounded bg-neutral-900 border border-neutral-700 text-sm text-neutral-100"
+                              />
+                              <label className="flex items-center gap-1.5 text-xs text-neutral-300 font-semibold">
+                                <input type="checkbox" checked={lbOnlyChanged} onChange={e => setLbOnlyChanged(e.target.checked)} />
+                                {t.lbViewOnlyChanged}
+                              </label>
+                            </div>
+                            <div className="space-y-1.5 max-h-96 overflow-y-auto">
+                              {[...removed, ...shown].map(r => (
+                                <div key={`${r.status}-${r.index}-${r.name}`} className="p-2 rounded border border-neutral-800 bg-neutral-950/60">
+                                  <div className="flex items-center gap-2 flex-wrap text-xs">
+                                    <span className={`px-1.5 py-0.5 rounded border font-bold ${badge(r.status)}`}>{t.lbStatus[r.status]}</span>
+                                    <span className="font-bold text-neutral-100">{r.name}</span>
+                                    {!r.enabled && <span className="text-neutral-500">({t.lbViewOff})</span>}
+                                    {r.constant && <span className="text-blue-300">const</span>}
+                                    <span className="text-neutral-400">
+                                      {r.chars.toLocaleString()} {t.lbViewChars}
+                                      {r.status !== 'same' && r.delta !== 0 && (
+                                        <span className={r.delta > 0 ? 'text-green-300' : 'text-red-300'}>
+                                          {' '}({r.delta > 0 ? '+' : ''}{r.delta.toLocaleString()})
+                                        </span>
+                                      )}
+                                    </span>
+                                  </div>
+                                  {r.keys.length > 0 && (
+                                    <div className="text-[11px] text-amber-300 mt-0.5 truncate">[{r.keys.join(', ')}]</div>
+                                  )}
+                                  <div className="text-[11px] text-neutral-400 mt-0.5">{r.preview}</div>
+                                </div>
+                              ))}
+                              {shown.length === 0 && removed.length === 0 && (
+                                <div className="text-xs text-neutral-500 py-4 text-center">{t.lbViewNoMatch}</div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
 
                       <div className="grid grid-cols-2 gap-4">
                         <div className="border rounded-md overflow-hidden flex flex-col">

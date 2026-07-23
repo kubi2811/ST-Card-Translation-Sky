@@ -13,7 +13,9 @@ import { useStore } from '../store';
 import { useUi } from '../i18n/useLocale';
 import { fmt } from '../i18n';
 import { Brain, AlertTriangle } from 'lucide-react';
-import { detectMythicCard, titleTranslationIsSafe, extractMythicFields } from '../utils/mythicSkill';
+import {
+  detectMythicCard, titleTranslationIsSafe, extractMythicFields, parseMythicComment,
+} from '../utils/mythicSkill';
 
 export default function MythicPanel() {
   const card = useStore((s) => s.card);
@@ -29,7 +31,8 @@ export default function MythicPanel() {
     let unsafeTitles = 0;
     for (const e of entries) {
       const cm = String((e as { comment?: string })?.comment ?? '');
-      if (cm.includes('_START') && !titleTranslationIsSafe(cm)) unsafeTitles++;
+      // Marker chính xác: content thật có token luật chơi như NO_WEAK_START, so '_START' trần là nhầm.
+      if (parseMythicComment(cm).blocks.length > 0 && !titleTranslationIsSafe(cm)) unsafeTitles++;
     }
     return { ...d, fields: extractMythicFields(card).length, unsafeTitles };
   }, [card]);

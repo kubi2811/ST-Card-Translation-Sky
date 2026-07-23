@@ -254,7 +254,8 @@ export function extractTranslatableFields(
         // khối meta được ghép lại nguyên vẹn ở applyMythicToCard.
         const mythicOn = enabledGroups.includes('mythic');
         const rawComment = String(entry.comment ?? '');
-        const isMythicEntry = mythicOn && parseMythicComment(rawComment).blocks.length > 0;
+        const mythicBlocks = mythicOn ? parseMythicComment(rawComment).blocks : [];
+        const isMythicEntry = mythicBlocks.length > 0;
         if (isMythicEntry) {
           // Entry KHÔNG ghi sẵn `eras` phải suy thời đại từ từ khoá Hán trong tiêu đề —
           // dịch tiêu đề là mất từ khoá và mất luôn entry. Những entry đó không trích tiêu đề.
@@ -279,8 +280,8 @@ export function extractTranslatableFields(
         // (Chiến lược A) Skill Mythic: `description` + `triggerWhen` nằm trong JSON nhúng
         // trong `comment`. Đây là thứ Agent đọc để quyết định nạp entry — không dịch thì người
         // chơi chat tiếng Việt sẽ không bao giờ kích hoạt được entry.
-        if (mythicOn) {
-          for (const b of parseMythicComment(rawComment).blocks) {
+        if (isMythicEntry) {
+          for (const b of mythicBlocks) {
             for (const mf of TRANSLATABLE_META_FIELDS) {
               const v = b.data[mf];
               if (typeof v !== 'string' || !v.trim()) continue;

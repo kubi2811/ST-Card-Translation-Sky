@@ -874,12 +874,19 @@ export function buildEntryNameDictionary(
 ): Record<string, string> {
   const dict: Record<string, string> = {};
   for (const f of fields) {
-    // Match lorebook[N].name fields
+    // Match lorebook[N].name VÀ lorebook[N].comment
+    // ─────────────────────────────────────────────
+    // (User 2026 — việc 81) TRƯỚC ĐÂY chỉ khớp `.name` → từ điển RỖNG với card thật.
+    // Trong SillyTavern, tiêu đề entry hiển thị trên UI và được script tham chiếu là `comment`;
+    // `name` gần như không ai điền (card mẫu trong bug/: 22/22 entry có `comment`, 0 entry có
+    // `name`). Nên mọi thứ ăn theo từ điển này — nhắc AI dùng đúng tên, tự vá tên trong văn bản,
+    // đồng bộ tham chiếu trong script — đều chạy trên từ điển rỗng. Đó chính là gốc của
+    // "script trỏ lorebook bằng tên entry bị mismatch hoàn toàn".
     if (
       f.status === 'done' &&
       f.translated &&
       f.translated.trim() &&
-      /\.name$/.test(f.path) &&
+      /\.(name|comment)$/.test(f.path) &&
       f.path.includes('character_book.entries[')
     ) {
       const orig = f.original.trim();

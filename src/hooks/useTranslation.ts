@@ -1,6 +1,7 @@
 import { splitLorebookBatches } from '../utils/batchSplit';
 import { stripUrlsForCjkCheck } from '../utils/cjk';
 import { scanFieldsForResidualCjk, buildResidualRetryInstruction } from '../utils/residualCjkScan';
+import { buildLorebookRefDictionary, enforceLorebookRefs, validateLorebookRefs } from '../utils/lorebookRefSync';
 import { useCallback, useEffect, useRef } from 'react';
 import { useStore } from '../store';
 import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookEntries, ChunkError, ApiError, setExtraProviders, resetProviderPool, computePoolConcurrency, callProvider, setNameStyle, setFandomMode } from '../utils/apiClient';
@@ -2863,6 +2864,36 @@ export function useTranslation() {
       } catch { /* sweep chỉ tăng cường — lỗi thì bỏ qua */ }
     }
 
+    // ═══ (User 2026 — việc 81) ĐỒNG BỘ THAM CHIẾU LOREBOOK NẰM TRONG CODE ═══
+    // Script/regex trỏ lorebook bằng CHUỖI: getLorebookEntries('主世界书'), e.comment === '开场白',
+    // getwi(null, '设定'). Tên sách và tên entry đều là field ĐƯỢC DỊCH, nhưng chuỗi trong code do
+    // một lượt gọi AI KHÁC dịch → ra chữ khác → script tìm không thấy entry, IM LẶNG không chạy.
+    // Ép chuỗi trong code khớp đúng tên đã dịch, rồi soi xem còn tham chiếu nào trỏ vào hư không.
+    try {
+      const refFields = useStore.getState().fields;
+      const refDict = buildLorebookRefDictionary(refFields);
+      if (Object.keys(refDict.book).length > 0 || Object.keys(refDict.entry).length > 0) {
+        let refFixed = 0;
+        const sample: string[] = [];
+        for (const f of refFields) {
+          if (f.status !== 'done' || typeof f.translated !== 'string' || !f.translated) continue;
+          if (f.group !== 'regex' && f.group !== 'tavern_helper' && f.group !== 'lorebook') continue;
+          const r = enforceLorebookRefs(f.translated, refDict);
+          if (r.fixes.length > 0 && r.text !== f.translated) {
+            store.updateField(f.path, { translated: r.text });
+            refFixed += r.fixes.length;
+            for (const fx of r.fixes) {
+              if (sample.length < 8) sample.push(`"${fx.from}" → "${fx.to}" (${fx.via})`);
+            }
+          }
+        }
+        if (refFixed > 0) {
+          store.addLog('success', `🔗 Đồng bộ tham chiếu lorebook trong code: sửa ${refFixed} chỗ trỏ sai tên.`);
+          for (const s of sample) store.addLog('info', `   • ${s}`);
+        }
+      }
+    } catch { /* đồng bộ chỉ tăng cường — lỗi thì bỏ qua, không chặn dịch */ }
+
     runningRef.current = false;
     store.setPhase('done');
     store.saveTranslationCache();
@@ -2924,6 +2955,31 @@ export function useTranslation() {
          store.addLog('warning', warning);
       }
     }
+
+    // ═══ (User 2026 — việc 81) SOI THAM CHIẾU LOREBOOK TRONG CODE CỦA CARD CUỐI ═══
+    // Mismatch trước giờ HOÀN TOÀN IM LẶNG: script chỉ đơn giản là không tìm thấy entry rồi
+    // thôi, không lỗi, không cảnh báo. Phải nói ra thì user mới biết đường sửa.
+    try {
+      const finalCard = applyTranslationsToCard(store.card!, useStore.getState().fields);
+      const codeTexts = useStore.getState().fields
+        .filter(f => f.status === 'done' && typeof f.translated === 'string' && f.translated
+          && (f.group === 'regex' || f.group === 'tavern_helper' || f.group === 'lorebook'))
+        .map(f => ({ text: f.translated as string, source: f.label }));
+      const { mismatches, checked } = validateLorebookRefs(finalCard as never, codeTexts);
+      if (checked > 0 && mismatches.length === 0) {
+        store.addLog('success', `✅ Tham chiếu lorebook trong code: ${checked} chỗ đều trỏ đúng sách/entry/uid có thật.`);
+      } else if (mismatches.length > 0) {
+        store.addLog('error', `❌ Tham chiếu lorebook: ${mismatches.length}/${checked} chỗ trỏ vào sách/entry KHÔNG TỒN TẠI — script sẽ không chạy.`);
+        for (const m of mismatches.slice(0, 12)) {
+          const kind = m.kind === 'book' ? 'tên sách' : m.kind === 'entry' ? 'tên entry' : 'uid';
+          store.addLog('error',
+            `   • ${m.source}: ${kind} "${m.value}" (${m.via})` +
+            (m.suggestion ? ` — có lẽ định trỏ tới "${m.suggestion}"` : '')
+          );
+        }
+        if (mismatches.length > 12) store.addLog('error', `   … và ${mismatches.length - 12} chỗ nữa`);
+      }
+    } catch { /* soi lỗi chỉ để báo cáo — hỏng thì bỏ qua */ }
 
     // ═══ Post-Translation Entry Name ↔ Text Sync Verification ═══
     {

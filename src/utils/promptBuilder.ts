@@ -20,6 +20,7 @@
 import type { TranslationField, GlossaryEntry } from '../types/card';
 import { fandomNameOverride } from './fandomMode';
 import { buildUnifiedRAGContext, type TranslationMemoryHit } from './ragContext';
+import { buildLorebookRefDictionary, buildLorebookRefPromptBlock } from './lorebookRefSync';
 import { buildEjsPromptBlock } from './ejsSync';
 import { filterGlossaryForText } from './nameGlossary';
 
@@ -1397,6 +1398,21 @@ ${modInstructionsBlock}`;
       options.ejsKeywordDict || {},
       options.ejsDecoratorPreserve ?? true,
     );
+  }
+
+  // ─── 5b. (User 2026 — việc 81) Tên sách/entry lorebook dùng trong CODE là KHOÁ TRA CỨU ───
+  // Chỉ bơm cho field CODE: chuỗi trong `getLorebookEntries('…')` / `e.comment === '…'` không
+  // phải văn xuôi mà là khoá để tìm lorebook. Dịch lệch một chữ là script mất kết nối và IM LẶNG
+  // không chạy. Field văn xuôi không cần khối này (đã có ENTRY NAME DICTIONARY lo phần narrative).
+  {
+    const codeGroups = ['regex', 'tavern_helper'];
+    const touchesCode = batchFields && batchFields.length > 0
+      ? batchFields.some(f => codeGroups.includes(f.group))
+      : codeGroups.includes(field?.group ?? '');
+    if (touchesCode && allFields) {
+      const refBlock = buildLorebookRefPromptBlock(buildLorebookRefDictionary(allFields));
+      if (refBlock) prompt = (prompt || '') + '\n' + refBlock + '\n';
+    }
   }
 
   // ─── 6. Inject active preset prompts ───

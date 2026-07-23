@@ -10,6 +10,7 @@ import {
   fnv1a, stableHashHex, normalizeStringList, normalizeEras, stripAllMeta,
   buildSourceHash, buildSkillHash, parseMythicComment, detectMythicCard,
   extractMythicFields, applyMythicTranslation, titleHasEraKeyword, titleTranslationIsSafe,
+  META_BLOCK_NAMES,
 } from '../mythicSkill';
 import { extractTranslatableFields, applyMythicToCard } from '../cardFields';
 
@@ -284,5 +285,79 @@ describe.skipIf(!hasFixture)('Chiến lược A — đi trọn đường trích 
     const after = (copy.data.character_book.entries as { comment?: string }[]).map((e) => techOf(e.comment));
     expect(after).toEqual(before);
     expect(before.filter((x) => x.length > 0).length).toBeGreaterThan(500);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────
+// KHỐI META KHÔNG ĐƯỢC RA TỚI AI.
+// `comment` của entry Mythic = tiêu đề + toàn bộ JSON meta. Trên card thật đó là 449k
+// ký tự. Đưa nguyên cho AI là nó viết lại JSON — hash lệch, `eras` bay mất, entry bị
+// Agent loại — chưa kể dịch trùng với chính field meta.
+// ─────────────────────────────────────────────────────────────────────────────────
+describe.skipIf(!hasFixture)('Chiến lược A — khối meta không lọt vào đường dịch', () => {
+  const card = hasFixture ? JSON.parse(fs.readFileSync(CARD, 'utf8')) : null;
+
+  it('TẮT Chiến lược A: comment vẫn mang nguyên JSON (đây là cái nguy hiểm)', () => {
+    const off = extractTranslatableFields(card, ['lorebook']);
+    const dirty = off.filter((f) => f.path.endsWith('.comment')
+      && META_BLOCK_NAMES.some((n) => f.original.includes(n + '_START')));
+    expect(dirty.length).toBeGreaterThan(500);
+  });
+
+  it('BẬT Chiến lược A: KHÔNG field nào còn chứa JSON meta', () => {
+    const on = extractTranslatableFields(card, ['lorebook', 'lorebook_keys', 'mythic']);
+    // `_START` trần là quá rộng: content thật có token luật chơi như NO_WEAK_START.
+    const leak = on.filter((f) => META_BLOCK_NAMES.some((n) => f.original.includes(n + '_START')));
+    expect(leak.map((f) => f.path)).toEqual([]);
+  });
+
+  it('BẬT: comment còn lại đúng tiêu đề, và khối lượng chữ giảm mạnh', () => {
+    const off = extractTranslatableFields(card, ['lorebook']);
+    const on = extractTranslatableFields(card, ['lorebook', 'mythic']);
+    const sum = (a: typeof off) =>
+      a.filter((f) => f.path.endsWith('.comment')).reduce((n, f) => n + f.original.length, 0);
+    // 449k ký tự comment tụt xuống còn phần tiêu đề — nhỏ hơn một bậc.
+    expect(sum(on)).toBeLessThan(sum(off) / 10);
+
+    const one = on.find((f) => f.path.endsWith('.comment'))!;
+    expect(one.original).not.toContain('<!--');
+    expect(one.original.trim()).toBe(one.original);
+  });
+
+  it('dịch tiêu đề rồi ghép lại: meta nguyên vẹn, hash khớp TIÊU ĐỀ MỚI', () => {
+    const copy = JSON.parse(JSON.stringify(card));
+    const all = extractTranslatableFields(copy, ['lorebook', 'mythic']).map((f) => ({
+      ...f, translated: 'VI::' + f.original, status: 'done' as const,
+    }));
+    // Thứ tự thật: dịch chính ghi tiêu đề vào comment TRƯỚC, Chiến lược A ghép meta SAU.
+    for (const f of all) {
+      const m = /entries\[(\d+)\]\.comment$/.exec(f.path);
+      if (m) copy.data.character_book.entries[Number(m[1])].comment = f.translated;
+    }
+    const res = applyMythicToCard(copy, all as never, card);
+    expect(res.entriesTouched).toBeGreaterThan(500);
+
+    let checked = 0, titled = 0;
+    const entries = copy.data.character_book.entries as { comment?: string }[];
+    for (let i = 0; i < entries.length; i++) {
+      const c = String(entries[i].comment ?? '');
+      if (!c.includes('_START')) continue;
+      const parsed = parseMythicComment(c);
+      expect(parsed.blocks.length).toBeGreaterThan(0);
+      const title = parsed.title.trim();
+      if (title.startsWith('VI::')) titled++;
+      for (const b of parsed.blocks) {
+        if (typeof b.data.sourceHash === 'string') {
+          // Hash phải khớp entry với TIÊU ĐỀ MỚI — đây là thứ script tính lại lúc chạy.
+          expect(buildSourceHash({ ...entries[i], comment: title } as never, b.data.eras)).toBe(b.data.sourceHash);
+        }
+        if (typeof b.data.sourceSkillHash === 'string') {
+          expect(buildSkillHash(b.data as never)).toBe(b.data.sourceSkillHash);
+        }
+      }
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(500);
+    expect(titled).toBeGreaterThan(400); // phần còn lại là entry phải giữ tiêu đề Hán vì era
   });
 });

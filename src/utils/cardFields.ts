@@ -1,4 +1,7 @@
-import { parseMythicComment, TRANSLATABLE_META_FIELDS, applyMythicTranslation } from './mythicSkill';
+import {
+  parseMythicComment, TRANSLATABLE_META_FIELDS, applyMythicTranslation,
+  stripAllMeta, titleTranslationIsSafe,
+} from './mythicSkill';
 import type { CharacterCard, CharacterBookEntry, TranslationField, FieldGroup, FieldGroupConfig } from '../types/card';
 
 /* ─── Default Field Group Configs ─── */
@@ -244,18 +247,40 @@ export function extractTranslatableFields(
           entry.content,
           eType
         );
-        addField(
-          `data.character_book.entries[${i}].comment`,
-          `lorebook[${i}].comment${typeTag}`,
-          'lorebook',
-          entry.comment,
-          eType
-        );
+        // (Chiến lược A) `comment` của entry Mythic = TIÊU ĐỀ + toàn bộ khối JSON meta
+        // (trung bình 672 ký tự, ~449k ký tự trên cả thẻ). Gửi nguyên cho AI là nó viết lại
+        // JSON: hash lệch, `eras` bay mất, entry bị Agent loại — chưa kể tốn token gấp bội và
+        // dịch trùng với chính field meta. Nên khi bật Chiến lược A, field này chỉ mang TIÊU ĐỀ;
+        // khối meta được ghép lại nguyên vẹn ở applyMythicToCard.
+        const mythicOn = enabledGroups.includes('mythic');
+        const rawComment = String(entry.comment ?? '');
+        const isMythicEntry = mythicOn && parseMythicComment(rawComment).blocks.length > 0;
+        if (isMythicEntry) {
+          // Entry KHÔNG ghi sẵn `eras` phải suy thời đại từ từ khoá Hán trong tiêu đề —
+          // dịch tiêu đề là mất từ khoá và mất luôn entry. Những entry đó không trích tiêu đề.
+          if (titleTranslationIsSafe(rawComment)) {
+            addField(
+              `data.character_book.entries[${i}].comment`,
+              `lorebook[${i}].comment${typeTag}`,
+              'lorebook',
+              stripAllMeta(rawComment).trim(),
+              eType
+            );
+          }
+        } else {
+          addField(
+            `data.character_book.entries[${i}].comment`,
+            `lorebook[${i}].comment${typeTag}`,
+            'lorebook',
+            entry.comment,
+            eType
+          );
+        }
         // (Chiến lược A) Skill Mythic: `description` + `triggerWhen` nằm trong JSON nhúng
         // trong `comment`. Đây là thứ Agent đọc để quyết định nạp entry — không dịch thì người
         // chơi chat tiếng Việt sẽ không bao giờ kích hoạt được entry.
-        if (enabledGroups.includes('mythic')) {
-          for (const b of parseMythicComment(String(entry.comment ?? '')).blocks) {
+        if (mythicOn) {
+          for (const b of parseMythicComment(rawComment).blocks) {
             for (const mf of TRANSLATABLE_META_FIELDS) {
               const v = b.data[mf];
               if (typeof v !== 'string' || !v.trim()) continue;
@@ -777,11 +802,15 @@ export function getCardSummary(card: CharacterCard) {
 export function applyMythicToCard(
   card: CharacterCard,
   fields: TranslationField[],
+  originalCard?: CharacterCard,
 ): { card: CharacterCard; entriesTouched: number; metaFields: number; hashes: number } {
   const entries = card?.data?.character_book?.entries;
   if (!Array.isArray(entries) || entries.length === 0) {
     return { card, entriesTouched: 0, metaFields: 0, hashes: 0 };
   }
+  // Meta luôn đọc từ thẻ GỐC: comment của thẻ xuất có thể chỉ còn tiêu đề (đã dịch), vì
+  // khối meta bị tách ra khỏi đường dịch để AI không đụng vào.
+  const originals = originalCard?.data?.character_book?.entries;
 
   // Gom bản dịch theo entry: entryIndex -> Map('BLOCK.field' -> bản dịch)
   const byEntry = new Map<number, Map<string, string>>();
@@ -796,11 +825,31 @@ export function applyMythicToCard(
 
   let entriesTouched = 0, metaFields = 0, hashes = 0;
   entries.forEach((entry, i) => {
-    const comment = String((entry as { comment?: string }).comment ?? '');
-    if (!comment.includes('_START')) return; // không phải entry Mythic
-    const r = applyMythicTranslation(comment, byEntry.get(i) ?? new Map(), entry as never);
-    if (r.comment === comment) return;
-    (entry as { comment?: string }).comment = r.comment;
+    const exported = String((entry as { comment?: string }).comment ?? '');
+    const origComment = String(
+      (Array.isArray(originals) ? (originals[i] as { comment?: string })?.comment : undefined) ?? exported,
+    );
+    if (parseMythicComment(origComment).blocks.length === 0) return; // không phải entry Mythic
+
+    // Tiêu đề cuối cùng: ưu tiên bản đã dịch trong thẻ xuất; nếu ở đó vẫn còn meta thì bóc ra.
+    const title = stripAllMeta(exported).trim() || stripAllMeta(origComment).trim();
+    // Hash lấy TIÊU ĐỀ MỚI + content/keys đã dịch làm đầu vào.
+    const hashEntry = {
+      comment: title,
+      content: (entry as { content?: string }).content,
+      keys: (entry as { keys?: string[] }).keys,
+      key: (entry as { key?: string[] }).key,
+      keysecondary: (entry as { keysecondary?: string[] }).keysecondary,
+    };
+    const r = applyMythicTranslation(origComment, byEntry.get(i) ?? new Map(), hashEntry as never);
+
+    // Ghép lại: tiêu đề (đã dịch) + phần meta, giữ đúng khoảng trắng phân cách của thẻ gốc.
+    const at = r.comment.indexOf('<!--');
+    const metaPart = at >= 0 ? r.comment.slice(at) : '';
+    const gap = /\n\s*\n\s*<!--/.test(origComment) ? '\n\n' : '\n';
+    const next = metaPart ? (title ? title + gap + metaPart : metaPart) : r.comment;
+    if (next === exported) return;
+    (entry as { comment?: string }).comment = next;
     entriesTouched++;
     metaFields += r.metaFieldsApplied;
     hashes += r.hashesRebuilt.length;

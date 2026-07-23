@@ -3500,7 +3500,7 @@ export function useTranslation() {
     // applyTranslationsToCard đã ghi title/content đã dịch, vì `sourceHash` lấy chính
     // title + content làm đầu vào — tính trước là ra hash của bản cũ.
     if (store.translationConfig.enableMythicSync) {
-      const my = applyMythicToCard(exportCard, store.fields);
+      const my = applyMythicToCard(exportCard, store.fields, store.card);
       if (my.entriesTouched > 0) {
         store.addLog(
           'info',

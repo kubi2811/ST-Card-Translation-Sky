@@ -13,6 +13,7 @@ import type { MVUZODSchema, MVUZODField } from '../types/mvuzod.types';
 import type { RegexScript } from '../types';
 import type { GameUIConfig } from '../types/gameUiConfig.types';
 import { IMAGE_SIZE_PX } from '../lib/mvuzod/gameUiDefaults';
+import { MVU_VAR_ACCESS_RULES } from '../lib/mvuzod/mvuRuntime';
 
 // ─── SYSTEM PROMPT ──────────────────────────────────────────────────────────
 
@@ -53,9 +54,16 @@ KHÔNG cần field "id" — app sẽ tự sinh UUID.
 Đọc biến MVU ZOD từ message data:
 <%_ const d = Mvu.getMvuData({type:'message', message_id:'latest'})?.stat_data ?? {}; _%>
 
-QUAN TRỌNG: Biến nằm trong \`stat_data\`, PHẢI qua stat_data:
+QUAN TRỌNG 1 — Biến nằm trong \`stat_data\`, PHẢI qua stat_data:
   ✅ d?.角色?.络络?.好感度  (sau khi lấy stat_data)
   ❌ d?.好感度              (thiếu stat_data prefix)
+
+QUAN TRỌNG 2 — MVU lưu MỖI biến dạng CẶP [giá_trị, "mô tả"], KHÔNG phải giá trị trần.
+Lấy được nhánh rồi VẪN PHẢI bóc phần tử đầu, nếu không bảng sẽ in ra cả phần mô tả:
+  initvar:  { "Cảnh Giới": ["Luyện Khí", "cảnh giới tu luyện hiện tại"] }
+  ❌ d?.['Cảnh Giới']       → ["Luyện Khí", "cảnh giới tu luyện hiện tại"]  ← bảng hỏng
+  ✅ d?.['Cảnh Giới']?.[0]  → "Luyện Khí"
+  ✅ TỐT NHẤT: mvuGet(d, 'Cảnh Giới', '—')  (helper đã nhúng sẵn, tự bóc cặp + có mặc định)
 
 **Phương pháp 2 — {{format_message_variable::}} macro (đơn giản nhất, dùng trong text):**
 {{format_message_variable::stat_data.角色.络络.好感度}}
@@ -1032,6 +1040,8 @@ Tách thành 2 nhóm sections rõ ràng.
  * Each section call gets this + specific section assignment.
  */
 export const ORCHESTRATED_SECTION_SYSTEM_PROMPT = `
+${MVU_VAR_ACCESS_RULES}
+
 Bạn là frontend developer tạo HTML cho 1 SECTION trong document game lớn hơn.
 TẤT CẢ CSS đã có sẵn trong <style> chung — BẠN CHỈ VIẾT HTML BODY + SECTION JS.
 
@@ -1050,10 +1060,13 @@ TẤT CẢ CSS đã có sẵn trong <style> chung — BẠN CHỈ VIẾT HTML BO
 3. ID prefix: TẤT CẢ element ID phải bắt đầu bằng sectionId + "-" tránh conflict
 4. HTML phải đứng độc lập (ghép được với sections khác)
 5. JS function tên = "populate_" + sectionId (camelCase), nhận param "d" = stat_data object
-6. Dùng _.get(d, ['key1', 'key2'], default) cho tên biến có khoảng trắng
-7. Record fields: dùng Object.entries() loop tạo list items
-8. Numeric fields: dùng progress bars với stcsSetBar()
-9. String fields: dùng stcsSetText()
+6. ĐỌC BIẾN: dùng mvuGet(d, 'key1.key2', default) — KHÔNG dùng _.get thẳng.
+   Lý do: MVU lưu mỗi biến dạng CẶP [giá_trị, "mô tả"], _.get trả về CẢ CẶP nên bảng
+   sẽ in kèm phần mô tả (đây chính là lỗi "bảng không ăn biến"). mvuGet tự bóc [0].
+   Số: mvuNum(...)  ·  Chữ: mvuText(...)  — cả 3 helper đã nhúng sẵn, đừng tự viết lại.
+7. Record fields: dùng Object.entries() loop tạo list items — nhớ mvuLeaf(value) cho từng mục
+8. Numeric fields: dùng progress bars với stcsSetBar(), giá trị lấy qua mvuNum()
+9. String fields: dùng stcsSetText(), giá trị lấy qua mvuText()
 
 CHỈ trả về JSON. KHÔNG markdown, KHÔNG giải thích.
 `;

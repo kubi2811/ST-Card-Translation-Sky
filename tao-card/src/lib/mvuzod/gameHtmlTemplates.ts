@@ -9,6 +9,7 @@
  * - bảng_khởi_đầu_Ai_Cập.html (730KB Egypt opening)
  * - bảng_mvuzod_Ai_Cập.html (60KB Egypt dashboard)
  */
+import { MVU_RUNTIME_HELPERS } from './mvuRuntime';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // THEME PRESET TYPES
@@ -1134,10 +1135,15 @@ export function generateStatusBarSharedJS(): string {
         });
     });
 
+${MVU_RUNTIME_HELPERS}
+
     // ── Helpers ──
+    // Nhận cả cặp [giá trị, "mô tả"] lẫn giá trị trần — luôn bóc qua mvuText trước khi in,
+    // nếu không bảng sẽ hiện kèm phần mô tả (lỗi "bảng không ăn biến").
     function stcsSetText(id, value, fallback) {
         var el = document.getElementById(id);
-        if (el) el.textContent = (value !== undefined && value !== null && value !== '') ? value : (fallback || '—');
+        var v = mvuText(value, '');
+        if (el) el.textContent = (v !== undefined && v !== null && v !== '') ? v : (fallback || '—');
     }
 
     function stcsSetHtml(id, html) {
@@ -1146,6 +1152,9 @@ export function generateStatusBarSharedJS(): string {
     }
 
     function stcsSetBar(barId, valId, current, max, suffix) {
+        // current có thể là cặp [số, "mô tả"] → bóc ra, tránh NaN% trên thanh máu.
+        current = mvuNum(current, 0);
+        max = mvuNum(max, 0);
         var pct = max > 0 ? Math.min(100, Math.max(0, (current / max) * 100)) : 0;
         var barEl = document.getElementById(barId);
         var valEl = document.getElementById(valId);

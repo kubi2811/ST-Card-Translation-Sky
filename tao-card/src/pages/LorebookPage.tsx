@@ -4,13 +4,13 @@
  * + Worldbook Config theo guide
  */
 
-import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import { useState, useCallback, useMemo, useRef, useEffect, useDeferredValue } from 'react';
 import {
   BookOpen, Plus, Search, Trash2, Copy, GripVertical,
   ChevronDown, ChevronRight, X, Check, Filter,
   ToggleLeft, ToggleRight,
-  Edit3, Layers, Zap, FileText, Globe, Lock, AlertTriangle, Gauge,
-  Wand2, Pencil,
+  Edit3, Layers, Zap, Lock, AlertTriangle,
+  Pencil,
 } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useCardStore } from '../store/cardStore';
@@ -18,6 +18,7 @@ import { useSettingsStore } from '../store/settingsStore';
 import { useToastStore } from '../store/toastStore';
 import { splitKeyInput } from '../lib/worldbook/keyInput';
 import { BatchGeneratorPanel } from '../components/lorebook/BatchGeneratorPanel';
+import { LorebookAgentPanel } from '../components/lorebook/LorebookAgentPanel';
 import { DocExtractPanel } from '../components/lorebook/DocExtractPanel';
 import { WikiScraperPanel } from '../components/lorebook/WikiScraperPanel';
 import { RAGDebugPanel } from '../components/lorebook/RAGDebugPanel';
@@ -59,21 +60,28 @@ const estimateTokens = (text: string) => Math.ceil((text || '').length / 4);
 // ─── Main Page ──────────────────────────────────────────────────────────────
 
 export function LorebookPage() {
-  const [activeTab, setActiveTab] = useState<'entries' | 'batch' | 'refiner' | 'doc' | 'wiki' | 'analysis' | 'quality' | 'tctrl'>('entries');
+  const [activeTab, setActiveTab] = useState<'entries' | 'agent' | 'batch' | 'refiner' | 'doc' | 'wiki' | 'analysis' | 'quality' | 'tctrl'>('entries');
+
+  // (Goal 102.1) Gộp phân mảnh: 2 tầng — tầng 1 chỉ còn [Entries] + [Tạo tự động (AI)];
+  // 7 panel chỉnh tay cũ dồn vào MỘT menu "Nâng cao" thay vì 8 tab dàn hàng ngang.
+  const ADV_TABS = [
+    { id: 'batch' as const, label: ui.lbTabBatch },
+    { id: 'refiner' as const, label: ui.lbTabRefiner },
+    { id: 'doc' as const, label: ui.lbTabDoc },
+    { id: 'wiki' as const, label: ui.lbTabWiki },
+    { id: 'analysis' as const, label: ui.lbTabAnalysis },
+    { id: 'quality' as const, label: ui.lbTabQuality },
+    { id: 'tctrl' as const, label: ui.lbTabTctrl },
+  ];
+  const isAdvTab = ADV_TABS.some(t => t.id === activeTab);
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
-      {/* Tab bar */}
-      <div className="flex border-b border-border bg-card/50 px-2 shrink-0">
+      {/* Tab bar 2 tầng */}
+      <div className="flex items-center border-b border-border bg-card/50 px-2 shrink-0">
         {[
           { id: 'entries' as const, label: ui.lbTabEntries, icon: BookOpen },
-          { id: 'batch' as const, label: ui.lbTabBatch, icon: Zap },
-          { id: 'refiner' as const, label: ui.lbTabRefiner, icon: Wand2 },
-          { id: 'doc' as const, label: ui.lbTabDoc, icon: FileText },
-          { id: 'wiki' as const, label: ui.lbTabWiki, icon: Globe },
-          { id: 'analysis' as const, label: ui.lbTabAnalysis, icon: Filter },
-          { id: 'quality' as const, label: ui.lbTabQuality, icon: Lock },
-          { id: 'tctrl' as const, label: ui.lbTabTctrl, icon: Gauge },
+          { id: 'agent' as const, label: 'Tạo tự động (AI)', icon: Zap },
         ].map(tab => {
           const Icon = tab.icon;
           return (
@@ -85,10 +93,23 @@ export function LorebookPage() {
             </button>
           );
         })}
+        <div className="flex-1" />
+        <div className="flex items-center gap-1.5 py-1.5">
+          <span className={`text-[10px] ${isAdvTab ? 'text-primary' : 'text-muted-foreground/60'}`}>🛠 Nâng cao:</span>
+          <select
+            value={isAdvTab ? activeTab : ''}
+            onChange={e => { if (e.target.value) setActiveTab(e.target.value as typeof activeTab); }}
+            title="Các panel chỉnh tay chi tiết — dùng khi muốn tự lái thay vì để AI tự quyết"
+            className={`settings-input w-auto text-xs py-1 ${isAdvTab ? 'border-primary/40 text-primary' : ''}`}>
+            <option value="">— chọn panel —</option>
+            {ADV_TABS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+          </select>
+        </div>
       </div>
 
       {/* Tab content */}
       {activeTab === 'entries' && <EntriesTab />}
+      {activeTab === 'agent' && <div className="flex-1 overflow-y-auto scrollbar-thin"><LorebookAgentPanel /></div>}
       {activeTab === 'batch' && <div className="flex-1 overflow-y-auto scrollbar-thin"><BatchGeneratorPanel /></div>}
       {activeTab === 'refiner' && <div className="flex-1 overflow-y-auto scrollbar-thin"><LorebookRefinerPanel /></div>}
       {activeTab === 'doc' && <div className="flex-1 overflow-y-auto scrollbar-thin"><DocExtractPanel /></div>}
@@ -178,13 +199,26 @@ function EntriesTab() {
   // ─── Editor state ───────────────────────────────────────────────────
   const [editingEntry, setEditingEntry] = useState<LorebookEntry | null>(null);
 
+  // ─── Chọn nhiều entry (Goal 102 — nút tiện lợi thao tác hàng loạt) ──
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const toggleSelect = useCallback((id: number) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
   // ─── Filtered + sorted entries ──────────────────────────────────────
+  // (Goal 102.4) Search quét cả content mọi entry — gõ từng phím trên lorebook trăm entry
+  // là giật. useDeferredValue để React lọc ở mức ưu tiên thấp, ô gõ luôn mượt.
+  const deferredQuery = useDeferredValue(searchQuery);
   const filteredEntries = useMemo(() => {
     let result = [...entries];
 
     // Search
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
+    if (deferredQuery) {
+      const q = deferredQuery.toLowerCase();
       result = result.filter(e =>
         e.comment.toLowerCase().includes(q) ||
         e.keys.some(k => k.toLowerCase().includes(q)) ||
@@ -213,7 +247,23 @@ function EntriesTab() {
     });
 
     return result;
-  }, [entries, searchQuery, filterPosition, filterEnabled, sortBy]);
+  }, [entries, deferredQuery, filterPosition, filterEnabled, sortBy]);
+
+  // ─── Thao tác hàng loạt lên các entry ĐANG CHỌN ─────────────────────
+  const bulkSetEnabled = useCallback((value: boolean) => {
+    for (const id of selectedIds) updateEntry(id, { enabled: value });
+  }, [selectedIds, updateEntry]);
+
+  const bulkDelete = useCallback(() => {
+    if (!confirm(`Xoá ${selectedIds.size} entry đã chọn? (không hoàn tác được)`)) return;
+    for (const id of selectedIds) deleteEntry(id);
+    setSelectedIds(new Set());
+    setEditingEntry(prev => (prev && selectedIds.has(prev.id) ? null : prev));
+  }, [selectedIds, deleteEntry]);
+
+  const selectAllFiltered = useCallback(() => {
+    setSelectedIds(new Set(filteredEntries.map(e => e.id)));
+  }, [filteredEntries]);
 
   // ─── Stats ──────────────────────────────────────────────────────────
   const totalTokens = useMemo(() => entries.reduce((sum, e) => sum + estimateTokens(e.content), 0), [entries]);
@@ -369,12 +419,40 @@ function EntriesTab() {
           )}
 
           {/* Stats bar */}
-          <div className="flex gap-4 mt-3 text-xs text-muted-foreground">
+          <div className="flex gap-4 mt-3 text-xs text-muted-foreground items-center flex-wrap">
             <span><Layers className="w-3 h-3 inline mr-1" />{entries.length} entries</span>
             <span className="text-emerald-400/80">{fmt(ui.lbEnabledCount, { count: enabledCount })}</span>
             <span>~{totalTokens.toLocaleString()} tokens</span>
             {searchQuery && <span className="text-primary">{fmt(ui.lbResultCount, { count: filteredEntries.length })}</span>}
+            <button onClick={selectAllFiltered} className="text-[10px] text-muted-foreground hover:text-foreground underline decoration-dotted"
+              title="Chọn toàn bộ entry đang hiển thị (theo bộ lọc/tìm kiếm) để thao tác hàng loạt">
+              Chọn tất cả ({filteredEntries.length})
+            </button>
           </div>
+
+          {/* (Goal 102) Thanh thao tác hàng loạt — hiện khi có entry được tick chọn */}
+          {selectedIds.size > 0 && (
+            <div className="flex items-center gap-2 mt-2 px-3 py-1.5 rounded-lg bg-primary/5 border border-primary/20">
+              <span className="text-xs text-primary font-medium">{selectedIds.size} đã chọn</span>
+              <div className="flex-1" />
+              <button onClick={() => bulkSetEnabled(true)}
+                className="flex items-center gap-1 px-2 py-1 rounded text-[11px] text-emerald-400 hover:bg-emerald-500/10 transition-colors">
+                <ToggleRight className="w-3.5 h-3.5" /> Bật
+              </button>
+              <button onClick={() => bulkSetEnabled(false)}
+                className="flex items-center gap-1 px-2 py-1 rounded text-[11px] text-muted-foreground hover:bg-muted/50 transition-colors">
+                <ToggleLeft className="w-3.5 h-3.5" /> Tắt
+              </button>
+              <button onClick={bulkDelete}
+                className="flex items-center gap-1 px-2 py-1 rounded text-[11px] text-destructive hover:bg-destructive/10 transition-colors">
+                <Trash2 className="w-3.5 h-3.5" /> Xoá
+              </button>
+              <button onClick={() => setSelectedIds(new Set())}
+                className="flex items-center gap-1 px-2 py-1 rounded text-[11px] text-muted-foreground hover:text-foreground transition-colors">
+                <X className="w-3.5 h-3.5" /> Bỏ chọn
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Virtualized list */}
@@ -399,6 +477,8 @@ function EntriesTab() {
                     <EntryRow
                       entry={entry}
                       isActive={editingEntry?.id === entry.id}
+                      isSelected={selectedIds.has(entry.id)}
+                      onSelect={() => toggleSelect(entry.id)}
                       onEdit={() => setEditingEntry(structuredClone(entry))}
                       onToggle={() => handleToggleEnabled(entry.id, entry.enabled)}
                       onDuplicate={() => handleDuplicate(entry)}
@@ -493,14 +573,18 @@ function EntriesTab() {
 // ENTRY ROW — virtualized list item
 // ═══════════════════════════════════════════════════════════════════════════
 
-function EntryRow({ entry, isActive, onEdit, onToggle, onDuplicate, onDelete }: {
-  entry: LorebookEntry; isActive: boolean;
-  onEdit: () => void; onToggle: () => void; onDuplicate: () => void; onDelete: () => void;
+function EntryRow({ entry, isActive, isSelected, onSelect, onEdit, onToggle, onDuplicate, onDelete }: {
+  entry: LorebookEntry; isActive: boolean; isSelected: boolean;
+  onSelect: () => void; onEdit: () => void; onToggle: () => void; onDuplicate: () => void; onDelete: () => void;
 }) {
   return (
     <div className={`flex items-center gap-2 px-4 py-2.5 border-b border-border/50 hover:bg-muted/30 transition-colors cursor-pointer group ${
-      isActive ? 'bg-primary/5 border-l-2 border-l-primary' : ''
+      isActive ? 'bg-primary/5 border-l-2 border-l-primary' : isSelected ? 'bg-primary/[0.03]' : ''
     }`} onClick={onEdit}>
+      {/* Tick chọn cho thao tác hàng loạt (Goal 102) */}
+      <input type="checkbox" checked={isSelected}
+        onChange={onSelect} onClick={e => e.stopPropagation()}
+        className="settings-checkbox shrink-0" title="Chọn để thao tác hàng loạt (bật/tắt/xoá)" />
       <GripVertical className="w-3.5 h-3.5 text-muted-foreground/40 shrink-0 cursor-grab" />
 
       {/* Toggle enabled */}

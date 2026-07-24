@@ -188,8 +188,15 @@ Workflow:
 
 QUAN TRỌNG:
 - Code chạy trong browser, KHÔNG dùng Node.js APIs
-- Dùng getvar()/setvar() để đọc/ghi biến MVU
-- Listen 'mvu_state_changed' event để update UI realtime
+- (Goal 100.2 — hợp đồng từ source MagVarUpdate) Biến MVU đọc/ghi qua đối tượng toàn cục
+  \`Mvu\` (nằm trên window.parent, chờ event 'global_Mvu_initialized' nếu chưa có):
+    ĐỌC:  const d = Mvu.getMvuData({ type: 'message', message_id: getCurrentMessageId() });
+          giá trị lấy từ d.stat_data — biến dạng cặp [giá_trị, "mô tả"] thì bóc phần tử [0]
+    GHI:  const nd = await Mvu.parseMessage("_.set('Nhóm.Biến', giá_trị);//lý do", d);
+          await Mvu.replaceMvuData(nd, { type: 'message', message_id: 'latest' });
+  TUYỆT ĐỐI KHÔNG dùng getvar()/setvar() hay /setvar — đó là kho biến chat của SillyTavern,
+  ghi vào đấy stat_data KHÔNG đổi (form bấm xong biến đứng im — đúng bug #162).
+- Update realtime: đăng ký eventOn(Mvu.events.VARIABLE_UPDATE_ENDED, render)
 - CSS animation dùng transform/opacity — tránh layout thrashing`,
 };
 

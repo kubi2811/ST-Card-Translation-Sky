@@ -50,6 +50,8 @@ export async function runGameUiTurn(userMessage: string, deps: GameUiAgentDeps):
   let loops = 0;
   let consecutiveFails = 0;
   let pendingInject: string | null = null;
+  // (bug #42) Số lỗi của bản TỐT NHẤT đang giữ — vòng sửa nào làm số này tăng là bị hoàn nguyên.
+  let lastErrCount: number | null = null;
 
   try {
     while (loops < MAX_LOOPS) {
@@ -82,6 +84,15 @@ export async function runGameUiTurn(userMessage: string, deps: GameUiAgentDeps):
       const text = raw.text || '';
 
       // ─── Áp actions ───
+      // (Goal 100.3 — bug #42) CHỤP LẠI trạng thái TRƯỚC khi áp bản sửa của AI. Bug thật đã
+      // xảy ra: card có 3 lỗi, AI "sửa" bằng cách viết lại cả khối → 500 lỗi, và loop cứ thế
+      // nhận bản hỏng làm nền cho vòng sau. Nguyên tắc mới: một vòng sửa mà làm LỖI NỞ RA
+      // thì HOÀN NGUYÊN về bản trước, không bao giờ lấy bản tệ hơn làm nền.
+      const snapshot = {
+        components: { ...st().components },
+        regexDraft: [...st().regexDraft],
+        sampleOutput: st().sampleOutput,
+      };
       const actions: StudioActionSummary[] = [];
       const editIssues: ValidationIssue[] = [];
 
@@ -136,6 +147,28 @@ export async function runGameUiTurn(userMessage: string, deps: GameUiAgentDeps):
       st().setValidation(report);
 
       const hasDone = hasDoneTag(text);
+
+      // (Goal 100.3 — bug #42) Bản sửa làm lỗi NỞ RA → hoàn nguyên + nói thẳng cho AI biết.
+      const nErrNow = report.issues.filter((x) => x.level === 'error').length;
+      if (lastErrCount !== null && nErrNow > lastErrCount) {
+        st().setComponentsBulk(snapshot.components);
+        st().setRegexDraft(snapshot.regexDraft);
+        st().setSampleOutput(snapshot.sampleOutput);
+        const reverted = validateRegexDraft(st().regexDraft, st().sampleOutput, schemaVars);
+        st().setValidation(reverted);
+        consecutiveFails++;
+        st().appendMessage({ id: uuidv4(), role: 'system-note',
+          content: `↩️ Bản sửa vừa rồi làm lỗi NỞ từ ${lastErrCount} lên ${nErrNow} — đã HOÀN NGUYÊN về bản trước. (vòng ${consecutiveFails}/${MAX_FIX_ROUNDS})`, tone: 'error' });
+        if (consecutiveFails > MAX_FIX_ROUNDS) {
+          st().appendMessage({ id: uuidv4(), role: 'system-note', content: `⚠️ Dừng: AI sửa ${MAX_FIX_ROUNDS} vòng đều làm tệ hơn. Giữ bản ít lỗi nhất (${lastErrCount} lỗi) — bạn sửa tay hoặc đổi cách nhắn.`, tone: 'error' });
+          break;
+        }
+        pendingInject = reportToXml(reverted)
+          + `
+<note>Bản sửa trước của bạn làm lỗi tăng từ ${lastErrCount} lên ${nErrNow} nên đã bị HOÀN NGUYÊN. Chỉ sửa ĐÚNG chỗ được báo, dùng edit_component với đoạn search nguyên văn — KHÔNG viết lại cả khối.</note>`;
+        continue;
+      }
+      lastErrCount = nErrNow;
 
       if (report.ok) {
         consecutiveFails = 0;

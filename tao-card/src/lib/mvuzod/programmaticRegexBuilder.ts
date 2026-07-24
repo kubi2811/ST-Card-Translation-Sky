@@ -594,33 +594,49 @@ function buildSubmitHandler(analysis: SchemaAnalysis): string {
         });
         stcsSetHtml('stcs-summary-table', summaryHtml || '<tr><td colspan="2">Không có dữ liệu</td></tr>');
         var mappings = ${JSON.stringify(mappings)};
-        var slashCommands = [];
-        
+
+        // (Goal 100.2 — giải bug #162) Ghi biến qua ĐÚNG API của MVU: Mvu.getMvuData →
+        // parseMessage("_.set(...)") → replaceMvuData. Bản cũ ghi vào kho biến CHAT của
+        // SillyTavern (lệnh setvar) — không phải stat_data của MVU, nên form nhập xong trình
+        // quản lý biến không thấy gì và status bar không hề đổi. Nguồn hợp đồng: mvuReference.ts
+        // (đối chiếu source MagVarUpdate src/function/global/index.ts).
+        var cmds = [];
         mappings.forEach(function(m) {
             var val = data[m.inputId];
-            if (val !== undefined) {
-                var path = 'stat_data.' + m.path.join('.');
-                slashCommands.push('/setvar key="' + path + '" value="' + val + '"');
-            }
-        });
-
-        if (slashCommands.length > 0) {
-            var cmdText = slashCommands.join('\\n');
-            console.log('[STCS] Executing commands:\\n' + cmdText);
-            
-            // If running in SillyTavern UI, try to execute slash commands
-            if (typeof executeSlashCommands === 'function') {
-                executeSlashCommands(cmdText);
+            if (val === undefined) return;
+            var path = m.path.join('.');
+            var lit;
+            if (m.type === 'number') {
+                var n = Number(val);
+                lit = isFinite(n) ? String(n) : JSON.stringify(String(val));
+            } else if (m.type === 'boolean') {
+                lit = (val === true || val === 'true') ? 'true' : 'false';
             } else {
-                // Fallback: paste into chat textarea
-                var ta = document.getElementById('send_textarea');
-                if (ta) {
-                    ta.value = cmdText;
-                    var btn = document.getElementById('send_but');
-                    if (btn) btn.click();
-                }
+                lit = JSON.stringify(String(val));
             }
+            cmds.push("_.set('" + String(path).replace(/'/g, "\\\\'") + "', " + lit + ');//form thiết lập');
+        });
+        if (!cmds.length) return;
+
+        var M = (typeof Mvu !== 'undefined' && Mvu) ? Mvu
+              : (window.Mvu ? window.Mvu : (window.parent && window.parent.Mvu ? window.parent.Mvu : null));
+        if (!M || typeof M.parseMessage !== 'function' || typeof M.replaceMvuData !== 'function') {
+            console.error('[STCS] Mvu chưa sẵn sàng — cần MagVarUpdate + Tavern Helper ≥ 3.4.17');
+            if (typeof toastr !== 'undefined') toastr.error('MVU chưa sẵn sàng — chưa ghi được biến.');
+            return;
         }
+        var opts = { type: 'message', message_id: (typeof getCurrentMessageId === 'function') ? getCurrentMessageId() : 'latest' };
+        var oldData = M.getMvuData(opts);
+        console.log('[STCS] Ghi biến qua Mvu.parseMessage:\\n' + cmds.join('\\n'));
+        Promise.resolve(M.parseMessage(cmds.join('\\n'), oldData)).then(function(newData) {
+            if (!newData) { console.warn('[STCS] parseMessage không tạo thay đổi nào'); return; }
+            return Promise.resolve(M.replaceMvuData(newData, opts)).then(function() {
+                if (typeof toastr !== 'undefined') toastr.success('Đã lưu thiết lập vào biến MVU.');
+            });
+        }).catch(function(e) {
+            console.error('[STCS] Ghi biến MVU thất bại:', e);
+            if (typeof toastr !== 'undefined') toastr.error('Ghi biến MVU thất bại: ' + e);
+        });
     }
 `;
 }

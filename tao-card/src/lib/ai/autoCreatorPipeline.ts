@@ -14,6 +14,8 @@ import { buildOutputFormatContent, buildEmphasisContent } from '../mvuzod/system
 import { nestFlatInitvarKeys } from '../mvuzod/nestFlatInitvar';
 import { buildMVUZODScripts } from '../mvuzod/tavernScriptBuilder';
 import { OPENING_FORM_ANCHOR, STATUS_BAR_ANCHOR } from '../mvuzod/regexAnchors';
+import { isMvuUpdateBlockAccepted } from '../mvuzod/mvuReference';
+import { validateMvuCard } from '../mvuzod/validateMvuCard';
 import { autoRepairCard } from './cardAutoRepair';
 import { checkMvuOutputContract } from '../mvuzod/mvuReference';
 import { buildMvuCoreRegexScripts } from '../mvuzod/mvuCoreRegex';
@@ -691,8 +693,15 @@ async function buildFinalCheckReport(
       lines.push('❌ Không có entry nào dạy AI khối <UpdateVariable> — đây là ĐỊNH DẠNG ĐẦU RA của biến. Thiếu nó thì MVU không bóc được lệnh cập nhật, vào game báo "变量更新失败".');
       problems++;
     } else if (!contract.ok) {
-      lines.push(`❌ Khối <UpdateVariable> THIẾU thẻ con ${contract.missing.map(m => `<${m}>`).join(' và ')} — MVU đọc mảng lệnh bên trong <JSONPatch>, để trần mảng JSON là parse không ra.`);
-      problems++;
+      // (Goal 100.1) ĐỐI CHIẾU SOURCE ENGINE: <UpdateVariable> chứa lệnh hàm `_.set(...)`
+      // CŨNG hợp lệ (fn_call_match || json_patch_match — invoke_extra_model.ts:351). Trước
+      // đây phép kiểm chỉ biết JSONPatch nên bắt lỗi oan card dùng phương ngữ _.set.
+      if (isMvuUpdateBlockAccepted(allContent)) {
+        lines.push('✅ Khối <UpdateVariable> dùng phương ngữ lệnh _.set — engine chấp nhận (không bắt buộc JSONPatch)');
+      } else {
+        lines.push(`❌ Khối <UpdateVariable> THIẾU thẻ con ${contract.missing.map(m => `<${m}>`).join(' và ')} và cũng không có lệnh _.set nào — đúng lỗi "其内的更新命令无效" của engine.`);
+        problems++;
+      }
     } else {
       lines.push('✅ Có định dạng đầu ra biến đầy đủ (<UpdateVariable> + <Analysis> + <JSONPatch>)');
     }
@@ -727,6 +736,17 @@ async function buildFinalCheckReport(
   }
   if (badRegex > 0) { lines.push(`❌ ${badRegex}/${regexScripts.length} regex có findRegex KHÔNG compile được`); problems++; }
   else if (regexScripts.length > 0) lines.push(`✅ ${regexScripts.length} regex compile OK`);
+
+  // (Goal 100.3/100.4) Suite hợp nhất validateMvuCard — bắt những gì các phép kiểm cũ lọt:
+  // form ghi biến sai đường (bug #162 — kho biến chat của ST thay vì Mvu API) và khoá phẳng
+  // "A/B:" trong initvar (bug 78a). Chỉ lấy các mã CHƯA được kiểm ở trên để không báo trùng.
+  const unified = validateMvuCard({ entries: entries as never, regexScripts });
+  const NEW_CODES = new Set(['initvar-flat-keys', 'form-write-path']);
+  for (const iss of unified.errors) {
+    if (!NEW_CODES.has(iss.code)) continue;
+    lines.push(`❌ ${iss.message}${iss.where ? ` (${iss.where})` : ''}`);
+    problems++;
+  }
 
   // 3b. (bug 72) Giao diện không hiện — 2 nguyên nhân im lặng nhất, kiểm thẳng ở đây:
   //  - khối HTML mở fence ```html mà thiếu ``` đóng ⇒ SillyTavern không render;

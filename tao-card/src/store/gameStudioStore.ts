@@ -43,6 +43,8 @@ interface GameStudioState {
 
   appendMessage: (msg: StudioMessage) => void;
   upsertComponent: (id: string, name: string, html: string) => void;
+  /** (bug #42) Thay TOÀN BỘ components một phát — dùng cho hoàn nguyên khi bản sửa làm lỗi nở ra. */
+  setComponentsBulk: (components: Record<string, StudioComponent>) => void;
   removeComponent: (id: string) => void;
   setRegexDraft: (scripts: DraftScript[]) => void;
   setSampleOutput: (s: string) => void;
@@ -68,6 +70,7 @@ export const useGameStudioStore = create<GameStudioState>((set, get) => ({
   appendMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
   upsertComponent: (id, name, html) =>
     set((s) => ({ components: { ...s.components, [id]: { name, html, updatedAt: Date.now() } } })),
+  setComponentsBulk: (components) => set({ components: { ...components } }),
   removeComponent: (id) =>
     set((s) => { const c = { ...s.components }; delete c[id]; return { components: c }; }),
   setRegexDraft: (scripts) => set({ regexDraft: scripts }),

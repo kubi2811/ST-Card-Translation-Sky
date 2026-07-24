@@ -7,6 +7,26 @@
 import type { CharacterCard } from '../types/card';
 import { validateCard } from './cardFields';
 import { extractCharaFromPNG } from './pngHandler';
+import { isWorldbookFormat, worldbookToCard } from './worldbookParser';
+
+/**
+ * (User 24/07) Nhận CẢ file World Info / lorebook rời, không chỉ card đầy đủ.
+ *
+ * Màn Dịch Card vốn đã nhận lorebook (useCardParser.ts gọi đúng cặp hàm này), nhưng So Sánh Card
+ * đi đường parse riêng nên trước giờ chỉ `validateCard` rồi ném "missing spec, first_mes…" —
+ * user nạp file lorebook vào là bị chặn dù dữ liệu hoàn toàn dùng được.
+ *
+ * `worldbookToCard` dựng pseudo-card có `data.character_book.entries[]`, nên mọi thứ phía sau
+ * (gióng hàng, gộp thông minh, xuất JSON/PNG) chạy nguyên vẹn, không phải sửa gì thêm.
+ */
+function toCardOrWorldbook(json: unknown, fileName: string): CharacterCard {
+  const v = validateCard(json);
+  if (v.valid) return json as CharacterCard;
+  if (isWorldbookFormat(json)) return worldbookToCard(json, fileName);
+  throw new Error(
+    `${v.error || 'Định dạng không hợp lệ'} — cũng không phải file World Info/lorebook (cần \`entries\` dạng object).`,
+  );
+}
 
 export interface ParsedCard {
   card: CharacterCard;
@@ -46,12 +66,7 @@ export async function parseCardFile(file: File): Promise<ParsedCard> {
     throw new Error(`File không phải JSON hợp lệ: ${e instanceof Error ? e.message : String(e)}`);
   }
 
-  const validation = validateCard(json);
-  if (!validation.valid) {
-    throw new Error(validation.error || 'Định dạng card không hợp lệ');
-  }
-
-  return { card: json as CharacterCard, dataUrl, isPng, fileName: file.name };
+  return { card: toCardOrWorldbook(json, file.name), dataUrl, isPng, fileName: file.name };
 }
 
 /**
@@ -70,10 +85,5 @@ export function parseCardJsonText(text: string, fileName = 'card-dán.json'): Pa
     throw new Error(`JSON dán không hợp lệ: ${e instanceof Error ? e.message : String(e)}`);
   }
 
-  const validation = validateCard(json);
-  if (!validation.valid) {
-    throw new Error(validation.error || 'Định dạng card không hợp lệ');
-  }
-
-  return { card: json as CharacterCard, dataUrl: null, isPng: false, fileName };
+  return { card: toCardOrWorldbook(json, fileName), dataUrl: null, isPng: false, fileName };
 }

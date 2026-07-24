@@ -15,7 +15,9 @@ import {
 } from 'lucide-react';
 import { useStore } from '../store';
 import { parseCardFile, parseCardJsonText, type ParsedCard } from '../utils/parseCardFile';
-import { buildCompareGroups, valuesDiffer, planMerge, type MergePlan } from '../utils/compareCards';
+import {
+  buildCompareGroups, valuesDiffer, planMerge, planMergeTwoCard, promoteSuspects, type MergePlan,
+} from '../utils/compareCards';
 import { extractTranslatableFields, setNestedValue, DEFAULT_FIELD_GROUPS } from '../utils/cardFields';
 import { syncEmbeddedWorldLink } from '../utils/worldLink';
 import { embedCharaToPNG } from '../utils/pngHandler';
@@ -177,15 +179,33 @@ export function CompareCardsPanel({ onClose }: Props) {
   }, [slots, flushEdits, saveAll, addToast]);
 
   // ─── Gộp thông minh (tái dùng bản dịch cũ cho entry không đổi) ───
+  // (User 24/07) Trước đây BẮT BUỘC đủ 3 card. Thực tế user thường chỉ còn bản đã dịch cũ + bản gốc
+  // mới của tác giả — thiếu bản gốc CŨ. Nay cho chạy 2 card, nhưng nói thẳng đó là chế độ SUY ĐOÁN:
+  // entry mới thì chắc chắn, còn entry tác giả SỬA nội dung thì không thể biết chắc.
   const allThree = SLOT_ORDER.every((s) => slots[s.id].parsed);
+  const canMerge2 = !!slots.translated.parsed && !!slots.final.parsed;
+  const canMerge = allThree || canMerge2;
 
   const runMerge = useCallback(() => {
-    if (!allThree) return;
-    const plan = planMerge(slots.raw.valueByPath, slots.translated.valueByPath, slots.final.valueByPath);
+    if (!allThree && !canMerge2) return;
+    const plan = allThree
+      ? planMerge(slots.raw.valueByPath, slots.translated.valueByPath, slots.final.valueByPath)
+      : planMergeTwoCard(slots.translated.valueByPath, slots.final.valueByPath);
     setMerge(plan);
     setDiffOnly(false);
     addToast('success', fmt(ui.ccToastMerged, { reused: plan.counts.reused, changed: plan.counts.changed }));
-  }, [allThree, slots, addToast]);
+  }, [allThree, canMerge2, slots, addToast]);
+
+  /** Chuyển mọi mục "nghi tác giả đã sửa" sang diện cần dịch. */
+  const promoteAllSuspects = useCallback(() => {
+    setMerge((prev) => {
+      if (!prev || prev.suspect.size === 0) return prev;
+      const n = prev.suspect.size;
+      const next = promoteSuspects(prev);
+      addToast('success', fmt(ui.ccToastPromoted, { count: n }));
+      return next;
+    });
+  }, [addToast]);
 
   // Đưa Card Final sang Dịch Card: reused = "đã dịch" (khoá), phần mới = "chờ dịch".
   // (Bug 39b — 2026) THỨ TỰ QUAN TRỌNG: trước đây setCard/setFields chạy NGAY trong click khi
@@ -330,11 +350,21 @@ export function CompareCardsPanel({ onClose }: Props) {
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 18px', borderBottom: '1px solid var(--border-default)', background: 'rgba(56,189,248,0.06)', flexWrap: 'wrap' }}>
           {!merge ? (
             <>
-              <button onClick={runMerge} disabled={!allThree}
-                title={allThree ? ui.ccMergeTitleOk : ui.ccMergeTitleNeed}
-                style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 14px', borderRadius: 'var(--radius-sm)', border: 'none', background: allThree ? '#38bdf8' : 'var(--bg-elevated)', color: allThree ? '#04263a' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.78rem', cursor: allThree ? 'pointer' : 'default' }}>
-                {ui.ccMergeBtn}{allThree ? '' : ui.ccMergeBtnNeed}
+              <button onClick={runMerge} disabled={!canMerge}
+                title={allThree ? ui.ccMergeTitleOk : canMerge2 ? ui.ccMergeMode2Tip : ui.ccMergeTitleNeed}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 14px', borderRadius: 'var(--radius-sm)', border: 'none', background: canMerge ? '#38bdf8' : 'var(--bg-elevated)', color: canMerge ? '#04263a' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.78rem', cursor: canMerge ? 'pointer' : 'default' }}>
+                {ui.ccMergeBtn}{canMerge ? '' : ui.ccMergeBtnNeed2}
               </button>
+              {/* Nói rõ đang chạy chế độ nào — chính xác (3 card) hay suy đoán (2 card). */}
+              {canMerge && (
+                <span title={allThree ? ui.ccMergeMode3Tip : ui.ccMergeMode2Tip}
+                  style={{ fontSize: '0.68rem', fontWeight: 700, padding: '3px 9px', borderRadius: '99px', cursor: 'help',
+                    background: allThree ? 'rgba(34,197,94,0.12)' : 'rgba(251,191,36,0.14)',
+                    color: allThree ? '#22c55e' : 'var(--accent-warning)',
+                    border: `1px solid ${allThree ? 'rgba(34,197,94,0.35)' : 'rgba(251,191,36,0.4)'}` }}>
+                  {allThree ? ui.ccMergeMode3 : ui.ccMergeMode2}
+                </span>
+              )}
               <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
                 {ui.ccMergeHint}
               </span>
@@ -347,6 +377,20 @@ export function CompareCardsPanel({ onClose }: Props) {
                 <span style={{ color: 'var(--accent-warning)' }}>{fmt(ui.ccMergeChanged, { count: merge.counts.changed })}</span>
                 <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>{fmt(ui.ccMergeTotal, { count: merge.counts.total })}</span>
               </span>
+              {/* Chế độ 2 card: mục nghi tác giả đã sửa — VẪN đang tái dùng, tô vàng để user tự quyết. */}
+              {merge.counts.suspect > 0 && (
+                <span style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
+                  <span title={ui.ccSuspectTip}
+                    style={{ fontSize: '0.72rem', fontWeight: 700, padding: '3px 9px', borderRadius: '99px', cursor: 'help',
+                      background: 'rgba(251,191,36,0.14)', color: 'var(--accent-warning)', border: '1px solid rgba(251,191,36,0.4)' }}>
+                    {fmt(ui.ccSuspectChip, { count: merge.counts.suspect })}
+                  </span>
+                  <button onClick={promoteAllSuspects} title={ui.ccSuspectTip}
+                    style={{ padding: '5px 10px', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(251,191,36,0.5)', background: 'transparent', color: 'var(--accent-warning)', fontSize: '0.72rem', fontWeight: 600, cursor: 'pointer' }}>
+                    {ui.ccSuspectPromote}
+                  </button>
+                </span>
+              )}
               <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                 <button onClick={sendToTranslate}
                   style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '7px 14px', borderRadius: 'var(--radius-sm)', border: 'none', background: 'var(--accent-primary)', color: '#fff', fontWeight: 700, fontSize: '0.78rem', cursor: 'pointer' }}>
@@ -409,8 +453,11 @@ export function CompareCardsPanel({ onClose }: Props) {
                     </div>
                     {SLOT_ORDER.map((s) => {
                       const isFinal = s.id === 'final';
-                      const tag: 'reused' | 'changed' | undefined = merge && isFinal
-                        ? (merge.reused.has(e.path) ? 'reused' : merge.changed.has(e.path) ? 'changed' : undefined)
+                      // 'suspect' = vẫn tái dùng nhưng nghi tác giả đã sửa (chỉ có ở chế độ 2 card).
+                      const tag: 'reused' | 'changed' | 'suspect' | undefined = merge && isFinal
+                        ? (merge.suspect.has(e.path) ? 'suspect'
+                          : merge.reused.has(e.path) ? 'reused'
+                          : merge.changed.has(e.path) ? 'changed' : undefined)
                         : undefined;
                       const shownValue = tag === 'reused' ? (merge!.reused.get(e.path) ?? '') : (effective(s.id, e.path) ?? '');
                       return (
@@ -546,7 +593,7 @@ function SlotHeader({ slotDef, slot, onImport, onPasteJson, onRemove, onSaveAll,
 // ─── One editable cell ───
 function CompareCell({ loaded, present, value, dirty, readOnly, mergeTag, onChange, onSave }: {
   loaded: boolean; present: boolean; value: string; dirty: boolean;
-  readOnly?: boolean; mergeTag?: 'reused' | 'changed';
+  readOnly?: boolean; mergeTag?: 'reused' | 'changed' | 'suspect';
   onChange: (v: string) => void; onSave: () => void;
 }) {
   const ui = useUi();
@@ -557,16 +604,22 @@ function CompareCell({ loaded, present, value, dirty, readOnly, mergeTag, onChan
     return <div style={{ padding: '8px 12px', fontSize: '0.66rem', color: 'var(--text-muted)', fontStyle: 'italic', borderLeft: '1px solid var(--border-subtle)', background: mergeTag === 'changed' ? 'rgba(240,196,106,0.05)' : 'transparent' }}>{ui.ccNoEntry}</div>;
   }
   const bg = mergeTag === 'reused' ? 'rgba(34,197,94,0.07)'
+    : mergeTag === 'suspect' ? 'rgba(251,191,36,0.13)'
     : mergeTag === 'changed' ? 'rgba(240,196,106,0.08)'
     : dirty ? 'rgba(240,196,106,0.06)' : 'transparent';
   const borderColor = mergeTag === 'reused' ? 'rgba(34,197,94,0.5)'
+    : mergeTag === 'suspect' ? 'rgba(251,191,36,0.85)'
     : mergeTag === 'changed' ? 'var(--accent-warning)'
     : dirty ? 'var(--accent-warning)' : 'var(--border-subtle)';
   return (
     <div style={{ padding: '6px 8px', borderLeft: '1px solid var(--border-subtle)', position: 'relative', background: bg }}>
       {mergeTag && (
-        <div style={{ fontSize: '0.6rem', fontWeight: 700, marginBottom: '3px', color: mergeTag === 'reused' ? '#16a34a' : 'var(--accent-warning)' }}>
-          {mergeTag === 'reused' ? ui.ccTagReused : ui.ccTagChanged}
+        <div title={mergeTag === 'suspect' ? ui.ccSuspectTip : undefined}
+          style={{ fontSize: '0.6rem', fontWeight: 700, marginBottom: '3px', cursor: mergeTag === 'suspect' ? 'help' : 'default',
+            color: mergeTag === 'reused' ? '#16a34a' : 'var(--accent-warning)' }}>
+          {mergeTag === 'reused' ? ui.ccTagReused
+            : mergeTag === 'suspect' ? `${ui.ccTagReused} · ⚠️`
+            : ui.ccTagChanged}
         </div>
       )}
       <textarea

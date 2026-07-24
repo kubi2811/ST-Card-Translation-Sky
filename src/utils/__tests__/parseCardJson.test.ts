@@ -32,3 +32,29 @@ describe('parseCardJsonText — dán JSON trực tiếp', () => {
     expect(() => parseCardJsonText('{"foo": 1}')).toThrow();
   });
 });
+
+
+/* (User 24/07) So Sánh Card phải nhận CẢ file World Info/lorebook rời, không chỉ card đầy đủ.
+ * Trước đây chỉ `validateCard` rồi ném "missing spec, first_mes…" — user nạp lorebook là bị chặn,
+ * dù màn Dịch Card vốn đã nhận được. */
+const worldbookJson = JSON.stringify({
+  entries: {
+    '0': { uid: 0, key: ['武魂', 'Võ hồn'], content: '武魂设定', comment: 'Võ hồn' },
+    '1': { uid: 1, key: ['魂环'], content: '魂环设定', comment: 'Hồn hoàn' },
+  },
+});
+
+describe('parseCardJsonText — nhận file World Info / lorebook rời', () => {
+  it('lorebook (entries dạng object) → dựng pseudo-card có character_book.entries', () => {
+    const r = parseCardJsonText(worldbookJson, 'lore.json');
+    const entries = r.card.data?.character_book?.entries;
+    expect(Array.isArray(entries)).toBe(true);
+    expect(entries).toHaveLength(2);
+    expect(entries?.[0].content).toBe('武魂设定');
+    expect(entries?.[0].keys).toContain('武魂');
+  });
+
+  it('JSON không phải card cũng không phải lorebook → lỗi nhắc cả hai dạng', () => {
+    expect(() => parseCardJsonText('{"foo":1}')).toThrow(/World Info|lorebook/i);
+  });
+});

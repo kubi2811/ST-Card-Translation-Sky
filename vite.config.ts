@@ -19,9 +19,16 @@ const safeCacheName = (key: string) =>
 const ensureProgressDir = () => { try { fs.mkdirSync(PROGRESS_DIR, { recursive: true }); } catch { /* ignore */ } };
 const readJsonBody = (req: import('http').IncomingMessage): Promise<any> =>
   new Promise((resolve) => {
-    let body = '';
-    req.on('data', (c) => { body += c; });
-    req.on('end', () => { try { resolve(body ? JSON.parse(body) : {}); } catch { resolve(null); } });
+    // Gom Buffer rồi decode UTF-8 MỘT LẦN ở cuối. Trước đây `body += c` ép mỗi chunk thành
+    // chuỗi riêng lẻ: với body vài MB (thẻ dịch, cache resume Dịch Script/Preset), một ký tự
+    // UTF-8 nhiều byte bị cắt qua 2 chunk TCP → mỗi nửa byte thành U+FFFD, hỏng chữ (ví dụ "đ"
+    // = C4 91 → ). Buffer.concat ghép nhị phân trước, không tách giữa ký tự.
+    const chunks: Buffer[] = [];
+    req.on('data', (c) => { chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)); });
+    req.on('end', () => {
+      const body = Buffer.concat(chunks).toString('utf8');
+      try { resolve(body ? JSON.parse(body) : {}); } catch { resolve(null); }
+    });
     req.on('error', () => resolve(null));
   });
 

@@ -130,3 +130,132 @@ export const MVU_FORMAT_RULES = [
   `Mảng lệnh JSON nằm TRONG <${MVU_TAGS.patch}> — để trần trong <${MVU_TAGS.root}> là MVU không bóc được.`,
   'Entry khởi tạo biến phải TẮT (enabled=false) thì MVU mới đọc làm template.',
 ].join('\n');
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+ * (Goal 100.1 — 24/07) HỢP ĐỒNG ĐỐI CHIẾU TỪ SOURCE MVU THẬT
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Phần trên đúc từ card thật (quan sát bên ngoài). Phần dưới đây đúc từ CHÍNH SOURCE
+ * của extension MagVarUpdate (bugNeedFix/mvu-reference/ — clone từ GitHub
+ * MagicalAstrogy/MagVarUpdate). Không còn phải đoán: đây là những gì engine THẬT SỰ làm.
+ * File nguồn dẫn chiếu ghi cạnh từng mục. Mọi generator/validator/harness của tool
+ * import từ đây — MỘT nguồn sự thật, ba nơi (sinh, kiểm, giả lập) không bao giờ lệch.
+ * ═══════════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Marker entry mà engine dò trong `comment` — regex NGUYÊN VĂN từ src/variable_def.ts:316.
+ * Khớp bất kỳ đâu trong comment, không phân biệt hoa thường. `[initvar]` do luồng nạp
+ * biến đọc (initvar/variable_init.ts), 2 cái sau lọc entry khi build prompt.
+ */
+export const MVU_ENTRY_MARKERS = {
+  initvar: /\[initvar\]/i,
+  update: /\[mvu_update\]/i,
+  plot: /\[mvu_plot\]/i,
+} as const;
+
+/**
+ * HAI PHƯƠNG NGỮ CẬP NHẬT ĐỀU HỢP LỆ (src/function/update/invoke_extra_model.ts:351-354):
+ * engine chấp nhận khối <UpdateVariable> chứa HOẶC lệnh hàm `_.set(...)` HOẶC JSON Patch —
+ * `fn_call_match || json_patch_match`. Tool SINH ra JSONPatch (nhất quán, dễ kiểm), nhưng
+ * bộ KIỂM card ngoài phải chấp nhận cả hai — bắt card `_.set` là báo lỗi oan.
+ *
+ * Lệnh hàm được parse bằng MÁY TRẠNG THÁI đếm ngoặc (update_variables.ts:269-380),
+ * KHÔNG phải regex thô — chuỗi lồng `_.set('a',["x);"])` vẫn parse đúng. Danh sách lệnh:
+ * `_.set(path, new)` · `_.set(path, old, new)` · `_.insert(path, [idx,] value)` ·
+ * `_.delete(path[, key])` · `_.add(path, delta)` (số hoặc mốc thời gian ms) ·
+ * `_.assign(path, [key,] value)` · `_.move(from, to)`.
+ * Giá trị số: chuỗi số tự ép về number (update_variables.ts:791).
+ */
+export const MVU_UPDATE_DIALECTS = ['json_patch', 'function_call'] as const;
+/** Regex nhận diện phương ngữ trong một khối update — mirror invoke_extra_model.ts:351-352. */
+export const MVU_DIALECT_RE = {
+  functionCall: /_\.(set|insert|delete|add|assign|remove|move)\s*\(/,
+  jsonPatch: /json_?patch/i,
+} as const;
+
+/** Một khối <UpdateVariable> có được ENGINE THẬT chấp nhận không (chuẩn nhận card NGOÀI —
+ * lỏng hơn checkMvuOutputContract vốn là chuẩn CHẶT cho card tool tự sinh). */
+export function isMvuUpdateBlockAccepted(block: string): boolean {
+  const s = String(block || '');
+  return MVU_DIALECT_RE.functionCall.test(s) || MVU_DIALECT_RE.jsonPatch.test(s);
+}
+
+/**
+ * INITVAR — cách engine THẬT nạp biến (initvar/variable_init.ts + util/common.ts:parseString):
+ * - Thử YAML trước (bật merge `<<:`), fallback JSON5, fallback JSON đã qua jsonrepair.
+ *   → viết YAML là chuẩn nhất, nhưng JSON cũng chạy.
+ * - Nạp từ MỌI lorebook đang bật (global + primary + additional của nhân vật), merge dần.
+ * - Khối `<initvar>...</initvar>` trong LỜI MỞ ĐẦU (first_mes) — nếu có — ĐÈ toàn bộ
+ *   [initvar] của worldbook nhân vật (variable_init.ts:154-171). Card tự sinh không nên
+ *   dùng cả hai kiểu cùng lúc kẻo khó lần.
+ * - Giá trị chấp nhận cả TRẦN (`Máu: 100`) lẫn CẶP MÔ TẢ `[100, "máu tối đa 100"]`
+ *   (ValueWithDescription — variable_def.ts:52): cập nhật chỉ ghi đè phần tử [0], giữ mô tả.
+ * - `$meta` trên node: `extensible` (cho phép thêm khoá mới), `recursiveExtensible`,
+ *   `required`, `template` (mẫu tự điền khi thêm phần tử). Gốc thêm được `strictTemplate`,
+ *   `concatTemplateArray`, `strictSet` (variable_def.ts:5-11, 87-91).
+ * - Từ initvar engine TỰ SINH `schema` (function/schema.ts:generateSchema) và lưu vào
+ *   MvuData cạnh stat_data — tool không cần (và không nên) tự chế schema khác kiểu.
+ * - Biến của MỖI TẦNG TIN NHẮN (type:'message'), không phải chatvar toàn cục: cấu trúc
+ *   MvuData = { initialized_lorebooks, stat_data, schema, display_data?, delta_data? }.
+ */
+export const MVU_INITVAR_NOTES = 'xem docblock MVU_INITVAR — nguồn: mvu-reference/src/function/initvar/';
+
+/**
+ * API MẶT TIỀN (Opening Form / Status Bar) — LỜI GIẢI CHO BUG #162.
+ * Nguồn: src/function/global/index.ts. Extension gắn đối tượng `Mvu` lên `window.parent`
+ * (script thẻ chạy trong iframe của TavernHelper) và phát event `global_Mvu_initialized`.
+ *
+ * ĐỌC biến (Status Bar):
+ *   const d = Mvu.getMvuData({ type: 'message', message_id: getCurrentMessageId() });
+ *   // giá trị: _.get(d.stat_data, 'Người Chơi.Máu') — nếu là cặp [value, desc] thì lấy [0]
+ *
+ * GHI biến (Opening Form) — 2 đường đều đúng:
+ *   // a) qua parseMessage (được khuyên dùng — đi đúng luồng lệnh, có event, có clamp rule):
+ *   const nd = await Mvu.parseMessage(`_.set('Người Chơi.Tên', 'A');//form`, d);
+ *   await Mvu.replaceMvuData(nd, { type: 'message', message_id: 'latest' });
+ *   // b) sửa thẳng rồi thay: _.set(d, 'stat_data.X', v); await Mvu.replaceMvuData(d, ...);
+ *
+ * TUYỆT ĐỐI KHÔNG dùng /setvar hay getvar của SillyTavern cho biến MVU — đó là kho biến
+ * KHÁC, ghi vào đấy thì stat_data không hề đổi (đúng hiện tượng bug #162: form nhập xong
+ * trình quản lý biến không thấy gì, status bar không cập nhật).
+ *
+ * Script nên chờ Mvu sẵn sàng:  if (!window.parent.Mvu) await new Promise(r =>
+ *   eventOn('global_Mvu_initialized', r));
+ *
+ * Event lắng nghe được (variable_def.ts:175-242): 'mag_variable_initialized',
+ * 'mag_variable_update_started', 'mag_command_parsed' (sửa/chèn lệnh trước khi áp),
+ * 'mag_variable_update_ended' (clamp giá trị sau cập nhật), 'mag_before_message_update'.
+ * Event gọi từ ngoài (variable_def.ts:114-119): 'mag_invoke_mvu', 'mag_update_variable'.
+ *
+ * Yêu cầu môi trường: TavernHelper (酒馆助手) ≥ 3.4.17 (src/main.ts:18).
+ */
+export const MVU_FRONTEND_API = {
+  globalObject: 'Mvu',
+  attachedTo: 'window.parent',
+  readyEvent: 'global_Mvu_initialized',
+  read: 'Mvu.getMvuData({ type, message_id })',
+  write: 'Mvu.parseMessage(cmds, data) → Mvu.replaceMvuData(newData, { type, message_id })',
+  events: {
+    initialized: 'mag_variable_initialized',
+    updateStarted: 'mag_variable_update_started',
+    commandParsed: 'mag_command_parsed',
+    updateEnded: 'mag_variable_update_ended',
+    beforeMessageUpdate: 'mag_before_message_update',
+    invoke: 'mag_invoke_mvu',
+    updateVariable: 'mag_update_variable',
+  },
+  minTavernHelper: '3.4.17',
+} as const;
+
+/**
+ * LUỒNG "额外模型" (model phụ phân tích biến) — nguồn của lỗi đỏ
+ * "[MVU额外模型解析]变量更新失败" trong bug 72/75: khi card bật chế độ model phụ, MỘT model
+ * riêng nhận ngữ cảnh + PHẢI trả về khối <UpdateVariable> hợp lệ (một trong hai phương ngữ).
+ * Không tìm thấy thẻ → lỗi "没有能从回复中找到<UpdateVariable>标签"; thấy thẻ nhưng lệnh
+ * không hợp lệ → "其内的更新命令无效" (invoke_extra_model.ts:333-360). Chế độ
+ * "格式化输出" thì trả JSON {"analysis","json_patch"} theo json_schema thay vì thẻ.
+ * → final_check của tool phải kiểm ĐÚNG các điều kiện này trên entry [mvu_update].
+ */
+export const MVU_EXTRA_MODEL_ERRORS = {
+  noTag: '没有能从回复中找到<UpdateVariable>标签',
+  invalidCommands: '其内的更新命令无效',
+} as const;

@@ -105,3 +105,60 @@ describe('MVU_WORKING_CARD_EXAMPLE — mẫu dạy AI', () => {
     expect(MVU_WORKING_CARD_EXAMPLE).toMatch(/snake_case/);
   });
 });
+
+
+/* ═══ (Goal 100.1) Hợp đồng đối chiếu từ SOURCE MVU thật (bugNeedFix/mvu-reference) ═══ */
+import {
+  MVU_ENTRY_MARKERS, MVU_DIALECT_RE, isMvuUpdateBlockAccepted, MVU_FRONTEND_API,
+} from '../mvuReference';
+
+describe('MVU_ENTRY_MARKERS — regex nguyên văn từ variable_def.ts của engine', () => {
+  it('khớp không phân biệt hoa thường, ở bất kỳ đâu trong comment', () => {
+    expect(MVU_ENTRY_MARKERS.update.test('abc [MVU_UPDATE] xyz')).toBe(true);
+    expect(MVU_ENTRY_MARKERS.plot.test('[mvu_plot] đẩy cốt truyện')).toBe(true);
+    expect(MVU_ENTRY_MARKERS.initvar.test('[InitVar] Vui lòng không mở')).toBe(true);
+    expect(MVU_ENTRY_MARKERS.update.test('mvu update không ngoặc')).toBe(false);
+  });
+});
+
+describe('isMvuUpdateBlockAccepted — chuẩn NHẬN của engine (2 phương ngữ đều hợp lệ)', () => {
+  it('JSON Patch → nhận', () => {
+    expect(isMvuUpdateBlockAccepted('<JSONPatch>[{"op":"replace"}]</JSONPatch>')).toBe(true);
+    expect(isMvuUpdateBlockAccepted('json_patch: []')).toBe(true);
+  });
+  it('lệnh hàm _.set/_.add/_.insert → CŨNG nhận (trước đây tool bắt lỗi oan)', () => {
+    expect(isMvuUpdateBlockAccepted("_.set('Người Chơi.Máu', 90);//trúng đòn")).toBe(true);
+    expect(isMvuUpdateBlockAccepted("_.add('Thế Giới.Ngày', 1);")).toBe(true);
+    expect(isMvuUpdateBlockAccepted("_.insert('Túi Đồ', 'thuốc');")).toBe(true);
+  });
+  it('không phương ngữ nào → từ chối (đúng lỗi 其内的更新命令无效)', () => {
+    expect(isMvuUpdateBlockAccepted('chỉ có văn xuôi, không lệnh nào')).toBe(false);
+    expect(isMvuUpdateBlockAccepted('')).toBe(false);
+  });
+  it('KHÔNG khớp nhầm code thường: _.setup() hay object.set() không phải lệnh MVU', () => {
+    expect(isMvuUpdateBlockAccepted('_.setup(config)')).toBe(false);
+    expect(isMvuUpdateBlockAccepted('store.set(1)')).toBe(false);
+  });
+});
+
+describe('MVU_FRONTEND_API — lời giải bug #162, đối chiếu global/index.ts', () => {
+  it('đúng tên đối tượng, chỗ gắn, event sẵn sàng', () => {
+    expect(MVU_FRONTEND_API.globalObject).toBe('Mvu');
+    expect(MVU_FRONTEND_API.attachedTo).toBe('window.parent');
+    expect(MVU_FRONTEND_API.readyEvent).toBe('global_Mvu_initialized');
+  });
+  it('đúng bộ event mag_* nguyên văn từ variable_def.ts', () => {
+    expect(MVU_FRONTEND_API.events.initialized).toBe('mag_variable_initialized');
+    expect(MVU_FRONTEND_API.events.commandParsed).toBe('mag_command_parsed');
+    expect(MVU_FRONTEND_API.events.updateEnded).toBe('mag_variable_update_ended');
+    expect(MVU_FRONTEND_API.events.updateVariable).toBe('mag_update_variable');
+  });
+});
+
+describe('MVU_DIALECT_RE.functionCall — máy trạng thái parse các lệnh này', () => {
+  it('đủ 7 lệnh của engine', () => {
+    for (const cmd of ['set', 'insert', 'delete', 'add', 'assign', 'remove', 'move']) {
+      expect(MVU_DIALECT_RE.functionCall.test(`_.${cmd}('a', 1)`)).toBe(true);
+    }
+  });
+});

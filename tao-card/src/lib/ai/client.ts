@@ -271,7 +271,7 @@ async function callOpenAICompatible(
     presence_penalty: params.presence_penalty,
     stream: false,
   };
-  if (params.stop.length > 0) body.stop = params.stop;
+  if (params.stop?.length) body.stop = params.stop; // ?. — settings đời cũ có thể thiếu mảng stop
   if (params.seed !== -1) body.seed = params.seed;
   if (params.top_k > 0) body.top_k = params.top_k;
   if (params.min_p > 0) body.min_p = params.min_p;
@@ -371,7 +371,7 @@ async function callClaude(
     top_p: params.top_p,
   };
   if (systemMsg) body.system = systemMsg.content;
-  if (params.stop.length > 0) body.stop_sequences = params.stop;
+  if (params.stop?.length) body.stop_sequences = params.stop;
   if (params.top_k > 0) body.top_k = params.top_k;
 
   let res: Response;
@@ -462,7 +462,7 @@ async function callGemini(
   if (systemMsg) {
     body.systemInstruction = { parts: [{ text: systemMsg.content }] };
   }
-  if (params.stop.length > 0) {
+  if (params.stop?.length) {
     (body.generationConfig as Record<string, unknown>).stopSequences = params.stop;
   }
 

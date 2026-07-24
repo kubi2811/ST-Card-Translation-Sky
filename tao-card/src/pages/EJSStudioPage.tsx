@@ -19,6 +19,7 @@ import { EJSPreviewPanel } from '../components/ejs/EJSPreviewPanel';
 import { EJS_SNIPPETS } from '../components/ejs/ejsSnippets';
 import { JSAnalyzerPanel } from '../components/ejs/JSAnalyzerPanel';
 import { EJSAIGenerator } from '../components/ejs/EJSAIGenerator';
+import { EJSAgentPanel } from '../components/ejs/EJSAgentPanel';
 import { EJSTemplateLibrary } from '../components/ejs/EJSTemplateLibrary';
 import type { MVUZODSchema } from '../types/mvuzod.types';
 import type { TavernHelperScript } from '../types/tavernHelper.types';
@@ -27,6 +28,8 @@ import { t as ui, fmt } from '../i18n';
 
 type ActiveView = 'ejs' | 'analyzer';
 type RightPanel = 'preview' | 'analysis' | 'reference' | 'ai_generate' | 'library';
+/** (Goal 101) 'agent' = AI tự quyết (mặc định); 'advanced' = studio 3 panel chỉnh tay cũ. */
+type StudioMode = 'agent' | 'advanced';
 
 const SAMPLE_EJS = `@@preprocessing
 <%_
@@ -95,6 +98,7 @@ export function EJSStudioPage() {
   const updateTavernScript = useCardStore(s => s.updateTavernScript);
   const deleteTavernScript = useCardStore(s => s.deleteTavernScript);
 
+  const [mode, setMode] = useState<StudioMode>('agent');
   const [activeView, setActiveView] = useState<ActiveView>('ejs');
   const [rightPanel, setRightPanel] = useState<RightPanel>('preview');
   const [ejsContent, setEjsContent] = useState(SAMPLE_EJS);
@@ -208,9 +212,28 @@ export function EJSStudioPage() {
           </p>
         </div>
 
+        {/* Mode toggle: AI tự quyết (mặc định) vs Nâng cao (chỉnh tay) */}
+        <div className="flex items-center gap-0.5 rounded-lg bg-muted/30 p-0.5">
+          <button onClick={() => setMode('agent')}
+            title="Chỉ cần gõ yêu cầu — AI tự lên kế hoạch, sinh code, tự kiểm và tự sửa"
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-medium transition-colors ${
+              mode === 'agent' ? 'bg-emerald-500/15 text-emerald-400 shadow-sm' : 'text-muted-foreground hover:text-foreground'
+            }`}>
+            <Bot className="w-3 h-3" /> AI tự quyết
+          </button>
+          <button onClick={() => setMode('advanced')}
+            title="Studio 3 panel đầy đủ: editor, preview, analyzer, template — chỉnh tay từng khối"
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-medium transition-colors ${
+              mode === 'advanced' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+            }`}>
+            <Code2 className="w-3 h-3" /> Nâng cao
+          </button>
+        </div>
+
         {/* Panel toggles */}
         <div className="flex items-center gap-1">
           <button onClick={() => setShowLeftPanel(!showLeftPanel)}
+            disabled={mode === 'agent'}
             title="Toggle left panel"
             className={`p-1.5 rounded-lg transition-colors ${showLeftPanel ? 'text-primary bg-primary/10' : 'text-muted-foreground hover:text-foreground'}`}>
             <PanelLeftClose className="w-4 h-4" />
@@ -226,7 +249,24 @@ export function EJSStudioPage() {
       {/* Divider */}
       <div className="h-px bg-border shrink-0" />
 
-      {/* 3-Panel Layout */}
+      {/* ═══ MODE: AI tự quyết (Goal 101 — mặc định) ═══ */}
+      {mode === 'agent' && (
+        <div className="flex-1 overflow-y-auto scrollbar-thin">
+          <EJSAgentPanel
+            schema={schema}
+            onOpenInEditor={(code) => {
+              setEjsContent(code);
+              setSelectedEntryId(null);
+              setActiveView('ejs');
+              setIsDirty(true);
+              setMode('advanced');
+            }}
+          />
+        </div>
+      )}
+
+      {/* 3-Panel Layout (Nâng cao) */}
+      {mode === 'advanced' && (
       <div className="flex-1 flex overflow-hidden">
         {/* ═══ LEFT PANEL: File Tree ═══ */}
         {showLeftPanel && (
@@ -445,6 +485,7 @@ export function EJSStudioPage() {
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }

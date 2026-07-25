@@ -15,6 +15,12 @@ export interface RegexResult {
 /**
  * Parse findRegex string → RegExp.
  * Handles both "/pattern/flags" format and plain strings.
+ *
+ * (Goal 103 — bug thật) Trước đây chuỗi KHÔNG bọc /…/ bị ESCAPE toàn bộ thành literal —
+ * khác hẳn SillyTavern thật (utils.regexFromString parse nó như PATTERN regex). Hệ quả kép:
+ * preview của Lab khớp khác ST, và validateRegex không bao giờ bắt được pattern hỏng
+ * (escape xong thì cái gì cũng compile). Mirror đúng ST: plain string = pattern, mặc định
+ * thêm 'g' cho preview thay toàn cục (ST bản thân chạy script lặp theo pipeline).
  */
 export function parseRegex(findRegex: string): RegExp {
   // "/pattern/flags" format
@@ -22,12 +28,7 @@ export function parseRegex(findRegex: string): RegExp {
   if (slashMatch) {
     return new RegExp(slashMatch[1], slashMatch[2]);
   }
-  // Plain string — escape and use global + case-insensitive
-  return new RegExp(escapeRegExp(findRegex), 'gi');
-}
-
-function escapeRegExp(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(findRegex, 'g');
 }
 
 /**

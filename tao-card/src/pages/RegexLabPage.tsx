@@ -10,9 +10,14 @@ import {
   Puzzle, Plus, Trash2, Copy, ChevronDown, ChevronRight, X, Check,
   ToggleLeft, ToggleRight, GripVertical, AlertTriangle,
   Eye, Code, Layers, FileCode, Braces, CheckCircle2, XCircle, AlertCircle,
+  Wand2, Blocks,
 } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { useCardStore } from '../store/cardStore';
+import { useToastStore } from '../store/toastStore';
+import { RegexAgentPanel } from '../components/regexlab/RegexAgentPanel';
+import { buildProgrammaticRegex, type ProgrammaticComponent } from '../lib/mvuzod/programmaticRegexBuilder';
+import type { MVUZODSchema } from '../types/mvuzod.types';
 import { cn } from '../lib/utils';
 import { applyRegex, applyAllRegex, validateRegex } from '../lib/regexEngine/applyRegex';
 import { analyzeReplaceString, structureSummary } from '../lib/regexEngine/regexInjector';
@@ -57,6 +62,41 @@ export function RegexLabPage() {
   const [selectedId, setSelectedId] = useState<string | null>(scripts[0]?.id ?? null);
   const [previewText, setPreviewText] = useState(SAMPLE_TEXTS.ai_output);
   const [previewSource, setPreviewSource] = useState<'ai_output' | 'user_input' | 'world_info'>('ai_output');
+
+  // ─── (Goal 103) Sinh AI + bộ chuẩn từ schema ─────────────────────────
+  const [showAgent, setShowAgent] = useState(false);
+  const schema: MVUZODSchema | null = useMemo(() => {
+    const ext = card.data.extensions as unknown as Record<string, unknown> | undefined;
+    return ((ext?.mvuzod as Record<string, unknown>)?.schema as MVUZODSchema) ?? null;
+  }, [card.data.extensions]);
+
+  /**
+   * (103.2) Sinh bộ regex CHUẨN từ schema — đường TĨNH ưu tiên: dùng programmaticRegexBuilder
+   * của Phase 100 (đã fix #162: form ghi qua Mvu API), không tốn call AI, kết quả tất định.
+   */
+  const handleBuildFromSchema = useCallback((component: ProgrammaticComponent) => {
+    if (!schema) return;
+    try {
+      const r = buildProgrammaticRegex({ schema, component, gameName: card.data.name || 'Game' });
+      const existing = new Set(card.data.extensions.regex_scripts.map(s => s.scriptName));
+      let firstId: string | null = null;
+      updateCard(c => {
+        for (const s of r.scripts) {
+          // Bấm 2 lần không nhân đôi: script trùng tên thì THAY THẾ bản cũ (bộ chuẩn là tất định).
+          c.data.extensions.regex_scripts = c.data.extensions.regex_scripts.filter(x => x.scriptName !== s.scriptName);
+          const id = uuidv4();
+          if (!firstId) firstId = id;
+          c.data.extensions.regex_scripts.push({ ...s, id });
+        }
+      });
+      if (firstId) setSelectedId(firstId);
+      useToastStore.getState().success(
+        `Đã sinh ${r.scripts.length} script chuẩn từ schema (${r.fieldsRendered} biến)` +
+        (r.scripts.some(s => existing.has(s.scriptName)) ? ' — bản cũ cùng tên được thay thế.' : '.'));
+    } catch (e) {
+      useToastStore.getState().error(`Sinh từ schema lỗi: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, [schema, card.data.name, card.data.extensions.regex_scripts, updateCard]);
 
   const selectedScript = useMemo(() => scripts.find(s => s.id === selectedId) ?? null, [scripts, selectedId]);
 
@@ -173,10 +213,42 @@ export function RegexLabPage() {
             <h1 className="text-lg font-semibold">Regex Lab</h1>
             <span className="text-xs text-muted-foreground">({scripts.length})</span>
           </div>
-          <button onClick={handleAdd}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors">
-            <Plus className="w-4 h-4" /> {ui.rlAdd}
-          </button>
+          <div className="flex items-center gap-1.5">
+            {/* (103.2) Bộ chuẩn từ schema — tĩnh, tất định, không tốn call AI */}
+            <div className="relative group/schema">
+              <button disabled={!schema}
+                title={schema
+                  ? 'Sinh bộ regex chuẩn (status bar / opening form) TĨNH từ MVUZOD schema — không tốn call AI, form ghi biến qua đúng Mvu API'
+                  : 'Card chưa có MVUZOD schema — tạo schema ở tab MVUZOD trước'}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/60 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                <Blocks className="w-3.5 h-3.5 text-violet-400" /> Bộ chuẩn từ schema
+              </button>
+              {schema && (
+                <div className="absolute right-0 top-full mt-1 z-30 hidden group-hover/schema:block bg-card border border-border rounded-lg shadow-xl overflow-hidden min-w-[190px]">
+                  {([
+                    ['status_bar', '📊 Thanh trạng thái'],
+                    ['opening_form', '📝 Form mở đầu'],
+                    ['full_set', '🎁 Trọn bộ (cả hai)'],
+                  ] as Array<[ProgrammaticComponent, string]>).map(([comp, label]) => (
+                    <button key={comp} onClick={() => handleBuildFromSchema(comp)}
+                      className="w-full text-left px-3 py-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors">
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            {/* (103.1) Sinh AI */}
+            <button onClick={() => setShowAgent(true)}
+              title="Mô tả nhu cầu bằng lời thường — AI sinh regex, bị ép compile + chạy thử thật trước khi vào card"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-medium transition-all">
+              <Wand2 className="w-3.5 h-3.5" /> Sinh AI
+            </button>
+            <button onClick={handleAdd}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors">
+              <Plus className="w-4 h-4" /> {ui.rlAdd}
+            </button>
+          </div>
         </div>
 
         {/* Script list */}
@@ -519,6 +591,16 @@ export function RegexLabPage() {
           </div>
         </div>
       </div>
+
+      {/* (103.1) Drawer Sinh AI */}
+      {showAgent && (
+        <RegexAgentPanel
+          schema={schema}
+          sampleText={previewText}
+          onClose={() => setShowAgent(false)}
+          onCreated={(firstId) => setSelectedId(firstId)}
+        />
+      )}
     </div>
   );
 }

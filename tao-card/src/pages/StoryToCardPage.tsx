@@ -10,6 +10,7 @@ import {
   type ScannedCharacter, type GeneratedStoryCard, type StoryCardOptions, type StoryCardTemplate,
   type BatchCardResult, type WorldEntry,
 } from '../lib/ai/storyToCard';
+import { isSameAsUserPersona } from '../lib/ai/userPersonaSwap';
 import { t as ui, fmt } from '../i18n';
 
 /**
@@ -101,6 +102,23 @@ export function StoryToCardPage() {
     toast.success(fmt(ui.s2cMerged, { count: names.length, name: primary.name }));
   };
 
+  /**
+   * (bugNeedFix/105) Người được gán làm {{user}}, kèm biệt danh lấy từ bảng quét.
+   * Chỉ điền tên đầy đủ vào ô đó là chưa đủ: trong truyện họ còn được gọi bằng "Tiểu Triệu",
+   * "Triệu ca"… nên nếu không gom biệt danh thì thay xong vẫn còn tên người chơi rải rác.
+   */
+  const userPersona = (() => {
+    const n = opts.userReplaceName?.trim();
+    if (!n) return null;
+    const hit = roster.find(c => isSameAsUserPersona(c.name, n) || c.aliases.some(a => isSameAsUserPersona(a, n)));
+    const aliases = hit ? Array.from(new Set([hit.name, ...hit.aliases])).filter(a => a.trim() && a.trim() !== n) : [];
+    return { name: n, aliases };
+  })();
+
+  /** Options gửi xuống engine — bơm kèm biệt danh của người chơi cho bước thay tên. */
+  const genOpts = (): StoryCardOptions =>
+    userPersona ? { ...opts, userReplaceAliases: userPersona.aliases } : opts;
+
   const targets = (): string[] => {
     const arr = [...checked];
     if (manualName.trim()) arr.push(manualName.trim());
@@ -112,18 +130,32 @@ export function StoryToCardPage() {
     const names = targets();
     if (names.length === 0) { toast.error(ui.s2cPickChar); return; }
     if (!story.trim()) { toast.error(ui.s2cNeedStory2); return; }
+
+    // (bugNeedFix/105) Chọn CHÍNH người đã gán làm {{user}} để làm nhân vật thẻ là mâu thuẫn:
+    // thẻ sẽ vừa là người chơi vừa là người đối thoại với người chơi. Đúng tình huống trong
+    // ảnh của user — thẻ ra tên "Triệu Hy Ngạn" còn {{user}} bị đẩy thành vai quần chúng.
+    if (userPersona) {
+      const clash = names.filter(n => isSameAsUserPersona(n, userPersona.name, userPersona.aliases));
+      if (clash.length > 0) {
+        toast.error(
+          `"${clash[0]}" đang được đặt làm {{user}} nên không thể làm nhân vật của thẻ `
+          + '— thẻ sẽ tự nói chuyện với chính mình. Bỏ chọn người này, hoặc xoá ô "Nhân vật thành {{user}}".',
+        );
+        return;
+      }
+    }
     setGenerating(true); setCard(null); setBatch([]);
     abortRef.current = new AbortController();
     const signal = abortRef.current.signal;
     try {
       let madeEntries = 0;
       if (names.length === 1) {
-        const c = await generateCardFromStory(story, names[0], profile!, settings.generationParams, opts, signal);
+        const c = await generateCardFromStory(story, names[0], profile!, settings.generationParams, genOpts(), signal);
         setCard(c);
         madeEntries = c.worldEntries.length;
       } else {
         setBatchProg({ d: 0, t: names.length, name: '' });
-        const res = await generateCardsForMany(story, names, profile!, settings.generationParams, opts, signal,
+        const res = await generateCardsForMany(story, names, profile!, settings.generationParams, genOpts(), signal,
           (d, t, name) => setBatchProg({ d, t, name }));
         setBatch(res);
         const ok = res.filter((r) => r.card).length;
@@ -282,13 +314,22 @@ export function StoryToCardPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             {roster.map((c) => {
               const on = checked.includes(c.name);
+              // (bugNeedFix/105) Người đã gán làm {{user}} thì KHÔNG chọn được: thẻ của người chơi
+              // là vô nghĩa. Vẫn hiện trong danh sách (kèm nhãn) để user biết vì sao mờ đi.
+              const isUser = !!userPersona
+                && (isSameAsUserPersona(c.name, userPersona.name, userPersona.aliases)
+                  || c.aliases.some(a => isSameAsUserPersona(a, userPersona.name, userPersona.aliases)));
               return (
-                <button key={c.name} onClick={() => toggleCheck(c.name)}
-                  className="text-left p-2.5 rounded-lg border flex gap-2"
-                  style={{ borderColor: on ? '#7c6af0' : '#2a2a3e', background: on ? 'rgba(124,106,240,0.1)' : 'transparent' }}>
-                  <input type="checkbox" readOnly checked={on} className="mt-0.5" />
+                <button key={c.name} onClick={() => !isUser && toggleCheck(c.name)} disabled={isUser}
+                  title={isUser ? 'Người này đang được đặt làm {{user}} (người chơi) nên không thể làm nhân vật của thẻ.' : undefined}
+                  className="text-left p-2.5 rounded-lg border flex gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{ borderColor: isUser ? '#4b5563' : on ? '#7c6af0' : '#2a2a3e', background: on && !isUser ? 'rgba(124,106,240,0.1)' : 'transparent' }}>
+                  <input type="checkbox" readOnly checked={on && !isUser} disabled={isUser} className="mt-0.5" />
                   <div>
-                    <div className="text-sm font-semibold">{c.name}{c.aliases.length > 0 && <span className="text-xs text-muted-foreground"> ({c.aliases.join(', ')})</span>}</div>
+                    <div className="text-sm font-semibold">
+                      {c.name}{c.aliases.length > 0 && <span className="text-xs text-muted-foreground"> ({c.aliases.join(', ')})</span>}
+                      {isUser && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-300 align-middle">= {'{{user}}'}</span>}
+                    </div>
                     {c.brief && <div className="text-xs text-muted-foreground mt-0.5">{c.brief}</div>}
                   </div>
                 </button>

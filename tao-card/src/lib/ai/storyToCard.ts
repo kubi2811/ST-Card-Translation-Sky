@@ -15,6 +15,7 @@
  * Dùng callAI của tao-card → hưởng multi-key + chạy song song theo RPM.
  */
 import { hasCjk, scanCjkResidue, buildCjkRetryHint } from './cjkResidue';
+import { applyUserPersonaSwap } from './userPersonaSwap';
 import type { ProxyProfile, GenerationParams } from '../../types';
 import { callAI, computePoolConcurrency } from './client';
 
@@ -36,6 +37,12 @@ export interface ScanOptions {
 export interface StoryCardOptions {
   /** #3 — nhân vật trong truyện sẽ bị thay bằng {{user}}. */
   userReplaceName?: string;
+  /**
+   * (bugNeedFix/105) Các cách gọi khác của người đó (biệt danh, tên gọi thân mật, chức danh).
+   * Bảng chọn nhân vật đã quét sẵn `aliases`, truyền vào đây thì bước thay tên mới quét trúng
+   * hết — chứ chỉ đổi mỗi tên đầy đủ thì "Tiểu Triệu", "Triệu ca" vẫn nằm nguyên trong thẻ.
+   */
+  userReplaceAliases?: string[];
   /** #3 — thiết lập bổ sung cho trải nghiệm {{user}} ↔ nhân vật (free text). */
   userSetup?: string;
   /** Quan hệ nhân vật ↔ {{user}}. */
@@ -248,7 +255,18 @@ function buildCardSystem(characterName: string, opts: StoryCardOptions): string 
   const directives: string[] = [];
   if (opts.userReplaceName?.trim()) {
     const n = opts.userReplaceName.trim();
-    directives.push(`Nhân vật "${n}" trong truyện CHÍNH LÀ {{user}} (người chơi). Thay mọi chỗ nhắc "${n}" bằng {{user}}; KHÔNG mô tả nội tâm/hành động/lời thoại thay cho {{user}}. Thẻ này viết cho nhân vật "${characterName}" tương tác VỚI {{user}}.`);
+    const others = (opts.userReplaceAliases ?? []).map(s => s.trim()).filter(Boolean);
+    // (bugNeedFix/105) Bản cũ chỉ nhét một gạch đầu dòng vào giữa danh sách → model đọc lướt và
+    // vẫn coi "${n}" với {{user}} là hai người ("… chạm mặt {{user}} cũng vừa bước ra sân").
+    // Nay nâng thành LUẬT CỨNG đặt riêng, nêu đích danh cả biệt danh, và cấm gọi tên.
+    directives.push(
+      `【${n} = {{user}} — LUẬT CỨNG】"${n}"${others.length ? ` (và các cách gọi khác: ${others.join(', ')})` : ''} `
+      + `KHÔNG phải một nhân vật riêng: đó chính là NGƯỜI CHƠI. `
+      + `TUYỆT ĐỐI không viết tên "${n}" ở bất cứ đâu trong thẻ — mọi lần nhắc phải là {{user}}. `
+      + `Không được để "${n}" và {{user}} cùng xuất hiện như hai người khác nhau, không cho họ gặp/nhìn/nói với nhau. `
+      + `Không mô tả nội tâm, hành động hay lời thoại THAY CHO {{user}}. `
+      + `Thẻ này viết cho "${characterName}" tương tác VỚI {{user}}.`,
+    );
     if (opts.userSetup?.trim()) directives.push(`Thiết lập bổ sung về {{user}} và trải nghiệm chung: ${opts.userSetup.trim()}`);
   }
   if (opts.relationship?.trim()) directives.push(`Thể hiện rõ mối quan hệ giữa "${characterName}" và {{user}}: ${opts.relationship.trim()}`);
@@ -354,6 +372,34 @@ export async function generateCardFromStory(
     text = fixed.text;
   }
 
+  // (bugNeedFix/105) Nếu model VẪN gọi tên người chơi thì cho đúng MỘT lượt viết lại trước khi
+  // thay bằng máy. Vì thay máy chỉ đổi được cái tên, còn câu văn kiểu "X vừa về, chạm mặt
+  // {{user}} cũng vừa bước ra sân" sau khi thay sẽ thành "{{user}} … chạm mặt {{user}} …" —
+  // đúng chữ nhưng ngớ ngẩn. Bảo AI sửa thì câu mới liền mạch.
+  const uName = opts.userReplaceName?.trim();
+  if (uName) {
+    const uAll = [uName, ...(opts.userReplaceAliases ?? [])].map(s => s.trim()).filter(s => s.length >= 2);
+    const blkNow = tag(text, 'card') || text;
+    const hit = uAll.filter(n => blkNow.includes(n));
+    if (hit.length > 0) {
+      const fixed = await callAI({
+        profile, params, signal,
+        label: `Tạo thẻ: ${characterName} (gộp ${uName} vào {{user}})`,
+        messages: [
+          ...messages,
+          { role: 'assistant' as const, content: text },
+          {
+            role: 'user' as const,
+            content: `Thẻ vẫn còn nhắc tên "${hit.join('", "')}" như một nhân vật riêng. Nhưng ${uName} CHÍNH LÀ {{user}} `
+              + `— cùng một người. Viết LẠI toàn bộ khối <card>: mọi chỗ nhắc những tên đó phải thành {{user}}, và câu văn phải `
+              + `liền mạch (không được để {{user}} gặp/nhìn/nói chuyện với chính mình). Giữ nguyên tên thẻ "${characterName}" và mọi nội dung khác.`,
+          },
+        ],
+      });
+      if (fixed.text.trim()) text = fixed.text;
+    }
+  }
+
   const block = tag(text, 'card') || text;
   const worldEntries: WorldEntry[] = opts.withWorldEntries
     ? allTags(tag(block, 'world_entries') || block, 'entry')
@@ -364,7 +410,7 @@ export async function generateCardFromStory(
         .filter((e) => e.content)
     : [];
 
-  return {
+  const card: GeneratedStoryCard = {
     name: tag(block, 'name') || characterName,
     description: [tag(block, 'basic'), tag(block, 'persona')].filter(Boolean).join('\n\n'),
     personality: '',
@@ -373,6 +419,16 @@ export async function generateCardFromStory(
     worldEntries,
     raw: text,
   };
+
+  // (bugNeedFix/105) CHỐT CHẶN TẤT ĐỊNH cho "Nhân vật thành {{user}}".
+  // Prompt đã nói rõ, nhưng bằng chứng của user cho thấy model vẫn để tên người chơi nằm nguyên
+  // và đẩy {{user}} thành vai quần chúng. Quét lại bằng code: mọi lần nhắc tên đó (kèm biệt danh)
+  // đều thành {{user}}. Đây là phần không phụ thuộc model có nghe lời hay không.
+  if (opts.userReplaceName?.trim()) {
+    const { card: swapped } = applyUserPersonaSwap(card, opts.userReplaceName, opts.userReplaceAliases ?? []);
+    return swapped;
+  }
+  return card;
 }
 
 // ═══ B2b: Sinh thẻ HÀNG LOẠT cho nhiều nhân vật (chạy song song theo RPM) ═══

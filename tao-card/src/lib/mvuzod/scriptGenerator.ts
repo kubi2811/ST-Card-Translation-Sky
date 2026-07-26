@@ -72,7 +72,7 @@ function buildZodTypeExpr(field: MVUZODField, indent: number): string {
       if (field.children?.length) {
         const valueFields = field.children
           .map(child => {
-            const childName = getFieldName(child);
+            const childName = zodKey(getFieldName(child));
             const childType = buildZodTypeExpr(child, indent + 1);
             return `${pad(indent + 2)}${childName}: ${childType},`;
           })
@@ -115,17 +115,17 @@ function renderFieldBlock(field: MVUZODField, indent: number): string[] {
     // Object with children → z.object({...})
     const hasTransform = !!field.constraints?.transformExpr;
 
-    lines.push(`${pad(indent)}${name}: z.object({`);
+    lines.push(`${pad(indent)}${zodKey(name)}: z.object({`);
     for (const child of field.children) {
       if (child.type === 'object' && child.children?.length) {
         lines.push(...renderFieldBlock(child, indent + 1));
       } else if (child.type === 'record' && child.children?.length) {
         // Record with complex value
         const recordType = buildZodTypeExpr(child, indent + 1);
-        lines.push(`${pad(indent + 1)}${getFieldName(child)}: ${recordType},`);
+        lines.push(`${pad(indent + 1)}${zodKey(getFieldName(child))}: ${recordType},`);
       } else {
         const zodType = buildZodTypeExpr(child, indent + 1);
-        lines.push(`${pad(indent + 1)}${getFieldName(child)}: ${zodType},`);
+        lines.push(`${pad(indent + 1)}${zodKey(getFieldName(child))}: ${zodType},`);
       }
     }
 
@@ -140,15 +140,15 @@ function renderFieldBlock(field: MVUZODField, indent: number): string[] {
     const recordType = buildZodTypeExpr(field, indent);
     const hasTransform = !!field.constraints?.transformExpr;
     if (hasTransform) {
-      lines.push(`${pad(indent)}${name}: ${recordType}`);
+      lines.push(`${pad(indent)}${zodKey(name)}: ${recordType}`);
       lines.push(`${pad(indent + 1)}.transform(${field.constraints?.transformExpr}),`);
     } else {
-      lines.push(`${pad(indent)}${name}: ${recordType},`);
+      lines.push(`${pad(indent)}${zodKey(name)}: ${recordType},`);
     }
   } else {
     // Simple field
     const zodType = buildZodTypeExpr(field, indent);
-    lines.push(`${pad(indent)}${name}: ${zodType},`);
+    lines.push(`${pad(indent)}${zodKey(name)}: ${zodType},`);
   }
 
   return lines;
@@ -605,6 +605,22 @@ function pad(n: number): string {
 
 function getFieldName(field: MVUZODField): string {
   return field.path.split('/').filter(Boolean).pop() ?? field.path;
+}
+
+/**
+ * (bugNeedFix/97) Tên biến làm KHOÁ trong code Zod/JS thì phải BỌC NHÁY khi không phải một
+ * identifier hợp lệ.
+ *
+ * Chuẩn tên biến của bộ tool là DÙNG DẤU CÁCH ("Thế Giới", "Khung Giờ") — đã chốt ở bug #8 sau khi
+ * bản ép `_` làm 272 chỗ trong thẻ user lệch nhau. Dấu cách hoàn toàn hợp lệ với MVU vì MVU truy
+ * biến bằng KHOÁ CHUỖI. Cái KHÔNG hợp lệ là viết khoá trần trong code:
+ *     Thế Giới: z.object({ … })   ← SyntaxError, cả file schema chết
+ *     "Thế Giới": z.object({ … }) ← đúng
+ * Đây chính là lỗi mà người báo bug gặp và đề xuất chữa bằng `_`. Bọc nháy chữa tận gốc mà không
+ * phải đổi chuẩn tên biến (đổi chuẩn sẽ làm thẻ sinh mới lệch với thẻ đã dịch).
+ */
+export function zodKey(name: string): string {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name) ? name : JSON.stringify(name);
 }
 
 function escapeQuotes(s: unknown): string {

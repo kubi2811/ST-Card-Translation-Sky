@@ -10,7 +10,7 @@ import type { CharacterCardV3, LorebookEntry, CardExtensions, TavernHelperScript
 import type { MVUZODSchema, InitVarConfig } from '../types/mvuzod.types';
 import { tavernSync } from '../lib/sync/tavernSyncService';
 import { createEmptyCard, syncMirrorFields, nextEntryId } from '../lib/converters/cardDefaults';
-import { schemaToZodCode } from '../lib/mvuzod/schemaInferencer';
+import { buildMVUImportScript, buildSchemaScript } from '../lib/mvuzod/tavernScriptBuilder';
 import { normalizeMVUZODSchema } from '../lib/mvuzod/normalizeSchema';
 import * as repo from '../lib/db/projectRepo';
 
@@ -242,13 +242,13 @@ const createCardSlice: StateCreator<CardState, [], [], CardSlice> = (set, get) =
         const scripts = (th.scripts ?? []) as TavernHelperScript[];
         const cardName = card.data.name || 'Card';
 
-        // Update or create 'MVU' import script
+        // (bugNeedFix/97) Dùng CHUNG bộ dựng script với luồng xuất thẻ (tavernScriptBuilder)
+        // thay vì tự dựng object tại đây. Hai chỗ tự dựng riêng chính là lý do bản sinh ở studio
+        // thiếu công tắc nút + thiếu phần import/registerMvuSchema, còn bản xuất lại khác.
         const mvuIdx = scripts.findIndex(s => s.name === 'MVU');
         const mvuScript: TavernHelperScript = {
-          type: 'script', enabled: true, name: 'MVU',
+          ...buildMVUImportScript(),
           id: mvuIdx >= 0 ? scripts[mvuIdx].id : crypto.randomUUID(),
-          content: `import 'https://testingcf.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate/artifact/bundle.js';`,
-          info: '', button: { enabled: false, buttons: [] }, data: {},
         };
         if (mvuIdx >= 0) scripts[mvuIdx] = mvuScript;
         else scripts.push(mvuScript);
@@ -257,10 +257,8 @@ const createCardSlice: StateCreator<CardState, [], [], CardSlice> = (set, get) =
         const schemaPrefix = 'Cấu trúc biến';
         const schemaIdx = scripts.findIndex(s => s.name.startsWith(schemaPrefix));
         const schemaScript: TavernHelperScript = {
-          type: 'script', enabled: true, name: `${schemaPrefix} ${cardName}`,
+          ...buildSchemaScript(schema, cardName),
           id: schemaIdx >= 0 ? scripts[schemaIdx].id : crypto.randomUUID(),
-          content: schemaToZodCode(schema, cardName),
-          info: '', button: { enabled: false, buttons: [] }, data: {},
         };
         if (schemaIdx >= 0) scripts[schemaIdx] = schemaScript;
         else scripts.push(schemaScript);

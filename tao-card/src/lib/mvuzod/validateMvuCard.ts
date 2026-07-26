@@ -45,11 +45,21 @@ interface ScriptLike {
   [k: string]: unknown;
 }
 
+interface ThScriptLike {
+  name?: string;
+  content?: string;
+  enabled?: boolean;
+  button?: { enabled?: boolean };
+  [k: string]: unknown;
+}
+
 export interface MvuCardInput {
   /** entries của character_book (hoặc worldbook đã convert). */
   entries: EntryLike[];
   /** regex_scripts (nơi Opening Form/Status Bar sống trong replaceString). */
   regexScripts?: ScriptLike[];
+  /** extensions.tavern_helper.scripts — script MVU + Cấu trúc biến (bugNeedFix/97). */
+  tavernHelperScripts?: ThScriptLike[];
 }
 
 export function validateMvuCard(card: MvuCardInput): MvuCardReport {
@@ -111,6 +121,52 @@ export function validateMvuCard(card: MvuCardInput): MvuCardReport {
     for (const p of check.problems) {
       errors.push({ level: 'error', code: 'form-write-path',
         message: `Opening Form ghi biến sai đường: ${p}`, where: String(s.scriptName ?? 'form') });
+    }
+  }
+
+  /* ─── 4. Script TavernHelper: MVU + Cấu trúc biến (bugNeedFix/97) ─── */
+  const thScripts = Array.isArray(card.tavernHelperScripts) ? card.tavernHelperScripts : [];
+  if (thScripts.length > 0) {
+    const mvu = thScripts.find((s) => String(s.name ?? '') === 'MVU'
+      || /MagVarUpdate\/artifact\/bundle\.js/.test(String(s.content ?? '')));
+    const schemaScript = thScripts.find((s) => String(s.name ?? '').startsWith('Cấu trúc biến')
+      || /export\s+const\s+Schema\s*=/.test(String(s.content ?? '')));
+
+    if (!mvu) {
+      errors.push({ level: 'error', code: 'th-mvu-missing',
+        message: 'Thiếu script 酒馆助手 "MVU" nạp bundle MagVarUpdate — không có nó thì mọi biến MVU đứng im.' });
+    } else {
+      if (mvu.enabled === false) {
+        errors.push({ level: 'error', code: 'th-mvu-disabled',
+          message: 'Script "MVU" đang TẮT — bật lên thì MVU mới chạy.', where: 'MVU' });
+      }
+      if (mvu.button?.enabled === false) {
+        warnings.push({ level: 'warning', code: 'th-mvu-buttons-off',
+          message: 'Công tắc "Nút" của script MVU đang tắt — 6 nút của bundle (Xử lý lại biến, Đọc lại biến khởi tạo…) sẽ không hiện cho người chơi.', where: 'MVU' });
+      }
+    }
+
+    if (schemaScript) {
+      const code = String(schemaScript.content ?? '');
+      const where = String(schemaScript.name ?? 'Cấu trúc biến');
+      if (!/registerMvuSchema\s*}?\s*from\s*['"]/.test(code)) {
+        errors.push({ level: 'error', code: 'th-schema-no-import',
+          message: 'Script Cấu trúc biến thiếu dòng import mvu_zod.js — `registerMvuSchema` không tồn tại, script chết ngay dòng gọi.', where });
+      }
+      if (!/registerMvuSchema\s*\(\s*Schema\s*\)/.test(code)) {
+        errors.push({ level: 'error', code: 'th-schema-no-register',
+          message: 'Script Cấu trúc biến khai báo Schema nhưng KHÔNG gọi registerMvuSchema(Schema) — schema nằm im, MVU không bao giờ nhận.', where });
+      }
+      // Khoá tên biến có dấu cách nhưng viết TRẦN trong code ⇒ SyntaxError, chết cả file.
+      const bareSpacedKey = /^\s*([^\s'"`{}[\],:]+(?:[ \t]+[^\s'"`{}[\],:]+)+)\s*:\s*z\./m.exec(code);
+      if (bareSpacedKey) {
+        errors.push({ level: 'error', code: 'th-schema-bare-key',
+          message: `Khoá "${bareSpacedKey[1].trim()}" có dấu cách nhưng không bọc nháy — JavaScript báo SyntaxError và cả file schema không chạy. Phải viết "${bareSpacedKey[1].trim()}": z…`, where });
+      }
+      if (schemaScript.enabled === false) {
+        errors.push({ level: 'error', code: 'th-schema-disabled',
+          message: 'Script Cấu trúc biến đang TẮT — schema không được đăng ký.', where });
+      }
     }
   }
 

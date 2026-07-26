@@ -32,16 +32,50 @@ export function buildMVUImportScript(): TavernHelperScript {
     enabled: true,
     name: 'MVU',
     id: newScriptId(),
-    content: `import 'https://testingcf.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate/artifact/bundle.js';`,
+    content: MVU_BUNDLE_IMPORT,
     info: '',
-    button: { enabled: false, buttons: [] },
+    // (bugNeedFix/97) PHẢI bật `button` — bundle MVU tự đăng ký 6 nút qua getButtonEvent
+    // (Xử lý lại biến / Đọc lại biến khởi tạo / Chụp ảnh tầng / Diễn lại tầng / Thử lại phân
+    // tích mô hình phụ / Xoá biến tầng cũ). Trước đây ta ghi `enabled: false` nên trong 酒馆助手
+    // công tắc "按钮" tắt sẵn, người chơi mở thẻ ra không thấy nút nào và tưởng MVU hỏng.
+    // Mặc định của chính TavernHelper cho field này cũng là true.
+    button: { enabled: true, buttons: [] },
     data: {},
   };
 }
 
+export const MVU_BUNDLE_IMPORT =
+  `import 'https://testingcf.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate/artifact/bundle.js';`;
+
 // ═══════════════════════════════════════════════════════════════════════════
 // SCRIPT 2 — SCHEMA REGISTRATION
 // ═══════════════════════════════════════════════════════════════════════════
+
+/** Dòng import bắt buộc để `registerMvuSchema` tồn tại trong script 酒馆助手. */
+export const MVU_ZOD_IMPORT =
+  `import { registerMvuSchema } from 'https://testingcf.jsdelivr.net/gh/StageDog/tavern_resource/dist/util/mvu_zod.js';`;
+
+/**
+ * (bugNeedFix/97) Bọc code Zod trần thành script CHẠY ĐƯỢC trong 酒馆助手.
+ *
+ * Trước đây script "Cấu trúc biến …" chỉ chứa `export const Schema = z.object({…})` — không có
+ * dòng import, cũng không có lệnh đăng ký. Nghĩa là schema được khai báo rồi… nằm im: MVU không
+ * bao giờ biết tới nó, nên mọi ràng buộc/prefault trong schema đều vô tác dụng và người dùng phải
+ * tự dán thêm phần import + `registerMvuSchema` bằng tay.
+ *
+ * Hàm này idempotent: code đã có sẵn import/đăng ký thì giữ nguyên, không bọc chồng.
+ */
+export function wrapSchemaCodeForTavernHelper(zodCode: string): string {
+  const code = (zodCode || '').trim();
+  const hasImport = /registerMvuSchema\s*}?\s*from\s*['"]/.test(code) || code.includes(MVU_ZOD_IMPORT);
+  const hasRegister = /registerMvuSchema\s*\(\s*Schema\s*\)/.test(code);
+
+  const parts: string[] = [];
+  if (!hasImport) parts.push(MVU_ZOD_IMPORT, '');
+  parts.push(code);
+  if (!hasRegister) parts.push('', '$(() => {', '  registerMvuSchema(Schema);', '});');
+  return parts.join('\n');
+}
 
 /**
  * Build the schema registration script with Zod code.
@@ -52,9 +86,10 @@ export function buildSchemaScript(schema: MVUZODSchema, cardName: string): Taver
     enabled: true,
     name: `Cấu trúc biến ${cardName}`,
     id: newScriptId(),
-    content: schemaToZodCode(schema, cardName),
+    content: wrapSchemaCodeForTavernHelper(schemaToZodCode(schema, cardName)),
     info: '',
-    button: { enabled: false, buttons: [] },
+    // (bugNeedFix/97) đồng bộ với script MVU: để đúng mặc định của TavernHelper.
+    button: { enabled: true, buttons: [] },
     data: {},
   };
 }

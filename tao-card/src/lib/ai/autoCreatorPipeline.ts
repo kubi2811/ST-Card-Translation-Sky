@@ -925,8 +925,19 @@ export async function buildFinalCheckReport(
   // (Goal 100.3/100.4) Suite hợp nhất validateMvuCard — bắt những gì các phép kiểm cũ lọt:
   // form ghi biến sai đường (bug #162 — kho biến chat của ST thay vì Mvu API) và khoá phẳng
   // "A/B:" trong initvar (bug 78a). Chỉ lấy các mã CHƯA được kiểm ở trên để không báo trùng.
-  const unified = validateMvuCard({ entries: entries as never, regexScripts });
-  const NEW_CODES = new Set(['initvar-flat-keys', 'form-write-path']);
+  // (bugNeedFix/97) Kèm cả script 酒馆助手: thiếu import/registerMvuSchema, script hoặc công tắc
+  // nút bị tắt, khoá có dấu cách viết trần trong code Zod — toàn những thứ làm thẻ "trông đủ"
+  // nhưng vào SillyTavern là biến đứng im.
+  const unified = validateMvuCard({
+    entries: entries as never,
+    regexScripts,
+    tavernHelperScripts: ext?.tavern_helper?.scripts ?? [],
+  });
+  const NEW_CODES = new Set([
+    'initvar-flat-keys', 'form-write-path',
+    'th-mvu-missing', 'th-mvu-disabled', 'th-schema-no-import', 'th-schema-no-register',
+    'th-schema-bare-key', 'th-schema-disabled',
+  ]);
   for (const iss of unified.errors) {
     if (!NEW_CODES.has(iss.code)) continue;
     lines.push(`❌ ${iss.message}${iss.where ? ` (${iss.where})` : ''}`);

@@ -101,6 +101,16 @@ function buildPatterns(): RefPattern[] {
     // { comment: '开场白' }  ← tạo/sửa entry
     { kind: 'entry', via: 'gán comment/name', group: 2, re: /\b(?:comment|name)\s*:\s*(['"`])([^'"`]+)\1/g },
 
+    // (bugNeedFix/110) const WI_FILE = '{ Tên sách }';  ← HẰNG SỐ CẤU HÌNH, không phải lời gọi hàm.
+    // Đây là kiểu viết phổ biến nhất của bảng trạng thái: script khai một hằng chứa TÊN SÁCH rồi
+    // dùng nó đi tra lorebook. Bản cũ chỉ soi đối số của lời gọi hàm nên bỏ lọt hoàn toàn → tên
+    // sách trong card và tên trong script được hai lượt dịch khác nhau xử lý ("mùa hè của em" vs
+    // "mùa hạ của em") → script không tìm thấy sách, biến không lên bảng.
+    {
+      kind: 'book', via: 'hằng số tên sách (WI_FILE…)', group: 3,
+      re: /\b(?:const|let|var)?\s*\b(WI_FILE|WI_BOOK|WI_NAME|BOOK_NAME|LOREBOOK_NAME|WORLDBOOK_NAME|WORLD_BOOK|LOREBOOK|WORLDBOOK)\b\s*[:=]\s*(['"`])([^'"`]+)\2/gi,
+    },
+
     // e.uid === 12 / uid: 12 / e.uid === '12'
     { kind: 'uid', via: 'so sánh uid', group: 2, re: /\.uid\s*[=!]==?\s*(['"`]?)(\d+)\1/g },
     { kind: 'uid', via: 'gán uid', group: 2, re: /\buid\s*:\s*(['"`]?)(\d+)\1/g },
@@ -143,7 +153,56 @@ interface DictField {
  * - Tên entry: `data.character_book.entries[i].comment` và `.name`
  *   (card thật dùng `comment`; `name` chỉ có ở một số card nên gom cả hai)
  */
-export function buildLorebookRefDictionary(fields: DictField[]): LorebookRefDictionary {
+/**
+ * (bugNeedFix/110) KHOÁ TÊN WORLDBOOK — bản dịch tên sách được CHỐT một lần, mọi nơi dùng đúng nó.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * User: "tên worldbook trong card và trong bảng trạng thái thường xuyên không khớp nhau: sách dịch
+ * là 'mùa hè của em' thì trong bảng trạng thái lại là 'mùa hạ của em', hệ thống không check được
+ * worldbook nên không hiện biến". Gốc: tên sách nằm ở HAI CHỖ (field `character_book.name` và
+ * chuỗi trong code), hai chỗ đó do hai lượt gọi AI khác nhau dịch — khác một chữ là đứt.
+ *
+ * Khoá hoạt động y như khoá từ điển MVU: đã chốt thì pipeline KHÔNG dịch lại tên sách nữa, và mọi
+ * tham chiếu trong code bị ép về đúng tên đã chốt.
+ */
+export type WorldbookNameLock = Record<string, string>;
+
+/** Chuẩn hoá để tra khoá: bỏ khoảng trắng thừa (giữ nguyên chữ hoa/thường và dấu). */
+function lockKey(s: string): string {
+  return (s || '').replace(/\s+/g, ' ').trim();
+}
+
+/** Tên đã chốt cho một tên sách gốc, nếu có. */
+export function getLockedBookName(lock: WorldbookNameLock | undefined, original: string): string | undefined {
+  if (!lock) return undefined;
+  const k = lockKey(original);
+  if (!k) return undefined;
+  if (lock[k]) return lock[k];
+  // Tra không phân biệt hoa/thường như một lưới đỡ (tên sách hay bị đổi hoa/thường khi copy).
+  const lower = k.toLowerCase();
+  for (const [o, t] of Object.entries(lock)) {
+    if (lockKey(o).toLowerCase() === lower) return t;
+  }
+  return undefined;
+}
+
+/** Ghi/cập nhật một cặp khoá. Trả về BẢN SAO mới (không đột biến tại chỗ). */
+export function setLockedBookName(
+  lock: WorldbookNameLock | undefined, original: string, translated: string,
+): WorldbookNameLock {
+  const next = { ...(lock || {}) };
+  const k = lockKey(original);
+  const v = lockKey(translated);
+  if (!k) return next;
+  if (!v) delete next[k];
+  else next[k] = v;
+  return next;
+}
+
+export function buildLorebookRefDictionary(
+  fields: DictField[],
+  /** (bugNeedFix/110) Khoá tên sách — ưu tiên TUYỆT ĐỐI, đè lên bản dịch của lượt hiện tại. */
+  lock?: WorldbookNameLock,
+): LorebookRefDictionary {
   const book: Record<string, string> = {};
   const entry: Record<string, string> = {};
 
@@ -159,6 +218,13 @@ export function buildLorebookRefDictionary(fields: DictField[]): LorebookRefDict
     } else if (/character_book\.entries\[\d+\]\.(?:comment|name)$/.test(f.path)) {
       entry[orig] = trans;
     }
+  }
+
+  // Khoá đè lên bản dịch của lượt này: user đã chốt thì mọi nơi phải theo, kể cả khi lượt dịch
+  // hiện tại vô tình cho ra chữ khác.
+  for (const [orig, locked] of Object.entries(lock || {})) {
+    const k = lockKey(orig);
+    if (k && locked?.trim()) book[k] = locked.trim();
   }
   return { book, entry };
 }

@@ -425,6 +425,14 @@ export interface TranslationConfig {
    * trong panel Chiến lược B (user tự bấm) vẫn cho phép.
    */
   mvuDictLocked: boolean;
+  /**
+   * (bugNeedFix/110) 🔒 KHOÁ TÊN WORLDBOOK: bản dịch tên sách được CHỐT một lần, mọi nơi dùng đúng nó.
+   * Tên sách nằm ở HAI chỗ — field `character_book.name` và chuỗi trong script bảng trạng thái
+   * (`const WI_FILE='…'`) — do hai lượt gọi AI khác nhau dịch, nên lệch một chữ ("mùa hè của em"
+   * vs "mùa hạ của em") là script không tìm thấy sách, biến không lên bảng.
+   * Dạng: { tên sách GỐC: tên đã CHỐT }. Rỗng = chưa khoá gì, hành vi như cũ.
+   */
+  worldbookNameLock: Record<string, string>;
   enableRAGContext: boolean; // Enable Cross-field Context RAG for consistency
   ragMaxFields: number; // Max context fields to include (default: 5)
   ragMaxChars: number; // Max total chars for RAG context (default: 3000)

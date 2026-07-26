@@ -1,7 +1,7 @@
 import { splitLorebookBatches } from '../utils/batchSplit';
 import { stripUrlsForCjkCheck } from '../utils/cjk';
 import { scanFieldsForResidualCjk, buildResidualRetryInstruction } from '../utils/residualCjkScan';
-import { buildLorebookRefDictionary, enforceLorebookRefs, validateLorebookRefs } from '../utils/lorebookRefSync';
+import { buildLorebookRefDictionary, enforceLorebookRefs, validateLorebookRefs, getLockedBookName } from '../utils/lorebookRefSync';
 import { enforceFormatTagSync, findFormatTagMismatches } from '../utils/formatTagSync';
 import { useCallback, useEffect, useRef } from 'react';
 import { useStore } from '../store';
@@ -322,6 +322,20 @@ export function useTranslation() {
     // pause đã reset → kẹt 'translating' hoài / "vẫn dịch nền"). Bail ngay để loop trên bắt Cancelled.
     if (checkAbort()) throw new Error('Cancelled');
     store.setCurrentFieldIndex(index);
+
+    // ═══ (bugNeedFix/110) TÊN WORLDBOOK ĐÃ KHOÁ → dùng thẳng, KHÔNG gọi AI ═══
+    // Tên sách nằm ở hai nơi (field này và chuỗi trong script bảng trạng thái). Để AI dịch lại
+    // mỗi lượt là mỗi lượt một chữ khác ("mùa hè của em" / "mùa hạ của em") → script không tra
+    // được sách. Đã chốt thì chốt luôn, y như khoá từ điển MVU.
+    if (/(?:^|\.)character_book\.name$/.test(field.path)) {
+      const locked = getLockedBookName(store.translationConfig.worldbookNameLock, field.original);
+      if (locked) {
+        store.updateField(field.path, { status: 'done', translated: locked });
+        store.addLog('info', `🔒 Tên worldbook đã khoá — dùng "${locked}" (không gọi AI).`);
+        return;
+      }
+    }
+
     store.updateField(field.path, { status: 'translating' });
     // (User 2026 — bugNeedFix/39) NHẢ main thread 1 nhịp trước phần chuẩn bị ĐỒNG BỘ (RAG/prompt/dict).
     // Nhiều worker song song chạy các khối sync liên tiếp có thể chiếm main thread hàng chục giây
@@ -2951,7 +2965,9 @@ export function useTranslation() {
     // Ép chuỗi trong code khớp đúng tên đã dịch, rồi soi xem còn tham chiếu nào trỏ vào hư không.
     try {
       const refFields = useStore.getState().fields;
-      const refDict = buildLorebookRefDictionary(refFields);
+      // (bugNeedFix/110) Khoá tên sách đè lên bản dịch của lượt này — user đã chốt thì mọi
+      // chuỗi trong code phải theo đúng nó.
+      const refDict = buildLorebookRefDictionary(refFields, useStore.getState().translationConfig.worldbookNameLock);
       if (Object.keys(refDict.book).length > 0 || Object.keys(refDict.entry).length > 0) {
         let refFixed = 0;
         const sample: string[] = [];

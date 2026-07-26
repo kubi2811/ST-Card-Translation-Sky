@@ -53,3 +53,42 @@ describe('stitchContinuation — chặn ca model viết lại từ đầu', () =
     expect(r.stitched).toBe(answer1);
   });
 });
+
+// ─── (bugNeedFix/106) "một câu hỏi → 4 phần trả lời trong 1 lượt, rất lâu" ────────────────
+import { DEFAULT_LOOP_BUDGET } from '../loopController';
+
+describe('bug 106: chặn bài mới bị nối vào bài cũ', () => {
+  const bai1 = 'Tôi sẽ giúp bạn Việt hoá schema. '.repeat(8)
+    + 'Bước 1: bọc nháy cho key. Bước 2: đổi tên biến. Đoạn code bị cắt giữa chừng const x = {';
+
+  it('đoạn "viết tiếp" mở đầu bằng LỜI DẪN → coi là viết lại, không nối', () => {
+    const st = stitchContinuation(bai1, 'Chào bạn! Dựa trên yêu cầu của bạn, tôi sẽ tiến hành Việt hoá toàn bộ Keys trong file Zod Schema này.');
+    expect(st.restarted).toBe(true);
+    expect(st.stitched).toBe(bai1);
+    expect(st.addedChars).toBe(0);
+  });
+
+  it('bắt được cả khi lời chào KHÁC lần đầu (so-đầu-với-đầu bỏ lọt)', () => {
+    const st = stitchContinuation(bai1, 'Đã hiểu! Tôi sẽ phân tích lại file schema và trả về bản Việt hoá đầy đủ cho bạn ngay đây.');
+    expect(st.restarted).toBe(true);
+  });
+
+  it('đoạn "viết tiếp" thực ra đã nằm sẵn trong bài cũ → không nối lặp', () => {
+    const st = stitchContinuation(bai1, 'Bước 1: bọc nháy cho key. Bước 2: đổi tên biến. Đoạn code bị cắt giữa chừng thêm nữa');
+    expect(st.restarted).toBe(true);
+  });
+
+  it('viết tiếp THẬT (nối mạch, không lời dẫn) vẫn được ghép bình thường', () => {
+    const st = stitchContinuation(bai1, ' a: 1, b: 2 };\nVậy là xong.');
+    expect(st.restarted).toBe(false);
+    expect(st.addedChars).toBeGreaterThan(0);
+    expect(st.stitched.endsWith('Vậy là xong.')).toBe(true);
+  });
+});
+
+describe('bug 106: ngân sách vòng lặp không được quá rộng', () => {
+  it('tối đa 3 vòng và 2 phút — bài dài thì user bấm "Tiếp tục"', () => {
+    expect(DEFAULT_LOOP_BUDGET.maxRounds).toBeLessThanOrEqual(3);
+    expect(DEFAULT_LOOP_BUDGET.maxMs).toBeLessThanOrEqual(2 * 60_000);
+  });
+});

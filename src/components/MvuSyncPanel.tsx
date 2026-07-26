@@ -19,6 +19,7 @@ import {
   enforceVariableCasing
 } from '../utils/mvuSync';
 import { isMvuCard, getMvuZodSummary } from '../utils/mvuDetector';
+import { getLockedBookName, setLockedBookName, enforceLorebookRefs } from '../utils/lorebookRefSync';
 import { 
   Settings, 
   Plus, 
@@ -1058,6 +1059,13 @@ export default function MvuSyncPanel() {
             </button>
           </div>
 
+          {/* ── (bugNeedFix/110) 🔒 KHOÁ TÊN WORLDBOOK ────────────────────────────────
+              User: bảng trạng thái tra lorebook BẰNG TÊN. Tên sách nằm ở hai chỗ — field
+              `character_book.name` và chuỗi trong script (`const WI_FILE='…'`) — hai lượt gọi AI
+              khác nhau dịch, lệch một chữ ("mùa hè của em" vs "mùa hạ của em") là script không
+              tìm thấy sách, biến không lên bảng. Chốt một tên ở đây thì mọi nơi dùng đúng nó. */}
+          <WorldbookNameLockBox />
+
           {/* (User 2026) Badge trạng thái khoá */}
           {translationConfig.mvuDictLocked && (
             <div style={{
@@ -1351,6 +1359,138 @@ export default function MvuSyncPanel() {
               <Plus size={16} />
             </button>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   (bugNeedFix/110) KHOÁ TÊN WORLDBOOK
+   ───────────────────────────────────────────────────────────────────────────
+   Bảng trạng thái của nhiều thẻ tra lorebook BẰNG TÊN:
+       const WI_FILE='{ Mùa hè của em }';   // phải khớp tên sách trong thẻ
+   Nhưng tên sách nằm ở HAI chỗ: field `data.character_book.name` và chuỗi trong script. Hai chỗ
+   đó do hai lượt gọi AI KHÁC NHAU dịch, nên ra "Mùa hè của em" và "Mùa hạ của em" là chuyện bình
+   thường — và script lập tức không tra được sách, biến không hiện.
+
+   Khoá ở đây chốt MỘT tên duy nhất: pipeline không dịch lại tên sách nữa, đồng thời mọi tham
+   chiếu trong regex/script bị ép về đúng tên đã chốt. Cùng tinh thần với khoá từ điển MVU.
+   ═══════════════════════════════════════════════════════════════════════════ */
+function WorldbookNameLockBox() {
+  const card = useStore((s) => s.card);
+  const fields = useThrottledStore((s) => s.fields, 300);
+  const translationConfig = useStore((s) => s.translationConfig);
+  const setTranslationConfig = useStore((s) => s.setTranslationConfig);
+  const updateField = useStore((s) => s.updateField);
+  const addToast = useStore((s) => s.addToast);
+
+  const nameField = useMemo(
+    () => fields.find((f) => /(?:^|\.)character_book\.name$/.test(f.path)),
+    [fields],
+  );
+  const original = (nameField?.original
+    || (card?.data as { character_book?: { name?: string } } | undefined)?.character_book?.name
+    || '').trim();
+
+  const lock = translationConfig.worldbookNameLock || {};
+  const lockedValue = getLockedBookName(lock, original);
+  const [draft, setDraft] = useState('');
+
+  // Ô nhập theo sau dữ liệu thật khi user chưa gõ gì.
+  const suggested = lockedValue || (nameField?.translated || '').trim() || original;
+  const value = draft || suggested;
+
+  if (!original) return null;
+
+  const doLock = () => {
+    const v = value.trim();
+    if (!v) { addToast('error', 'Chưa có tên để khoá.'); return; }
+    setTranslationConfig({ worldbookNameLock: setLockedBookName(lock, original, v) });
+    // Áp ngay vào field tên sách để bản dịch đang làm dở cũng khớp.
+    if (nameField && nameField.translated !== v) {
+      updateField(nameField.path, { translated: v, status: 'done' });
+    }
+    // Ép mọi tham chiếu trong code về đúng tên vừa chốt — đây mới là chỗ chữa bệnh.
+    const dict = { book: { [original]: v }, entry: {} };
+    let fixed = 0;
+    for (const f of useStore.getState().fields) {
+      if (typeof f.translated !== 'string' || !f.translated) continue;
+      if (f.group !== 'regex' && f.group !== 'tavern_helper' && f.group !== 'lorebook') continue;
+      const r = enforceLorebookRefs(f.translated, dict);
+      if (r.fixes.length > 0 && r.text !== f.translated) {
+        updateField(f.path, { translated: r.text });
+        fixed += r.fixes.length;
+      }
+    }
+    addToast('success', fixed > 0
+      ? `🔒 Đã khoá tên worldbook "${v}" và sửa ${fixed} chỗ trỏ sai trong script/regex.`
+      : `🔒 Đã khoá tên worldbook "${v}". Mọi lượt dịch sau sẽ dùng đúng tên này.`);
+  };
+
+  const doUnlock = () => {
+    setTranslationConfig({ worldbookNameLock: setLockedBookName(lock, original, '') });
+    addToast('info', 'Đã bỏ khoá tên worldbook — lượt dịch sau sẽ tự dịch lại tên sách.');
+  };
+
+  return (
+    <div style={{
+      padding: '8px 10px', marginBottom: '8px',
+      borderRadius: 'var(--radius-sm)',
+      background: lockedValue ? 'rgba(56,189,248,0.08)' : 'var(--bg-primary)',
+      border: lockedValue ? '1px solid rgba(56,189,248,0.35)' : '1px solid var(--border-subtle)',
+      fontSize: '0.7rem',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, fontWeight: 700, color: lockedValue ? '#38bdf8' : 'var(--text-secondary)' }}>
+        {lockedValue ? '🔒' : '🔓'} Khoá tên worldbook
+        <span
+          title={'Bảng trạng thái tra lorebook BẰNG TÊN sách. Tên sách nằm ở hai nơi — thẻ và chuỗi trong script '
+            + '(const WI_FILE=…) — do hai lượt AI khác nhau dịch nên hay lệch một chữ ("mùa hè của em" vs "mùa hạ của em"), '
+            + 'khiến script không tra được sách và biến không hiện. Chốt một tên ở đây: pipeline thôi dịch lại tên sách, '
+            + 'và mọi tham chiếu trong regex/script bị ép về đúng tên này.'}
+          style={{ cursor: 'help', opacity: 0.6, fontWeight: 400 }}
+        >ⓘ</span>
+      </div>
+      <div style={{ color: 'var(--text-secondary)', marginBottom: 4 }}>
+        Tên gốc: <b style={{ color: 'var(--text-primary)' }}>{original}</b>
+      </div>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <input
+          value={value}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="Tên worldbook sau khi dịch…"
+          style={{
+            flex: 1, minWidth: 0, padding: '4px 8px', fontSize: '0.7rem',
+            background: 'var(--bg-secondary)', color: 'var(--text-primary)',
+            border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)',
+          }}
+        />
+        <button
+          onClick={doLock}
+          style={{
+            padding: '4px 10px', fontSize: '0.68rem', fontWeight: 700, cursor: 'pointer',
+            background: 'rgba(56,189,248,0.15)', color: '#38bdf8',
+            border: '1px solid rgba(56,189,248,0.4)', borderRadius: 'var(--radius-sm)', flexShrink: 0,
+          }}
+        >
+          {lockedValue ? 'Cập nhật khoá' : 'Khoá tên này'}
+        </button>
+        {lockedValue && (
+          <button
+            onClick={doUnlock}
+            style={{
+              padding: '4px 8px', fontSize: '0.68rem', cursor: 'pointer',
+              background: 'none', color: 'var(--text-secondary)',
+              border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)', flexShrink: 0,
+            }}
+          >
+            Bỏ khoá
+          </button>
+        )}
+      </div>
+      {lockedValue && (
+        <div style={{ marginTop: 5, color: '#38bdf8' }}>
+          Đang khoá: <b>{lockedValue}</b> — lượt dịch sau không gọi AI cho tên sách nữa, và script/regex được ép khớp tên này.
         </div>
       )}
     </div>

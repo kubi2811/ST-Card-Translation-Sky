@@ -551,6 +551,8 @@ export const useStore = create<AppState>((set) => ({
     enableMythicSync: LS.get('st-translator-mythic-sync-enabled', false),
     mvuDictionary: LS.get('st-translator-mvu-dict', {}) as Record<string, string>,
     mvuDictLocked: LS.get('st-translator-mvu-dict-locked', false),
+    // (bugNeedFix/110) Khoá tên worldbook — giữ qua mọi lần import thẻ, y như từ điển MVU khoá.
+    worldbookNameLock: LS.get('st-translator-wb-name-lock', {}) as Record<string, string>,
     enableRAGContext: LS.get('st-translator-rag-enabled', true),
     ragMaxFields: LS.get('st-translator-rag-max-fields', 5),
     ragMaxChars: LS.get('st-translator-rag-max-chars', 3000),
@@ -649,6 +651,9 @@ export const useStore = create<AppState>((set) => ({
       }
       if ('mvuDictLocked' in partial) {
         LS.set('st-translator-mvu-dict-locked', next.mvuDictLocked);
+      }
+      if ('worldbookNameLock' in partial) {
+        LS.set('st-translator-wb-name-lock', next.worldbookNameLock);
       }
       if ('enableMvuConversion' in partial) {
         LS.set('st-translator-mvu-conversion', next.enableMvuConversion);
@@ -809,6 +814,7 @@ export const useStore = create<AppState>((set) => ({
       enableMythicSync: false,
       mvuDictionary: {},
       mvuDictLocked: false,
+      worldbookNameLock: {},
       enableRAGContext: true,
       ragMaxFields: 5,
       ragMaxChars: 3000,

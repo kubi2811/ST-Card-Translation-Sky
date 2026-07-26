@@ -251,3 +251,63 @@ describe('collectLorebookIdentity', () => {
     expect(id.entryNames.size).toBe(0);
   });
 });
+
+// ─── (bugNeedFix/110) Khoá tên worldbook + hằng số WI_FILE ────────────────────────────────
+import { getLockedBookName, setLockedBookName } from '../lorebookRefSync';
+
+describe('bug 110: hằng số tên sách trong script bảng trạng thái', () => {
+  const dict = { book: { 'Mùa hè của em': 'Mùa hè của em (VI)' }, entry: {} };
+
+  it('const WI_FILE = "…" được ép khớp (bản cũ chỉ soi đối số hàm nên bỏ lọt)', () => {
+    const src = "const WI_FILE='Mùa hè của em';  // Vui lòng thay bằng tên tệp";
+    const r = enforceLorebookRefs(src, dict);
+    expect(r.text).toContain("'Mùa hè của em (VI)'");
+    expect(r.fixes[0].via).toContain('hằng số');
+  });
+
+  it('nhận cả BOOK_NAME / LOREBOOK_NAME / WORLDBOOK', () => {
+    for (const name of ['BOOK_NAME', 'LOREBOOK_NAME', 'WORLDBOOK']) {
+      const r = enforceLorebookRefs(`let ${name} = "Mùa hè của em";`, dict);
+      expect(r.text).toContain('Mùa hè của em (VI)');
+    }
+  });
+
+  it('không đụng hằng số khác trùng nội dung', () => {
+    const r = enforceLorebookRefs("const TITLE = 'Mùa hè của em';", dict);
+    expect(r.text).toBe("const TITLE = 'Mùa hè của em';");
+  });
+});
+
+describe('bug 110: khoá tên worldbook', () => {
+  it('chốt rồi thì tra ra đúng tên đã chốt', () => {
+    const lock = setLockedBookName({}, 'Mùa hè của em', 'Mùa hè của em (bản Việt)');
+    expect(getLockedBookName(lock, 'Mùa hè của em')).toBe('Mùa hè của em (bản Việt)');
+  });
+
+  it('tra bỏ qua khoảng trắng thừa và hoa/thường', () => {
+    const lock = setLockedBookName({}, 'Mùa hè của em', 'X');
+    expect(getLockedBookName(lock, '  Mùa   hè của em ')).toBe('X');
+    expect(getLockedBookName(lock, 'MÙA HÈ CỦA EM')).toBe('X');
+  });
+
+  it('đặt giá trị rỗng = bỏ khoá', () => {
+    let lock = setLockedBookName({}, 'A B', 'X');
+    lock = setLockedBookName(lock, 'A B', '');
+    expect(getLockedBookName(lock, 'A B')).toBeUndefined();
+  });
+
+  it('khoá ĐÈ lên bản dịch của lượt hiện tại (đó là mục đích của khoá)', () => {
+    const d = buildLorebookRefDictionary(
+      [{ path: 'data.character_book.name', original: 'Mùa hè của em', translated: 'Mùa hạ của em', status: 'done' }],
+      { 'Mùa hè của em': 'Mùa hè của em' },
+    );
+    expect(d.book['Mùa hè của em']).toBe('Mùa hè của em');
+  });
+
+  it('không có khoá thì giữ nguyên hành vi cũ', () => {
+    const d = buildLorebookRefDictionary(
+      [{ path: 'data.character_book.name', original: 'Mùa hè của em', translated: 'Mùa hạ của em', status: 'done' }],
+    );
+    expect(d.book['Mùa hè của em']).toBe('Mùa hạ của em');
+  });
+});

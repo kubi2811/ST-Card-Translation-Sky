@@ -15,7 +15,13 @@ export interface LoopBudget {
   maxMs: number;       // tổng thời gian cho các vòng viết tiếp
 }
 
-export const DEFAULT_LOOP_BUDGET: LoopBudget = { maxRounds: 8, maxMs: 5 * 60_000 };
+/**
+ * (bugNeedFix/106) Trần 8 vòng × 2 phút là quá rộng: mỗi vòng là một call AI đầy đủ, nên một câu
+ * hỏi có thể ngốn hàng chục phút và ghép ra một khối khổng lồ — đúng lời user "tốn thời gian cực
+ * nhiều để trả về 4 phần trả lời trong 1 lần phản hồi". Hạ xuống 3 vòng / 2 phút: đủ cứu phản hồi
+ * bị cắt một hai nhịp, còn bài dài thật thì user bấm "Tiếp tục" — chủ động và biết mình đang chờ gì.
+ */
+export const DEFAULT_LOOP_BUDGET: LoopBudget = { maxRounds: 3, maxMs: 2 * 60_000 };
 
 /** Đuôi mỏ neo gửi cho vòng sau. */
 export const TAIL_ANCHOR_CHARS = 800;
@@ -87,13 +93,41 @@ function normHead(s: string): string {
   return s.replace(/\s+/g, ' ').trim().toLowerCase().slice(0, RESTART_PROBE_CHARS);
 }
 
+/**
+ * (bugNeedFix/106) Lời dẫn mở bài. Prompt viết tiếp đã CẤM mở đầu bằng lời dẫn, nên thấy nó ở đầu
+ * đoạn "viết tiếp" gần như chắc chắn là model đang trả lời LẠI TỪ ĐẦU chứ không nối mạch.
+ */
+const FRESH_INTRO_RE = new RegExp(
+  '^(chào bạn|chào|xin chào|vâng|dạ|ok|okay|được rồi|đã hiểu|hiểu rồi|tuyệt vời|chắc chắn rồi|'
+  + 'tất nhiên|dựa trên|dựa vào|theo yêu cầu|sau khi (xem|phân tích|đọc)|dưới đây là|tôi (sẽ|đã) (giúp|tiến hành|phân tích|kiểm tra)|'
+  + 'chỉ thị|theo chỉ thị)\\b',
+  'i',
+);
+
 export function looksLikeRestart(existing: string, continuation: string): boolean {
   const a = normHead(existing);
   const b = normHead(continuation);
-  if (a.length < RESTART_MIN_COMMON || b.length < RESTART_MIN_COMMON) return false;
-  let i = 0;
-  while (i < a.length && i < b.length && a[i] === b[i]) i++;
-  return i >= RESTART_MIN_COMMON;
+  if (b.length < RESTART_MIN_COMMON) return false;
+
+  // 1) Hai bài mở đầu giống hệt nhau ⇒ rõ ràng là viết lại.
+  if (a.length >= RESTART_MIN_COMMON) {
+    let i = 0;
+    while (i < a.length && i < b.length && a[i] === b[i]) i++;
+    if (i >= RESTART_MIN_COMMON) return true;
+  }
+
+  // 2) (bugNeedFix/106) Mở đầu bằng LỜI DẪN dù prompt đã cấm ⇒ bài mới. Bắt được cả ca model
+  //    chào theo kiểu khác lần trước ("Đã hiểu!" vs "Chào bạn!") mà so-đầu-với-đầu bỏ lọt —
+  //    chính là lý do user nhận "4 phần trả lời trong 1 lượt".
+  const contHead = continuation.replace(/^[\s>*#-]+/, '');
+  if (FRESH_INTRO_RE.test(contHead)) return true;
+
+  // 3) Đoạn "viết tiếp" mở đầu bằng một khúc đã NẰM SẴN đâu đó trong bài cũ ⇒ đang chép lại,
+  //    không phải nội dung mới. (findOverlap chỉ bắt được khi lặp đúng phần ĐUÔI.)
+  const probe = normHead(continuation).slice(0, 60);
+  if (probe.length >= 50 && existing.replace(/\s+/g, ' ').toLowerCase().includes(probe)) return true;
+
+  return false;
 }
 
 /** Dò overlap: suffix của `existing` == prefix của `continuation` (thử raw rồi trim). */

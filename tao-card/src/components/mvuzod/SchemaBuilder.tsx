@@ -26,6 +26,7 @@ import type { LorebookEntry, CardExtensions } from '../../types';
 import { MVUZOD_TEMPLATES, type MVUZODTemplate } from '../../lib/mvuzod/templateLibrary';
 import { analyzeLorebookForSchema, buildMinimalSchemaFromReport, parseSchemaInferenceResponse, schemaToZodCode } from '../../lib/mvuzod/schemaInferencer';
 import { parseZodCodeToSchema, isMvuSchemaScript } from '../../lib/mvuzod/zodCodeParser';
+import { mergeInferredSchemas } from '../../lib/mvuzod/mergeInferredSchemas';
 import { buildMVUZODScripts } from '../../lib/mvuzod/tavernScriptBuilder';
 import { useSettingsStore } from '../../store/settingsStore';
 import { callAI } from '../../lib/ai/client';
@@ -36,6 +37,19 @@ import { cn } from '../../lib/utils';
 // ═══════════════════════════════════════════════════════════════════════════
 // HELPERS
 // ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * (bugNeedFix/99) Đã đọc được schema từ chỗ text hiện có chưa? Dùng để DỪNG SỚM chuỗi "viết tiếp
+ * phần còn thiếu": nhiều provider trả finishReason='length' dù JSON đã đóng đủ ngoặc, nên vòng cũ
+ * cứ gọi thêm 3 lượt nữa cho một kết quả vốn đã dùng được.
+ */
+function canParseSchema(text: string): boolean {
+  if (!text.trim()) return false;
+  try {
+    const p = parseSchemaInferenceResponse(text);
+    return !!p.proposedSchema?.fields?.length;
+  } catch { return false; }
+}
 
 /**
  * Extract MVUZODSchema from various JSON formats:
@@ -669,6 +683,10 @@ function SchemaSourcePanel({
   const [parallelCount, setParallelCount] = useState(1);
   const [scanProgress, setScanProgress] = useState<{ current: number; total: number; results: string[] } | null>(null);
   const cancelRef = useRef(false);
+  // (bugNeedFix/99) Nút "Dừng quét" trước đây chỉ bật một lá cờ, mà lá cờ đó chỉ được đọc ở đầu mỗi
+  // đợt sóng — đang treo giữa một call AI dài thì bấm bao nhiêu cũng không có gì xảy ra, user tưởng
+  // nút chết. Nay mọi call đều nhận signal của controller này nên bấm là request đứt ngay.
+  const abortRef = useRef<AbortController | null>(null);
 
   // (User 2026) CHỌN ENTRY RIÊNG LẺ để quét: card 100+ nhân vật thì quét cả 100 entry NPC vô nghĩa —
   // cho tick bỏ những entry không giúp gì cho schema. Mặc định quét TẤT CẢ (loại trừ theo id, entry
@@ -708,6 +726,8 @@ function SchemaSourcePanel({
     let currentMessages = messages;
 
     while (isTruncated && callCount < 4) {
+      // (bugNeedFix/99) Bấm "Dừng quét" giữa chuỗi gọi tiếp thì phải dừng NGAY, không đợi hết 4 lượt.
+      if (cancelRef.current) break;
       callCount++;
       if (callCount > 1) setLoadingStatus(`${label} — Tiếp tục phản hồi (lượt ${callCount})...`);
 
@@ -715,10 +735,15 @@ function SchemaSourcePanel({
         profile: activeProfile,
         params: { ...params, useJsonResponseFormat: true },
         messages: currentMessages,
+        signal: abortRef.current?.signal,
       });
 
       fullText += response.text;
       isTruncated = ['MAX_TOKENS', 'max_tokens', 'length'].includes(response.finishReason || '');
+
+      // Đã đọc được schema rồi thì thôi, đừng gọi tiếp cho tốn (finishReason đôi khi báo 'length'
+      // dù JSON đã đóng đủ ngoặc).
+      if (isTruncated && canParseSchema(fullText)) isTruncated = false;
 
       if (isTruncated && response.text.trim()) {
         currentMessages = [
@@ -734,69 +759,41 @@ function SchemaSourcePanel({
     return fullText;
   }, []);
 
-  // Merge multiple partial schemas into one via AI
-  const mergeSchemas = useCallback(async (partialResults: string[]): Promise<string> => {
-    const activeProfile = useSettingsStore.getState().getActiveProfile();
-    const params = useSettingsStore.getState().generationParams;
-    if (!activeProfile || !activeProfile.apiKey) {
-      throw new Error('Chưa cấu hình API AI. Vào Settings → API Key.');
+  /**
+   * (bugNeedFix/99) Tổng hợp kết quả nhiều batch — KHÔNG gọi AI nữa.
+   *
+   * Bản cũ nhồi toàn bộ JSON của mọi batch vào một prompt ở chế độ bắt-buộc-JSON rồi nhờ AI merge.
+   * Output gần như luôn chạm trần token ⇒ vòng "viết tiếp phần còn thiếu" gửi lại cả lịch sử đang
+   * phình, tới 4 lượt, mỗi lượt một chậm — nhìn từ ngoài đúng như user tả: "cứ xong là lại gọi
+   * tiếp rồi treo". Mà ở chế độ JSON-object mỗi lượt model buộc trả một object MỚI hoàn chỉnh, nên
+   * nối các lượt lại cũng chẳng ra JSON hợp lệ: tốn 4 call to đùng rồi vẫn hỏng.
+   *
+   * Gộp schema là việc dữ liệu thuần (hợp nhất field theo path, gộp enum, giữ ràng buộc đầy đủ
+   * nhất) nên làm bằng code: tức thì, miễn phí, không bao giờ treo.
+   */
+  const mergeSchemas = useCallback((partialResults: string[]): MVUZODSchema => {
+    setLoadingStatus(`Tổng hợp ${partialResults.length} batch (không cần gọi AI)...`);
+    const parsed = partialResults.map((raw) => {
+      try { return parseSchemaInferenceResponse(raw).proposedSchema; } catch { return null; }
+    });
+    const merged = mergeInferredSchemas(parsed);
+    if (merged.usedCount === 0) {
+      throw new Error('Không batch nào trả về schema đọc được — thử giảm số entry mỗi batch rồi quét lại.');
     }
-
-    setLoadingStatus('Tổng hợp kết quả từ các batch...');
-
-    const mergePrompt = `Bạn là AI chuyên gia tổng hợp MVUZOD schema.
-
-Dưới đây là ${partialResults.length} kết quả phân tích schema từ các batch entries khác nhau.
-Hãy MERGE (hợp nhất) tất cả thành MỘT schema duy nhất.
-
-Quy tắc merge:
-• Gộp các fields trùng path thành một, giữ constraints đầy đủ nhất
-• Gộp enum values từ các batch
-• Gộp analysis.groups, cộng dồn count
-• Giữ warnings từ tất cả batch
-• Trả về đúng cấu trúc JSON như MVUZOD_SCHEMA_INFERENCE_PROMPT yêu cầu
-
-CHỈ trả về JSON, KHÔNG giải thích.`;
-
-    const batchSummary = partialResults.map((r, i) => `=== Batch ${i + 1} ===\n${r}`).join('\n\n');
-
-    const messages: ChatMessage[] = [
-      { role: 'system', content: mergePrompt },
-      { role: 'user', content: batchSummary },
-    ];
-
-    let fullText = '';
-    let isTruncated = true;
-    let callCount = 0;
-    let currentMessages = messages;
-
-    while (isTruncated && callCount < 4) {
-      callCount++;
-      const response = await callAI({
-        profile: activeProfile,
-        params: { ...params, useJsonResponseFormat: true },
-        messages: currentMessages,
-      });
-      fullText += response.text;
-      isTruncated = ['MAX_TOKENS', 'max_tokens', 'length'].includes(response.finishReason || '');
-      if (isTruncated && response.text.trim()) {
-        currentMessages = [
-          ...currentMessages,
-          { role: 'assistant', content: response.text },
-          { role: 'user', content: 'Viết tiếp phần còn thiếu.' },
-        ];
-      } else {
-        isTruncated = false;
-      }
-    }
-
-    return fullText;
+    const skipped = partialResults.length - merged.usedCount;
+    setLoadingStatus(
+      `Đã gộp ${merged.usedCount}/${partialResults.length} batch → ${merged.schema.fields.length} nhóm biến`
+      + (merged.mergedPaths > 0 ? `, hợp nhất ${merged.mergedPaths} biến trùng` : '')
+      + (skipped > 0 ? ` (bỏ qua ${skipped} batch lỗi)` : ''),
+    );
+    return merged.schema;
   }, []);
 
   const handleAIAnalyze = useCallback(async () => {
     setLoading(true);
     setError(null);
     cancelRef.current = false;
+    abortRef.current = new AbortController();
     setScanProgress(null);
     setLoadingStatus('Đang kết nối AI...');
 
@@ -864,31 +861,23 @@ CHỈ trả về JSON, KHÔNG giải thích.`;
         // Handle cancel with partial results
         const validResults = partialResults.filter((r): r is string => r !== null);
         if (cancelRef.current) {
-          setLoadingStatus('Đã hủy quét.');
+          // (bugNeedFix/99) Bấm Dừng mà đã quét được vài batch thì vẫn dùng phần đó — gộp bằng
+          // code nên không phải chờ thêm một call AI nào nữa.
           if (validResults.length > 0) {
-            setLoadingStatus('Tổng hợp kết quả đã quét...');
-            if (validResults.length === 1) {
-              finalText = validResults[0];
-            } else {
-              finalText = await mergeSchemas(validResults);
-            }
-            setLoadingStatus('Phân tích phản hồi...');
-            const parsed = parseSchemaInferenceResponse(finalText!);
-            if (parsed.proposedSchema) {
-              await onApplyInferred(parsed.proposedSchema);
-            }
+            await onApplyInferred(mergeSchemas(validResults));
+            setLoadingStatus(`Đã dừng — vẫn giữ kết quả của ${validResults.length} batch đã xong.`);
+          } else {
+            setLoadingStatus('Đã hủy quét.');
           }
           return;
         }
 
         // Merge results if multiple batches
-        if (validResults.length === 1) {
-          finalText = validResults[0];
-        } else if (validResults.length > 1) {
-          finalText = await mergeSchemas(validResults);
-        } else {
+        if (validResults.length === 0) {
           throw new Error('Không có kết quả nào từ quét.');
         }
+        await onApplyInferred(mergeSchemas(validResults));
+        return;
       }
 
       setLoadingStatus('Phân tích phản hồi...');
@@ -897,12 +886,16 @@ CHỈ trả về JSON, KHÔNG giải thích.`;
 
       await onApplyInferred(parsed.proposedSchema);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      // Bấm Dừng thì request bị abort — đó là ý user, không phải lỗi để đỏ màn hình.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (cancelRef.current && /abort/i.test(msg)) setLoadingStatus('Đã dừng quét.');
+      else setError(msg);
     } finally {
       setLoading(false);
       setLoadingStatus('');
       setScanProgress(null);
       cancelRef.current = false;
+      abortRef.current = null;
     }
   }, [scanEntries, onApplyInferred, scanMode, batchSize, parallelCount, callAIForEntries, mergeSchemas]);
 
@@ -914,6 +907,10 @@ CHỈ trả về JSON, KHÔNG giải thích.`;
 
   const handleCancel = useCallback(() => {
     cancelRef.current = true;
+    // (bugNeedFix/99) Cắt đứt luôn request đang bay. Trước đây chỉ bật cờ, mà cờ chỉ được đọc ở
+    // đầu mỗi đợt sóng nên đang chờ một call dài thì bấm mãi không thấy gì.
+    abortRef.current?.abort(new Error('Người dùng dừng quét'));
+    setLoadingStatus('Đang dừng...');
   }, []);
 
   // ─── Idea-to-schema state & handler ───

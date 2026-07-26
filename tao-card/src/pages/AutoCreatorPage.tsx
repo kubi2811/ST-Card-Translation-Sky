@@ -4,13 +4,13 @@ import {
   CheckCircle2, Circle, Loader2, ChevronRight, ChevronDown,
   AlertTriangle, Settings2, Hash, BookOpen, User, Terminal,
   MessageSquare, Sparkles, SkipForward, Edit3, Zap, Moon, Cog,
-  Maximize2, X, Wrench,
+  Maximize2, X, Wrench, PlayCircle,
   type LucideIcon
 } from 'lucide-react';
 import { useAutoCreatorStore } from '../store/autoCreatorStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { useToastStore } from '../store/toastStore';
-import { runAutoCreatorPipeline, retrySingleStep, skipStep, applyStepPreview, runAutoRepair } from '../lib/ai/autoCreatorPipeline';
+import { runAutoCreatorPipeline, retrySingleStep, skipStep, applyStepPreview, runAutoRepair, runFullVerifyCycle } from '../lib/ai/autoCreatorPipeline';
 import { runMinhNguyetPipeline, retryMnStep, skipMnStep } from '../lib/ai/minhNguyetPipeline';
 import { AUTO_CREATOR_PRESETS } from '../lib/ai/autoCreatorPresets';
 import { MINH_NGUYET_STEP_LABELS } from '../prompts/minhNguyetTemplates';
@@ -74,6 +74,7 @@ export function AutoCreatorPage() {
   const [showMnPromptOverride, setShowMnPromptOverride] = useState<MinhNguyetStep | null>(null);
   const [ideaExpanded, setIdeaExpanded] = useState(false); // ô "Ý tưởng của bạn" phóng to toàn màn hình
   const [repairing, setRepairing] = useState(false); // (việc 82) đang chạy vòng vá lỗi
+  const [verifying, setVerifying] = useState(false); // (bugNeedFix/98) đang chạy kiểm + mô phỏng
   const logEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -114,6 +115,25 @@ export function AutoCreatorPage() {
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
       setRepairing(false);
+    }
+  };
+
+  /**
+   * (bugNeedFix/98) Retry TỔNG: kiểm tra → vá → mô phỏng MVU/EJS. Không gọi AI.
+   * Dùng khi vừa sửa tay một biến/hàm/giá trị ở đâu đó và muốn biết ngay còn khớp nhau không.
+   */
+  const handleFullVerify = async () => {
+    const toast = useToastStore.getState();
+    setVerifying(true);
+    try {
+      const r = await runFullVerifyCycle();
+      if (r.after === 0) toast.success('Sạch hoàn toàn — kiểm tra, vá và mô phỏng đều qua.');
+      else if (!r.simOk) toast.error(`Mô phỏng còn lỗi — xem console. Đã vá ${r.fixedCount} chỗ, còn ${r.after} vấn đề.`);
+      else toast.info(`Đã vá ${r.fixedCount} chỗ, còn ${r.after} vấn đề — xem console.`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setVerifying(false);
     }
   };
 
@@ -655,19 +675,33 @@ export function AutoCreatorPage() {
                 <button onClick={() => store.stopPipeline()} title="Dừng DỨT HẲN: hủy cả request AI đang bay, không chỉ dừng giữa các bước" className="px-2 py-1 bg-red-500/20 text-red-500 hover:bg-red-500/30 rounded flex items-center gap-1 transition-colors"><Square className="w-3 h-3" /> {ui.acStop}</button>
               </div>
             )}
-            {!store.isRunning && store.logs.length > 0 && (
+            {!store.isRunning && (
               <div className="flex items-center gap-1.5">
+                {/* (bugNeedFix/98) RETRY TỔNG — luôn bấm được, kể cả khi console chưa có log nào
+                    (vừa mở lại app, hay vừa sửa tay một biến/hàm ở đâu đó). Chạy trọn vòng
+                    kiểm tra → vá cơ học → MÔ PHỎNG MVU/EJS, không gọi AI nên bấm bao nhiêu
+                    lần cũng được. */}
+                <button
+                  onClick={handleFullVerify}
+                  disabled={repairing || verifying}
+                  className="px-2 py-1 bg-sky-500/20 text-sky-300 hover:bg-sky-500/30 disabled:opacity-50 rounded flex items-center gap-1 transition-colors"
+                  title="Chạy lại TOÀN BỘ: kiểm tra tổng thể → vá lỗi cơ học → mô phỏng nạp biến MVU và đối chiếu EJS. Không tốn API. Dùng mỗi khi bạn vừa sửa tay biến/hàm/giá trị ở bất kỳ đâu."
+                >
+                  <PlayCircle className="w-3 h-3" /> {verifying ? 'Đang kiểm & mô phỏng…' : 'Kiểm & Mô phỏng lại'}
+                </button>
                 {/* (User 22/07 — việc 82) Kiểm tra tổng thể xong ra một đống lỗi cơ học mà user
                     phải tự sửa tay. Nút này chạy vòng vá tất định cho tới khi hết vá được. */}
                 <button
                   onClick={handleAutoRepair}
-                  disabled={repairing}
+                  disabled={repairing || verifying}
                   className="px-2 py-1 bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 disabled:opacity-50 rounded flex items-center gap-1 transition-colors"
                   title={ui.acRepairAllHint}
                 >
                   <Wrench className="w-3 h-3" /> {repairing ? ui.acRepairing : ui.acRepairAll}
                 </button>
-                <button onClick={() => store.resetPipeline()} className="px-2 py-1 bg-white/10 hover:bg-white/20 rounded flex items-center gap-1 transition-colors"><RotateCcw className="w-3 h-3" /> Reset</button>
+                {store.logs.length > 0 && (
+                  <button onClick={() => store.resetPipeline()} className="px-2 py-1 bg-white/10 hover:bg-white/20 rounded flex items-center gap-1 transition-colors"><RotateCcw className="w-3 h-3" /> Reset</button>
+                )}
               </div>
             )}
           </div>

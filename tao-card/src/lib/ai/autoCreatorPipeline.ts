@@ -16,6 +16,7 @@ import { buildMVUZODScripts } from '../mvuzod/tavernScriptBuilder';
 import { OPENING_FORM_ANCHOR, STATUS_BAR_ANCHOR } from '../mvuzod/regexAnchors';
 import { isMvuUpdateBlockAccepted } from '../mvuzod/mvuReference';
 import { validateMvuCard } from '../mvuzod/validateMvuCard';
+import { simulateCard } from '../mvuzod/simulateCard';
 import { runFormCycle } from '../mvuzod/mvuHarness';
 import { validateEJSEntry, isPreprocessingEntry } from '../ejs/ejsParser';
 import { validateReplaceString } from '../regexEngine/regexValidator';
@@ -371,6 +372,50 @@ export async function runAutoRepair(): Promise<{ before: number; after: number; 
   else log('warning', `⚠️ Đã vá ${fixedCount} chỗ, còn ${remaining} vấn đề cần xử lý tay hoặc chạy lại bước AI.`);
 
   return { before, after: remaining, fixedCount };
+}
+
+/**
+ * ═══ (bugNeedFix/98) RETRY TỔNG: kiểm tra → vá → MÔ PHỎNG, chạy lại bao nhiêu lần cũng được ═══
+ *
+ * User: "nên thêm cả 1 nút retry tổng để người dùng có thể retry thủ công cả quy trình check,
+ * sửa, mô phỏng MVU và EJS này — phòng khi vừa cập nhật thêm một hàm, biến hay giá trị mới vào
+ * bất kỳ đâu đó có liên quan".
+ *
+ * Trước đây muốn kiểm lại sau khi sửa tay thì phải chạy lại nguyên bước final_check của pipeline
+ * (tốn call AI review) hoặc bấm Vá lỗi rồi tự đoán. Hàm này gói trọn vòng: đếm lỗi → vá cơ học →
+ * mô phỏng lại → báo kết quả, HOÀN TOÀN không gọi mạng nên bấm thoải mái.
+ */
+export async function runFullVerifyCycle(): Promise<{
+  before: number; after: number; fixedCount: number; simOk: boolean; report: string[];
+}> {
+  const store = useAutoCreatorStore.getState();
+  const step: AutoCreatorStep = 'final_check';
+  const log = (level: 'info' | 'success' | 'warning' | 'error', message: string) =>
+    store.addLog({ step, level, message });
+
+  log('info', '🔁 Chạy lại toàn bộ: kiểm tra → vá → mô phỏng…');
+
+  const first = await buildFinalCheckReport(useCardStore.getState());
+  const before = first.problems;
+
+  let fixedCount = 0;
+  if (before > 0) {
+    const repair = await runAutoRepair();
+    fixedCount = repair.fixedCount;
+  }
+
+  // Báo cáo CUỐI đã bao gồm bước mô phỏng (xem buildFinalCheckReport) — đọc lại sau khi vá.
+  const last = await buildFinalCheckReport(useCardStore.getState());
+  for (const line of last.lines) {
+    const level = line.startsWith('❌') ? 'error' : line.startsWith('⚠️') ? 'warning' : 'info';
+    log(level, line);
+  }
+
+  const simOk = !last.lines.some(l => l.startsWith('❌ Mô phỏng:'));
+  if (last.problems === 0) log('success', '🎉 Sạch hoàn toàn — kiểm tra, vá và mô phỏng đều qua.');
+  else log('warning', `⚠️ Còn ${last.problems} vấn đề (đã vá được ${fixedCount} chỗ). Chỗ nào cần AI sáng tác thì chạy lại bước tương ứng.`);
+
+  return { before, after: last.problems, fixedCount, simOk, report: last.lines };
 }
 
 // ═══ EXECUTE STEP ═══
@@ -942,6 +987,46 @@ export async function buildFinalCheckReport(
     if (!NEW_CODES.has(iss.code)) continue;
     lines.push(`❌ ${iss.message}${iss.where ? ` (${iss.where})` : ''}`);
     problems++;
+  }
+
+  // ─── (bugNeedFix/98) BƯỚC MÔ PHỎNG — chạy thử vòng đời card trước khi coi là xong ───
+  // Mọi phép kiểm ở trên đều TĨNH: "có entry chưa", "regex compile chưa". Chúng không trả lời
+  // được câu hỏi thật: nạp biến khởi tạo lên rồi thì schema / lệnh cập nhật / EJS có ăn khớp
+  // với nhau không. Harness cũ có làm một phần nhưng CHỈ khi initvar là JSON — mà thẻ do chính
+  // app sinh lại xuất YAML, nên với đúng thẻ của mình phép kiểm sâu nhất luôn bị bỏ qua im lặng.
+  {
+    const initEntryForSim = entries.find(en =>
+      String(en.content || '').includes('[initvar]') || String(en.comment || '').toLowerCase().includes('initvar'));
+    if (initEntryForSim) {
+      const readers: Array<{ name: string; content: string }> = [
+        ...entries
+          .filter(en => isPreprocessingEntry(String(en.content || '')))
+          .map(en => ({ name: `EJS "${en.comment || '?'}"`, content: String(en.content || '') })),
+        ...regexScripts
+          .filter(rs => /getvar\(|stat_data/.test(String(rs.replaceString || '')))
+          .map(rs => ({ name: `Script "${rs.scriptName || '?'}"`, content: String(rs.replaceString || '') })),
+      ];
+      const sim = simulateCard({
+        initVarContent: String(initEntryForSim.content || ''),
+        schema: schema && Array.isArray(schema.fields) && schema.fields.length ? schema : null,
+        updateContents: entries
+          .filter(en => /<UpdateVariable>/i.test(String(en.content || '')))
+          .map(en => String(en.content || '')),
+        readerSources: readers,
+      });
+      const errs = sim.issues.filter(i => i.level === 'error');
+      const warns = sim.issues.filter(i => i.level === 'warning');
+      for (const i of errs) { lines.push(`❌ Mô phỏng: ${i.message}`); problems++; }
+      for (const i of warns) lines.push(`⚠️ Mô phỏng: ${i.message}`);
+      if (errs.length === 0) {
+        lines.push(
+          `✅ Mô phỏng chạy sạch: nạp ${sim.stats.initVars} biến từ initvar`
+          + (sim.stats.schemaLeaves ? `, khớp ${sim.stats.schemaLeaves} biến schema` : '')
+          + (sim.stats.formWritesOk ? `, ghi-đọc lại ${sim.stats.formWritesOk} biến OK` : '')
+          + (sim.stats.ejsRefsChecked ? `, ${sim.stats.ejsRefsChecked} tham chiếu biến trong EJS/giao diện đều có thật` : ''),
+        );
+      }
+    }
   }
 
   // 3b. (bug 72) Giao diện không hiện — 2 nguyên nhân im lặng nhất, kiểm thẳng ở đây:

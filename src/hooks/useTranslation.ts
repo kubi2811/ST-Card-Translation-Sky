@@ -21,6 +21,7 @@ import { validateMvuVariables, autoFixMvuVariables, generateSyncReport, buildEnt
 import { buildEffectivePrompt } from '../utils/promptBuilder';
 import { applyRegexAlternation } from '../scriptTranslate/regexAlternation';
 import { surgicalTranslate, verifyCodeStructureParity, detectInventedDeclarations } from '../utils/surgical';
+import { repairUnquotedObjectKeys, repairUnquotedObjectKeysInHtml } from '../utils/repairObjectKeys';
 import { parsePatchOutput, applyPatches, validatePatchResult } from '../utils/patchEngine';
 import { injectMvuZodSystem } from '../utils/mvuGenerator';
 import { unifyCrossStrategyDicts } from '../utils/crossStrategySync';
@@ -1000,6 +1001,23 @@ export function useTranslation() {
       // Field là SCRIPT JS trần (TavernHelper/JS-Slash-Runner) mà bản GỐC parse sạch (acorn, cả mode
       // module lẫn script) thì bản DỊCH cũng PHẢI parse sạch. Vỡ (cụt output, đứt regex/chuỗi…) →
       // retry; hết retry → GIỮ NGUYÊN bản gốc + chỉ rõ DÒNG lỗi. Card không bao giờ xuất script liệt.
+      // ═══ (bugNeedFix/109) VÁ KHOÁ OBJECT MẤT NHÁY — chạy TRƯỚC guard cú pháp ═══
+      // Bản gốc `{ 魔力值:80, AP上限:8 }` hợp lệ vì chữ Hán là định danh JS. Dịch ra
+      // `APGiới hạn:8` (có khoảng trắng, vẫn không nháy) là SyntaxError ⇒ cả <script> chết ⇒
+      // user thấy "mất mục" (giao diện biến mất). Vá tất định, chỉ nhận khi code hết lỗi thật.
+      if (translated && translated !== field.original) {
+        const keyFix = /<script[^>]*>/i.test(translated)
+          ? repairUnquotedObjectKeysInHtml(translated)
+          : repairUnquotedObjectKeys(translated);
+        if (keyFix.repaired) {
+          translated = keyFix.code;
+          store.addLog('info',
+            `🔧 ${field.label}: bọc nháy ${keyFix.fixed.length} khoá bị dịch thành có khoảng trắng ` +
+            `(${keyFix.fixed.slice(0, 3).join(', ')}${keyFix.fixed.length > 3 ? '…' : ''}) — nếu để nguyên thì cả script chết, giao diện mất sạch.`
+          );
+        }
+      }
+
       if (translated && translated !== field.original && isLikelyJsScript(field.original) && jsParseErrorAny(field.original) === null) {
         const jsErr = jsParseErrorAny(translated);
         if (jsErr) {

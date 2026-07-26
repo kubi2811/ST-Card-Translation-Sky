@@ -8,6 +8,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import type { FieldGroup, TranslationField, TranslationStatus } from '../types/card';
 import { RotateCcw, AlertTriangle, CheckCircle2, Clock, ArrowLeftRight, BarChart3, Ban, Search, X, Copy, Check, Eye, Wand2, Zap, Brain, Download } from 'lucide-react';
 import { countCjkText } from '../utils/cjk';
+import { TranslatedTextarea } from './TranslatedTextarea';
 
 const RAGDebugPanel = lazy(() => import('./RAGDebugPanel'));
 
@@ -970,10 +971,10 @@ const VirtualFieldTableRow = memo(({
 
       {/* Translated */}
       <div className="field-grid-cell field-translated">
-        <textarea
+        {/* (bugNeedFix/107) Ô này phải chịu được bộ gõ tiếng Việt: xem TranslatedTextarea. */}
+        <TranslatedTextarea
           value={field.translated}
-          onChange={(e) => {
-            const val = e.target.value;
+          onCommit={(val) => {
             updateField(field.path, {
               translated: val,
               status: val.trim() ? 'done' : 'pending',

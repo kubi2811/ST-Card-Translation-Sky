@@ -20,6 +20,7 @@ import type { AgentIssue, AgentPlan, AgentStepSpec, GoalAgentDomain } from './go
 import { applyRegex, validateRegex } from '../regexEngine/applyRegex';
 import { validateReplaceString } from '../regexEngine/regexValidator';
 import { buildSchemaContextForBatch } from '../mvuzod/schemaContextBuilder';
+import { buildRecipeCatalogForPrompt } from '../regexEngine/regexRecipes';
 
 // ═══ Kiểu dữ liệu ═════════════════════════════════════════════════════════
 
@@ -43,6 +44,19 @@ export interface RegexAgentContext {
 const PLAN_SYSTEM = `Bạn là kiến trúc sư Regex Script cho SillyTavern. Nhận YÊU CẦU của user,
 hãy TỰ QUYẾT cần mấy regex script và mỗi cái làm gì. Mỗi bước = MỘT script trọn vẹn.
 Thường 1-3 script là đủ, tối đa 5 — đừng chẻ vụn một việc thành nhiều script.
+
+═══ REGEX LÀM ĐƯỢC NHIỀU HƠN "ẨN/HIỆN CHỮ" ═══
+Regex trong SillyTavern là cầu nối biến TEXT của AI thành GIAO DIỆN CHẠY ĐƯỢC. Ngoài việc
+ẩn/định dạng, nó làm được: nhạc nền đổi theo diễn biến truyện, mini game (xúc xắc, nút lựa
+chọn nhánh), thanh chỉ số, khối gấp/mở… Cách làm chung: quy ước MỘT MARKER ngắn mà AI viết
+ra trong truyện (ví dụ [audio:chien-truong], [roll:1d20]), rồi regex bắt marker đó và thay
+bằng khối HTML+JS tương ứng.
+
+CÔNG THỨC CÓ SẴN trong app (ưu tiên gợi ý user dùng, KHÔNG viết lại từ đầu — chúng đã được
+kiểm chuẩn ST và luôn compile):
+${buildRecipeCatalogForPrompt()}
+Nếu yêu cầu của user TRÙNG một công thức trên, hãy ghi rõ trong "detail" là "dùng công thức
+<id>" để user bấm nút thư viện thay vì tốn call AI; chỉ tự viết khi user cần thứ khác.
 
 Trả về DUY NHẤT JSON:
 {
@@ -69,6 +83,16 @@ const STEP_SYSTEM = `Bạn là chuyên gia viết Regex Script cho SillyTavern. 
   script trang trí/render. promptOnly=true: ngược lại, chỉ sửa prompt gửi model.
 - QUY TẮC AN TOÀN: pattern phải KHÔNG tham lam khi bắt khối (dùng [\\\\s\\\\S]*? thay vì .* cho
   nhiều dòng), neo bằng thẻ mở/đóng cụ thể; TUYỆT ĐỐI không viết pattern nuốt cả tin nhắn.
+
+═══ KHI SINH WIDGET (audio / mini game / thanh chỉ số) — CHUẨN ST BẮT BUỘC ═══
+- Bọc TOÀN BỘ khối HTML trong fence \`\`\`html … \`\`\` và PHẢI đóng fence; thiếu fence đóng là
+  SillyTavern nuốt luôn phần sau của tin nhắn.
+- Gắn hành vi bằng addEventListener trong <script> thường (KHÔNG type="module"). Nếu buộc phải
+  dùng onclick= inline thì hàm PHẢI gán ra global: window.tenHam = tenHam.
+- Marker nên ẩn khỏi prompt bằng MỘT script thứ hai cùng pattern, replaceString rỗng,
+  promptOnly=true + markdownOnly=false — nếu không, mỗi lượt chat context lại gánh marker thừa.
+- Dữ liệu thay đổi (danh sách nhạc, bảng vật phẩm) nên để trong ENTRY LOREBOOK và đọc qua biến
+  window, đừng nhúng cứng vào regex — sửa nội dung không phải sửa lại script.
 
 Trả về DUY NHẤT JSON:
 {

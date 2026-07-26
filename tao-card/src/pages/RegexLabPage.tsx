@@ -10,13 +10,14 @@ import {
   Puzzle, Plus, Trash2, Copy, ChevronDown, ChevronRight, X, Check,
   ToggleLeft, ToggleRight, GripVertical, AlertTriangle,
   Eye, Code, Layers, FileCode, Braces, CheckCircle2, XCircle, AlertCircle,
-  Wand2, Blocks,
+  Wand2, Blocks, Library,
 } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { useCardStore } from '../store/cardStore';
 import { useToastStore } from '../store/toastStore';
 import { RegexAgentPanel } from '../components/regexlab/RegexAgentPanel';
 import { buildProgrammaticRegex, type ProgrammaticComponent } from '../lib/mvuzod/programmaticRegexBuilder';
+import { REGEX_RECIPES, buildRecipeScripts, type RecipeId } from '../lib/regexEngine/regexRecipes';
 import type { MVUZODSchema } from '../types/mvuzod.types';
 import { cn } from '../lib/utils';
 import { applyRegex, applyAllRegex, validateRegex } from '../lib/regexEngine/applyRegex';
@@ -97,6 +98,34 @@ export function RegexLabPage() {
       useToastStore.getState().error(`Sinh từ schema lỗi: ${e instanceof Error ? e.message : String(e)}`);
     }
   }, [schema, card.data.name, card.data.extensions.regex_scripts, updateCard]);
+
+  /**
+   * (103b) THƯ VIỆN CÔNG THỨC — audio theo diễn biến, mini game, thanh chỉ số…
+   * Sinh TĨNH nên luôn compile + luôn đóng fence + đúng chuẩn ST; user chỉ việc chọn.
+   */
+  const [showRecipes, setShowRecipes] = useState(false);
+  const handleAddRecipe = useCallback((id: RecipeId) => {
+    try {
+      const scripts = buildRecipeScripts(id);
+      let firstId: string | null = null;
+      updateCard(c => {
+        for (const s of scripts) {
+          // Idempotent: cùng tên thì thay, bấm nhiều lần không đẻ bản sao.
+          c.data.extensions.regex_scripts = c.data.extensions.regex_scripts.filter(x => x.scriptName !== s.scriptName);
+          const sid = uuidv4();
+          if (!firstId) firstId = sid;
+          c.data.extensions.regex_scripts.push({ ...s, id: sid });
+        }
+      });
+      if (firstId) setSelectedId(firstId);
+      const r = REGEX_RECIPES.find(x => x.id === id);
+      useToastStore.getState().success(
+        `Đã thêm "${r?.label ?? id}" (${scripts.length} script). Cho AI/thẻ viết marker mẫu: ${r?.sample.split('\n')[0] ?? ''}`);
+      setShowRecipes(false);
+    } catch (e) {
+      useToastStore.getState().error(`Thêm công thức lỗi: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, [updateCard]);
 
   const selectedScript = useMemo(() => scripts.find(s => s.id === selectedId) ?? null, [scripts, selectedId]);
 
@@ -238,6 +267,12 @@ export function RegexLabPage() {
                 </div>
               )}
             </div>
+            {/* (103b) Thư viện công thức — audio theo diễn biến, mini game… */}
+            <button onClick={() => setShowRecipes(true)}
+              title="Công thức dựng sẵn: nhạc nền đổi theo diễn biến, mini game xúc xắc/lựa chọn, thanh chỉ số, khối gấp mở — sinh tĩnh, 0 call AI"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors">
+              <Library className="w-3.5 h-3.5 text-amber-400" /> Thư viện công thức
+            </button>
             {/* (103.1) Sinh AI */}
             <button onClick={() => setShowAgent(true)}
               title="Mô tả nhu cầu bằng lời thường — AI sinh regex, bị ép compile + chạy thử thật trước khi vào card"
@@ -591,6 +626,49 @@ export function RegexLabPage() {
           </div>
         </div>
       </div>
+
+      {/* (103b) Drawer Thư viện công thức */}
+      {showRecipes && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={e => { if (e.target === e.currentTarget) setShowRecipes(false); }}>
+          <div className="bg-card border border-border rounded-xl w-full max-w-lg flex flex-col max-h-[85vh] shadow-2xl">
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-border bg-muted/20 shrink-0">
+              <div className="flex items-center gap-2">
+                <Library className="w-4 h-4 text-amber-400" />
+                <h3 className="font-semibold text-sm">Thư viện công thức regex</h3>
+              </div>
+              <button onClick={() => setShowRecipes(false)}
+                className="p-1 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-4 space-y-2 overflow-y-auto scrollbar-thin">
+              <p className="text-[11px] text-muted-foreground">
+                Regex không chỉ để ẩn/hiện chữ — nó biến text của AI thành giao diện chạy được.
+                Mỗi công thức dựng sẵn <strong>tĩnh</strong> (0 call AI, luôn compile, luôn đóng fence);
+                bạn chỉ cần bảo AI/thẻ viết ra <em>marker</em> tương ứng trong truyện.
+              </p>
+              {REGEX_RECIPES.map(r => (
+                <div key={r.id} className="rounded-lg border border-border overflow-hidden">
+                  <div className="px-3 py-2 flex items-start gap-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-medium">{r.label}</p>
+                      <p className="text-[10px] text-muted-foreground mt-0.5">{r.desc}</p>
+                      <code className="text-[10px] font-mono text-amber-400/90 mt-1 block">
+                        marker: {r.sample.split('\n')[0]}
+                      </code>
+                    </div>
+                    <button onClick={() => handleAddRecipe(r.id)}
+                      className="shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors">
+                      <Plus className="w-3 h-3" /> Thêm
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* (103.1) Drawer Sinh AI */}
       {showAgent && (

@@ -427,6 +427,41 @@ export function AutoCreatorPage() {
             <p className="text-[10px] text-muted-foreground/70 text-right">{ui.acIdeaChars.replace('{n}', String(store.config.idea.length))}</p>
           </div>
 
+          {/* (Goal 104b) LOẠI THẺ — thẻ nhân vật vs game/thế giới. Đây không phải chuyện lời văn:
+              nó đổi hẳn đối tượng mà mọi bước AI viết về, và chế độ game bỏ luôn System prompt. */}
+          <div className="space-y-2">
+            <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Loại thẻ</label>
+            <div className="grid grid-cols-2 gap-2">
+              {([
+                { kind: 'character' as const, icon: '👤', title: 'Thẻ nhân vật', desc: 'Trò chuyện/nhập vai với một nhân vật cụ thể.' },
+                { kind: 'game_world' as const, icon: '🌍', title: 'Game / Thế giới', desc: 'Người chơi bước vào thế giới, AI làm quản trò. Bỏ System prompt.' },
+              ]).map(o => {
+                const active = store.config.cardKind === o.kind;
+                return (
+                  <button key={o.kind} disabled={store.isRunning}
+                    onClick={() => store.setCardKind(o.kind)}
+                    className={cn(
+                      'text-left p-3 rounded-xl border transition-colors disabled:opacity-50',
+                      active ? 'border-primary/50 bg-primary/5' : 'border-border hover:bg-muted/40',
+                    )}>
+                    <div className="text-xs font-medium flex items-center gap-1.5">
+                      <span>{o.icon}</span>{o.title}
+                      {active && <Check className="w-3 h-3 text-primary ml-auto" />}
+                    </div>
+                    <p className="text-[10px] text-muted-foreground mt-1 leading-snug">{o.desc}</p>
+                  </button>
+                );
+              })}
+            </div>
+            {store.config.cardKind === 'game_world' && (
+              <p className="text-[10px] text-amber-400/90">
+                🌍 Chế độ game: mọi bước viết theo hướng thế giới vận hành (luật chơi, phe phái, vòng lặp chơi,
+                NPC là dân cư có chỉ số) và bước <strong>System prompt đã được bỏ</strong> — luật chơi sống trong
+                lorebook + entry [mvu_update] + giao diện, không bị preset của người chơi đè.
+              </p>
+            )}
+          </div>
+
           {/* (User 19/07) Yêu cầu / quy tắc TOÀN CỤC cho AI — áp cho MỌI bước pipeline */}
           <div className="space-y-2">
             <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">{ui.acUserRules}</label>

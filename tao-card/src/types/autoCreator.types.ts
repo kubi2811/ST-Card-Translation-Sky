@@ -3,6 +3,9 @@ import type { EntryCategory, CardType } from '../lib/worldbook/worldbookConfig';
 // ═══ Phương pháp Pipeline ═══
 export type PipelineMethod = 'standard' | 'minh_nguyet';
 
+/** (Goal 104b) Loại thẻ đang tạo — quyết định prompt của MỌI bước, không chỉ lời văn. */
+export type CardKind = 'character' | 'game_world';
+
 // ═══ Các bước pipeline — Standard ═══
 // (User 19/07) Thứ tự CHẠY do ALL_STEPS trong autoCreatorStore quyết định — mvuzod nay chạy
 // TRƯỚC regex để regex bám đúng tên biến schema; game_ui sau mvuzod; final_check cuối cùng.
@@ -164,6 +167,16 @@ export interface AutoCreatorConfig {
    * (vd "Không NSFW", "Văn phong cổ trang", "Mọi tên riêng dùng Hán-Việt").
    */
   userRules: string;
+  /**
+   * (Goal 104b — yêu cầu gốc của user) Thẻ này là THẺ NHÂN VẬT truyền thống, hay là một
+   * GAME / THẾ GIỚI hoàn chỉnh? Hai thứ này viết khác hẳn nhau:
+   *  - 'character': mô tả một con người — tính cách, ngoại hình, quan hệ.
+   *  - 'game_world': mô tả một THẾ GIỚI VẬN HÀNH ĐƯỢC — luật chơi, hệ thống, vòng lặp
+   *    gameplay, người chơi là nhân vật chính, AI đóng vai quản trò/narrator.
+   * Chế độ game_world cũng BỎ System prompt theo yêu cầu: luật chơi sống trong lorebook +
+   * entry [mvu_update] + giao diện, không nhét vào system prompt (dễ bị preset của user đè).
+   */
+  cardKind: CardKind;
   pipelineMethod: PipelineMethod;        // 'standard' | 'minh_nguyet'
   selectedSteps: AutoCreatorStep[];      // Các bước đã bật — Standard
   selectedMnSteps: MinhNguyetStep[];     // Các bước đã bật — Minh Nguyệt

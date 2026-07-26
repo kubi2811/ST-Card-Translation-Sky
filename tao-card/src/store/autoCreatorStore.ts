@@ -7,6 +7,7 @@ import type {
   MinhNguyetStep,
   AnyPipelineStep,
   PipelineMethod,
+  CardKind,
   PipelineLog,
   StepStatus,
   StepPreview,
@@ -41,6 +42,8 @@ interface AutoCreatorState {
 
   // Actions — Config
   setIdea: (idea: string) => void;
+  /** (104b) Đổi loại thẻ — game_world tự bỏ bước system_prompt khỏi danh sách chạy. */
+  setCardKind: (kind: CardKind) => void;
   setUserRules: (userRules: string) => void;
   setPipelineMethod: (method: PipelineMethod) => void;
   toggleStep: (step: AutoCreatorStep) => void;
@@ -137,6 +140,7 @@ export const useAutoCreatorStore = create<AutoCreatorState>()(persist((set, get)
   config: {
     idea: '',
     userRules: '',
+    cardKind: 'character',
     pipelineMethod: 'minh_nguyet',  // Minh Nguyệt = default
     selectedSteps: [...ALL_STEPS],
     selectedMnSteps: [...DEFAULT_MN_STEPS],
@@ -192,6 +196,20 @@ export const useAutoCreatorStore = create<AutoCreatorState>()(persist((set, get)
 
   // ─── Config actions ───
   setIdea: (idea) => set((s) => ({ config: { ...s.config, idea } })),
+  setCardKind: (cardKind) => set((s) => ({
+    config: {
+      ...s.config,
+      cardKind,
+      // (104b) "bỏ System prompt" cho thẻ game/thế giới: luật chơi thuộc về lorebook +
+      // [mvu_update] + giao diện. Đổi về character thì trả lại bước đó.
+      selectedSteps: cardKind === 'game_world'
+        ? s.config.selectedSteps.filter((x) => x !== 'system_prompt')
+        : (s.config.selectedSteps.includes('system_prompt')
+            ? s.config.selectedSteps
+            : ([...s.config.selectedSteps, 'system_prompt'] as AutoCreatorStep[])
+                .sort((a, b) => ALL_STEPS.indexOf(a) - ALL_STEPS.indexOf(b))),
+    },
+  })),
 
   // (User 19/07) Yêu cầu/quy tắc toàn cục — áp cho MỌI bước pipeline.
   setUserRules: (userRules) => set((s) => ({ config: { ...s.config, userRules } })),

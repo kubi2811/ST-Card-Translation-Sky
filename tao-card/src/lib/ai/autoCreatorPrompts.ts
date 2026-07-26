@@ -5,6 +5,7 @@
 
 import { MVU_WORKING_CARD_EXAMPLE } from '../mvuzod/mvuReference';
 import type {
+  CardKind,
   CardBlueprint,
   BasicInfoStepConfig,
   RegexStepConfig,
@@ -48,6 +49,36 @@ Thế lực: ${bp.worldStructure.factions.join(', ')}
 Tone: ${bp.toneAndStyle.narrativeVoice}, ${bp.toneAndStyle.mood}
 Ngôn ngữ: ${bp.toneAndStyle.language}
 Độ phức tạp: ${bp.estimatedComplexity}
+`;
+}
+
+
+/**
+ * (Goal 104b — yêu cầu gốc của user) KHỐI CHỈ THỊ "THẺ GAME / THẾ GIỚI".
+ * "chúng ta không phải là làm một card truyền thống (thẻ nhân vật) mà đây là gần như một game
+ *  một thế giới hoàn chỉnh, bỏ System prompt".
+ *
+ * Chèn vào ĐẦU mọi prompt bước khi cardKind='game_world' — chỉ đổi lời văn thôi không đủ, phải
+ * đổi hẳn thứ AI coi là "đối tượng chính": không phải một con người mà là một THẾ GIỚI VẬN HÀNH.
+ */
+export function gameWorldDirective(kind: CardKind | undefined): string {
+  if (kind !== 'game_world') return '';
+  return `
+═══ ⚠️ ĐÂY KHÔNG PHẢI THẺ NHÂN VẬT — ĐÂY LÀ MỘT GAME / THẾ GIỚI HOÀN CHỈNH ═══
+Người chơi KHÔNG trò chuyện với một nhân vật. Họ BƯỚC VÀO một thế giới và chơi trong đó; AI
+đóng vai QUẢN TRÒ (narrator/game master) điều hành thế giới ấy.
+
+VÌ VẬY, MỌI NỘI DUNG BẠN VIẾT PHẢI THEO HƯỚNG NÀY:
+1. Chủ thể của thẻ là THẾ GIỚI + HỆ THỐNG, không phải một cá nhân. Không viết "cô ấy cao 1m65,
+   thích ăn ngọt" như thẻ waifu; hãy viết luật vận hành, phe phái, tài nguyên, hiểm hoạ.
+2. Phải có VÒNG LẶP CHƠI rõ ràng: người chơi làm gì mỗi lượt, thắng/thua/tiến bộ ra sao, cái gì
+   đo được bằng chỉ số (biến MVU).
+3. NPC là DÂN CƯ của thế giới — mỗi NPC gắn với địa điểm/phe/vai trò và có chỉ số, không phải
+   nhân vật chính.
+4. Người chơi là NHÂN VẬT CHÍNH. Nhân xưng hướng về {{user}} như người đang chơi.
+5. Văn phong: quản trò khách quan, mô tả hậu quả hành động, đưa lựa chọn — KHÔNG nhập vai tán tỉnh.
+6. KHÔNG dùng System prompt để chứa luật chơi: luật sống trong lorebook, entry [mvu_update] và
+   giao diện. (Bước system_prompt đã bị bỏ khỏi pipeline ở chế độ này.)
 `;
 }
 

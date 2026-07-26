@@ -1,7 +1,51 @@
 // (Goal 104) Auto v4 — DAG phụ thuộc + final_check harness đủ vòng + EJS parse.
 import { describe, it, expect } from 'vitest';
 import { STEP_DEPS, buildFinalCheckReport } from '../autoCreatorPipeline';
+import { gameWorldDirective } from '../autoCreatorPrompts';
+import { useAutoCreatorStore } from '../../../store/autoCreatorStore';
 import type { AutoCreatorStep } from '../../../types';
+
+// ═══ 104b — chế độ "Game / Thế giới" + bỏ System prompt (yêu cầu gốc trong ảnh Excel) ═══
+
+describe('cardKind game_world (104b)', () => {
+  it('thẻ nhân vật → KHÔNG chèn chỉ thị gì (giữ nguyên hành vi cũ)', () => {
+    expect(gameWorldDirective('character')).toBe('');
+    expect(gameWorldDirective(undefined)).toBe('');
+  });
+
+  it('thẻ game/thế giới → chỉ thị nói rõ đối tượng là THẾ GIỚI, có vòng lặp chơi, NPC là dân cư', () => {
+    const d = gameWorldDirective('game_world');
+    expect(d).toContain('KHÔNG PHẢI THẺ NHÂN VẬT');
+    expect(d).toContain('VÒNG LẶP CHƠI');
+    expect(d.toLowerCase()).toContain('quản trò');
+    expect(d).toContain('System prompt');
+  });
+
+  it('chọn Game/Thế giới → BỎ bước system_prompt; chọn lại Nhân vật → trả bước đó về đúng thứ tự', () => {
+    const st = useAutoCreatorStore.getState();
+    st.setCardKind('game_world');
+    let steps = useAutoCreatorStore.getState().config.selectedSteps;
+    expect(steps).not.toContain('system_prompt');
+    // các bước khác không bị đụng
+    expect(steps).toContain('lorebook');
+    expect(steps).toContain('mvuzod');
+
+    useAutoCreatorStore.getState().setCardKind('character');
+    steps = useAutoCreatorStore.getState().config.selectedSteps;
+    expect(steps).toContain('system_prompt');
+    // đúng thứ tự chạy: system_prompt sau regex, trước first_message
+    expect(steps.indexOf('system_prompt')).toBeGreaterThan(steps.indexOf('regex'));
+    expect(steps.indexOf('system_prompt')).toBeLessThan(steps.indexOf('first_message'));
+  });
+
+  it('bấm Game/Thế giới 2 lần không nhân đôi bước nào', () => {
+    const st = useAutoCreatorStore.getState();
+    st.setCardKind('character');
+    useAutoCreatorStore.getState().setCardKind('character');
+    const steps = useAutoCreatorStore.getState().config.selectedSteps;
+    expect(steps.filter(s => s === 'system_prompt')).toHaveLength(1);
+  });
+});
 
 // ═══ 104.2 — DAG ═══
 

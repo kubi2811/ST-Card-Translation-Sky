@@ -41,6 +41,7 @@ import {
   buildSystemPromptPrompt,
   buildFirstMessagePrompt,
   buildMesExamplePrompt,
+  gameWorldDirective,
 } from './autoCreatorPrompts';
 
 export interface AutoCreatorContext {
@@ -108,7 +109,10 @@ export async function runAutoCreatorPipeline(ctx: AutoCreatorContext) {
   
   let blueprint: CardBlueprint | null = null;
   try {
-    blueprint = await analyzeIdea(config.idea, ctx.profile, ctx.generationParams, abortController.signal);
+    blueprint = await analyzeIdea(
+      gameWorldDirective(config.cardKind) + config.idea,
+      ctx.profile, ctx.generationParams, abortController.signal,
+    );
     store.setBlueprint(blueprint);
     store.addLog({
       step: 'blueprint',
@@ -387,7 +391,9 @@ async function executeStep(
   const freshCardStr = JSON.stringify(cardStore.card.data, null, 2);
 
   const callAIAndExtract = async (prompt: string): Promise<unknown> => {
-    let finalPrompt = prompt;
+    // (104b) Chế độ "game/thế giới": neo chỉ thị ở ĐẦU prompt — model đọc trước nhất thì mới
+    // đổi được thứ nó coi là đối tượng chính (thế giới vận hành, không phải một con người).
+    let finalPrompt = gameWorldDirective(config.cardKind) + prompt;
 
     // Lần thử trước hỏng vì gì thì nói thẳng, đừng gửi lại y hệt prompt cũ rồi mong khác đi.
     if (lastError) {
@@ -490,7 +496,8 @@ ${response.text}`;
 
     case 'lorebook': {
       const lbConfig = config.stepConfigs.lorebook;
-      const topicPrompt = buildLorebookBatchPrompt(config.idea, freshCardStr, blueprint, lbConfig.promptOverride, lbConfig.promptMode);
+      const topicPrompt = gameWorldDirective(config.cardKind)
+        + buildLorebookBatchPrompt(config.idea, freshCardStr, blueprint, lbConfig.promptOverride, lbConfig.promptMode);
 
       // (User 21/07 — bug 71) Thế giới lớn mà lorebook chỉ vài entry. Ba chốt chặn:
       // 1) TRẦN nới theo QUY MÔ thật của thế giới — blueprint đã liệt kê bao nhiêu thực thể

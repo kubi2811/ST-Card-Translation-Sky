@@ -8,6 +8,7 @@
  */
 
 import { OPENING_FORM_ANCHOR, STATUS_BAR_ANCHOR } from './regexAnchors';
+import { decideNumericBounds } from './numericSemantics';
 import type { MVUZODSchema, MVUZODField } from '../../types/mvuzod.types';
 import type { RegexScript } from '../../types/regex.types';
 import {
@@ -24,6 +25,7 @@ import {
   guessFieldIcon,
   guessBarColor,
   renderProgressBarHTML,
+  renderCounterHTML,
   renderDataCardHTML,
   renderPanelHTML,
   renderRecordListHTML,
@@ -259,13 +261,20 @@ function buildStatusBar(
 function buildSectionContent(section: SectionAnalysis, bindings: string[]): string {
   const parts: string[] = [];
 
-  // Numeric fields → progress bars
+  // Numeric fields → thanh tiến trình (chỉ khi CÓ trần) hoặc con số trần trụi (bộ đếm).
   if (section.numericFields.length > 0) {
     for (const nf of section.numericFields) {
-      const barColor = guessBarColor(nf.field.label);
-      const max = nf.maxValue ?? 100;
-      parts.push(renderProgressBarHTML(nf.elementId, nf.field.label, nf.icon, barColor, max));
-      bindings.push(generateFieldBindingJS(nf.keyPath, nf.elementId, 'number', max));
+      // (bugNeedFix/113) Có trần hữu hạn ⇒ thanh tiến trình (HP, VP, thang sao — tỉ lệ có nghĩa).
+      // Không trần ⇒ CHỈ hiện số (ngày, tiền, số lượng). Vẽ thanh cho tiền là vô nghĩa, mà tệ hơn
+      // là gợi cho người chơi tưởng 100 là mức tối đa.
+      if (nf.maxValue !== undefined) {
+        const barColor = guessBarColor(nf.field.label);
+        parts.push(renderProgressBarHTML(nf.elementId, nf.field.label, nf.icon, barColor, nf.maxValue));
+        bindings.push(generateFieldBindingJS(nf.keyPath, nf.elementId, 'number', nf.maxValue));
+      } else {
+        parts.push(renderCounterHTML(nf.elementId, nf.field.label, nf.icon));
+        bindings.push(generateFieldBindingJS(nf.keyPath, nf.elementId, 'number'));
+      }
     }
   }
 
@@ -505,10 +514,26 @@ function buildFormPage(
     parts.push(`</div></div>`);
   }
 
-  // Number fields → sliders
+  // Number fields → thanh trượt (có trần) hoặc ô nhập số (bộ đếm không trần).
   for (const nf of numbers) {
-    const min = nf.field.constraints?.clamp?.[0] ?? nf.field.constraints?.min ?? 0;
-    const max = nf.field.constraints?.clamp?.[1] ?? nf.field.constraints?.max ?? 100;
+    // (bugNeedFix/113) Slider `min=0 max=100` cho tiền/ngày là sai từ gốc: người chơi không thể
+    // nhập 5000 đồng, và kéo hết thanh cũng chỉ tới 100.
+    const bounds = decideNumericBounds(nf.field);
+    if (!bounds.bounded) {
+      const def0 = typeof nf.field.defaultValue === 'number' ? nf.field.defaultValue : 0;
+      parts.push(
+        `<div class="stcs-slider-group">` +
+        `<div class="stcs-slider-header">` +
+        `<span class="stcs-slider-label">${nf.icon} ${nf.field.label}</span>` +
+        `</div>` +
+        `<input type="number" class="stcs-input" id="${nf.elementId}-slider" value="${def0}"` +
+        (bounds.min !== undefined ? ` min="${bounds.min}"` : '') + ` step="1">` +
+        `</div>`,
+      );
+      continue;
+    }
+    const min = bounds.min ?? 0;
+    const max = bounds.max!;
     const def = typeof nf.field.defaultValue === 'number' ? nf.field.defaultValue : Math.floor((min + max) / 2);
     const sliderId = `${nf.elementId}-slider`;
 
@@ -579,7 +604,7 @@ function buildSummaryPage(pageIndex: number): string {
 
 function buildSubmitHandler(analysis: SchemaAnalysis): string {
   // Build field → stat_data path mappings
-  const mappings: Array<{ inputId: string; path: string[]; type: string }> = [];
+  const mappings: EditableMapping[] = [];
   for (const section of analysis.sections) {
     collectEditableMappings(section, mappings);
   }
@@ -616,38 +641,127 @@ function buildSubmitHandler(analysis: SchemaAnalysis): string {
             }
             cmds.push("_.set('" + String(path).replace(/'/g, "\\\\'") + "', " + lit + ');//form thiết lập');
         });
-        if (!cmds.length) return;
+        // (bugNeedFix/114) TUYỆT ĐỐI KHÔNG im lặng bỏ về. Bản cũ thoát ngay khi danh sách lệnh
+        // rỗng, không log không toast — mà vì id lệch nên nó LUÔN rỗng. Đó là lý do bug sống lâu:
+        // user tưởng đã lưu. Nay nói thẳng chưa ghi được gì và vì sao.
+        if (!cmds.length) {
+            var ids = mappings.map(function(m) { return m.inputId; });
+            console.error('[STCS] Không thu được giá trị nào từ form. Cần các id: ' + ids.join(', ')
+                + ' — nhưng form chỉ có: ' + Object.keys(data).join(', '));
+            if (typeof toastr !== 'undefined') toastr.error('Chưa ghi được biến nào — form và bảng biến không khớp id. Xem Console.');
+            return;
+        }
+
+        var opts = { type: 'message', message_id: (typeof getCurrentMessageId === 'function') ? getCurrentMessageId() : 'latest' };
+
+        // Dựng sẵn cây stat_data cho đường ghi dự phòng (xem bên dưới).
+        var tree = {};
+        mappings.forEach(function(m) {
+            var val = data[m.inputId];
+            if (val === undefined) return;
+            var v;
+            if (m.type === 'number') { var n2 = Number(val); v = isFinite(n2) ? n2 : String(val); }
+            else if (m.type === 'boolean') { v = (val === true || val === 'true'); }
+            else { v = String(val); }
+            var node = tree, p = m.path;
+            for (var i = 0; i < p.length - 1; i++) { if (!node[p[i]] || typeof node[p[i]] !== 'object') node[p[i]] = {}; node = node[p[i]]; }
+            node[p[p.length - 1]] = v;
+        });
+
+        function reportOk(how) {
+            console.log('[STCS] Đã ghi biến (' + how + '):\\n' + cmds.join('\\n'));
+            if (typeof toastr !== 'undefined') toastr.success('Đã lưu thiết lập vào biến MVU.');
+        }
+
+        // ĐƯỜNG DỰ PHÒNG — học từ thẻ mẫu chạy đúng (bugNeedFix/114): TavernHelper BƠM SẴN
+        // \`insertOrAssignVariables\` vào iframe, nên nó luôn gọi được; còn \`Mvu\` thì MagVarUpdate
+        // gắn lên window.parent (window.parent.Mvu) và có thể chưa kịp nạp.
+        function writeViaTavernHelper() {
+            var TH = (typeof insertOrAssignVariables === 'function') ? { insertOrAssignVariables: insertOrAssignVariables }
+                   : (window.TavernHelper || (window.parent && window.parent.TavernHelper) || null);
+            if (!TH || typeof TH.insertOrAssignVariables !== 'function') {
+                console.error('[STCS] Không có đường ghi biến nào khả dụng (thiếu cả Mvu lẫn insertOrAssignVariables).');
+                if (typeof toastr !== 'undefined') toastr.error('Chưa ghi được biến: thiếu MVU và TavernHelper API.');
+                return;
+            }
+            Promise.resolve(TH.insertOrAssignVariables({ stat_data: tree }, opts))
+                .then(function() { reportOk('insertOrAssignVariables'); })
+                .catch(function(e) {
+                    console.error('[STCS] insertOrAssignVariables thất bại:', e);
+                    if (typeof toastr !== 'undefined') toastr.error('Ghi biến thất bại: ' + e);
+                });
+        }
 
         var M = (typeof Mvu !== 'undefined' && Mvu) ? Mvu
               : (window.Mvu ? window.Mvu : (window.parent && window.parent.Mvu ? window.parent.Mvu : null));
         if (!M || typeof M.parseMessage !== 'function' || typeof M.replaceMvuData !== 'function') {
-            console.error('[STCS] Mvu chưa sẵn sàng — cần MagVarUpdate + Tavern Helper ≥ 3.4.17');
-            if (typeof toastr !== 'undefined') toastr.error('MVU chưa sẵn sàng — chưa ghi được biến.');
+            console.warn('[STCS] Mvu chưa sẵn sàng — dùng đường ghi TavernHelper.');
+            writeViaTavernHelper();
             return;
         }
-        var opts = { type: 'message', message_id: (typeof getCurrentMessageId === 'function') ? getCurrentMessageId() : 'latest' };
         var oldData = M.getMvuData(opts);
         console.log('[STCS] Ghi biến qua Mvu.parseMessage:\\n' + cmds.join('\\n'));
         Promise.resolve(M.parseMessage(cmds.join('\\n'), oldData)).then(function(newData) {
-            if (!newData) { console.warn('[STCS] parseMessage không tạo thay đổi nào'); return; }
+            if (!newData) {
+                console.warn('[STCS] parseMessage không tạo thay đổi nào — thử đường TavernHelper.');
+                writeViaTavernHelper();
+                return;
+            }
             return Promise.resolve(M.replaceMvuData(newData, opts)).then(function() {
-                if (typeof toastr !== 'undefined') toastr.success('Đã lưu thiết lập vào biến MVU.');
+                reportOk('Mvu.parseMessage + replaceMvuData');
             });
         }).catch(function(e) {
-            console.error('[STCS] Ghi biến MVU thất bại:', e);
-            if (typeof toastr !== 'undefined') toastr.error('Ghi biến MVU thất bại: ' + e);
+            console.error('[STCS] Ghi biến qua Mvu thất bại, thử đường TavernHelper:', e);
+            writeViaTavernHelper();
         });
     }
 `;
 }
 
+/**
+ * (bugNeedFix/114) HẬU TỐ ID phải khớp ĐÚNG id thật của thẻ input trong form.
+ *
+ * Đây là gốc rễ của bug: form render input với id có hậu tố —
+ *     số        → `<id>-slider`   (thanh trượt hoặc ô nhập số)
+ *     chuỗi     → `<id>-input`
+ *     lựa chọn  → `<id>-cards`    (lưới thẻ, giá trị ở data-value của thẻ .selected)
+ *     bật/tắt   → `<id>-check`    (checkbox)
+ * …nhưng bảng `mappings` lại ghi id TRẦN (không hậu tố). Nên `data[m.inputId]` luôn `undefined`,
+ * mọi field bị bỏ qua, `cmds` rỗng và hàm `return` IM LẶNG — không lỗi, không toast. Người dùng
+ * thấy form nhận chữ, bấm Xác nhận thấy bảng tóm tắt hiện ra, nhưng trình quản lý biến trống
+ * trơn: đúng lời báo "chỉ mới đang nhập cho có, chứ chưa cập nhật vào Trình quản lý biến".
+ */
+type EditableKind = 'number' | 'string' | 'enum' | 'boolean';
+
+const INPUT_ID_SUFFIX: Record<EditableKind, string> = {
+  number: '-slider',
+  string: '-input',
+  enum: '-cards',
+  boolean: '-check',
+};
+
+export interface EditableMapping {
+  /** ID THẬT của thẻ input trong DOM (đã kèm hậu tố). */
+  inputId: string;
+  path: string[];
+  /** Kiểu để đổi giá trị sang literal đúng khi dựng lệnh _.set. */
+  type: EditableKind;
+}
+
 function collectEditableMappings(
   section: SectionAnalysis,
-  result: Array<{ inputId: string; path: string[]; type: string }>,
+  result: EditableMapping[],
 ): void {
-  for (const f of [...section.numericFields, ...section.stringFields, ...section.enumFields, ...section.booleanFields]) {
-    if (!f.field.constraints?.readOnly) {
-      result.push({ inputId: f.elementId, path: f.keyPath, type: f.field.type });
+  const buckets: Array<[EditableKind, typeof section.numericFields]> = [
+    ['number', section.numericFields],
+    ['string', section.stringFields],
+    ['enum', section.enumFields],
+    ['boolean', section.booleanFields],
+  ];
+  for (const [kind, list] of buckets) {
+    for (const f of list) {
+      if (f.field.constraints?.readOnly) continue;
+      result.push({ inputId: `${f.elementId}${INPUT_ID_SUFFIX[kind]}`, path: f.keyPath, type: kind });
     }
   }
   for (const nested of section.nestedSections) {
@@ -837,9 +951,12 @@ function findHeaderFields(analysis: SchemaAnalysis): FieldAnalysis[] {
 
 function getMaxValue(field: MVUZODField): number | undefined {
   if (field.type !== 'number') return undefined;
-  if (field.constraints?.clamp) return field.constraints.clamp[1];
-  if (field.constraints?.max !== undefined) return field.constraints.max;
-  return 100; // default max for progress bars
+  // (bugNeedFix/113) TRƯỚC ĐÂY: không khai trần thì `return 100`. Hệ quả đúng như user báo —
+  // "Ngày (Thời gian trôi) 1/100", "Tiền tệ Veil Coin 75/100", kèm thanh tiến trình vô nghĩa.
+  // Ngày, tiền, số lượng vật phẩm là BỘ ĐẾM: không có trần, ý nghĩa nằm ở con số chứ không ở
+  // tỉ lệ. Nay hỏi numericSemantics: chỉ biến thật sự có trần mới trả về max (⇒ mới vẽ thanh).
+  const d = decideNumericBounds(field);
+  return d.bounded ? d.max : undefined;
 }
 
 /** Sanitize a label string into a safe DOM ID fragment */

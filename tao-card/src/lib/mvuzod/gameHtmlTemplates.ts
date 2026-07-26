@@ -1036,6 +1036,26 @@ export function renderProgressBarHTML(
 }
 
 /**
+ * (bugNeedFix/113) BỘ ĐẾM không trần — chỉ hiện con số, KHÔNG vẽ thanh tiến trình.
+ *
+ * Ngày, tiền, số lượng vật phẩm không có mức tối đa nên "75/100" kèm thanh gần trống là vừa sai
+ * vừa gây hiểu nhầm (người chơi tưởng 100 là trần). Hàng này in đúng con số, giữ nguyên khung
+ * hàng của thanh tiến trình để bố cục không lệch.
+ */
+export function renderCounterHTML(
+  elementId: string,
+  label: string,
+  icon: string,
+): string {
+  return `<div style="margin-bottom:8px">` +
+    `<div class="stcs-bar-row">` +
+    `<span class="stcs-bar-label">${icon} ${label}</span>` +
+    `<span class="stcs-bar-value stcs-counter" id="${elementId}">0</span>` +
+    `</div>` +
+    `</div>`;
+}
+
+/**
  * Render a data card (label + value) HTML fragment.
  */
 export function renderDataCardHTML(
@@ -1273,12 +1293,26 @@ export function generateOpeningFormSharedJS(totalPages: number): string {
     }
 
     function collectFormData() {
-        // Collect all inputs
-        document.querySelectorAll('#stcs-app input[type=text], #stcs-app input[type=number]').forEach(function(inp) {
+        // (bugNeedFix/114) TRƯỚC ĐÂY chỉ quét input[type=text|number] + textarea. Nghĩa là:
+        //   • thanh trượt (input[type=range]) chỉ có giá trị nếu người chơi ĐỘNG vào nó,
+        //   • checkbox và lưới thẻ lựa chọn KHÔNG BAO GIỜ được thu.
+        // Cộng với lỗi lệch id (xem programmaticRegexBuilder), kết quả là bấm Xác nhận xong
+        // chẳng có biến nào được ghi mà cũng không báo lỗi gì.
+        // Nay thu ĐỦ mọi loại, và thu theo TRẠNG THÁI HIỆN TẠI của DOM chứ không chờ event.
+        document.querySelectorAll('#stcs-app input[type=text], #stcs-app input[type=number], #stcs-app input[type=range]').forEach(function(inp) {
             if (inp.id) formData[inp.id] = inp.value;
         });
         document.querySelectorAll('#stcs-app textarea').forEach(function(ta) {
             if (ta.id) formData[ta.id] = ta.value;
+        });
+        document.querySelectorAll('#stcs-app input[type=checkbox]').forEach(function(cb) {
+            if (cb.id) formData[cb.id] = cb.checked;
+        });
+        // Lưới thẻ lựa chọn: giá trị nằm ở data-value của thẻ đang .selected.
+        document.querySelectorAll('#stcs-app .stcs-card-grid').forEach(function(grid) {
+            if (!grid.id) return;
+            var sel = grid.querySelector('.stcs-card.selected');
+            if (sel) formData[grid.id] = sel.getAttribute('data-value') || '';
         });
         return formData;
     }

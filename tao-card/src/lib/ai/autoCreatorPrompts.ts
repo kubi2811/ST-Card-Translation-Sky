@@ -215,7 +215,7 @@ Yêu cầu định dạng JSON chính xác:
         "type": "number|string|boolean",
         "label": "Tên hiển thị",
         "defaultValue": 0,
-        "constraints": { "min": 0, "max": 100 },
+        "constraints": { "min": 0 },
         "description": "Mô tả cho AI"
       }
     ]
@@ -235,6 +235,16 @@ QUY TẮC BẮT BUỘC VỀ SCHEMA:
   { "path": "/Nhân vật", "type": "object", "label": "Nhân vật", "defaultValue": {}, "constraints": {},
     "children": [ { "path": "/Nhân vật/Tên", "type": "string", "label": "Tên", "defaultValue": "", "constraints": {} } ] }
 - Ít nhất vài field phải cho người chơi nhập (KHÔNG đặt "constraints.readOnly" hay "hidden" cho tất cả).
+
+QUY TẮC VỀ RÀNG BUỘC SỐ HỌC (BẮT BUỘC — bugNeedFix/113):
+Có HAI loại biến số, đừng lẫn:
+  • ĐỒNG HỒ ĐO — có trần rõ ràng, ý nghĩa nằm ở TỈ LỆ so với trần: HP/máu, VP/năng lượng, độ hảo
+    cảm, tiến độ %, thang sao 1-5, cấp độ 1-10. Loại này PHẢI ghi "min" và "max" đúng thang thật.
+  • BỘ ĐẾM — tăng/giảm không có trần, ý nghĩa nằm ở CON SỐ: ngày/thời gian, tiền tệ, số lượng vật
+    phẩm, điểm tích luỹ, kinh nghiệm, điểm cống hiến. Loại này chỉ ghi "min" (thường 0) và
+    TUYỆT ĐỐI KHÔNG ghi "max" cũng không ghi "clamp".
+KHÔNG áp bừa 0-100 cho mọi biến số. Kẹp trần 100 lên tiền hay ngày là lỗi nặng: chơi tới ngày 101
+hay kiếm quá 100 đồng là giá trị bị cắt về 100, mất dữ liệu thật của người chơi.
 
 QUY TẮC VỀ "updateRulesEntry" (BẮT BUỘC — đọc kỹ):
 Đây KHÔNG phải đoạn văn xuôi. Viết một CÂY YAML, và phải có mục riêng cho TỪNG BIẾN LÁ trong

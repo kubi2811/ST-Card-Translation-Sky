@@ -267,5 +267,41 @@ export function checkFormWritePath(script: string): FormScriptCheck {
   if (!/parseMessage/.test(s)) problems.push('thiếu Mvu.parseMessage — không có đường ghi biến MVU');
   if (!/replaceMvuData/.test(s)) problems.push('thiếu Mvu.replaceMvuData — parse xong không ghi lại');
   if (!MVU_DIALECT_RE.functionCall.test(s)) problems.push('không sinh lệnh _.set nào — form không có gì để ghi');
+
+  /* ─── (bugNeedFix/114) Ba phép kiểm mới ─── */
+
+  // 1. LỆCH ID: bảng mappings phải trỏ vào ID THẬT của thẻ input (có hậu tố). Đây là gốc rễ
+  //    bug 114 — id trần thì `data[m.inputId]` luôn undefined, không ghi được biến nào.
+  const mapIds = [...s.matchAll(/"inputId"\s*:\s*"([^"]+)"/g)].map(m => m[1]);
+  if (mapIds.length > 0) {
+    const bare = mapIds.filter(id => !/-(?:slider|input|cards|check|select|textarea)$/.test(id));
+    if (bare.length > 0) {
+      problems.push(
+        `${bare.length}/${mapIds.length} mục trong bảng mappings dùng id TRẦN (${bare.slice(0, 3).join(', ')}` +
+        `${bare.length > 3 ? '…' : ''}) — thẻ input thật có hậu tố (-slider/-input/-cards/-check), ` +
+        'nên tra ra undefined và không ghi được biến nào (bug 114)',
+      );
+    }
+  }
+
+  // 2. THU THIẾU LOẠI INPUT: form có thanh trượt / checkbox / lưới thẻ mà collectFormData không
+  //    quét tới thì mấy field đó không bao giờ có giá trị.
+  if (/collectFormData/.test(s)) {
+    if (/type=range|type="range"/.test(s) && !/input\[type=range\]/.test(s)) {
+      problems.push('form có thanh trượt nhưng collectFormData không quét input[type=range] — giá trị chưa động vào sẽ bị bỏ');
+    }
+    if (/type=checkbox|type="checkbox"/.test(s) && !/input\[type=checkbox\]/.test(s)) {
+      problems.push('form có checkbox nhưng collectFormData không quét input[type=checkbox]');
+    }
+    if (/stcs-card-grid/.test(s) && !/\.stcs-card-grid/.test(s.replace(/id="[^"]*"/g, ''))) {
+      problems.push('form có lưới thẻ lựa chọn nhưng collectFormData không đọc thẻ .selected');
+    }
+  }
+
+  // 3. THẤT BẠI IM LẶNG: không thu được gì thì phải BÁO, không được `return` êm.
+  if (/if\s*\(\s*!\s*cmds\.length\s*\)\s*return\s*;/.test(s)) {
+    problems.push('khi không thu được giá trị nào thì hàm thoát IM LẶNG — user tưởng đã lưu (bug 114). Phải log + toast lỗi');
+  }
+
   return { ok: problems.length === 0, problems };
 }

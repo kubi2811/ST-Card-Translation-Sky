@@ -12,6 +12,7 @@
  * mọi consumer phía sau được bảo đảm `constraints` luôn là object, children đã đệ quy sạch.
  */
 import type { MVUZODField, MVUZODSchema } from '../../types/mvuzod.types';
+import { stripBogusNumericCaps } from './numericSemantics';
 
 const DEFAULT_BY_TYPE: Record<string, unknown> = {
   number: 0,
@@ -113,9 +114,16 @@ export function nestFlatSchema(fields: MVUZODField[]): MVUZODField[] {
 export function normalizeMVUZODSchema(raw: any): MVUZODSchema {
   const s = (raw && typeof raw === 'object') ? raw : {};
   const fields = Array.isArray(s.fields) ? s.fields.map(normalizeMVUZODField) : [];
-  return {
+  const base = {
     ...s,
     version: typeof s.version === 'string' && s.version ? s.version : '1.0',
     fields: nestFlatSchema(fields),
   } as MVUZODSchema;
+
+  // (bugNeedFix/113) Bỏ TRẦN BỊA khỏi bộ đếm. Ví dụ JSON trong prompt ghi thẳng
+  // `"constraints": { "min": 0, "max": 100 }` nên AI chép y nguyên cho mọi biến số — kể cả tiền
+  // tệ, ngày và số lượng vật phẩm. Đây không chỉ là lỗi hiển thị: `max`/`clamp` được Zod dùng để
+  // KẸP giá trị, nên người chơi kiếm quá 100 đồng là bị cắt về 100, mất dữ liệu thật.
+  // Làm ở đây vì mọi đường ghi schema (AI sinh, wizard, import) đều đi qua hàm này.
+  return stripBogusNumericCaps(base).schema;
 }

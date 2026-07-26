@@ -507,7 +507,7 @@ Dựa trên mô tả người dùng, bạn phải tạo DANH SÁCH ACTIONS cần
        "type": "number",
        "label": "Tên mới",
        "defaultValue": 0,
-       "constraints": { "min": 0, "max": 100, "clamp": [0, 100] }
+       "constraints": { "min": 0, "max": 100, "clamp": [0, 100] }   // CHỈ khi biến thật sự có trần (HP, %, thang sao). Bộ đếm (ngày/tiền/số lượng) thì KHÔNG ghi max/clamp.
      }
    }
    CHÚ Ý: Trong "changes", CHỈ ghi các trường muốn thay đổi, KHÔNG ghi lại trường không đổi.

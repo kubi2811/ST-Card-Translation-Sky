@@ -47,12 +47,26 @@ export function jsParseErrorAny(code: string): { line: number; msg: string } | n
     const err = e as { loc?: { line?: number }; message?: string };
     scriptErr = { line: err?.loc?.line ?? -1, msg: String(err?.message || e) };
   }
+  let moduleErr: { line: number; msg: string } | null = null;
   try {
     acornParse(code, { ecmaVersion: 'latest', sourceType: 'module', locations: true });
     return null;
-  } catch {
-    return scriptErr;
+  } catch (e: unknown) {
+    const err = e as { loc?: { line?: number }; message?: string };
+    moduleErr = { line: err?.loc?.line ?? -1, msg: String(err?.message || e) };
   }
+  // (bugNeedFix/95) CẢ HAI mode đều fail ⇒ phải chọn thông điệp NÓI ĐÚNG chỗ hỏng.
+  // Script 酒馆助手 là ES module (mở đầu `import 'https://…'`). Trước đây luôn trả lỗi mode
+  // SCRIPT, nên user chỉ thấy "'import' and 'export' may appear only with 'sourceType: module'"
+  // ở dòng 1 — câu này VÔ NGHĨA với ESM (import ở đó là đúng) và che mất lỗi THẬT (thường là
+  // chuỗi bị vỡ ở giữa file do dịch). Với ESM, lỗi module-mode mới là lỗi thật.
+  return isEsModuleScript(code) ? moduleErr : scriptErr;
+}
+
+/** Script có phải ES module không: có import/export ở ĐẦU DÒNG (không tính trong chuỗi/comment). */
+export function isEsModuleScript(code: string): boolean {
+  if (typeof code !== 'string') return false;
+  return /^\s*(?:import|export)\s/m.test(code);
 }
 
 /**

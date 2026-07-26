@@ -1003,17 +1003,33 @@ export function useTranslation() {
       if (translated && translated !== field.original && isLikelyJsScript(field.original) && jsParseErrorAny(field.original) === null) {
         const jsErr = jsParseErrorAny(translated);
         if (jsErr) {
-          if (freshRetries() < (store.proxy.maxRetries || 3)) {
-            store.updateField(field.path, { retries: freshRetries() + 1 });
+          // (bugNeedFix/95) CHỐNG RETRY VÔ ÍCH — lý do user mất 1-2 tiếng cho MỘT field Zod.
+          // Dịch phẫu thuật là phép thay-thế-theo-từ-điển gần như TẤT ĐỊNH: chạy lại cho ra
+          // đúng kết quả cũ, nên lỗi y hệt (cùng dòng + cùng thông điệp) nghĩa là dịch lại
+          // KHÔNG BAO GIỜ khác. Nhớ dấu vân tay lỗi; trùng là dừng luôn, giữ gốc.
+          const errFingerprint = `${jsErr.line}|${jsErr.msg.slice(0, 80)}`;
+          const prevFingerprint = useStore.getState().fields.find(f => f.path === field.path)?.lastJsErrorFingerprint;
+          const sameErrorAgain = prevFingerprint === errFingerprint;
+          if (!sameErrorAgain && freshRetries() < (store.proxy.maxRetries || 3)) {
+            store.updateField(field.path, { retries: freshRetries() + 1, lastJsErrorFingerprint: errFingerprint });
             store.addLog('retry', `⚠️ Script vỡ cú pháp sau dịch (${field.label}, dòng ~${jsErr.line}: ${jsErr.msg.slice(0, 60)}) → dịch lại…`);
             await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
             return 'retry';
           }
-          store.addLog('warning',
-            `⚠️ Script toàn vẹn: ${field.label} vẫn vỡ cú pháp JS sau retry (dòng ~${jsErr.line}) → GIỮ NGUYÊN ` +
-            `bản gốc để script KHÔNG liệt trong SillyTavern. Hãy dịch lại riêng entry này.`
-          );
-          translated = field.original;
+          if (sameErrorAgain) {
+            store.addLog('warning',
+              `⚠️ ${field.label}: dịch lại vẫn RA ĐÚNG LỖI CŨ (dòng ~${jsErr.line}) → dừng thử lại cho đỡ mất thời gian, ` +
+              `GIỮ NGUYÊN bản gốc. Lỗi này lặp lại được nên nằm ở nội dung/từ điển, dịch lại bao nhiêu lần cũng thế — ` +
+              `hãy sửa tay entry này hoặc chỉnh từ điển rồi dịch lại riêng nó.`
+            );
+            translated = field.original;
+          } else {
+            store.addLog('warning',
+              `⚠️ Script toàn vẹn: ${field.label} vẫn vỡ cú pháp JS sau retry (dòng ~${jsErr.line}) → GIỮ NGUYÊN ` +
+              `bản gốc để script KHÔNG liệt trong SillyTavern. Hãy dịch lại riêng entry này.`
+            );
+            translated = field.original;
+          }
         }
       }
 

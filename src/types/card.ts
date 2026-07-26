@@ -141,6 +141,12 @@ export interface TranslationField {
   error?: string;
   /** Retry count */
   retries: number;
+  /**
+   * (bugNeedFix/95) Dấu vân tay "dòng|thông điệp" của lỗi cú pháp JS ở lần dịch TRƯỚC.
+   * Dịch lại mà ra ĐÚNG lỗi cũ ⇒ lỗi tất định (nội dung/từ điển), thử lại bao nhiêu lần cũng
+   * thế → dừng ngay thay vì đốt hết lượt retry (user từng mất 1-2 tiếng cho một field Zod).
+   */
+  lastJsErrorFingerprint?: string;
   /** Previous translation for updating/merging */
   previousTranslation?: string;
   /** MVU entry classification for per-type translation strategy */

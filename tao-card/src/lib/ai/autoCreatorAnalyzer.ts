@@ -66,6 +66,8 @@ export async function analyzeIdea(
   idea: string,
   profile: ProxyProfile,
   params: GenerationParams,
+  /** (#43) Signal từ nút Dừng — Phase 0 cũng phải chết ngay, không để call bay tiếp. */
+  signal?: AbortSignal,
 ): Promise<CardBlueprint> {
   const response = await callAI({
     profile,
@@ -74,6 +76,7 @@ export async function analyzeIdea(
       { role: 'system', content: BLUEPRINT_SYSTEM_PROMPT },
       { role: 'user', content: `Phân tích ý tưởng sau và tạo Card Blueprint:\n\n${idea}` },
     ],
+    signal,
   });
 
   const trimmed = response.text.trim();

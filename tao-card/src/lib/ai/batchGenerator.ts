@@ -701,12 +701,22 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
         
         ctx.log(`🌐 [Batch ${i}] Đang tìm kiếm web: "${searchQuery.slice(0, 60)}..."...`);
         try {
-          const searchResults = await cascadeSearch(searchQuery, ctx.profile.webSearchProxyUrl);
+          let searchResults = await cascadeSearch(searchQuery, ctx.profile.webSearchProxyUrl);
+          // (#43 — "web search tìm rộng hơn") Query dài ghép cả tên card + category dễ thành
+          // chuỗi quá đặc thù → 0 kết quả. Không thấy gì thì TỰ NỚI: thử lại chỉ với vài từ
+          // khoá đầu của chủ đề, thay vì bỏ cuộc luôn.
+          if (searchResults.length === 0) {
+            const broad = baseQuery.split(/\s+/).slice(0, 5).join(' ').trim();
+            if (broad && broad !== searchQuery) {
+              ctx.log(`🔎 [Batch ${i}] Không thấy gì — nới query rộng hơn: "${broad}"...`);
+              searchResults = await cascadeSearch(broad, ctx.profile.webSearchProxyUrl);
+            }
+          }
           if (searchResults.length > 0) {
             webInjection = searchResults.map(r => `[${r.source}] ${r.url}\n${r.content}`).join('\n\n---\n\n');
             ctx.log(`✅ [Batch ${i}] Web Search: ${searchResults.length} nguồn — ${searchResults.map(r => r.source).join(', ')}`);
           } else {
-            ctx.log(`⚠️ [Batch ${i}] Web Search: Không tìm thấy dữ liệu liên quan.`);
+            ctx.log(`⚠️ [Batch ${i}] Web Search: Không tìm thấy dữ liệu liên quan (đã thử cả query nới rộng).`);
           }
         } catch (webErr) {
           ctx.log(`⚠️ [Batch ${i}] Web Search lỗi: ${webErr instanceof Error ? webErr.message : String(webErr)}`);

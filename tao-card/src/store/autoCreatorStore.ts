@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import { v4 as uuidv4 } from 'uuid';
 import type {
   AutoCreatorConfig,
@@ -18,6 +19,8 @@ interface AutoCreatorState {
 
   // Pipeline state
   isRunning: boolean;
+  /** (Goal 104 — #43) Hủy call AI ĐANG BAY khi bấm Dừng — không chỉ dừng giữa các bước. */
+  abort: AbortController | null;
   isPaused: boolean;
   currentStep: AnyPipelineStep | null;
   stepStatuses: Record<AutoCreatorStep, StepStatus>;
@@ -58,6 +61,9 @@ interface AutoCreatorState {
   
   // Actions — Pipeline control
   setIsRunning: (running: boolean) => void;
+  setAbort: (ac: AbortController | null) => void;
+  /** (Goal 104 — #43) Dừng DỨT HẲN: tắt cờ chạy + abort mọi request đang bay. */
+  stopPipeline: () => void;
   setPaused: (paused: boolean) => void;
   setCurrentStep: (step: AnyPipelineStep | null) => void;
   setStepStatus: (step: AutoCreatorStep, status: StepStatus) => void;
@@ -127,7 +133,7 @@ const emptyMnPreviews = (): Record<MinhNguyetStep, StepPreview | null> => ({
   npc_creation: null, character_overview: null, opening: null
 });
 
-export const useAutoCreatorStore = create<AutoCreatorState>((set) => ({
+export const useAutoCreatorStore = create<AutoCreatorState>()(persist((set, get) => ({
   config: {
     idea: '',
     userRules: '',
@@ -169,6 +175,7 @@ export const useAutoCreatorStore = create<AutoCreatorState>((set) => ({
   },
 
   isRunning: false,
+  abort: null,
   isPaused: false,
   currentStep: null,
   stepStatuses: emptyStatuses(),
@@ -272,6 +279,13 @@ export const useAutoCreatorStore = create<AutoCreatorState>((set) => ({
 
   // ─── Pipeline control ───
   setIsRunning: (isRunning) => set({ isRunning }),
+  setAbort: (abort) => set({ abort }),
+  stopPipeline: () => {
+    // (#43) Trước đây Dừng chỉ tắt cờ — call AI đang bay vẫn chạy tiếp hàng chục giây rồi
+    // GHI KẾT QUẢ vào card như thường. Nay abort thật để luồng kết thúc ngay.
+    get().abort?.abort();
+    set({ isRunning: false, isPaused: false, currentStep: null });
+  },
   setPaused: (isPaused) => set({ isPaused }),
   setCurrentStep: (currentStep) => set({ currentStep }),
   setStepStatus: (step, status) => set((s) => ({
@@ -315,4 +329,9 @@ export const useAutoCreatorStore = create<AutoCreatorState>((set) => ({
     mnStepPreviews: { ...s.mnStepPreviews, [step]: preview }
   })),
   clearAllPreviews: () => set({ stepPreviews: emptyPreviews(), mnStepPreviews: emptyMnPreviews() }),
+}), {
+  name: 'tcs.autocreator.v1',
+  // (#43 — "giữ input khi đổi tab") Chỉ persist CONFIG (ý tưởng, quy tắc, bước đã chọn,
+  // config từng bước) — trạng thái chạy/log/preview là phù du, không lưu.
+  partialize: (s) => ({ config: s.config }),
 }));

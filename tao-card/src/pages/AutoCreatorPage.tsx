@@ -617,7 +617,7 @@ export function AutoCreatorPage() {
             {store.isRunning && (
               <div className="flex items-center gap-1.5">
                 <button onClick={() => store.setPaused(true)} className="px-2 py-1 bg-amber-500/20 text-amber-500 hover:bg-amber-500/30 rounded flex items-center gap-1 transition-colors"><Pause className="w-3 h-3" /> {ui.acPause}</button>
-                <button onClick={() => { store.setIsRunning(false); store.setPaused(false); }} className="px-2 py-1 bg-red-500/20 text-red-500 hover:bg-red-500/30 rounded flex items-center gap-1 transition-colors"><Square className="w-3 h-3" /> {ui.acStop}</button>
+                <button onClick={() => store.stopPipeline()} title="Dừng DỨT HẲN: hủy cả request AI đang bay, không chỉ dừng giữa các bước" className="px-2 py-1 bg-red-500/20 text-red-500 hover:bg-red-500/30 rounded flex items-center gap-1 transition-colors"><Square className="w-3 h-3" /> {ui.acStop}</button>
               </div>
             )}
             {!store.isRunning && store.logs.length > 0 && (

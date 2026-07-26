@@ -62,6 +62,10 @@ export async function runMinhNguyetPipeline(ctx: AutoCreatorContext) {
   }
 
   store.setIsRunning(true);
+  // (#43) Cùng chuẩn với pipeline Standard: một AbortController cho cả lượt chạy, nút Dừng
+  // abort là call AI đang bay chết ngay thay vì chạy nốt rồi ghi kết quả vào card.
+  const abortController = new AbortController();
+  store.setAbort(abortController);
   store.addLog({ step: 'system', level: 'info', message: '🌙 Pipeline Minh Nguyệt bắt đầu...' });
 
   const { config } = store;
@@ -85,7 +89,7 @@ export async function runMinhNguyetPipeline(ctx: AutoCreatorContext) {
     store.addLog({ step, level: 'info', message: `🌙 Bắt đầu: ${stepLabel}` });
 
     try {
-      const output = await executeMnStep(step, config, ctx, previousOutputs);
+      const output = await executeMnStep(step, config, ctx, previousOutputs, abortController.signal);
       
       if (output) {
         previousOutputs.push({ step, content: output });
@@ -94,6 +98,13 @@ export async function runMinhNguyetPipeline(ctx: AutoCreatorContext) {
       store.setMnStepStatus(step, 'done');
       store.addLog({ step, level: 'success', message: `✅ Hoàn thành: ${stepLabel}` });
     } catch (error) {
+      // (#43) User bấm Dừng → abort: thoát êm, không ghi lỗi bước, không chạy tiếp.
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        store.addLog({ step: 'system', level: 'warning', message: '⏹ Pipeline đã dừng.' });
+        store.setIsRunning(false);
+        store.setAbort(null);
+        return;
+      }
       const msg = error instanceof Error ? error.message : String(error);
       store.addLog({ step, level: 'error', message: `❌ Lỗi tại ${stepLabel}: ${msg}` });
       
@@ -128,6 +139,7 @@ export async function runMinhNguyetPipeline(ctx: AutoCreatorContext) {
 
   store.setIsRunning(false);
   store.setCurrentStep(null);
+  store.setAbort(null);
   store.addLog({ step: 'system', level: 'success', message: '🌙 Pipeline Minh Nguyệt hoàn tất!' });
 }
 
@@ -140,6 +152,8 @@ async function executeMnStep(
   config: AutoCreatorConfig,
   ctx: AutoCreatorContext,
   previousOutputs: StepOutput[],
+  /** (#43) Signal từ nút Dừng — call AI của bước phải chết ngay khi user dừng. */
+  signal?: AbortSignal,
 ): Promise<string | null> {
   const cardStore = useCardStore.getState();
   const store = useAutoCreatorStore.getState();
@@ -224,6 +238,7 @@ Yêu cầu:
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
     ],
+    signal,
   });
 
   const output = response.text;

@@ -16,6 +16,9 @@ import { buildMVUZODScripts } from '../mvuzod/tavernScriptBuilder';
 import { OPENING_FORM_ANCHOR, STATUS_BAR_ANCHOR } from '../mvuzod/regexAnchors';
 import { isMvuUpdateBlockAccepted } from '../mvuzod/mvuReference';
 import { validateMvuCard } from '../mvuzod/validateMvuCard';
+import { runFormCycle } from '../mvuzod/mvuHarness';
+import { validateEJSEntry, isPreprocessingEntry } from '../ejs/ejsParser';
+import { validateReplaceString } from '../regexEngine/regexValidator';
 import { autoRepairCard } from './cardAutoRepair';
 import { checkMvuOutputContract } from '../mvuzod/mvuReference';
 import { buildMvuCoreRegexScripts } from '../mvuzod/mvuCoreRegex';
@@ -64,16 +67,38 @@ function extractJsonFromText(text: string): unknown {
   return null;
 }
 
+/**
+ * (Goal 104.2) DAG PHỤ THUỘC giữa các bước — nền của chế độ đa luồng.
+ * Bước chỉ chạy khi mọi bước nó phụ thuộc (VÀ được chọn) đã done/skipped; các bước cùng
+ * "đợt" (wave) chạy SONG SONG qua pool. Vì sao an toàn: mỗi bước ghi vào vùng RIÊNG của card
+ * (basic_info → 4 trường chữ; lorebook → entries; system_prompt → system_prompt…), còn bước
+ * cần đọc kết quả bước khác thì đã bị DAG bắt chờ.
+ */
+export const STEP_DEPS: Record<AutoCreatorStep, AutoCreatorStep[]> = {
+  basic_info: [],
+  lorebook: ['basic_info'],
+  system_prompt: ['basic_info'],
+  mes_example: ['basic_info'],
+  mvuzod: ['lorebook'],                    // autoDetect đọc lorebook để suy schema
+  game_ui: ['mvuzod'],                     // dựng UI tĩnh từ schema
+  regex: ['mvuzod'],                       // regex bám tên biến schema
+  first_message: ['basic_info', 'mvuzod'], // greeting nhắc mỏ neo form/initvar
+  final_check: ['basic_info', 'lorebook', 'system_prompt', 'mes_example', 'mvuzod', 'game_ui', 'regex', 'first_message'],
+};
+
 // ═══ MAIN PIPELINE ═══
 export async function runAutoCreatorPipeline(ctx: AutoCreatorContext) {
   const store = useAutoCreatorStore.getState();
-  
+
   if (store.isRunning || store.config.selectedSteps.length === 0 || !store.config.idea) {
     return;
   }
 
   store.setIsRunning(true);
-  store.addLog({ step: 'system', level: 'info', message: '🚀 Pipeline v3 bắt đầu...' });
+  // (#43) Một AbortController cho cả lượt chạy — nút Dừng abort là MỌI call đang bay chết ngay.
+  const abortController = new AbortController();
+  store.setAbort(abortController);
+  store.addLog({ step: 'system', level: 'info', message: '🚀 Pipeline v4 bắt đầu...' });
 
   const { config } = store;
 
@@ -83,7 +108,7 @@ export async function runAutoCreatorPipeline(ctx: AutoCreatorContext) {
   
   let blueprint: CardBlueprint | null = null;
   try {
-    blueprint = await analyzeIdea(config.idea, ctx.profile, ctx.generationParams);
+    blueprint = await analyzeIdea(config.idea, ctx.profile, ctx.generationParams, abortController.signal);
     store.setBlueprint(blueprint);
     store.addLog({
       step: 'blueprint',
@@ -91,6 +116,14 @@ export async function runAutoCreatorPipeline(ctx: AutoCreatorContext) {
       message: `✅ Blueprint: "${blueprint.characterProfile.name}" | ${blueprint.estimatedComplexity} | ${blueprint.suggestedEntryTopics.length} topics, ${blueprint.suggestedVariables.length} vars`,
     });
   } catch (error) {
+    // (#43) Dừng giữa Phase 0 → thoát hẳn, đừng "tiếp tục không blueprint" rồi đốt tiếp call.
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      store.setBlueprintLoading(false);
+      store.setIsRunning(false);
+      store.setAbort(null);
+      store.addLog({ step: 'system', level: 'warning', message: '⏹ Pipeline đã dừng.' });
+      return;
+    }
     store.addLog({
       step: 'blueprint',
       level: 'warning',
@@ -99,66 +132,114 @@ export async function runAutoCreatorPipeline(ctx: AutoCreatorContext) {
   }
   store.setBlueprintLoading(false);
 
-  // ─── Run selected steps ───
-  const stepsToRun = config.selectedSteps;
-
-  for (const step of stepsToRun) {
-    // Check pause/stop
-    while (useAutoCreatorStore.getState().isPaused) {
-      await sleep(500);
-      if (!useAutoCreatorStore.getState().isRunning) return;
-    }
-    if (!useAutoCreatorStore.getState().isRunning) {
-      store.addLog({ step: 'system', level: 'warning', message: '⏹ Pipeline đã dừng.' });
-      return;
-    }
-
+  // ─── Chạy 1 bước với retry (dùng chung cho tuần tự lẫn DAG) ───
+  const runStepWithRetry = async (step: AutoCreatorStep): Promise<'done' | 'skipped' | 'fatal'> => {
     store.setStepStatus(step, 'running');
     store.setCurrentStep(step);
     store.addLog({ step, level: 'info', message: `Bắt đầu xử lý: ${step}` });
 
-    // (User 21/07) 2 lần là quá ít cho lỗi tạm thời (mạng/model hiccup) — bước bị bỏ là card
-    // thiếu mảng, user phải sửa tay. Nâng lên 3 lần, và lần sau CÓ NÓI cho AI biết lần trước
-    // hỏng vì gì (xem lastError bên dưới) thay vì gửi lại y hệt prompt cũ.
     const maxRetries = 2;
     let lastError = '';
-
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      if (!useAutoCreatorStore.getState().isRunning) return 'fatal';
       try {
-        if (attempt > 0) {
-          store.addLog({ step, level: 'info', message: `🔄 Retry lần ${attempt}...` });
-        }
-
-        await executeStep(step, config, ctx, blueprint, lastError);
-        
+        if (attempt > 0) store.addLog({ step, level: 'info', message: `🔄 Retry lần ${attempt}...` });
+        await executeStep(step, config, ctx, blueprint, lastError, abortController.signal);
         store.setStepStatus(step, 'done');
         store.addLog({ step, level: 'success', message: `✅ Hoàn thành: ${step}` });
-        break;
+        return 'done';
       } catch (error) {
+        // (#43) User bấm Dừng → abort: KHÔNG coi là lỗi bước, không retry, thoát êm.
+        if (error instanceof DOMException && error.name === 'AbortError') return 'fatal';
         const msg = error instanceof Error ? error.message : String(error);
-        lastError = msg; // lần thử sau sẽ được nhắc rõ lần trước hỏng vì gì
+        lastError = msg;
         store.addLog({ step, level: 'error', message: `❌ Lỗi tại ${step}: ${msg}` });
-
         if (attempt >= maxRetries) {
-          // Auto-skip on final failure when autoApplyAll = true
           if (config.autoApplyAll) {
             store.setStepStatus(step, 'skipped');
             store.addLog({ step, level: 'warning', message: `⏭ Bỏ qua ${step} sau ${maxRetries + 1} lần thử, tiếp tục pipeline...` });
-            // handled, so pipeline continues
-          } else {
-            store.setStepStatus(step, 'error');
-            store.setIsRunning(false);
-            store.addLog({ step: 'system', level: 'error', message: `Pipeline dừng tại ${step}. Bạn có thể retry bước này hoặc skip.` });
-            return;
+            return 'skipped';
           }
+          store.setStepStatus(step, 'error');
+          store.addLog({ step: 'system', level: 'error', message: `Pipeline dừng tại ${step}. Bạn có thể retry bước này hoặc skip.` });
+          return 'fatal';
         }
+      }
+    }
+    return 'fatal';
+  };
+
+  const waitIfPaused = async (): Promise<boolean> => {
+    while (useAutoCreatorStore.getState().isPaused) {
+      await sleep(500);
+      if (!useAutoCreatorStore.getState().isRunning) return false;
+    }
+    return useAutoCreatorStore.getState().isRunning;
+  };
+
+  // ─── Run selected steps ───
+  const stepsToRun = config.selectedSteps;
+
+  if (config.autoApplyAll) {
+    // (Goal 104.2) CHẾ ĐỘ ĐA LUỒNG THEO DAG: mỗi vòng gom mọi bước đã đủ phụ thuộc rồi chạy
+    // song song qua pool đa key. basic_info xong là lorebook ∥ system_prompt ∥ mes_example
+    // chạy cùng lúc — không còn xếp hàng tuần tự cả chục phút.
+    const finished = new Map<AutoCreatorStep, 'done' | 'skipped'>();
+    const pending = new Set<AutoCreatorStep>(stepsToRun);
+    while (pending.size > 0) {
+      if (!(await waitIfPaused())) {
+        store.addLog({ step: 'system', level: 'warning', message: '⏹ Pipeline đã dừng.' });
+        store.setAbort(null);
+        return;
+      }
+      const wave = [...pending].filter((s) =>
+        STEP_DEPS[s].every((dep) => !pending.has(dep) || finished.has(dep)),
+      // final_check phải chạy MỘT MÌNH sau cùng (đọc toàn card) — không ghép vào wave khác.
+      ).filter((s, _i, arr) => s !== 'final_check' || arr.length === 1);
+      if (wave.length === 0) {
+        // Còn bước mà không mở khóa được (dep bị fatal) — thoát để không kẹt vòng lặp.
+        store.addLog({ step: 'system', level: 'warning', message: `⚠️ ${pending.size} bước không chạy được vì bước phụ thuộc đã lỗi.` });
+        break;
+      }
+      if (wave.length > 1) {
+        store.addLog({ step: 'system', level: 'info', message: `⚡ Đợt song song: ${wave.join(' ∥ ')}` });
+      }
+      const results = await Promise.all(wave.map((s) => runStepWithRetry(s)));
+      let fatal = false;
+      wave.forEach((s, i) => {
+        pending.delete(s);
+        const r = results[i];
+        if (r === 'fatal') fatal = true;
+        else finished.set(s, r);
+      });
+      if (fatal || !useAutoCreatorStore.getState().isRunning) {
+        store.setIsRunning(false);
+        store.setAbort(null);
+        return;
+      }
+    }
+  } else {
+    // Chế độ PREVIEW (user duyệt từng bước) giữ TUẦN TỰ — chạy song song thì preview dồn đống,
+    // user không biết đang duyệt cái gì.
+    for (const step of stepsToRun) {
+      if (!(await waitIfPaused())) {
+        store.addLog({ step: 'system', level: 'warning', message: '⏹ Pipeline đã dừng.' });
+        store.setAbort(null);
+        return;
+      }
+      const r = await runStepWithRetry(step);
+      if (r === 'fatal') {
+        store.setIsRunning(false);
+        store.setAbort(null);
+        return;
       }
     }
   }
 
   store.setIsRunning(false);
   store.setCurrentStep(null);
-  store.addLog({ step: 'system', level: 'success', message: '🎉 Pipeline v3 hoàn tất thành công!' });
+  store.setAbort(null);
+  store.addLog({ step: 'system', level: 'success', message: '🎉 Pipeline v4 hoàn tất thành công!' });
 }
 
 // ═══ Retry a single step ═══
@@ -296,6 +377,8 @@ async function executeStep(
   blueprint: CardBlueprint | null,
   /** Lỗi của lần thử TRƯỚC (nếu có) — nhắc lại cho AI để nó khỏi lặp đúng lỗi cũ. */
   lastError = '',
+  /** (#43) Signal từ nút Dừng — mọi call AI của bước phải nhận để chết ngay khi user dừng. */
+  signal?: AbortSignal,
 ) {
   const cardStore = useCardStore.getState();
   const store = useAutoCreatorStore.getState();
@@ -330,10 +413,13 @@ BẠN PHẢI TẬN DỤNG TỐI ĐA dung lượng này để tạo ra nội dung
 
     const response = await callAI({
       profile: ctx.profile,
-      params: ctx.generationParams,
-      messages: [{ role: 'user', content: finalPrompt }]
+      // (#43 — "bỏ ép JSON output") KHÔNG ép response_format json nữa: một số proxy/model lỗi
+      // hoặc trả rác khi bị ép; extractJsonFromText + vòng vá JSON bên dưới đã lo phần parse.
+      params: { ...ctx.generationParams, useJsonResponseFormat: false },
+      messages: [{ role: 'user', content: finalPrompt }],
+      signal,
     });
-    
+
     let parsed = extractJsonFromText(response.text);
 
     // (User 21/07 — "không skip tiến trình và tự vá") Trước đây parse hỏng là ném lỗi ngay,
@@ -355,8 +441,9 @@ ${response.text}`;
       try {
         const repaired = await callAI({
           profile: ctx.profile,
-          params: { ...ctx.generationParams, temperature: 0 },
+          params: { ...ctx.generationParams, temperature: 0, useJsonResponseFormat: false },
           messages: [{ role: 'user', content: repairPrompt }],
+          signal,
         });
         parsed = extractJsonFromText(repaired.text);
         if (parsed) {
@@ -448,8 +535,10 @@ ${response.text}`;
         card: cardStore.card,
         profile: ctx.profile,
         generationParams: ctx.generationParams,
-        paused: false,
-        stopped: false,
+        // (#43) Trước đây hardcode false — batch lorebook trong Auto KHÔNG nghe nút Dừng/Tạm dừng.
+        get paused() { return useAutoCreatorStore.getState().isPaused; },
+        get stopped() { return !useAutoCreatorStore.getState().isRunning; },
+        signal,
         log: (msg) => store.addLog({ step, level: 'info', message: msg }),
         onProgress: (p) => {
           store.addLog({ step, level: 'info', message: `Batch ${p.batch}/${p.totalBatches}: ${p.created}/${p.total} entries` });
@@ -480,10 +569,37 @@ ${response.text}`;
       const prompt = buildRegexPrompt(config.idea, freshCardStr, config.stepConfigs.regex, blueprint, schemaForRegex);
       const result = await callAIAndExtract(prompt);
 
-      if (config.autoApplyAll && Array.isArray(result)) {
-        applyParsedDataToCard(step, result, config, cardStore);
+      // (Goal 104.1 — luật sắt của Phase 103 áp vào Auto) MỌI regex AI trả về phải COMPILE
+      // được và replaceString không vỡ JS/HTML. Cái hỏng bị LOẠI đích danh (không nhét regex
+      // chết vào card); hỏng cả lô thì ném lỗi cho vòng retry chạy lại bước.
+      let cleaned = result;
+      if (Array.isArray(result)) {
+        const kept: unknown[] = [];
+        for (const raw of result) {
+          const s = raw as { scriptName?: string; regex?: string; findRegex?: string; replaceString?: string };
+          const pattern = String(s.regex ?? s.findRegex ?? '');
+          if (!pattern.trim() || !parseFindRegex(pattern)) {
+            store.addLog({ step, level: 'warning', message: `⏭ Loại regex "${s.scriptName ?? '?'}" — pattern không compile: ${pattern.slice(0, 60)}` });
+            continue;
+          }
+          const rv = validateReplaceString(String(s.replaceString ?? ''));
+          const hardErrs = [...rv.jsIssues, ...rv.htmlIssues].filter((i) => i.type === 'error');
+          if (hardErrs.length) {
+            store.addLog({ step, level: 'warning', message: `⏭ Loại regex "${s.scriptName ?? '?'}" — replaceString vỡ: ${hardErrs[0].message}` });
+            continue;
+          }
+          kept.push(raw);
+        }
+        if (kept.length === 0 && result.length > 0) {
+          throw new Error(`Cả ${result.length} regex AI trả về đều không qua kiểm (compile/replaceString) — thử lại.`);
+        }
+        cleaned = kept;
       }
-      store.setStepResult(step, `${Array.isArray(result) ? result.length : 0} scripts${schemaForRegex ? ' (bám schema MVU)' : ''}`);
+
+      if (config.autoApplyAll && Array.isArray(cleaned)) {
+        applyParsedDataToCard(step, cleaned, config, cardStore);
+      }
+      store.setStepResult(step, `${Array.isArray(cleaned) ? cleaned.length : 0} scripts qua kiểm compile${schemaForRegex ? ' (bám schema MVU)' : ''}`);
       break;
     }
 
@@ -559,6 +675,7 @@ ${response.text}`;
             profile: ctx.profile,
             params: ctx.generationParams,
             messages: [{ role: 'user', content: buildFinalCheckReviewPrompt(report.lines.join('\n'), freshCardStr, config.userRules) }],
+            signal,
           });
           aiVerdict = resp.text.trim();
           store.addLog({ step, level: 'info', message: `🧠 AI nhận xét tổng thể:\n${aiVerdict.slice(0, 1500)}` });
@@ -635,7 +752,7 @@ function verifyMvuzodResult(result: unknown, cfg: AutoCreatorConfig['stepConfigs
 }
 
 // ═══ (User 19/07) BÁO CÁO KIỂM TRA TỔNG THỂ toàn card (deterministic, không tốn AI) ═══
-async function buildFinalCheckReport(
+export async function buildFinalCheckReport(
   cardStore: ReturnType<typeof useCardStore.getState>,
 ): Promise<{ lines: string[]; problems: number }> {
   const lines: string[] = [];
@@ -712,11 +829,16 @@ async function buildFinalCheckReport(
       problems++;
     }
 
-    const varNames = new Set(collectSchemaVarNames(schema));
+    // (Goal 104 — FALSE POSITIVE thật, bắt được khi chạy live) collectSchemaVarNames trả path
+    // KHÔNG có dấu "/" đầu ("Lâm Phong/Cảnh Giới"), trong khi regex hợp lệ hay viết JSON-pointer
+    // đầy đủ ("/Lâm Phong/Cảnh Giới") hoặc dot-path ("Lâm Phong.Cảnh Giới"). So chuỗi thô nên
+    // báo đỏ oan hàng loạt data-var VỐN ĐÚNG. Chuẩn hoá cả hai phía trước khi so.
+    const normVar = (v: string) => v.trim().replace(/^[/.]+/, '').replace(/[.]/g, '/').toLowerCase();
+    const varNames = new Set(collectSchemaVarNames(schema).map(normVar));
     const badVars = new Set<string>();
     for (const rs of regexScripts) {
       for (const m of String(rs.replaceString || '').matchAll(/data-var\s*=\s*["']([^"']+)["']/g)) {
-        if (!varNames.has(m[1])) badVars.add(m[1]);
+        if (!varNames.has(normVar(m[1]))) badVars.add(m[1]);
       }
     }
     if (badVars.size > 0) {
@@ -724,6 +846,43 @@ async function buildFinalCheckReport(
       problems++;
     } else if (regexScripts.length > 0) {
       lines.push('✅ Mọi data-var trong regex khớp tên biến schema');
+    }
+
+    // (Goal 104.4) HARNESS ĐỦ VÒNG — bài kiểm chấp nhận của Phase 100 chạy NGAY trong final_check:
+    // nạp initvar thật của card → giả lập form `_.set` từng biến lá của schema → đọc lại như
+    // status bar sẽ đọc. Bắt đúng lớp lỗi "initvar một đằng, schema một nẻo" (4 hệ tên biến
+    // không giao nhau — bugNeedFix/41) mà mọi phép kiểm tĩnh ở trên đều lọt.
+    if (initEntry) {
+      const rawInit = String(initEntry.content || '').replace(/\[initvar\]/i, '').trim();
+      let initJson: string | null = null;
+      try { JSON.parse(rawInit); initJson = rawInit; } catch { /* YAML — harness JSON bỏ qua */ }
+      if (initJson) {
+        const leaves: Array<{ path: string; value: unknown }> = [];
+        const walkFields = (fields: Array<{ path?: string; children?: unknown[]; defaultValue?: unknown }>, prefix: string) => {
+          for (const f of fields ?? []) {
+            const name = String(f.path || '').split('/').pop() ?? '';
+            const p = prefix ? `${prefix}.${name}` : name;
+            if (Array.isArray(f.children) && f.children.length) walkFields(f.children as never, p);
+            else leaves.push({ path: p, value: f.defaultValue });
+          }
+        };
+        walkFields(normalizeMVUZODSchema(schema).fields as never, '');
+        const probe = leaves.slice(0, 30).filter(l => l.value !== undefined && l.value !== null && typeof l.value !== 'object');
+        if (probe.length) {
+          const cmds = probe
+            .map(l => `_.set('${l.path.replace(/'/g, "\\'")}', ${JSON.stringify(l.value)});//harness`)
+            .join('\n');
+          const cycle = runFormCycle(initJson, cmds, probe.map(l => ({ path: l.path, expect: l.value })));
+          if (cycle.ok) {
+            lines.push(`✅ Harness đủ vòng: ${probe.length} biến schema ghi được vào initvar và đọc lại đúng (initvar ↔ schema khớp đường dẫn)`);
+          } else {
+            lines.push(`❌ Harness đủ vòng FAIL — ${cycle.problems.length} biến schema KHÔNG ghi/đọc được trên initvar thật (initvar và schema lệch đường dẫn, form sẽ "bấm mà không ăn"): ${cycle.problems.slice(0, 3).join(' · ')}`);
+            problems++;
+          }
+        }
+      } else if (rawInit) {
+        lines.push('ℹ️ Initvar không phải JSON (YAML?) — harness đủ vòng bỏ qua (engine MVU vẫn đọc YAML được).');
+      }
     }
   } else {
     lines.push('ℹ️ Card không có schema MVU — bỏ qua kiểm MVU');
@@ -736,6 +895,25 @@ async function buildFinalCheckReport(
   }
   if (badRegex > 0) { lines.push(`❌ ${badRegex}/${regexScripts.length} regex có findRegex KHÔNG compile được`); problems++; }
   else if (regexScripts.length > 0) lines.push(`✅ ${regexScripts.length} regex compile OK`);
+
+  // 3+. (Goal 104.4) EJS parse — entry @@preprocessing vỡ cú pháp là lỗi IM LẶNG: TavernHelper
+  // nuốt lỗi và bỏ qua khối, logic bật/tắt entry không bao giờ chạy mà chẳng ai báo gì.
+  const ejsEntries = entries.filter(en => isPreprocessingEntry(String(en.content || '')));
+  if (ejsEntries.length > 0) {
+    let ejsErrs = 0;
+    for (const en of ejsEntries) {
+      const v = validateEJSEntry(
+        String(en.content || ''),
+        schema && Array.isArray(schema.fields) && schema.fields.length ? normalizeMVUZODSchema(schema) : undefined,
+      );
+      for (const errMsg of v.errors) {
+        lines.push(`❌ EJS "${en.comment || '?'}": ${errMsg}`);
+        ejsErrs++;
+      }
+    }
+    if (ejsErrs > 0) problems += ejsErrs;
+    else lines.push(`✅ ${ejsEntries.length} entry EJS (@@preprocessing) parse sạch`);
+  }
 
   // (Goal 100.3/100.4) Suite hợp nhất validateMvuCard — bắt những gì các phép kiểm cũ lọt:
   // form ghi biến sai đường (bug #162 — kho biến chat của ST thay vì Mvu API) và khoá phẳng
@@ -752,9 +930,13 @@ async function buildFinalCheckReport(
   //  - khối HTML mở fence ```html mà thiếu ``` đóng ⇒ SillyTavern không render;
   //  - nhiều script cùng bám một mỏ neo ⇒ cái chạy trước ăn mất, cái sau vô hình.
   const FENCE = '`'.repeat(3);
+  // (Goal 104) Phép kiểm cũ chỉ soi script BẮT ĐẦU ĐÚNG bằng ```html và kết thúc ĐÚNG bằng
+  // ```+hết chuỗi — fence nằm giữa nội dung, có khoảng trắng/xuống dòng đầu, hay fence đóng
+  // còn ký tự phía sau đều lọt hết. Nay ĐẾM số fence: lẻ ⇒ có fence chưa đóng, bất kể vị trí.
   const unclosed = regexScripts.filter(rs => {
     const rep = String(rs.replaceString || '');
-    return rep.startsWith(FENCE + 'html') && !new RegExp('\\n' + FENCE + '\\s*$').test(rep);
+    const n = (rep.match(new RegExp(FENCE, 'g')) || []).length;
+    return n > 0 && n % 2 === 1;
   });
   if (unclosed.length > 0) {
     lines.push(`❌ ${unclosed.length} script mở fence ${FENCE}html nhưng THIẾU ${FENCE} đóng ở cuối — ST sẽ không render giao diện: ${unclosed.map(s => s.scriptName || '?').slice(0, 3).join(', ')}`);
@@ -802,9 +984,17 @@ async function buildFinalCheckReport(
 
     const isModule = /<script[^>]*type\s*=\s*["']module["']/i.test(rep);
     if (!isModule) continue;
+    // (Goal 104) Nhận ĐỦ 3 cách đưa hàm ra global, không chỉ `window.fn =`:
+    //   window.fn = fn | window['fn'] = fn | Object.assign(window, { fn, ... })
+    // Thiếu 2 cách sau thì báo đỏ oan mọi form viết theo lối gán gộp.
+    const assignBlocks = [...rep.matchAll(/Object\.assign\s*\(\s*(?:window|globalThis)\s*,\s*\{([\s\S]*?)\}\s*\)/g)]
+      .map(m => m[1]).join(',');
     for (const m of rep.matchAll(/\son(?:click|change|input|submit|blur|focus)\s*=\s*["']([A-Za-z_$][\w$]*)\s*\(/g)) {
       const fn = m[1];
-      const exported = new RegExp(`(?:window|globalThis)\\s*\\.\\s*${fn}\\s*=`).test(rep);
+      const exported =
+        new RegExp(`(?:window|globalThis)\\s*\\.\\s*${fn}\\s*=`).test(rep) ||
+        new RegExp(`(?:window|globalThis)\\s*\\[\\s*['"]${fn}['"]\\s*\\]\\s*=`).test(rep) ||
+        new RegExp(`(^|[,{\\s])${fn}\\s*[,:}]`).test(assignBlocks);
       if (!exported && !brokenHandlers.includes(fn)) brokenHandlers.push(fn);
     }
   }
@@ -859,8 +1049,20 @@ function buildFinalCheckReviewPrompt(reportText: string, cardContext: string, us
 Vai của bạn là người HOÀI NGHI, không phải người khen. Mặc định coi card là CHƯA đạt cho tới khi
 tự tìm thấy bằng chứng ngược lại trong chính nội dung thẻ bên dưới.
 
-═══ NỘI DUNG CARD (JSON, có thể bị cắt) ═══
-${cardContext.slice(0, 60_000)}
+═══ NỘI DUNG CARD (JSON) ═══
+${(() => {
+  const LIMIT = 60_000;
+  if (cardContext.length <= LIMIT) return cardContext;
+  // (Goal 104 — FALSE POSITIVE bắt được khi chạy live) Trước đây cắt thô ở 60k rồi vẫn bảo AI
+  // "soi lỗi script bị cắt cụt" ⇒ AI nhìn thấy JSON đứt giữa chừng và LUÔN kết luận card hỏng,
+  // dù card hoàn toàn lành. Nay đánh dấu ranh giới cắt rõ ràng và CẤM suy ra lỗi từ chỗ đó.
+  return cardContext.slice(0, LIMIT) +
+    `\n\n[⚠️ CHỖ NÀY LÀ RANH GIỚI CẮT CỦA CÔNG CỤ, KHÔNG PHẢI LỖI CỦA THẺ]\n` +
+    `Nội dung thẻ dài ${cardContext.length.toLocaleString()} ký tự nên chỉ gửi được ${LIMIT.toLocaleString()} ký tự đầu.\n` +
+    `TUYỆT ĐỐI KHÔNG kết luận "script bị cắt cụt / thiếu fence đóng / thiếu thẻ đóng" dựa trên\n` +
+    `chỗ đứt này — bạn không nhìn thấy phần sau, không có nghĩa là nó thiếu. Chỉ kết luận lỗi\n` +
+    `cắt cụt khi thấy nó nằm GIỮA phần bạn ĐỌC ĐƯỢC, và hãy nói rõ phần nào bạn không kiểm được.`;
+})()}
 ${userRules?.trim() ? `\n═══ QUY TẮC NGƯỜI DÙNG ĐẶT RA ═══\n${userRules.trim()}` : ''}
 
 ═══ BÁO CÁO KIỂM TRA TỰ ĐỘNG (chỉ là gợi ý, KHÔNG phải kết luận) ═══

@@ -18,6 +18,7 @@
 import type { CharacterCardV3, LorebookEntry, MVUZODSchema } from '../../types';
 
 import { collectSchemaVarNames } from '../mvuzod/gameUiValidator';
+import { stripInitVarPreamble } from '../mvuzod/simulateCard';
 import { generateWorldbookEntries, applyGeneratedEntries, findExistingMVUZODEntries } from '../export/worldbookGenerator';
 import { OPENING_FORM_ANCHOR, STATUS_BAR_ANCHOR } from '../mvuzod/regexAnchors';
 
@@ -73,6 +74,38 @@ export function repairInitvarEnabled(entries: LorebookEntry[]): { entries: Loreb
       description: `Tắt entry khởi tạo biến "${e.comment || '[initvar]'}" — đang bật thì MVU không đọc nó làm template, vào game lỗi "变量更新失败"`,
     });
     return { ...e, enabled: false, disable: true } as LorebookEntry;
+  });
+  return { entries: out, fixed };
+}
+
+/**
+ * (bugNeedFix/111) Dòng nhãn/lời dặn nằm TRƯỚC cây biến trong entry [initvar].
+ *
+ * MVU đọc TRỌN nội dung entry bằng `parseString` (YAML/JSON). Một dòng chữ ở đầu vì thế bị hiểu
+ * thành một biến và nuốt luôn biến lớn đầu tiên — trong trình quản lý biến hiện ra cái tên lạ
+ * "[ InitVar ]" ôm hết biến con của "Thế Giới". Nặng hơn: nội dung bắt đầu bằng "[" khiến
+ * parseString bỏ qua YAML hoàn toàn (`/^[[{]/` → nhánh JSON) rồi chạy `jsonrepair`, băm nát cả cây.
+ *
+ * Vá: xoá các dòng đó. Lời dặn vốn thuộc về TÊN entry, không phải nội dung.
+ */
+export function repairInitvarPreamble(entries: LorebookEntry[]): { entries: LorebookEntry[]; fixed: RepairAction[] } {
+  const fixed: RepairAction[] = [];
+  const out = entries.map(e => {
+    const isInit = String(e.content || '').includes('[initvar]')
+      || String(e.comment || '').toLowerCase().includes('initvar');
+    if (!isInit) return e;
+    const raw = String(e.content || '');
+    // Giữ nguyên nhãn [initvar] nếu nó đứng riêng — chỉ soi phần sau khi bỏ nhãn.
+    const noLabel = raw.replace(/\[initvar\]/gi, '');
+    const pre = stripInitVarPreamble(noLabel);
+    if (pre.removed.length === 0) return e;
+    fixed.push({
+      id: 'initvar_preamble',
+      description: `Xoá ${pre.removed.length} dòng chữ nằm trước cây biến trong "${e.comment || '[initvar]'}" `
+        + `("${pre.removed[0].slice(0, 40)}…") — MVU đọc nội dung như YAML nên dòng đó bị hiểu thành một biến `
+        + 'và nuốt mất biến lớn đầu tiên',
+    });
+    return { ...e, content: pre.content } as LorebookEntry;
   });
   return { entries: out, fixed };
 }
@@ -314,6 +347,12 @@ export function autoRepairCard(
     if (initRes.fixed.length > 0 && out.data.character_book) {
       out.data.character_book.entries = initRes.entries;
       fixed.push(...initRes.fixed);
+    }
+    // (bugNeedFix/111) Dòng chữ nằm trước cây biến — xoá đi, nếu không MVU nuốt mất biến lớn đầu tiên.
+    const preRes = repairInitvarPreamble(out.data.character_book?.entries ?? []);
+    if (preRes.fixed.length > 0 && out.data.character_book) {
+      out.data.character_book.entries = preRes.entries;
+      fixed.push(...preRes.fixed);
     }
   }
 

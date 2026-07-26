@@ -154,3 +154,52 @@ describe('EJS / status bar đọc biến có thật không', () => {
     expect(r.stats.ejsRefsMissing).toBe(0);
   });
 });
+
+// ─── (bugNeedFix/111) Dòng nhãn nằm trước cây biến trong [initvar] ────────────────────────
+import { stripInitVarPreamble } from '../simulateCard';
+import { validateMvuCard as validateCard111 } from '../validateMvuCard';
+
+const CA_USER = `[InitVar] Vui lòng không mở
+'Thế Giới':
+  'Ngày': 1
+  'Khung Giờ': 'Sáng'
+'Người Chơi':
+  'Thiên Phú': 0`;
+
+describe('bug 111: nhãn văn xuôi ở đầu [initvar] nuốt mất biến lớn đầu tiên', () => {
+  it('cắt được nhãn, nội dung bắt đầu thẳng bằng cây biến', () => {
+    const r = stripInitVarPreamble(CA_USER.replace(/\[InitVar\]/gi, ''));
+    expect(r.removed).toEqual(['Vui lòng không mở']);
+    expect(r.content.split('\n')[0].trim()).toBe("'Thế Giới':");
+    expect(r.content.trimStart().startsWith('[')).toBe(false);
+  });
+
+  it('mô phỏng vẫn đọc RA ĐỦ biến dù thẻ còn dòng nhãn (không báo thiếu biến oan)', () => {
+    const r = simulateCard({ initVarContent: CA_USER });
+    expect(Object.keys(r.statData)).toEqual(['Thế Giới', 'Người Chơi']);
+    expect(r.stats.initVars).toBe(3);
+  });
+
+  it('mô phỏng BÁO LỖI đích danh + nói rõ hậu quả jsonrepair', () => {
+    const r = simulateCard({ initVarContent: CA_USER });
+    const iss = r.issues.find(i => i.code === 'sim-initvar-preamble')!;
+    expect(iss).toBeTruthy();
+    expect(iss.level).toBe('error');
+    expect(iss.message).toContain('Vui lòng không mở');
+  });
+
+  it('bộ kiểm hợp nhất cũng bắt (mã initvar-preamble)', () => {
+    const r = validateCard111({
+      entries: [{ comment: '[initvar]初始化', content: CA_USER, enabled: false }] as never,
+    });
+    expect(r.errors.map(e => e.code)).toContain('initvar-preamble');
+  });
+
+  it('thẻ đã đúng chuẩn thì không báo gì', () => {
+    const ok = "'Thế Giới':\n  'Ngày': 1";
+    expect(simulateCard({ initVarContent: ok }).issues.map(i => i.code))
+      .not.toContain('sim-initvar-preamble');
+    expect(validateCard111({ entries: [{ comment: '[initvar]', content: ok, enabled: false }] as never }
+    ).errors.map(e => e.code)).not.toContain('initvar-preamble');
+  });
+});

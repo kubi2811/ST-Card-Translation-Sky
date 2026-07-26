@@ -139,9 +139,75 @@ export function parseInitVarYaml(text: string): Record<string, unknown> {
   return root;
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   (bugNeedFix/111) DÒNG NHÃN VĂN XUÔI Ở ĐẦU [initvar] — LỖI NUỐT BIẾN
+   ─────────────────────────────────────────────────────────────────────────
+   Người dùng báo: entry [initvar] mở đầu bằng dòng chữ "[InitVar] Vui lòng không mở", và trong
+   trình quản lý biến, biến lớn đầu tiên ("Thế Giới") BIẾN MẤT — thay vào đó là một biến tên
+   "[ InitVar ]" ôm hết mấy biến con của nó.
+
+   Đối chiếu source MagVarUpdate (util/common.ts → parseString):
+       const json_first = /^[[{]/s.test(content.trimStart());
+       if (json_first) throw …            // ← BỎ QUA YAML luôn
+       … JSON5.parse → JSON.parse(jsonrepair(content))
+   Nội dung bắt đầu bằng "[" khiến MVU tưởng đây là JSON: nó KHÔNG thèm chạy YAML nữa mà đẩy
+   thẳng qua `jsonrepair` — bộ này cố "sửa" một khối YAML thành JSON nên băm nát cây biến. Đó
+   chính xác là cái tên "[ InitVar ]" lạ hoắc mà user nhìn thấy.
+
+   Kết luận (khớp cách chữa của cộng đồng — "xoá chữ initvar vui lòng không mở đi"):
+   nội dung [initvar] phải BẮT ĐẦU THẲNG bằng cây biến, không dòng nhãn/lời dặn nào ở trên.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/** Một dòng có phải "khoá:" hợp lệ của YAML không (khoá có thể bọc nháy). */
+function isYamlMappingLine(line: string): boolean {
+  const t = line.trim();
+  if (!t || t.startsWith('#') || t === '---') return false;
+  return /^(?:'[^']+'|"[^"]+"|[^:#]+?)\s*:(?:\s|$)/.test(t);
+}
+
+export interface InitVarPreambleResult {
+  content: string;
+  /** Các dòng nhãn đã bị bỏ — để log cho user biết mình vừa xoá cái gì. */
+  removed: string[];
+}
+
+/**
+ * Bỏ mọi dòng nhãn/lời dặn nằm TRƯỚC cây biến của [initvar].
+ * Chỉ cắt phần ĐẦU và chỉ cắt những dòng KHÔNG phải "khoá:" — thân biến không bị đụng.
+ * Nội dung vốn là JSON thuần (`{…}`) thì giữ nguyên: MVU đọc JSON được.
+ */
+export function stripInitVarPreamble(content: string): InitVarPreambleResult {
+  const raw = String(content || '');
+  if (!raw.trim()) return { content: raw, removed: [] };
+
+  // JSON thật thì để yên.
+  const trimmedAll = raw.trim();
+  if (trimmedAll.startsWith('{')) {
+    try { JSON.parse(trimmedAll); return { content: raw, removed: [] }; } catch { /* không phải JSON */ }
+  }
+
+  const lines = raw.split(/\r?\n/);
+  const removed: string[] = [];
+  const kept: string[] = [];   // comment YAML (#) và dòng trống — YAML bỏ qua, GIỮ chứ không cắt
+  let i = 0;
+  while (i < lines.length) {
+    const t = lines[i].trim();
+    if (!t || t.startsWith('#') || t === '---') { kept.push(lines[i]); i++; continue; }
+    if (isYamlMappingLine(t)) break;           // gặp cây biến ⇒ dừng
+    removed.push(t);
+    i++;
+  }
+  if (removed.length === 0) return { content: raw, removed: [] };
+
+  return { content: [...kept, ...lines.slice(i)].join('\n').replace(/^\s*\n/, ''), removed };
+}
+
 /** Đọc initvar bất kể JSON hay YAML. */
 export function parseInitVar(content: string): Record<string, unknown> {
-  const raw = String(content || '').replace(/\[initvar\]/gi, '').trim();
+  // (bugNeedFix/111) Bỏ nhãn "[initvar]" và mọi dòng lời dặn ở đầu TRƯỚC khi đọc — đọc y như
+  // MVU sẽ đọc sau khi thẻ được sửa đúng chuẩn.
+  const noLabel = String(content || '').replace(/\[initvar\]/gi, '');
+  const raw = stripInitVarPreamble(noLabel).content.trim();
   if (!raw) return {};
   try {
     const j = JSON.parse(raw);
@@ -219,6 +285,25 @@ export function simulateCard(input: SimulateInput): SimulateResult {
   if (initPaths.length === 0) {
     issues.push({ level: 'error', code: 'sim-initvar-empty',
       message: 'Nạp [initvar] xong mà không ra biến nào — vào game stat_data rỗng, mọi thứ đọc biến đều trắng.' });
+  }
+
+  // (bugNeedFix/111) Dòng nhãn/lời dặn nằm trên cây biến — lỗi im lặng nguy hiểm: MVU vẫn nạp
+  // được nhưng NUỐT MẤT biến lớn đầu tiên (bắt đầu bằng "[" là parseString bỏ qua YAML, chạy
+  // jsonrepair và băm nát cây). Kiểm trên nội dung THÔ, sau khi chỉ bỏ mỗi nhãn [initvar].
+  {
+    const pre = stripInitVarPreamble(String(input.initVarContent || '').replace(/\[initvar\]/gi, ''));
+    if (pre.removed.length > 0) {
+      const first = pre.removed[0];
+      issues.push({
+        level: 'error', code: 'sim-initvar-preamble',
+        message: `Entry [initvar] có ${pre.removed.length} dòng chữ nằm TRƯỚC cây biến (“${first.slice(0, 60)}”). `
+          + 'MVU đọc cả nội dung như YAML nên dòng này bị hiểu thành một biến, nuốt luôn biến lớn đầu tiên; '
+          + (/^\s*[[{]/.test(first)
+            ? 'tệ hơn nữa, nội dung bắt đầu bằng “[” khiến MVU bỏ qua YAML và chạy bộ vá JSON, băm nát cả cây biến. '
+            : '')
+          + 'Xoá các dòng đó đi — nội dung phải bắt đầu thẳng bằng cây biến (lời dặn để ở TÊN entry).',
+      });
+    }
   }
 
   /* ─── 1. Đối chiếu 2 chiều initvar ↔ schema ─── */

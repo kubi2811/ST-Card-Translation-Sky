@@ -14,6 +14,7 @@ import {
   MVU_ENTRY_MARKERS, MVU_TAGS, isMvuUpdateBlockAccepted,
 } from './mvuReference';
 import { checkFormWritePath } from './mvuHarness';
+import { stripInitVarPreamble } from './simulateCard';
 
 export interface MvuCardIssue {
   level: 'error' | 'warning';
@@ -84,6 +85,13 @@ export function validateMvuCard(card: MvuCardInput): MvuCardReport {
     const content = String(e.content ?? '').trim();
     if (!content) {
       errors.push({ level: 'error', code: 'initvar-empty', message: 'Entry [initvar] rỗng.', where });
+    } else if (stripInitVarPreamble(content.replace(/\[initvar\]/gi, '')).removed.length > 0) {
+      // (bugNeedFix/111) Dòng chữ nằm TRƯỚC cây biến. MVU đọc trọn nội dung như YAML nên dòng đó
+      // thành một biến và nuốt mất biến lớn đầu tiên; nếu nó bắt đầu bằng "[" thì parseString còn
+      // bỏ hẳn YAML để chạy jsonrepair, băm nát cả cây.
+      const first = stripInitVarPreamble(content.replace(/\[initvar\]/gi, '')).removed[0];
+      errors.push({ level: 'error', code: 'initvar-preamble',
+        message: `Initvar có dòng chữ trước cây biến ("${first.slice(0, 50)}") — MVU coi nó là một biến và nuốt mất biến lớn đầu tiên. Xoá dòng đó; lời dặn để ở TÊN entry.`, where });
     } else if (/^\S+\/\S+\s*:/m.test(content)) {
       // Khoá phẳng "Player/Name:" — MVU đọc thành MỘT khoá tên có dấu / (bug 78a).
       errors.push({ level: 'error', code: 'initvar-flat-keys',

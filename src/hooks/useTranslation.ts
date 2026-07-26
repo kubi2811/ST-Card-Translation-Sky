@@ -2,6 +2,7 @@ import { splitLorebookBatches } from '../utils/batchSplit';
 import { stripUrlsForCjkCheck } from '../utils/cjk';
 import { scanFieldsForResidualCjk, buildResidualRetryInstruction } from '../utils/residualCjkScan';
 import { buildLorebookRefDictionary, enforceLorebookRefs, validateLorebookRefs, getLockedBookName } from '../utils/lorebookRefSync';
+import { repairInitVarContent, isInitVarEntryText } from '../utils/initVarPreamble';
 import { enforceFormatTagSync, findFormatTagMismatches } from '../utils/formatTagSync';
 import { useCallback, useEffect, useRef } from 'react';
 import { useStore } from '../store';
@@ -2957,6 +2958,34 @@ export function useTranslation() {
         if (swept > 0) store.addLog('success', `🔗 Đồng nhất từ điển EJS: chuẩn hoá ${swept} field về 1 dạng thống nhất (bỏ dấu lạ / hoa-thường lệch).`);
       } catch { /* sweep chỉ tăng cường — lỗi thì bỏ qua */ }
     }
+
+    // ═══ (bugNeedFix/111) DỌN DÒNG NHÃN NẰM TRƯỚC CÂY BIẾN TRONG [initvar] ═══
+    // MVU đọc TRỌN nội dung entry bằng parseString (YAML/JSON), không bỏ dòng nào. Một dòng chữ
+    // ở đầu — kiểu "[InitVar] Vui lòng không mở" — vì thế bị hiểu thành một biến và NUỐT MẤT biến
+    // lớn đầu tiên. Nặng hơn: nội dung bắt đầu bằng "[" khiến parseString (`/^[[{]/`) bỏ hẳn YAML
+    // để chạy jsonrepair, băm nát cả cây biến — đúng cái tên "[ InitVar ]" lạ hoắc user nhìn thấy
+    // trong trình quản lý biến. Thẻ gốc tiếng Trung có sẵn dòng này thì bản dịch cũng thừa hưởng,
+    // nên phải dọn ở đây chứ không thể trông chờ AI.
+    try {
+      let initFixed = 0;
+      for (const f of useStore.getState().fields) {
+        if (f.group !== 'lorebook') continue;
+        if (typeof f.translated !== 'string' || !f.translated.trim()) continue;
+        // Chỉ đụng field NỘI DUNG của entry khởi tạo biến.
+        if (!/\.content$/.test(f.path)) continue;
+        if (!isInitVarEntryText('', f.translated) && !isInitVarEntryText('', f.original)) continue;
+        const rep = repairInitVarContent(f.translated);
+        if (!rep) continue;
+        store.updateField(f.path, { translated: rep.content });
+        initFixed++;
+        store.addLog('success',
+          `🧹 [initvar]: bỏ ${rep.removed.length} dòng chữ nằm trước cây biến ("${rep.removed[0].slice(0, 50)}") `
+          + '— MVU đọc cả nội dung như YAML nên dòng này bị hiểu thành một biến và nuốt mất biến lớn đầu tiên.');
+      }
+      if (initFixed > 0) {
+        store.addLog('info', `   → Đã dọn ${initFixed} entry khởi tạo biến. Lời dặn nên để ở TÊN entry, không để trong nội dung.`);
+      }
+    } catch { /* dọn chỉ tăng cường — lỗi thì bỏ qua, không chặn dịch */ }
 
     // ═══ (User 2026 — việc 81) ĐỒNG BỘ THAM CHIẾU LOREBOOK NẰM TRONG CODE ═══
     // Script/regex trỏ lorebook bằng CHUỖI: getLorebookEntries('主世界书'), e.comment === '开场白',

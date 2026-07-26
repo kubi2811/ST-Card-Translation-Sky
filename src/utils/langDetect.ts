@@ -130,6 +130,13 @@ export function shouldSkipTranslation(text: string, targetLanguage: string, sour
   if (detected === 'unknown' || detected === 'mixed') return false;
 
   const normalizedTarget = LANG_LABEL_MAP[targetLanguage] || targetLanguage;
+
+  // (bugNeedFix/108) CODE có vỏ ngoài đánh lừa bộ đoán ngôn ngữ: từ khoá JS là Latin, comment
+  // có thể đã là tiếng Việt — nên cả hai luật bỏ qua bên dưới đều dễ kết luận "xong rồi",
+  // trong khi CHUỖI HIỂN THỊ và tên worldbook bên trong vẫn là tiếng Trung. Với code, chỉ được
+  // bỏ qua khi ruột đã SẠCH ký tự nguồn.
+  if (looksLikeCodeField(text) && hasSourceScriptLeft(text, normalizedTarget)) return false;
+
   // Skip if text is definitively already in the target language
   if (detected === normalizedTarget) return true;
 
@@ -137,9 +144,44 @@ export function shouldSkipTranslation(text: string, targetLanguage: string, sour
   // Only when the source is a specific known language — 'auto' means "translate whatever".
   const normalizedSource = LANG_LABEL_MAP[sourceLanguage];
   if (normalizedSource && normalizedSource !== normalizedTarget && detected !== normalizedSource) {
+    // Lưu ý: luật này CHỈ dành cho VĂN XUÔI thuần ngôn ngữ khác (yêu cầu #140 — card Trung có
+    // entry tiếng Anh/Nhật thì tôn trọng hợp đồng FROM/TO, không dịch). Field CODE đã được
+    // chốt riêng ở đầu hàm (bug 108) nên không rơi xuống đây khi ruột còn chữ nguồn.
     return true;
   }
 
+  return false;
+}
+
+/**
+ * Text có phải FIELD CODE không (EJS / JS / regex script). Nhận diện rộng tay: chỉ cần vài dấu
+ * hiệu là đủ, vì hậu quả của việc bỏ sót code lớn hơn nhiều so với việc dịch thừa một entry.
+ */
+function looksLikeCodeField(text: string): boolean {
+  if (typeof text !== 'string') return false;
+  if (/<%[\s\S]*?%>/.test(text)) return true;                       // khối EJS
+  if (/\b(?:getvar|setvar|getwi|activateEntry|setEntryEnabled)\s*\(/.test(text)) return true; // API TavernHelper
+  return /\b(?:function|const|let|var)\b[\s\S]*[;{]/.test(text);     // JS thường
+}
+
+/**
+ * Còn ký tự thuộc hệ chữ NGUỒN (Hán / kana / hangul / Cyrillic) mà đích không dùng hệ chữ đó?
+ * Dùng làm chốt an toàn cho mọi luật "bỏ qua": còn thứ để dịch thì không được bỏ qua.
+ */
+function hasSourceScriptLeft(text: string, normalizedTarget: string): boolean {
+  // KHÔNG dùng cleanText ở đây: nó xoá `<…>` (để đoán ngôn ngữ văn xuôi cho chuẩn), mà khối
+  // EJS `<%_ … _%>` cũng khớp luật đó ⇒ chữ Hán nằm TRONG code bị xoá sạch trước khi đếm,
+  // thành ra "không còn gì để dịch" — đúng cái bẫy làm entry EJS bị bỏ qua (bug 108).
+  // Ở đây chỉ cần biết "còn ký tự hệ chữ nguồn hay không", nên đếm trên text THÔ (bỏ URL).
+  const t = (text || '').replace(/https?:\/\/\S+/g, '');
+  const cjk = (t.match(CJK_G) || []).length;
+  const kana = (t.match(KANA_G) || []).length;
+  const hangul = (t.match(HANGUL_G) || []).length;
+  const cyrillic = (t.match(/[Ѐ-ӿ]/g) || []).length;
+  if (cjk > 0 && normalizedTarget !== '中文' && normalizedTarget !== '日本語') return true;
+  if (kana > 0 && normalizedTarget !== '日本語') return true;
+  if (hangul > 0 && normalizedTarget !== '한국어') return true;
+  if (cyrillic > 0 && normalizedTarget !== 'Русский') return true;
   return false;
 }
 

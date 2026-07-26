@@ -487,10 +487,20 @@ mà quy tắc CHO PHÉP. Thà trả về ít entry hơn còn hơn tạo thứ us
 
 export function tryExtractJsonArray(text: string): AIGeneratedEntry[] | null {
   const t = text.trim();
+  // (bugNeedFix/96) LUẬT CHUNG cho mọi bước bóc bên dưới: chỉ TRẢ VỀ khi thật sự bóc được
+  // entry hợp lệ. Trước đây các nhánh viết `return validateEntries(...)` nên khi bắt nhầm một
+  // mảng KHÔNG phải entry (ví dụ mảng "keys" nằm bên trong một entry trần) thì hàm trả null
+  // và THOÁT LUÔN — các cách bóc còn lại không bao giờ được chạy. Đó là lý do một entry trần
+  // hay NDJSON đều bị báo "AI trả về không phải JSON array".
+  const ok = (v: AIGeneratedEntry[] | null) => (v && v.length > 0 ? v : null);
+
   // Try raw parse first
   try {
     const parsed = JSON.parse(t);
-    if (Array.isArray(parsed) && parsed.length > 0) return validateEntries(parsed);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      const v = ok(validateEntries(parsed));
+      if (v) return v;
+    }
   } catch { /* continue */ }
 
   // Try extracting from code fence
@@ -498,7 +508,10 @@ export function tryExtractJsonArray(text: string): AIGeneratedEntry[] | null {
   if (fenceMatch) {
     try {
       const parsed = JSON.parse(fenceMatch[1].trim());
-      if (Array.isArray(parsed)) return validateEntries(parsed);
+      if (Array.isArray(parsed)) {
+        const v = ok(validateEntries(parsed));
+        if (v) return v;
+      }
     } catch { /* continue */ }
   }
 
@@ -508,7 +521,10 @@ export function tryExtractJsonArray(text: string): AIGeneratedEntry[] | null {
   if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
     try {
       const parsed = JSON.parse(t.substring(firstBracket, lastBracket + 1));
-      if (Array.isArray(parsed)) return validateEntries(parsed);
+      if (Array.isArray(parsed)) {
+        const v = ok(validateEntries(parsed));
+        if (v) return v;
+      }
     } catch { /* continue */ }
   }
   
@@ -519,11 +535,14 @@ export function tryExtractJsonArray(text: string): AIGeneratedEntry[] | null {
     while (currentClosing !== -1) {
       try {
         const parsed = JSON.parse(t.substring(firstBracket, currentClosing + 1));
-        if (Array.isArray(parsed)) return validateEntries(parsed);
-      } catch {
-        // Find next closing bracket
-        currentClosing = t.indexOf(']', currentClosing + 1);
-      }
+        if (Array.isArray(parsed)) {
+          const v = ok(validateEntries(parsed));
+          if (v) return v;
+        }
+      } catch { /* thử dấu ] kế tiếp */ }
+      // LUÔN tiến sang dấu ] kế tiếp — kể cả khi parse được nhưng không phải entry hợp lệ.
+      // (Nếu chỉ tiến trong nhánh catch thì trường hợp "parse OK + validate trượt" sẽ lặp vô hạn.)
+      currentClosing = t.indexOf(']', currentClosing + 1);
     }
   }
 
@@ -540,9 +559,27 @@ export function tryExtractJsonArray(text: string): AIGeneratedEntry[] | null {
           const v = validateEntries(arr as unknown[]);
           if (v) return v;
         }
+        // (bugNeedFix/96) MỘT ENTRY TRẦN, không bọc mảng. Xảy ra khi provider bật chế độ
+        // "bắt buộc trả JSON object" — chế độ đó CẤM mảng ở cấp cao nhất nên model đành trả
+        // một object entry. Trước đây rơi thẳng vào "AI trả về không phải JSON array".
+        const single = validateEntries([parsed]);
+        if (single) return single;
       }
     }
   } catch { /* continue */ }
+
+  // (bugNeedFix/96) NDJSON — mỗi dòng một object entry (một số model trả kiểu này khi bị ép JSON).
+  {
+    const lines = t.split('\n').map(l => l.trim()).filter(l => l.startsWith('{') && l.endsWith('}'));
+    if (lines.length > 0) {
+      const objs: unknown[] = [];
+      for (const l of lines) { try { objs.push(JSON.parse(l)); } catch { /* bỏ dòng hỏng */ } }
+      if (objs.length > 0) {
+        const v = validateEntries(objs);
+        if (v) return v;
+      }
+    }
+  }
 
   // (Fix bug #6) CỨU VỚT KHI JSON BỊ CẮT CỤT: model chạm giới hạn token giữa mảng → mảng
   // không đóng `]`, mọi cách parse trên đều fail → trước đây trả null → log "không trả về
@@ -749,10 +786,26 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
         if (ctx.stopped) return { batchIndex: task.batchIndex, entries: null };
         try {
           ctx.log(`📡 Batch ${task.batchIndex}/${totalBatches} — gọi AI${attempt > 0 ? ` (thử lại ${attempt})` : ''}...`);
-          const raw = await callAI({ profile, params: ctx.generationParams, messages: task.messages, signal: ctx.signal });
+          const raw = await callAI({
+            profile,
+            // (bugNeedFix/96) KHÔNG ép chế độ "chỉ trả JSON object": prompt ở đây đòi một
+            // MẢNG entry, mà chế độ đó của provider CẤM mảng ở cấp cao nhất — model buộc phải
+            // bọc lung tung hoặc trả một object, rồi tool báo "không phải JSON array" hàng loạt.
+            params: { ...ctx.generationParams, useJsonResponseFormat: false },
+            messages: task.messages,
+            signal: ctx.signal,
+          });
           result = tryExtractJsonArray(raw.text);
           if (result) break;
-          ctx.log(`⚠️ Batch ${task.batchIndex} — AI trả về không phải JSON array, thử lại...`);
+          // (bugNeedFix/96) Nói rõ AI đã trả về CÁI GÌ — trước đây chỉ báo "không phải JSON
+          // array" nên không ai biết vì sao, cứ thử lại mù rồi bỏ batch.
+          const cutOff = ['length', 'MAX_TOKENS', 'max_tokens'].includes(raw.finishReason || '');
+          const peek = (raw.text || '').trim().replace(/\s+/g, ' ').slice(0, 160) || '(rỗng)';
+          ctx.log(
+            `⚠️ Batch ${task.batchIndex} — không đọc được JSON` +
+            (cutOff ? ' (output BỊ CẮT do chạm giới hạn token — hãy giảm "số entry mỗi lô" hoặc tăng max tokens)' : '') +
+            `. AI trả về: «${peek}${(raw.text || '').length > 160 ? '…' : ''}» → thử lại...`,
+          );
         } catch (err) {
           // Người dùng bấm Dừng → abort: thoát ngay, KHÔNG coi là lỗi/thử lại.
           if (ctx.stopped || (err instanceof DOMException && err.name === 'AbortError')) {

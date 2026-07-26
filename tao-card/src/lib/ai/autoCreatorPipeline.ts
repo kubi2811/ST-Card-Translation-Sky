@@ -17,6 +17,7 @@ import { OPENING_FORM_ANCHOR, STATUS_BAR_ANCHOR } from '../mvuzod/regexAnchors';
 import { isMvuUpdateBlockAccepted } from '../mvuzod/mvuReference';
 import { validateMvuCard } from '../mvuzod/validateMvuCard';
 import { simulateCard } from '../mvuzod/simulateCard';
+import { buildUpdateRulesEntry, findVarsMissingRules } from '../mvuzod/updateRulesBuilder';
 import { runFormCycle } from '../mvuzod/mvuHarness';
 import { validateEJSEntry, isPreprocessingEntry } from '../ejs/ejsParser';
 import { validateReplaceString } from '../regexEngine/regexValidator';
@@ -989,6 +990,23 @@ export async function buildFinalCheckReport(
     problems++;
   }
 
+  // ─── (bugNeedFix/112) Biến nào KHÔNG có quy tắc cập nhật thì cả ván sẽ đứng im ───
+  // User: "có cái cập nhật được vào thanh trạng thái, có cái không". Entry [mvu_update] viết kiểu
+  // văn xuôi chỉ nhắc vài biến — biến không được nhắc thì AI trong game chẳng có cớ gì đụng tới.
+  if (schema && Array.isArray(schema.fields) && schema.fields.length > 0) {
+    const rulesEntry = entries.find(en => /mvu_update/i.test(String(en.comment || ''))
+      && /quy tắc|更新规则|update rule/i.test(String(en.comment || '')));
+    if (rulesEntry) {
+      const missing = findVarsMissingRules(normalizeMVUZODSchema(schema), String(rulesEntry.content || ''));
+      if (missing.length > 0) {
+        lines.push(`❌ ${missing.length} biến KHÔNG có quy tắc cập nhật trong entry [mvu_update] — vào game mấy biến này sẽ đứng im, không bao giờ lên thanh trạng thái: ${missing.slice(0, 8).join(', ')}${missing.length > 8 ? '…' : ''}`);
+        problems++;
+      } else {
+        lines.push('✅ Mọi biến schema đều có quy tắc cập nhật riêng');
+      }
+    }
+  }
+
   // ─── (bugNeedFix/98) BƯỚC MÔ PHỎNG — chạy thử vòng đời card trước khi coi là xong ───
   // Mọi phép kiểm ở trên đều TĨNH: "có entry chưa", "regex compile chưa". Chúng không trả lời
   // được câu hỏi thật: nạp biến khởi tạo lên rồi thì schema / lệnh cập nhật / EJS có ăn khớp
@@ -1349,13 +1367,41 @@ function applyParsedDataToCard(
           }, { enabled: false, defaultRole: 0, insertionOrderStart: 0 }, nextEntryId(entries)));
         }
 
-        if (config.stepConfigs.mvuzod.createUpdateRules && result.updateRulesEntry) {
-          entries.push(materializeEntry({
-            comment: '[mvu_update]Quy tắc cập nhật biến',
-            keys: [''],
-            content: result.updateRulesEntry as string,
-            constant: true,
-          }, { defaultPosition: 4, defaultDepth: 0, defaultRole: 0 }, nextEntryId(entries)));
+        if (config.stepConfigs.mvuzod.createUpdateRules) {
+          // (bugNeedFix/112) TRƯỚC ĐÂY dùng NGUYÊN VĂN bài AI viết. Bài đó là văn xuôi tự do, chỉ
+          // nhắc tay đôi ba biến ("Điểm '/Chiến Đấu/VP Hiện Tại': DÙNG op 'delta'…", "/Túi Đồ/*")
+          // — biến nào được nhắc thì AI trong game biết cập nhật, biến nào không thì đứng im suốt
+          // ván, đúng lời user "có cái cập nhật được vào thanh trạng thái, có cái không".
+          // Nay đi qua TỪNG LÁ của schema: giữ bài của AI làm nội dung chính (nó bám cốt truyện),
+          // biến nào AI bỏ quên thì sinh bù — không còn biến nào thiếu quy tắc.
+          const schemaNow = c.data.extensions.mvuzod?.schema as MVUZODSchema | undefined;
+          const aiText = result.updateRulesEntry as string | undefined;
+          if (schemaNow?.fields?.length) {
+            const built = buildUpdateRulesEntry(schemaNow, aiText);
+            entries.push(materializeEntry({
+              comment: '[mvu_update]Quy tắc cập nhật biến',
+              keys: [''],
+              content: built.content,
+              constant: true,
+            }, { defaultPosition: 4, defaultDepth: 0, defaultRole: 0 }, nextEntryId(entries)));
+            useAutoCreatorStore.getState().addLog({
+              step, level: built.stats.synthesized > 0 ? 'warning' : 'success',
+              message: `📏 Quy tắc cập nhật biến: phủ đủ ${built.stats.total} biến`
+                + ` (AI viết ${built.stats.fromAi}`
+                + (built.stats.synthesized > 0
+                  ? `, máy sinh bù ${built.stats.synthesized} biến AI bỏ quên — nếu không bù thì mấy biến này sẽ đứng im cả ván: ${built.stats.missingFromAi.slice(0, 5).join(', ')}${built.stats.missingFromAi.length > 5 ? '…' : ''}`
+                  : '')
+                + ')',
+            });
+          } else if (aiText) {
+            // Không có schema thì không đối chiếu được — dùng nguyên bài AI như trước.
+            entries.push(materializeEntry({
+              comment: '[mvu_update]Quy tắc cập nhật biến',
+              keys: [''],
+              content: aiText,
+              constant: true,
+            }, { defaultPosition: 4, defaultDepth: 0, defaultRole: 0 }, nextEntryId(entries)));
+          }
         }
 
         if (config.stepConfigs.mvuzod.createVarList && result.varListEntry) {

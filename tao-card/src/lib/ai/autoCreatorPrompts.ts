@@ -221,7 +221,7 @@ Yêu cầu định dạng JSON chính xác:
     ]
   },
   "initVarEntry": "Nội dung cho [initvar] dưới dạng YAML/JSON (nếu được yêu cầu)",
-  "updateRulesEntry": "Nội dung cho [mvu_update]Quy tắc cập nhật biến (nếu được yêu cầu)",
+  "updateRulesEntry": "Cây YAML quy tắc cập nhật — xem QUY TẮC VỀ updateRulesEntry bên dưới",
   "varListEntry": "Nội dung hiển thị biến (nếu được yêu cầu)"
 }
 
@@ -235,6 +235,42 @@ QUY TẮC BẮT BUỘC VỀ SCHEMA:
   { "path": "/Nhân vật", "type": "object", "label": "Nhân vật", "defaultValue": {}, "constraints": {},
     "children": [ { "path": "/Nhân vật/Tên", "type": "string", "label": "Tên", "defaultValue": "", "constraints": {} } ] }
 - Ít nhất vài field phải cho người chơi nhập (KHÔNG đặt "constraints.readOnly" hay "hidden" cho tất cả).
+
+QUY TẮC VỀ "updateRulesEntry" (BẮT BUỘC — đọc kỹ):
+Đây KHÔNG phải đoạn văn xuôi. Viết một CÂY YAML, và phải có mục riêng cho TỪNG BIẾN LÁ trong
+schema ở trên — không sót biến nào, không gộp bằng dấu "*", không dùng đường dẫn kiểu "/A/B".
+Biến nào không có mục riêng thì AI trong game sẽ không bao giờ cập nhật nó, người chơi thấy chỉ
+số đó đứng im cả ván.
+
+Mỗi biến lá gồm:
+  • type   — number / string / boolean (bỏ qua nếu không rõ)
+  • range  — miền giá trị, ví dụ 0~100 hoặc 1~Infinity (chỉ cho số)
+  • format — "Enum: A, B, C" nếu biến chỉ nhận vài giá trị cố định
+  • check  — 2-3 gạch đầu dòng nói RÕ khi nào tăng, khi nào giảm, ràng buộc gì, bám đúng cốt
+             truyện và cơ chế của thẻ này (đừng viết chung chung kiểu "cập nhật khi cần").
+
+Mẫu đúng:
+Quy tắc cập nhật biến:
+  Thế Giới:
+    Ngày:
+      type: number
+      range: 1~Infinity
+      check:
+        - Tăng 1 mỗi khi nhân vật ngủ qua đêm hoặc hết một chu kỳ sáng-đêm
+        - Không tự nhảy ngày khi cảnh vẫn diễn ra liên tục
+    Khung Giờ:
+      format: "Enum: Sáng, Trưa, Chiều, Tối, Đêm"
+      check:
+        - Chuyển tuần tự theo thời lượng hành động trong cảnh
+        - Tối/Đêm làm tỷ lệ quái vật xuất hiện cao hơn
+  Chiến Đấu:
+    VP Hiện Tại:
+      type: number
+      range: 0~VP Tối Đa
+      check:
+        - Dùng op 'delta' trừ khi dùng kỹ năng hoặc chịu sát thương
+        - Hồi lại khi nghỉ ngơi hoặc dùng vật phẩm hồi phục
+        - Rớt về 0 thì kích hoạt trạng thái kiệt sức, mô tả hệ quả trong truyện
 ${JSON_FORMAT_REQUIREMENT}
 `;
   return applyOverride(base, config.promptOverride, config.promptMode);

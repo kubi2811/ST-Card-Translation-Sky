@@ -22,7 +22,7 @@ import { runFormCycle } from '../mvuzod/mvuHarness';
 import { validateEJSEntry, isPreprocessingEntry } from '../ejs/ejsParser';
 import { validateReplaceString } from '../regexEngine/regexValidator';
 import { autoRepairCard } from './cardAutoRepair';
-import { checkMvuOutputContract } from '../mvuzod/mvuReference';
+import { checkMvuOutputContract, checkMvuPatchOps } from '../mvuzod/mvuReference';
 import { buildMvuCoreRegexScripts } from '../mvuzod/mvuCoreRegex';
 import { schemaToZodCode } from '../mvuzod/schemaInferencer';
 import { buildProgrammaticRegex } from '../mvuzod/programmaticRegexBuilder';
@@ -881,6 +881,18 @@ export async function buildFinalCheckReport(
       }
     } else {
       lines.push('✅ Có định dạng đầu ra biến đầy đủ (<UpdateVariable> + <Analysis> + <JSONPatch>)');
+    }
+
+    // (Làm tiếp việc 87 — học từ thẻ One Piece bug/116) Op trong ví dụ patch phải thuộc tập
+    // MVU hỗ trợ (replace/delta/insert/remove/move — KHÔNG phải RFC 6902 nguyên bản). Nội dung
+    // dạy AI mà dùng "add"/"test"/"copy" thì AI học theo, patch trong game bị MVU bỏ qua
+    // IM LẶNG: biến không đổi mà chẳng có lỗi nào hiện ra.
+    {
+      const opsCheck = checkMvuPatchOps(allContent);
+      if (!opsCheck.ok) {
+        lines.push(`❌ Ví dụ patch dùng op MVU KHÔNG hỗ trợ: ${opsCheck.bad.map(b => `"${b.op}" (${b.hint})`).join('; ')} — AI học theo là patch bị bỏ qua im lặng.`);
+        problems++;
+      }
     }
 
     // Entry [initvar] phải có nội dung THẬT, không chỉ đúng cái tên.

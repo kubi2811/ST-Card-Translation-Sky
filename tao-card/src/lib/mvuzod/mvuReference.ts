@@ -43,6 +43,25 @@ export const MVU_TAGS = {
 } as const;
 
 /**
+ * (Làm tiếp việc 87 — bằng chứng thứ HAI: thẻ One Piece 224 entry trong bug/116, thẻ MVU
+ * tiếng Việt user xác nhận đang chạy tốt) Tập op mà MVU THỰC SỰ hỗ trợ, chép nguyên văn từ
+ * entry "[mvu_update]Định Dạng Xuất Biến" của thẻ đó:
+ *     replace · delta · insert (dùng `-` làm chỉ mục mảng để thêm vào cuối) · remove · move
+ *
+ * LỖ ĐÃ BỊT: đây KHÔNG phải RFC 6902 nguyên bản. RFC có `add`/`test`/`copy` — model nào quen
+ * JSON Patch chuẩn sẽ hồn nhiên xuất "op":"add", mà op đó không nằm trong danh sách MVU nhận.
+ * Trước giờ không chỗ nào trong tool chốt tập op này nên chẳng ai bắt được.
+ */
+export const MVU_PATCH_OPS = ['replace', 'delta', 'insert', 'remove', 'move'] as const;
+
+/** Op RFC 6902 mà MVU KHÔNG hỗ trợ → gợi ý thay thế, dùng cho cả bộ kiểm lẫn prompt. */
+export const MVU_UNSUPPORTED_OPS: Record<string, string> = {
+  add: 'dùng "insert" (chèn vào object/mảng, chỉ mục "-" là thêm vào cuối)',
+  test: 'bỏ hẳn — MVU không có op kiểm điều kiện',
+  copy: 'dùng "replace" với giá trị chép tay',
+};
+
+/**
  * Khối đầu ra đúng chuẩn. `sampleOps` là các lệnh patch mẫu (mỗi phần tử một dòng JSON).
  * Phần <Analysis> viết bằng tiếng Anh + giới hạn độ dài đúng như card thật: model suy luận
  * bằng tiếng Anh ngắn gọn thì ra patch chính xác hơn, mà lại không tốn token của phần truyện.
@@ -77,6 +96,24 @@ export function checkMvuOutputContract(text: string): { ok: boolean; missing: st
   if (!new RegExp(`<${MVU_TAGS.analysis}>`, 'i').test(s)) missing.push(MVU_TAGS.analysis);
   if (!new RegExp(`<${MVU_TAGS.patch}>`, 'i').test(s)) missing.push(MVU_TAGS.patch);
   return { ok: missing.length === 0, missing };
+}
+
+/**
+ * (Làm tiếp việc 87) Soi các op xuất hiện trong nội dung dạy AI: op nào KHÔNG thuộc tập MVU
+ * hỗ trợ thì báo kèm cách thay. Ca thật cần bắt: nội dung ví dụ dùng "op":"add" theo RFC —
+ * AI học theo, patch trong game bị MVU bỏ qua im lặng, biến không đổi mà chẳng có lỗi nào.
+ */
+export function checkMvuPatchOps(text: string): { ok: boolean; bad: { op: string; hint: string }[] } {
+  const s = String(text || '');
+  const bad: { op: string; hint: string }[] = [];
+  const seen = new Set<string>();
+  for (const m of s.matchAll(/"op"\s*:\s*"([a-zA-Z_]+)"/g)) {
+    const op = m[1];
+    if ((MVU_PATCH_OPS as readonly string[]).includes(op) || seen.has(op)) continue;
+    seen.add(op);
+    bad.push({ op, hint: MVU_UNSUPPORTED_OPS[op] ?? `không nằm trong tập MVU hỗ trợ (${MVU_PATCH_OPS.join('/')})` });
+  }
+  return { ok: bad.length === 0, bad };
 }
 
 /**
@@ -118,6 +155,9 @@ mảng lệnh phải nằm TRONG <JSONPatch>, để trần là MVU parse không 
 【QUY TẮC RÚT RA】
 - Đường dẫn patch giữ NGUYÊN tên biến tiếng Việt có dấu và khoảng trắng: "/Thế Giới/Ngày".
   KHÔNG bỏ dấu, KHÔNG đổi sang snake_case, KHÔNG dịch sang tiếng Anh.
+- CHỈ dùng đúng 5 op MVU hỗ trợ: replace / delta / insert / remove / move (đối chiếu từ 2 thẻ
+  thật đang chạy). Đây KHÔNG phải RFC 6902 nguyên bản — TUYỆT ĐỐI KHÔNG dùng "add"/"test"/"copy":
+  cần thêm phần tử thì dùng "insert" (chỉ mục mảng "-" = thêm vào cuối).
 - op "delta" chỉ dùng cho SỐ và value là số trần (không có nháy).
 - Biến bắt đầu bằng _ là chỉ đọc, không bao giờ patch.
 - Không có gì đổi thì vẫn xuất khối, với mảng rỗng [].

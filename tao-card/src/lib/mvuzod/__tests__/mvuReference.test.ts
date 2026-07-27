@@ -1,4 +1,45 @@
 import { describe, it, expect } from 'vitest';
+import { checkMvuPatchOps, MVU_PATCH_OPS, MVU_WORKING_CARD_EXAMPLE as EX2 } from '../mvuReference';
+
+/**
+ * (Làm tiếp việc 87 — bằng chứng thứ hai: thẻ One Piece bug/116, MVU tiếng Việt đang chạy)
+ * Thẻ đó chốt tập op MVU hỗ trợ: replace/delta/insert/remove/move — KHÔNG phải RFC 6902
+ * nguyên bản. AI quen JSON Patch chuẩn sẽ xuất "op":"add" → MVU bỏ qua IM LẶNG, biến không
+ * đổi mà không có lỗi nào. Bộ kiểm mới bắt đúng lớp lỗi đó.
+ */
+describe('(việc 87 tiếp) checkMvuPatchOps — op phải thuộc tập MVU hỗ trợ', () => {
+  it('đủ 5 op hợp lệ theo thẻ One Piece', () => {
+    expect([...MVU_PATCH_OPS]).toEqual(['replace', 'delta', 'insert', 'remove', 'move']);
+  });
+
+  it('op hợp lệ → sạch', () => {
+    const r = checkMvuPatchOps('{"op":"replace","path":"/a","value":1} {"op":"delta","path":"/b","value":-2} {"op":"insert","path":"/c/-","value":"x"}');
+    expect(r.ok).toBe(true);
+  });
+
+  it('"add" của RFC 6902 → bắt kèm hướng thay bằng insert', () => {
+    const r = checkMvuPatchOps('{"op":"add","path":"/list/-","value":"x"}');
+    expect(r.ok).toBe(false);
+    expect(r.bad[0].op).toBe('add');
+    expect(r.bad[0].hint).toContain('insert');
+  });
+
+  it('"test"/"copy" → bắt; op lạ hoàn toàn cũng bắt', () => {
+    const r = checkMvuPatchOps('{"op":"test","path":"/a","value":1} {"op":"copy","from":"/a","path":"/b"} {"op":"upsert","path":"/c"}');
+    expect(r.bad.map(b => b.op).sort()).toEqual(['copy', 'test', 'upsert']);
+  });
+
+  it('cùng op sai lặp nhiều lần → chỉ báo một lần', () => {
+    const r = checkMvuPatchOps('{"op":"add","path":"/a"} {"op":"add","path":"/b"}');
+    expect(r.bad).toHaveLength(1);
+  });
+
+  it('ví dụ dạy AI của chính tool phải qua được bộ kiểm này (bộ sinh và bộ kiểm không lệch nhau)', () => {
+    expect(checkMvuPatchOps(EX2).ok).toBe(true);
+    expect(EX2).toContain('replace / delta / insert / remove / move');
+    expect(EX2).toMatch(/KHÔNG dùng "add"/);
+  });
+});
 import { buildMvuOutputBlock, checkMvuOutputContract, MVU_WORKING_CARD_EXAMPLE, MVU_TAGS } from '../mvuReference';
 import { generateOutputFormatEntry, generateEmphasisEntry } from '../scriptGenerator';
 import type { MVUZODSchema } from '../../../types';

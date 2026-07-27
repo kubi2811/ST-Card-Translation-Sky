@@ -25,7 +25,10 @@ export interface EntryGroup {
   subgroups?: EntryGroup[];
 }
 
-export type EjsStrategy = 'setEntryEnabled' | 'getwi';
+// (bugNeedFix/125) Doi ten tu 'setEntryEnabled' -> 'activate'. Ham setEntryEnabled KHONG ton
+// tai trong ST-Prompt-template; extension chi cho KICH HOAT entry dang tat bang
+// await activewi('ten entry', true). Ten cu day ca AI lan nguoi doc code di sai duong.
+export type EjsStrategy = 'activate' | 'getwi';
 
 export interface EntryAnalysis {
   /** Nhóm entries phát hiện được */
@@ -103,7 +106,7 @@ export function analyzeEntryGroups(
     totalToggleable < 100 ? 'medium' : 'complex';
 
   const recommendedStrategy: EjsStrategy =
-    totalToggleable >= 50 ? 'getwi' : 'setEntryEnabled';
+    totalToggleable >= 50 ? 'getwi' : 'activate';
 
   // 8. Find best control variable
   const suggestedControlVar = findBestControlVar(enrichedGroups, schema);
@@ -456,9 +459,9 @@ function buildPromptSummary(
     lines.push('Pattern: đọc biến → xác định era/context → load entries tương ứng bằng getwi()');
     lines.push('NPC: scan chat messages → tìm NPC được nhắc → load NPC entry bằng getwi()');
   } else {
-    lines.push('--- STRATEGY: setEntryEnabled() TOGGLING ---');
+    lines.push('--- STRATEGY: KICH HOAT CO DIEU KIEN (await activewi) ---');
     lines.push('Entries giữ nguyên trạng thái, EJS controller bật/tắt chúng theo điều kiện.');
-    lines.push('Pattern: đọc biến → setEntryEnabled("comment", condition)');
+    lines.push('Pattern: entry de TAT san → doc bien → if (dieu kien) { await activewi("comment", true); }');
   }
 
   // Full entry list for getwi strategy (AI needs exact comments)

@@ -11,6 +11,7 @@ import { callAI } from '../ai/client';
 import { DEFAULT_ENTRY_EXT } from '../../types/lorebook.types';
 import type { TctrlAnalysis, TctrlGroup } from './groupBuilder';
 import type { AnalyzedEntry, TctrlProgress, TctrlRunContext } from './tokenAnalyzer';
+import { STPT_API_PROMPT_BLOCK, validateWorldbookEjs, activationLine } from '../ejs/stptApi';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -57,38 +58,37 @@ export interface TctrlSummary {
 // AI PROMPT
 // ═══════════════════════════════════════════════════════════════════════════
 
-const TCTRL_SYSTEM_PROMPT = `Bạn là chuyên gia viết EJS preprocessing cho SillyTavern.
+// (bugNeedFix/125) Prompt cũ dạy `setEntryEnabled(comment, bool)` — API KHÔNG TỒN TẠI trong
+// ST-Prompt-template. Mọi controller sinh ra chết ngay khi chơi: "setEntryEnabled is not
+// defined". Nay dạy đúng mô hình thật của extension: entry điều khiển TẮT SẴN, controller BẬT
+// có điều kiện bằng `await activewi(...)`; muốn tắt tĩnh thì tắt bằng cấu hình, không viết code.
+const TCTRL_SYSTEM_PROMPT = `Bạn là chuyên gia viết EJS preprocessing cho SillyTavern (extension ST-Prompt-template).
 Nhiệm vụ: Sinh code EJS @@preprocessing để kiểm soát worldbook entries.
 
-BUILT-IN FUNCTIONS có thể dùng:
-- setEntryEnabled(comment, bool) — Bật/tắt entry theo comment text
-- await getwi(null, comment) — Đọc nội dung entry (PHẢI có await, 2 params: null + comment)
-- getvar(key, {defaults}) — Đọc biến
-- setvar(key, value) — Ghi biến
-- getChatMessages(-1, role) — Đọc tin nhắn chat ('user' hoặc 'assistant')
-- matchChatMessages(keywords, {start}) — Scan keywords trong 2 tin gần nhất, trả về bool
-- injectPrompt({text, position, depth}) — Inject text vào vị trí chính xác
-- YAML.stringify(obj) — Format object thành YAML
-- Mvu.getMvuData({type:'message', message_id:'latest'}) — Đọc stat_data
-- _.random(min, max) — Số ngẫu nhiên
-- TavernHelper.getLastMessageId() — Message ID cuối
+${STPT_API_PROMPT_BLOCK}
+
+Hàm bổ trợ có thật khác: YAML.stringify(obj), _.random(min, max), Mvu.getMvuData({type:'message', message_id:'latest'}).
 
 2 STRATEGIES:
-🅰️ setEntryEnabled (card nhỏ, <50 entries/group):
-  setEntryEnabled('Comment entry', điềuKiện);
+🅰️ KÍCH HOẠT CÓ ĐIỀU KIỆN (card nhỏ, <50 entries/group):
+  Entries điều khiển ĐÃ TẮT SẴN (tool tắt trong cấu hình). Controller bật khi điều kiện đúng:
+  <%_
+  if (_bien === 'giá trị') { await activewi('Comment entry'); }
+  _%>
 
-🅱️ getwi loading (card lớn, >50 entries/group):
-  Entries DISABLED. Controller load nội dung khi cần:
+🅱️ GETWI LOADING (card lớn, >50 entries/group):
+  Entries ĐÃ TẮT SẴN. Controller load thẳng NỘI DUNG khi cần:
   <%- await getwi(null, 'Comment entry') %>
 
 QUY TẮC:
 1. Mở đầu bằng @@preprocessing
 2. Dòng đầu code: <%# @@TCTRL — AUTO TOKEN CONTROLLER — DO NOT READ %>
-3. Dùng <%_ _%> (whitespace slurp)
+3. Dùng <%_ _%> (whitespace slurp); mở <%_ và đóng _%> mỗi cái một dòng riêng
 4. Dùng var (KHÔNG let/const — do EJS scoping)
-5. getwi() PHẢI có await — nó là async function
-6. Comment rõ ràng mục đích mỗi block
-7. setEntryEnabled dùng CHÍNH XÁC comment text của entry
+5. activewi()/getwi() PHẢI có await — chúng là async
+6. Chú thích trong scriptlet CHỈ dùng /* ... */ — TUYỆT ĐỐI KHÔNG dùng // (code bị dồn một dòng là // nuốt hết phần sau, vỡ compile)
+7. Tên entry trong activewi/getwi dùng CHÍNH XÁC comment text của entry
+8. KHÔNG bao giờ viết setEntryEnabled/activateEntry/enableWorldInfo — không tồn tại
 
 CHỈ trả về code EJS. KHÔNG markdown, KHÔNG giải thích.`;
 
@@ -101,11 +101,14 @@ function generateFallbackGateKeeper(analysis: TctrlAnalysis): string {
     '@@preprocessing',
     '<%# @@TCTRL::GateKeeper_Main — AUTO TOKEN CONTROLLER — DO NOT READ %>',
     '<%_',
-    `// ═══ AUTO TOKEN CONTROLLER (Generated) ═══`,
-    `// Total entries: ${analysis.totalEntries}`,
-    `// Total tokens: ~${analysis.totalTokens.toLocaleString()}`,
-    `// Budget: ${analysis.effectiveBudget.toLocaleString()} tokens (${Math.round(analysis.effectiveBudget / analysis.totalTokens * 100)}% of total)`,
-    `// Groups: ${analysis.groups.length}`,
+    // (bugNeedFix/125) Chú thích trong scriptlet CHỈ dùng dạng khối /* */ — code AI/máy sinh hay
+    // bị dồn về một dòng, chú thích // khi đó nuốt luôn phần code phía sau và EJS vỡ compile
+    // ("Unexpected token '<'").
+    `/* ═══ AUTO TOKEN CONTROLLER (Generated) ═══`,
+    ` * Total entries: ${analysis.totalEntries}`,
+    ` * Total tokens: ~${analysis.totalTokens.toLocaleString()}`,
+    ` * Budget: ${analysis.effectiveBudget.toLocaleString()} tokens (${Math.round(analysis.effectiveBudget / analysis.totalTokens * 100)}% of total)`,
+    ` * Groups: ${analysis.groups.length} */`,
     '',
   ];
 
@@ -115,7 +118,7 @@ function generateFallbackGateKeeper(analysis: TctrlAnalysis): string {
     const autoVars = analysis.variables.filter(v => v.source === 'auto');
 
     if (mvuzodVars.length > 0) {
-      lines.push('// ═══ BIẾN TỪ MVUZOD SCHEMA ═══');
+      lines.push('/* Biến từ MVUZOD schema */');
       for (const v of mvuzodVars) {
         const safeName = '_' + v.name.replace(/[^a-zA-Z0-9_]/g, '_');
         const defaultVal = v.type === 'number' ? v.defaultValue : `'${v.defaultValue}'`;
@@ -125,7 +128,7 @@ function generateFallbackGateKeeper(analysis: TctrlAnalysis): string {
     }
 
     if (autoVars.length > 0) {
-      lines.push('// ═══ BIẾN AUTO-DETECT (@@tctrl) ═══');
+      lines.push('/* Biến auto-detect (@@tctrl) */');
       for (const v of autoVars) {
         const safeName = '_' + v.name.replace(/[^a-zA-Z0-9_]/g, '_');
         const defaultVal = v.type === 'number' ? v.defaultValue : v.type === 'boolean' ? v.defaultValue : `'${v.defaultValue}'`;
@@ -137,44 +140,43 @@ function generateFallbackGateKeeper(analysis: TctrlAnalysis): string {
 
   // Overview of groups
   for (const group of analysis.groups) {
-    lines.push(`// ${group.name}: ${group.entries.length} entries, ~${group.totalTokens.toLocaleString()} tokens [${group.strategy}]`);
+    lines.push(`/* ${group.name}: ${group.entries.length} entries, ~${group.totalTokens.toLocaleString()} tokens [${group.strategy}] */`);
   }
 
-  lines.push('', '// Controller is active — individual group controllers handle specifics.', '_%>');
+  lines.push('', '/* Controller is active — individual group controllers handle specifics. */', '_%>');
   return lines.join('\n');
 }
 
 function generateFallbackGroupController(
   group: TctrlGroup,
   entriesInGroup: Array<{ id: number; comment: string; priority: string; tokens: number; controlHint?: AnalyzedEntry['controlHint'] }>,
-
 ): string {
   const lines = [
     '@@preprocessing',
     `<%# @@TCTRL::Group_${group.id} — ${group.name} Controller — DO NOT READ %>`,
     '<%_',
-    `// ═══ GROUP: ${group.name} ═══`,
-    `// Entries: ${group.entries.length} | Tokens: ~${group.totalTokens.toLocaleString()} | Budget: ~${group.budgetAllocation.toLocaleString()}`,
-    `// Strategy: ${group.strategy}`,
+    `/* GROUP: ${group.name}`,
+    ` * Entries: ${group.entries.length} | Tokens: ~${group.totalTokens.toLocaleString()} | Budget: ~${group.budgetAllocation.toLocaleString()}`,
+    ` * Strategy: ${group.strategy} */`,
     '',
   ];
 
   if (group.strategy === 'constant') {
-    lines.push('// Constant group — tất cả entries luôn bật, không cần kiểm soát.');
-  } else if (group.strategy === 'getwi') {
-    // ═══ GETWI STRATEGY ═══
-    // All entries in this group are DISABLED.
-    // Controller loads content on-demand using await getwi().
-    lines.push('// ═══ GETWI LOADING — Entries đã disabled, load khi cần ═══');
+    lines.push('/* Constant group — tất cả entries luôn bật, không cần kiểm soát. */');
+    lines.push('_%>');
+    return lines.join('\n');
+  }
 
-    // Variable-controlled entries
-    const variableControlled = entriesInGroup.filter(e => e.controlHint);
-    const otherEntries = entriesInGroup.filter(e => !e.controlHint);
+  const variableControlled = entriesInGroup.filter(e => e.controlHint);
+  const otherEntries = entriesInGroup.filter(e => !e.controlHint);
+
+  if (group.strategy === 'getwi') {
+    /* GETWI: entries đã disabled (configOptimizer), controller load NỘI DUNG khi cần. */
+    lines.push('/* GETWI LOADING — entries đã tắt trong cấu hình, load nội dung khi cần */');
 
     if (variableControlled.length > 0) {
-      lines.push(`// --- Entries điều khiển bằng biến (${variableControlled.length}) ---`);
+      lines.push(`/* Entries điều khiển bằng biến (${variableControlled.length}) */`);
       lines.push('_%>');
-
       for (const entry of variableControlled) {
         if (!entry.comment || !entry.controlHint) continue;
         const safeName = '_' + entry.controlHint.variableName.replace(/[^a-zA-Z0-9_]/g, '_');
@@ -182,19 +184,10 @@ function generateFallbackGroupController(
         lines.push(`<%- await getwi(null, '${entry.comment.replace(/'/g, "\\'")}') %>`);
         lines.push('<%_ } _%>');
       }
-
-      if (otherEntries.length > 0) {
-        lines.push('<%_');
-      }
-    }
-
-    // Chat-keyword triggered entries (priority HIGH/MEDIUM)
-    const keywordEntries = otherEntries.filter(e => e.priority === 'high' || e.priority === 'medium');
-    if (keywordEntries.length > 0 && variableControlled.length === 0) {
+    } else {
       lines.push('_%>');
     }
 
-    // For entries without control hints, load by priority
     const highEntries = otherEntries.filter(e => e.priority === 'high' || e.priority === 'critical');
     if (highEntries.length > 0) {
       lines.push(`<%# Load entries quan trọng (${highEntries.length}) %>`);
@@ -205,10 +198,8 @@ function generateFallbackGroupController(
       }
     }
 
-    // Medium/low entries — load conditionally via matchChatMessages
     const conditionalEntries = otherEntries.filter(e => e.priority === 'medium' || e.priority === 'low');
     if (conditionalEntries.length > 0) {
-      // Group by first keyword from comment
       lines.push(`<%# Load ${conditionalEntries.length} entries theo context chat %>`);
       for (const entry of conditionalEntries.slice(0, 50)) {
         if (!entry.comment) continue;
@@ -220,70 +211,39 @@ function generateFallbackGroupController(
         }
       }
     }
+    return lines.join('\n');
+  }
+
+  /* ═══ NORMAL STRATEGY — (bugNeedFix/125) MÔ HÌNH KÍCH HOẠT, không còn setEntryEnabled ═══
+   *
+   * Bản cũ giả định "entries đang bật, controller TẮT theo điều kiện" và gọi
+   * setEntryEnabled(comment, bool). ST-Prompt-template KHÔNG có API tắt entry từ EJS —
+   * chạy là "setEntryEnabled is not defined", đúng chuỗi lỗi đỏ user chụp.
+   *
+   * Mô hình thật (đối chiếu source extension): entry điều khiển phải TẮT SẴN trong cấu hình
+   * (configOptimizer lo việc đó), controller BẬT nó cho lượt sinh hiện tại bằng
+   * `await activewi('comment')` khi điều kiện đúng. Entry cần tắt VĨNH VIỄN (priority LOW,
+   * dead, duplicate) thì tắt thẳng bằng cấu hình — không cần một dòng code nào. */
+  if (variableControlled.length > 0) {
+    lines.push(`/* Bật có điều kiện ${variableControlled.length} entries (đã tắt sẵn trong cấu hình) */`);
+    for (const entry of variableControlled) {
+      if (!entry.comment || !entry.controlHint) continue;
+      const safeName = '_' + entry.controlHint.variableName.replace(/[^a-zA-Z0-9_]/g, '_');
+      lines.push(activationLine(entry.comment, `${safeName} ${entry.controlHint.condition}`) + ` /* ~${entry.tokens} tokens */`);
+    }
   } else {
-    // ═══ NORMAL STRATEGY (setEntryEnabled) ═══
-    const variableControlled = entriesInGroup.filter(e => e.controlHint);
-    const staticDisabled = entriesInGroup.filter(e => !e.controlHint && e.priority === 'low');
-
-    if (variableControlled.length > 0) {
-      lines.push(`// --- Điều khiển bằng biến (${variableControlled.length} entries) ---`);
-      for (const entry of variableControlled) {
-        if (!entry.comment || !entry.controlHint) continue;
-        const safeName = '_' + entry.controlHint.variableName.replace(/[^a-zA-Z0-9_]/g, '_');
-        lines.push(`setEntryEnabled('${entry.comment.replace(/'/g, "\\'")}', ${safeName} ${entry.controlHint.condition}); // ~${entry.tokens} tokens`);
-      }
-    }
-
-    if (staticDisabled.length > 0) {
-      lines.push(``, `// --- Tắt tĩnh ${staticDisabled.length} entries priority LOW ---`);
-      for (const entry of staticDisabled) {
-        if (entry.comment) {
-          lines.push(`setEntryEnabled('${entry.comment.replace(/'/g, "\\'")}', false); // ~${entry.tokens} tokens`);
-        }
-      }
-    }
+    lines.push('/* Nhóm này không có entry điều khiển bằng biến — entries LOW đã tắt bằng cấu hình. */');
   }
 
   lines.push('_%>');
   return lines.join('\n');
 }
 
-function generateFallbackPriorityGate(
-  deadEntries: AnalyzedEntry[],
-  duplicates: TctrlAnalysis['duplicates'],
-): string {
-  const lines = [
-    '@@preprocessing',
-    '<%# @@TCTRL::PriorityGate — Dead + Duplicate Cleaner — DO NOT READ %>',
-    '<%_',
-    '// ═══ PRIORITY GATE — Tắt entries chết và trùng ═══',
-    '',
-  ];
-
-  if (deadEntries.length > 0) {
-    lines.push(`// --- Dead entries (${deadEntries.length}) ---`);
-    for (const entry of deadEntries.slice(0, 100)) { // Cap at 100 to avoid huge entries
-      if (entry.comment) {
-        lines.push(`setEntryEnabled('${entry.comment.replace(/'/g, "\\'")}', false); // ${entry.reason}`);
-      }
-    }
-    if (deadEntries.length > 100) {
-      lines.push(`// ... và ${deadEntries.length - 100} entries nữa (xem log)`);
-    }
-  }
-
-  if (duplicates.length > 0) {
-    lines.push('', `// --- Duplicate entries (${duplicates.length}) ---`);
-    for (const dup of duplicates.slice(0, 50)) {
-      if (dup.comment) {
-        lines.push(`setEntryEnabled('${dup.comment.replace(/'/g, "\\'")}', false); // trùng với #${dup.keep}`);
-      }
-    }
-  }
-
-  lines.push('_%>');
-  return lines.join('\n');
-}
+/* (bugNeedFix/125) generateFallbackPriorityGate ĐÃ BỎ.
+ * Nó từng sinh một entry EJS gọi setEntryEnabled(x, false) cho từng entry chết/trùng — API
+ * không tồn tại nên entry đó vừa vô dụng vừa nổ lỗi đỏ mỗi lượt chat. Việc tắt tĩnh vốn là
+ * việc của CẤU HÌNH: optimizeConfigs() đã patch enabled=false cho dead/duplicate entries rồi,
+ * không cần (và không thể) làm bằng code EJS. */
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MAIN GENERATION PIPELINE
@@ -324,7 +284,9 @@ export async function generateTctrlEntries(
   // Determine TCTRL entries to generate
 
   const controllableCount = analysis.groups.filter(g => (g.strategy === 'normal' || g.strategy === 'getwi') && g.entries.length > 0).length;
-  const tctrlTotal = 1 + controllableCount + 1; // GateKeeper + per-group + PriorityGate
+  // (bugNeedFix/125) Bỏ PriorityGate: tắt tĩnh dead/duplicate là việc của cấu hình
+  // (optimizeConfigs đã patch enabled=false), EJS không có API tắt entry.
+  const tctrlTotal = 1 + controllableCount; // GateKeeper + per-group
   let tctrlGenerated = 0;
 
   const updateProgress = () => {
@@ -411,11 +373,11 @@ STRATEGY: GETWI LOADING (entries ĐÃ DISABLED)
 - Wrap mỗi getwi trong <%_ if (...) { _%> ... <%_ } _%>
 - Comment text trong getwi PHẢI chính xác: await getwi(null, 'CHÍNH XÁC comment')`
       : `
-STRATEGY: SET_ENTRY_ENABLED (entries đang bật, tắt theo điều kiện)
-- Entries có biến → dùng biến điều khiển: setEntryEnabled(comment, _location === 'X')
-- Entries priority LOW không có biến → disable: setEntryEnabled(comment, false)
-- Entries priority MEDIUM → giữ nguyên
-- Entries priority HIGH/CRITICAL → không tắt`;
+STRATEGY: KÍCH HOẠT CÓ ĐIỀU KIỆN (entries điều khiển ĐÃ TẮT SẴN trong cấu hình)
+- Entries có biến → bật khi điều kiện đúng: if (_location === 'X') { await activewi('comment'); }
+- Entries priority LOW không có biến → KHÔNG viết gì (đã tắt bằng cấu hình)
+- Entries priority MEDIUM/HIGH/CRITICAL không có biến → KHÔNG viết gì (vẫn đang bật, hoạt động như thường)
+- TUYỆT ĐỐI không viết setEntryEnabled — API không tồn tại`;
 
     const groupCode = await tryGenerateWithAI(
       ctx,
@@ -452,41 +414,8 @@ ${groupVars.map(v => `- _${v.name} ← getvar('${v.getvarPath}')`).join('\n')}
     ctx.log(`✅ @@TCTRL::Group_${group.id} [${group.strategy}]`);
   }
 
-  // 3. PriorityGate
-  if (!ctx.stopped) {
-    ctx.log('📡 Sinh @@TCTRL::PriorityGate...');
-    const priorityGateCode = await tryGenerateWithAI(
-      ctx,
-      `Sinh EJS @@preprocessing cho PRIORITY GATE.
-Mục đích: Tắt entries "chết" và entries trùng lặp.
-
-Dead entries (${analysis.deadEntries.length}):
-${analysis.deadEntries.slice(0, 40).map(e => `- [id=${e.entryId}] "${e.comment}" reason: ${e.reason}`).join('\n')}
-${analysis.deadEntries.length > 40 ? `\n... và ${analysis.deadEntries.length - 40} entries nữa` : ''}
-
-Duplicate entries (${analysis.duplicates.length}):
-${analysis.duplicates.slice(0, 20).map(d => `- "${d.comment}" trùng với #${d.keep} → disable`).join('\n')}
-${analysis.duplicates.length > 20 ? `\n... và ${analysis.duplicates.length - 20} cặp nữa` : ''}
-
-Comment entry: @@TCTRL::PriorityGate
-Dùng setEntryEnabled(comment, false) cho từng entry cần tắt.`,
-      () => generateFallbackPriorityGate(analysis.deadEntries, analysis.duplicates),
-    );
-    apiCalls++;
-    tctrlGenerated++;
-    updateProgress();
-
-    tctrlEntries.push({
-      comment: '@@TCTRL::PriorityGate',
-      content: priorityGateCode,
-      keys: ['@@tctrl'],
-      constant: true,
-      position: 4,
-      depth: 0,
-      order: 990,
-    });
-    ctx.log('✅ @@TCTRL::PriorityGate');
-  }
+  // 3. (bugNeedFix/125) PriorityGate đã bỏ — dead/duplicate entries được tắt bằng config patch
+  //    trong optimizeConfigs; EJS không có API tắt entry nên entry PriorityGate cũ chỉ nổ lỗi đỏ.
 
   // 4. Schema init entry (only for auto-detected variables, not MVUZOD)
   const autoVars = analysis.variables.filter(v => v.source === 'auto');
@@ -496,8 +425,8 @@ Dùng setEntryEnabled(comment, false) cho từng entry cần tắt.`,
       '@@preprocessing',
       '<%# @@TCTRL::Schema — Auto Variable Init — DO NOT READ %>',
       '<%_',
-      '// ═══ @@TCTRL SCHEMA — Biến điều khiển entries (auto-detect) ═══',
-      '// AI: Cập nhật các biến này mỗi lượt dựa trên context chat',
+      '/* @@TCTRL SCHEMA — biến điều khiển entries (auto-detect).',
+      ' * AI: cập nhật các biến này mỗi lượt dựa trên context chat. */',
       `if (typeof getvar('stat_data.@@tctrl') === 'undefined') {`,
       `  setvar('stat_data.@@tctrl', {`,
     ];
@@ -563,7 +492,16 @@ async function tryGenerateWithAI(
         messages,
       });
 
-      return parseEjsResponse(response.text);
+      const code = parseEjsResponse(response.text);
+      // (bugNeedFix/125) CHỐT CHẶN: AI trả gì cũng lưu chính là cách các entry gọi
+      // setEntryEnabled (API bịa) và chú thích // (vỡ compile khi mất xuống dòng) lọt vào thẻ
+      // của user. Không qua kiểm thì coi như AI fail — thử lại, hết lượt thì dùng template
+      // tất định vốn luôn hợp lệ.
+      const check = validateWorldbookEjs(code);
+      if (!check.ok) {
+        throw new Error(`EJS không hợp lệ: ${check.problems.join(' | ')}`);
+      }
+      return code;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (attempt < maxRetries) {
@@ -606,3 +544,12 @@ export function materializeTctrlEntry(tctrl: TctrlEntry, id: number): LorebookEn
     },
   };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// (bugNeedFix/125) Lộ template fallback cho test — chúng phải LUÔN sinh EJS hợp lệ,
+// vì đây là thứ được ghi vào thẻ khi AI fail hoặc trả code không qua kiểm.
+// ═══════════════════════════════════════════════════════════════════════════
+export const __testables = {
+  generateFallbackGateKeeper,
+  generateFallbackGroupController,
+};

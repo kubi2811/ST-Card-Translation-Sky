@@ -128,7 +128,7 @@ export function EJSAIGenerator({ schema, onInsertCode, currentEditorCode }: EJSA
     }
   }, [category, entries, schema]);
 
-  const activeStrategy = strategyOverride ?? entryAnalysis?.recommendedStrategy ?? 'setEntryEnabled';
+  const activeStrategy = strategyOverride ?? entryAnalysis?.recommendedStrategy ?? 'activate';
 
   // ─── Toggle Helpers ───
   const toggleEntryId = useCallback((id: number) => {
@@ -414,14 +414,14 @@ export function EJSAIGenerator({ schema, onInsertCode, currentEditorCode }: EJSA
             <p className="text-[9px] text-muted-foreground mb-1">{fmt(ui.egStrategy, { name: entryAnalysis.recommendedStrategy })}</p>
             <div className="flex gap-1">
               <button
-                onClick={() => setStrategyOverride('setEntryEnabled')}
+                onClick={() => setStrategyOverride('activate')}
                 className={`flex-1 px-2 py-1 rounded text-[9px] font-medium transition-colors ${
-                  activeStrategy === 'setEntryEnabled'
+                  activeStrategy === 'activate'
                     ? 'bg-blue-500/15 text-blue-400 border border-blue-500/30'
                     : 'text-muted-foreground hover:text-foreground bg-muted/20'
                 }`}
               >
-                🅰️ setEntryEnabled
+                🅰️ Kích hoạt có ĐK
               </button>
               <button
                 onClick={() => setStrategyOverride('getwi')}
@@ -652,7 +652,7 @@ export function EJSAIGenerator({ schema, onInsertCode, currentEditorCode }: EJSA
                   ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
                   : 'bg-blue-500/10 text-blue-400 border border-blue-500/20'
               }`}>
-                {result.strategy === 'getwi' ? '🅱️ getwi()' : '🅰️ setEntryEnabled()'}
+                {result.strategy === 'getwi' ? '🅱️ getwi()' : '🅰️ activewi()'}
               </span>
               <span className="text-[9px] text-muted-foreground">
                 {fmt(ui.egWillDisable, { count: result.entryActions.filter(a => a.action === 'disable').length })}

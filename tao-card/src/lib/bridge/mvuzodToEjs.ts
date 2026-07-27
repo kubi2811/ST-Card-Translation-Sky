@@ -4,7 +4,7 @@
  * Generates 4 types of EJS templates:
  * 1. Multi-phase Persona — Changes AI behavior based on numeric variable thresholds
  * 2. Variable Display — Shows current variable state in prompt
- * 3. Conditional Worldbook Controller — Toggles entries based on boolean/string variables
+ * 3. Conditional Worldbook Controller — Kích hoạt entry (đang tắt) theo biến boolean/string
  * 4. Inject Prompt — Dynamic prompt injection based on variable values
  *
  * All generated templates use the `getvar('stat_data.X')` pattern
@@ -12,6 +12,7 @@
  */
 
 import type { MVUZODSchema, MVUZODField } from '../../types/mvuzod.types';
+import { activationLine } from '../ejs/stptApi';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -268,7 +269,10 @@ export function generateConditionalWB(
 
   lines.push('');
 
-  // Generate setEntryEnabled calls
+  // (bugNeedFix/125) Trước đây sinh setEntryEnabled(comment, bool) — API KHÔNG tồn tại trong
+  // ST-Prompt-template, chơi thẻ là "setEntryEnabled is not defined". Extension chỉ cho KÍCH
+  // HOẠT entry đang tắt, nên các entry được map ở đây phải để enabled=false và ta bật chúng
+  // có điều kiện. Xem lib/ejs/stptApi.ts để biết vì sao bắt buộc có tham số force.
   for (const mapping of effectiveMappings) {
     const field = leaves.find(f => f.dotPath === mapping.fieldPath);
     if (!field) continue;
@@ -279,7 +283,7 @@ export function generateConditionalWB(
         ? `!${field.varName}`
         : `${field.varName} === '${escapeQuotes(mapping.condition)}'`;
 
-    lines.push(`setEntryEnabled('${escapeQuotes(mapping.entryComment)}', ${condition});`);
+    lines.push(activationLine(mapping.entryComment, condition));
   }
 
   lines.push('_%>');
@@ -287,11 +291,11 @@ export function generateConditionalWB(
   return {
     type: 'conditional_wb',
     name: 'Conditional Worldbook',
-    description: `Bật/tắt ${effectiveMappings.length} entries theo biến`,
+    description: `Kích hoạt ${effectiveMappings.length} entries theo biến (các entry này phải để TẮT sẵn)`,
     code: lines.join('\n'),
     fieldPaths: effectiveMappings.map(m => m.fieldPath),
     entryConfig: {
-      comment: 'EJS: Bật/tắt Worldbook theo biến',
+      comment: 'EJS: Kích hoạt Worldbook theo biến',
       constant: true,
       position: 'before_char',
     },

@@ -91,9 +91,15 @@ _%>
 📚 WORLDBOOK (QUAN TRỌNG: getwi là async!):
   await getwi('comment')         Đọc nội dung entry theo comment (PHẢI có await!)
   await getwi(null, 'comment')   Đọc entry từ worldbook hiện tại (PHẢI có await!)
-  activateEntry(id, bool)        Bật/tắt entry theo ID số
-  setEntryEnabled(comment, bool) Bật/tắt entry theo comment text
-  setEntryContent(comment, text) Ghi nội dung entry
+  await activewi('comment', true) KÍCH HOẠT entry đang TẮT cho lượt này (alias activateWorldInfo)
+  await activewi('sách', 'comment', true)  như trên, chỉ đích danh sách
+  activateWorldInfoByKeywords(['từ khoá'], { force: true })  kích hoạt entry tắt khớp từ khoá
+
+  ⛔ KHÔNG TỒN TẠI — viết vào là lỗi đỏ "is not defined" khi chơi:
+     setEntryEnabled(), activateEntry(), setEntryContent(), enableWorldInfo(), disableWorldInfo()
+  ⚠️ EJS KHÔNG TẮT được entry. Muốn một entry chỉ hiện có điều kiện thì để nó TẮT sẵn
+     (enabled = false) rồi bật bằng activewi. Muốn tắt hẳn thì tắt trong cấu hình entry.
+  ⚠️ activewi PHẢI có tham số force = true; thiếu nó lời gọi chạy êm nhưng không kích hoạt gì.
 
   ⚠️ getwi() là ASYNC — BẮT BUỘC dùng await:
     <%- await getwi('tên entry') %>         ← Output nội dung entry
@@ -117,11 +123,11 @@ _%>
 
 ═══ 2 STRATEGIES CHO CONTROLLER ═══
 
-🅰️ Strategy setEntryEnabled (card đơn giản, <50 entries):
-  Entries giữ nguyên, EJS bật/tắt chúng:
+🅰️ Strategy activate (card đơn giản, <50 entries):
+  Entries liên quan để TẮT sẵn, EJS bật cái đúng điều kiện:
   \`\`\`
-  setEntryEnabled('Entry A', biến === 'giá trị A');
-  setEntryEnabled('Entry B', biến === 'giá trị B');
+  if (biến === 'giá trị A') { await activewi('Entry A', true); }
+  if (biến === 'giá trị B') { await activewi('Entry B', true); }
   \`\`\`
 
 🅱️ Strategy getwi (card phức tạp, 50+ entries):
@@ -161,7 +167,7 @@ _%>
 7. Dùng <%_ _%> (whitespace slurp) để tránh xuống dòng thừa
 8. Logic phức tạp nên chia nhỏ thành nhiều entries
 9. getwi() là async — BẮT BUỘC dùng await: await getwi('comment') hoặc await getwi(null, 'comment')
-10. Card nhiều entries (>50): ưu tiên dùng getwi() load entries thay vì setEntryEnabled()
+10. Card nhiều entries (>50): ưu tiên dùng getwi() load nội dung thay vì kích hoạt từng entry
 11. Entries được getwi() load PHẢI ở trạng thái DISABLED trong worldbook
 12. matchChatMessages() dùng để phát hiện keyword context trong chat gần nhất
 
@@ -170,7 +176,7 @@ _%>
 Trả về JSON object:
 {
   "explanation": "Giải thích ngắn gọn EJS code làm gì",
-  "strategy": "getwi hoặc setEntryEnabled",
+  "strategy": "getwi hoặc activate",
   "controller": {
     "entryComment": "Tên entry controller (ví dụ: 'Bộ điều khiển EJS')",
     "code": "@@preprocessing\\n<%_ ... _%>"
@@ -182,7 +188,7 @@ Trả về JSON object:
 }
 
 entryActions chỉ cần cho strategy getwi. action: "disable" = tắt entry, "keep" = giữ nguyên.
-Nếu strategy là setEntryEnabled, có thể bỏ entryActions.
+Nếu strategy là activate, entryActions phải liệt kê các entry cần chuyển sang TẮT sẵn.
 
 CHỈ trả về JSON. KHÔNG markdown, KHÔNG giải thích bên ngoài JSON.
 `;
@@ -351,7 +357,7 @@ _%>
 <%- await getwi(null, 'Entry liên quan keyword1') %>
 <%_ } _%>
 \`\`\``
-    : `STRATEGY ĐƯỢC CHỌN: setEntryEnabled() TOGGLING
+    : `STRATEGY ĐƯỢC CHỌN: KÍCH HOẠT CÓ ĐIỀU KIỆN (await activewi)
 Entries giữ nguyên, EJS controller bật/tắt chúng.
 
 PATTERN:
@@ -359,8 +365,8 @@ PATTERN:
 @@preprocessing
 <%_
   var era = getvar('stat_data.Trạng thái.Thời đại', { defaults: 'Hiện đại' });
-  setEntryEnabled('WB: Cổ đại', era === 'Cổ đại');
-  setEntryEnabled('WB: Hiện đại', era === 'Hiện đại');
+  if (era === 'Cổ đại') { await activewi('WB: Cổ đại', true); }
+  if (era === 'Hiện đại') { await activewi('WB: Hiện đại', true); }
 _%>
 \`\`\``;
 
@@ -652,7 +658,7 @@ FUNCTIONS CÓ THỂ DÙNG:
   setvar(key, value)           Ghi biến
   print(text)                  Output text
   await getwi(null, 'comment') Load entry
-  setEntryEnabled(comment, b)  Bật/tắt entry
+  await activewi(comment, true)  Kích hoạt entry đang tắt (KHÔNG có setEntryEnabled)
   injectPrompt({text, position:'in_chat', depth:N})
   matchChatMessages(keywords)  Scan chat keywords
   getChatMessages(-1, role)    Đọc chat
@@ -705,7 +711,7 @@ export function parseEjsResponse(rawText: string): EJSGenerationResult {
     if (parsed.controller) {
       return {
         explanation: parsed.explanation ?? '',
-        strategy: parsed.strategy ?? 'setEntryEnabled',
+        strategy: parsed.strategy ?? 'activate',
         entryComment: parsed.controller.entryComment ?? 'Bộ điều khiển EJS',
         code: parsed.controller.code ?? '',
         entryActions: Array.isArray(parsed.entryActions) ? parsed.entryActions : [],
@@ -715,7 +721,7 @@ export function parseEjsResponse(rawText: string): EJSGenerationResult {
     // Old format: { explanation, entryComment, code }
     return {
       explanation: parsed.explanation ?? '',
-      strategy: parsed.strategy ?? 'setEntryEnabled',
+      strategy: parsed.strategy ?? 'activate',
       entryComment: parsed.entryComment ?? 'EJS: Generated',
       code: parsed.code ?? '',
       entryActions: Array.isArray(parsed.entryActions) ? parsed.entryActions : [],

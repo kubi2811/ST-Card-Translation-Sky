@@ -129,7 +129,9 @@ function buildEJSControllerContent(schema: MVUZODSchema): string {
 <%_
 // Đọc biến từ stat_data (TavernHelper variables)
 ${varReads.join('\n')}
-// Kích hoạt/tắt entries theo era bằng activateEntry(id, bool) hoặc setEntryEnabled(comment, bool)
+// (bugNeedFix/125) Muốn kích hoạt entry theo era: để entry đó TẮT sẵn rồi gọi
+// await activewi('tên entry', true) trong khối này. ST-Prompt-template KHÔNG có
+// setEntryEnabled/activateEntry — viết vào là lỗi "is not defined" khi chơi.
 _%>`;
 }
 

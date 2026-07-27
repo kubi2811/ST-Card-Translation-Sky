@@ -89,23 +89,29 @@ export function optimizeConfigs(
         continue; // Skip further optimizations for getwi entries
       }
 
-      // ═══ CRITICAL FIX: Entries managed by TCTRL must be non-constant ═══
-      // In SillyTavern, `constant: true` entries are ALWAYS injected into context
-      // regardless of setEntryEnabled(). To allow TCTRL EJS to control them,
-      // we must set constant=false so setEntryEnabled() actually works.
+      // ═══ (bugNeedFix/125) MÔ HÌNH KÍCH HOẠT — thay cho giả định setEntryEnabled cũ ═══
       //
-      // Exception: Core system entries (hierarchy 1-2) stay constant because
-      // TCTRL won't disable them anyway (they're critical).
-      if (entry.constant && group.strategy !== 'constant') {
+      // Bản cũ chỉ hạ constant=false rồi trông chờ EJS gọi setEntryEnabled() để TẮT entry.
+      // Hàm đó không tồn tại trong ST-Prompt-template, nên entry chẳng bao giờ bị tắt mà
+      // controller thì nổ "setEntryEnabled is not defined" mỗi lượt chat.
+      //
+      // Đúng chiều của extension: EJS chỉ BẬT được entry đang tắt (await activewi(..., true)).
+      // Vậy entry mà controller định điều khiển phải TẮT SẴN ngay trong cấu hình — có thế
+      // nhánh "điều kiện chưa đúng" mới thật sự tiết kiệm token. Entry KHÔNG có biến điều
+      // khiển thì để nguyên: chúng vẫn chạy bằng keyword như bình thường.
+      if (analyzed?.controlHint && group.strategy === 'normal' && (entry.enabled || entry.constant)) {
         patches.push({
           entryId: entry.id,
           patches: {
+            enabled: false,
             constant: false,
           },
-          reason: `constant → false: Để @@TCTRL có thể điều khiển bật/tắt entry "${entry.comment}"`,
+          reason: `Tắt sẵn để @@TCTRL::Group_${group.id} bật có điều kiện bằng await activewi() — biến "${analyzed.controlHint.variableName}"`,
         });
+        disabledCount++;
         configChangedCount++;
-        log(`  ⚙️ "${entry.comment}": constant=false (để EJS điều khiển được)`);
+        log(`  🔽 "${entry.comment}": tắt sẵn — controller bật khi ${analyzed.controlHint.variableName} ${analyzed.controlHint.condition}`);
+        continue;
       }
 
       // ═══ LOW PRIORITY entries in normal groups: ensure non-constant ═══

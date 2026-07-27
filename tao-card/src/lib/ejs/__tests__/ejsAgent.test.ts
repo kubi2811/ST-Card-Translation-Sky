@@ -25,7 +25,7 @@ const ENTRIES: LorebookEntry[] = [
 const ctx = { schema: SCHEMA, entries: ENTRIES, characterName: 'Test' };
 
 const draft = (over: Partial<EjsDraft>): EjsDraft => ({
-  stepId: 's1', entryComment: 'EJS: Bộ điều khiển', strategy: 'setEntryEnabled',
+  stepId: 's1', entryComment: 'EJS: Bộ điều khiển', strategy: 'activate',
   entryActions: [], explanation: '',
   code: `@@preprocessing\n<%_ var cg = getvar('stat_data.Người Chơi.Cảnh Giới', { defaults: 'Luyện Khí' }); _%>`,
   ...over,
@@ -105,11 +105,11 @@ describe('ejsAgent — đủ vòng qua khung goalAgent với mock AI', () => {
       steps: [{ id: 's1', title: 'Controller', requirement: 'làm controller' }],
     };
     const badResp = JSON.stringify({
-      explanation: 'v1', strategy: 'setEntryEnabled',
+      explanation: 'v1', strategy: 'activate',
       controller: { entryComment: 'EJS: Controller', code: `@@preprocessing\n<%_ var x = getvar('stat_data.SAI.Đường', { defaults: 1 }); _%>` },
     });
     const goodResp = JSON.stringify({
-      explanation: 'đã sửa', strategy: 'setEntryEnabled',
+      explanation: 'đã sửa', strategy: 'activate',
       controller: { entryComment: 'EJS: Controller', code: `@@preprocessing\n<%_ var x = getvar('stat_data.Người Chơi.HP', { defaults: 100 }); _%>` },
     });
     let fixCalls = 0;

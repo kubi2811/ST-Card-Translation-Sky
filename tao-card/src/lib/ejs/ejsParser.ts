@@ -4,6 +4,7 @@
  */
 
 import type { MVUZODSchema, MVUZODField } from '../../types/mvuzod.types';
+import { validateWorldbookEjs } from './stptApi';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TOKEN TYPES
@@ -137,11 +138,12 @@ export function validateEJSEntry(content: string, schema?: MVUZODSchema): Valida
     warnings.push('Entry không có @@preprocessing — sẽ không được xử lý như EJS');
   }
 
-  // Check balanced EJS tags
-  const openCount = (content.match(/<%/g) ?? []).length;
-  const closeCount = (content.match(/%>/g) ?? []).length;
-  if (openCount !== closeCount) {
-    errors.push(`EJS tags không cân: ${openCount} mở, ${closeCount} đóng`);
+  // (bugNeedFix/125) Đếm thô <% và %> KHÔNG đủ. Ca làm vỡ thẻ của user cân bằng số lượng nhưng
+  // vẫn sai cấu trúc: một khối <%_ mở lại mà không đóng khiến thẻ kế tiếp lọt vào JS, extension
+  // báo "Unexpected token '<'". validateWorldbookEjs dựng lại đúng máy trạng thái lint() của
+  // ST-Prompt-template (kèm chặn API bịa như setEntryEnabled) nên bắt được cả hai kiểu lỗi đó.
+  for (const p of validateWorldbookEjs(content).problems) {
+    errors.push(p);
   }
 
   // Extract getvar calls

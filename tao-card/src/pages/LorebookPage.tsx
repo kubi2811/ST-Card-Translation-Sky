@@ -20,7 +20,7 @@ import { splitKeyInput } from '../lib/worldbook/keyInput';
 import { BatchGeneratorPanel } from '../components/lorebook/BatchGeneratorPanel';
 import { LorebookAgentPanel } from '../components/lorebook/LorebookAgentPanel';
 import { DocExtractPanel } from '../components/lorebook/DocExtractPanel';
-import { WikiScraperPanel } from '../components/lorebook/WikiScraperPanel';
+import { WikiImportPanel } from '../components/lorebook/WikiImportPanel';
 import { RAGDebugPanel } from '../components/lorebook/RAGDebugPanel';
 import { LorebookCategorizationPanel } from '../components/lorebook/LorebookCategorizationPanel';
 import { QualityHubPanel } from '../components/lorebook/QualityHubPanel';
@@ -113,7 +113,7 @@ export function LorebookPage() {
       {activeTab === 'batch' && <div className="flex-1 overflow-y-auto scrollbar-thin"><BatchGeneratorPanel /></div>}
       {activeTab === 'refiner' && <div className="flex-1 overflow-y-auto scrollbar-thin"><LorebookRefinerPanel /></div>}
       {activeTab === 'doc' && <div className="flex-1 overflow-y-auto scrollbar-thin"><DocExtractPanel /></div>}
-      {activeTab === 'wiki' && <div className="flex-1 overflow-y-auto scrollbar-thin"><WikiScraperPanel /></div>}
+      {activeTab === 'wiki' && <div className="flex-1 overflow-y-auto scrollbar-thin"><WikiImportPanel /></div>}
       {activeTab === 'analysis' && <div className="flex-1 overflow-y-auto scrollbar-thin"><LorebookCategorizationPanel /></div>}
       {activeTab === 'quality' && <div className="flex-1 overflow-y-auto scrollbar-thin"><QualityHubPanel /></div>}
       {activeTab === 'tctrl' && <div className="flex-1 overflow-hidden"><TokenBudgetWizard /></div>}

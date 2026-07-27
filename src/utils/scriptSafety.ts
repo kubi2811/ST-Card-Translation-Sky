@@ -87,6 +87,40 @@ export function isLikelyJsScript(text: string): boolean {
 }
 
 /**
+ * (bugNeedFix/128) Text có TÍN HIỆU JS THẬT không — khác với "vô tình parse được".
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Ca thật làm user kẹt vòng dịch-lại: entry [initvar] là YAML thuần
+ *     叙事:
+ *       标题: 待定
+ *     夹带: {}
+ * YAML chữ Hán VÔ TÌNH là JS hợp lệ (mỗi dòng thành labeled statement, `夹带: {}` còn đếm là
+ * "dòng code" vì kết thúc bằng {}), nên lọt qua cả isLikelyJsScript lẫn acorn. Dịch sang tiếng
+ * Việt → nhãn có dấu cách → "Unexpected token (1:7)" → guard tưởng dịch làm vỡ SCRIPT và bắt
+ * dịch lại — trong khi đây chưa bao giờ là script. Hàm này đòi BẰNG CHỨNG CHỦ ĐỘNG của JS
+ * (từ khoá/arrow/gọi hàm/gán), thứ YAML không bao giờ có.
+ */
+export function hasRealJsSignal(text: string): boolean {
+  if (typeof text !== 'string') return false;
+  return /\b(?:const|let|var|function|return|await|async|=>)\b|[\w$一-鿿]\s*\([^)]*\)\s*[;{.]|[^=!<>]=[^=>]/.test(text)
+    && /\b(?:const|let|var|function|class|if|for|while|return|await|=>)\b/.test(text);
+}
+
+/**
+ * (bugNeedFix/128) Vân tay lỗi cú pháp KHÔNG PHỤ THUỘC SỐ DÒNG/CỘT.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Guard chống-retry-vô-ích (bug 95) so vân tay `dòng|thông điệp` — nhưng thông điệp của acorn
+ * TỰ CHỨA "(85:11)", và giữa hai lượt dịch phần văn xuôi có thể xê dịch vài dòng (85 → 81 trong
+ * bằng chứng user). Thế là "lỗi cũ" bị coi là "lỗi mới", đốt đủ 3 lượt retry MỖI LẦN CHẠY dù
+ * kết cục y hệt — đúng cái "vòng lặp không thoát ra được" user tả. Dịch phẫu thuật gần như tất
+ * định: cùng LOẠI lỗi nghĩa là cùng nguyên nhân, dòng lệch mấy cũng vậy. Vân tay chỉ giữ phần
+ * chữ của thông điệp, mọi con số thay bằng #.
+ */
+export function jsErrorFingerprint(err: { line: number; msg: string } | null): string {
+  if (!err) return '';
+  return err.msg.replace(/\d+/g, '#').slice(0, 120);
+}
+
+/**
  * Script CHỈ gồm import + comment + dòng trắng (mẫu template cộng đồng: script tự cập nhật từ CDN
  * qua 1 dòng `import 'https://…jsdelivr…'`). Các script này DỊCH VÔ ÍCH (nội dung thật nằm trên CDN)
  * và đụng vào chỉ thêm rủi ro → caller bỏ qua không dịch.

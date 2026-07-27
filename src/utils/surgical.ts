@@ -366,6 +366,69 @@ export function isInsideStringAtEnd(lineBefore: string): boolean {
   return quote !== null;
 }
 
+/**
+ * (bugNeedFix/128) THU THẬP ĐỊNH DANH JS TRẦN — thứ mà dịch là CHẮC CHẮN vỡ script.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Bằng chứng user: `const 配置 = {` dịch thành `const Cấu hình = {` → SyntaxError (2:12);
+ * schema Zod vỡ ở 85:11 cùng kiểu. Chữ Hán là ĐỊNH DANH JS HỢP LỆ, nhưng bản dịch tiếng Việt
+ * có dấu cách/dấu thanh thì không — và khác với object-key (bọc nháy được) hay dot-notation
+ * (đổi bracket được), định danh trần KHÔNG có cách nào cứu sau dịch: `const Cấu hình` là vỡ,
+ * chấm hết. Các fix trước (34/49/109) chỉ vá object-key/dot-notation/chuỗi nên lỗ này còn nguyên,
+ * và vì surgical gần như tất định nên user gặp ĐI GẶP LẠI trên mọi card có script kiểu này.
+ *
+ * Cách xử duy nhất đúng: NHẬN DIỆN các tên này rồi ĐỪNG DỊCH — giữ nguyên chữ Hán. Script vẫn
+ * chạy y nguyên (tên nội bộ, người chơi không nhìn thấy), và mọi tham chiếu tự khớp nhau.
+ *
+ * Nguồn thu thập (ưu tiên chính xác cao — thà sót một tên còn hơn giết oan cả câu văn):
+ *   1. Khai báo:            const/let/var/function/class 配置
+ *   2. Destructuring:       const { 配置, 状态 } = x
+ *   3. Tham số hàm:         function f(配置) / (配置, 状态) =>
+ *   4. Gốc truy cập thuộc tính: 配置.xxx / 配置?.xxx — dấu CHẤM ASCII dính liền chữ là code,
+ *      văn xuôi Trung dùng 。fullwidth nên không đụng.
+ * Mọi lần xuất hiện của đúng những tên này (ngoài string literal) đều được giữ nguyên.
+ */
+export function collectProtectedJsIdentifiers(text: string): Set<string> {
+  const out = new Set<string>();
+  const src = String(text || '');
+  // Định danh CÓ ÍT NHẤT MỘT chữ Hán, cho phép dính chữ Latin/số/gạch dưới hai bên (AP上限, 魔力值2)
+  // — chỉ những tên chứa CJK mới cần bảo vệ, tên thuần Latin không bao giờ bị extractor đụng tới.
+  const W = '[\\w$\\u4e00-\\u9fff\\u3400-\\u4dbf]';
+  const ID = `${W}*[\\u4e00-\\u9fff\\u3400-\\u4dbf]${W}*`;
+
+  // 1. Khai báo trực tiếp.
+  for (const m of src.matchAll(new RegExp(`\\b(?:const|let|var|function|class)\\s+(${ID})`, 'g'))) {
+    out.add(m[1]);
+  }
+  // 2. Destructuring `const { a, b: c } = …` — lấy tên BÊN TRÁI dấu hai chấm (tên nguồn)
+  //    lẫn tên đơn; tên nguồn phải khớp key gốc nên càng không được dịch.
+  for (const m of src.matchAll(/\b(?:const|let|var)\s*\{([^}]{1,300})\}/g)) {
+    for (const part of m[1].split(',')) {
+      const id = part.match(new RegExp(`^\\s*(${ID})`));
+      if (id) out.add(id[1]);
+    }
+  }
+  // 3. Tham số hàm: function f(...) và (...) =>
+  const paramLists: string[] = [];
+  for (const m of src.matchAll(new RegExp(`\\bfunction\\s*(?:${ID}|[\\w$]*)\\s*\\(([^)]{0,300})\\)`, 'g'))) {
+    paramLists.push(m[1]);
+  }
+  for (const m of src.matchAll(/\(([^()]{0,300})\)\s*=>/g)) {
+    paramLists.push(m[1]);
+  }
+  for (const list of paramLists) {
+    for (const part of list.split(',')) {
+      const id = part.match(new RegExp(`^\\s*(${ID})\\s*(?:=[^,]*)?$`));
+      if (id) out.add(id[1]);
+    }
+  }
+  // 4. Gốc truy cập thuộc tính: `配置.xxx` / `配置?.xxx` / `配置(` — KHÔNG lấy khi chính nó
+  //    đứng sau dấu chấm (khi đó nó là property, đã có đường dot-notation lo).
+  for (const m of src.matchAll(new RegExp(`(^|[^.\\w$\\u4e00-\\u9fff\\u3400-\\u4dbf])(${ID})\\s*(?:\\?\\.|\\.(?=[\\w$\\u4e00-\\u9fff\\u3400-\\u4dbf]))`, 'gm'))) {
+    out.add(m[2]);
+  }
+  return out;
+}
+
 export function extractCJKTokens(
   text: string,
   protectedZones?: ProtectedZone[],
@@ -373,6 +436,9 @@ export function extractCJKTokens(
   mvuDictionary?: Record<string, string>
 ): CJKToken[] {
   const tokens: CJKToken[] = [];
+  // (bugNeedFix/128) Định danh JS trần — gặp token TRÙNG KHỚP tên này ngoài chuỗi là bỏ qua,
+  // không đưa đi dịch. Văn xuôi thuần không có const/let/`.` nên tập này rỗng, không tốn gì.
+  const protectedIds = collectProtectedJsIdentifiers(text);
   // CJK ideograph ranges (primary text characters)
   const CJK = '\\u4e00-\\u9fff\\u3400-\\u4dbf\\u3040-\\u30ff\\uac00-\\ud7af\\uff65-\\uffdc';
   // CJK punctuation joiners: ，。、！？：；…—–\u2018\u2019\u201c\u201d～．（）「」『』【】〈〉《》〔〕〖〗〘〙〚〛
@@ -416,6 +482,47 @@ export function extractCJKTokens(
     const _lineStart = text.lastIndexOf('\n', mStart - 1) + 1;
     const _lineBefore = text.slice(_lineStart, mStart);
     const insideStringLiteral = isInsideStringAtEnd(_lineBefore);
+
+    // ═══ (bugNeedFix/128) ĐỊNH DANH JS TRẦN → KHÔNG DỊCH ═══
+    // `const 配置` dịch ra `const Cấu hình` là SyntaxError không thuốc chữa — không như object-key
+    // (bọc nháy) hay dot-notation (đổi bracket). Token trùng tên đã thu thập (kể cả khi chữ Hán
+    // dính liền chữ Latin thành một từ như AP上限) và KHÔNG nằm trong chuỗi → giữ nguyên chữ Hán.
+    // Trong chuỗi thì vẫn dịch bình thường ('stat_data.配置' đi theo chuẩn SPACE của từ điển MVU).
+    if (!insideStringLiteral && protectedIds.size > 0) {
+      let wStart = mStart, wEnd = mEnd;
+      while (wStart > 0 && /[\w$]/.test(text[wStart - 1])) wStart--;
+      while (wEnd < text.length && /[\w$]/.test(text[wEnd])) wEnd++;
+      if (protectedIds.has(match[0]) || protectedIds.has(text.slice(wStart, wEnd))) continue;
+
+      // ═══ CỤM TRUY CẬP THUỘC TÍNH VỚI BASE CHỮ HÁN: 配置.调试验证 ═══
+      // Dấu `.` ASCII nằm trong bộ JOINER (để câu văn "3.5米" không bị băm), nên cả cụm
+      // `配置.调试验证` bị bắt thành MỘT token và — vì không khớp mẫu dot-notation (mẫu đó chỉ
+      // nhìn ký tự TRƯỚC token) — bị coi là văn xuôi, dịch nguyên cụm thành "Bản dịch có dấu
+      // cách" ⇒ `if (!Bản dịch…)` vỡ. Base Latin (wd.时势) thoát nạn vì run bắt đầu SAU dấu
+      // chấm; base chữ Hán thì xưa nay luôn vỡ — đúng dòng ~85 trong bằng chứng user.
+      // Xử: tách cụm theo dấu chấm — base giữ nguyên, MỖI thuộc tính thành token dot-notation
+      // riêng để reinsert đổi sang bracket: 配置['Bản dịch'] — hợp lệ và khớp key đã dịch.
+      const dotIdx = match[0].indexOf('.');
+      if (dotIdx > 0) {
+        const base = match[0].slice(0, dotIdx);
+        if (protectedIds.has(base)) {
+          const parts = match[0].split('.');
+          let pos = mStart;
+          for (let pi = 0; pi < parts.length; pi++) {
+            const part = parts[pi];
+            if (pi > 0 && /[一-鿿㐀-䶿぀-ヿ가-힯]/.test(part) && !protectedIds.has(part)) {
+              tokens.push({
+                id: id++, text: part, start: pos, end: pos + part.length,
+                isIdentifier: true, isDotNotation: true,
+                isObjectKey: false, isCssClass: false, isHtmlAttr: false,
+              });
+            }
+            pos += part.length + 1;   // +1 cho dấu chấm phân cách
+          }
+          continue;
+        }
+      }
+    }
 
     // 1. JS Object Key
     // Must be preceded by {, ,, or newline/spaces, optionally followed by a quote.

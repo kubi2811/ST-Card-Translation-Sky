@@ -28,7 +28,7 @@ import { injectMvuZodSystem } from '../utils/mvuGenerator';
 import { unifyCrossStrategyDicts } from '../utils/crossStrategySync';
 import { detectEjsCard, extractEjsEntryNames, extractEjsKeywords, aiTranslateEjsEntries, validateEjsSync, autoFixEjsEntryNames, autoFixEjsKeywords, enforceEjsEntryName, enforceEjsCovariance, enforceEjsKeywordCasing, autoFixEjsKeywordsExtended, enforceEjsDictConsistency } from '../utils/ejsSync';
 import { isEjsProseField, maskEjsCode, unmaskEjsCode, countEjsBlocks } from '../utils/ejsSegmenter';
-import { isLikelyJsScript, jsParseErrorAny, isImportOnlyScript } from '../utils/scriptSafety';
+import { isLikelyJsScript, jsParseErrorAny, isImportOnlyScript, hasRealJsSignal, jsErrorFingerprint } from '../utils/scriptSafety';
 import { getActivePresetPromptContent } from '../utils/presetParser';
 import { CallMonitor } from '../utils/callMonitor';
 import { runWorkerPool } from '../utils/runWorkerPool';
@@ -1033,14 +1033,27 @@ export function useTranslation() {
         }
       }
 
-      if (translated && translated !== field.original && isLikelyJsScript(field.original) && jsParseErrorAny(field.original) === null) {
+      // (bugNeedFix/128) HAI ĐIỀU KIỆN MỚI trong cổng guard:
+      // - entryType 'initvar'/'json_patch' KHÔNG BAO GIỜ là script — initvar là YAML mà MVU đọc
+      //   bằng parseString, json_patch là JSON. YAML chữ Hán vô tình parse được như JS (mỗi dòng
+      //   thành labeled statement) nên lọt guard, dịch xong nhãn có dấu cách là "vỡ cú pháp" và
+      //   bị bắt dịch lại vô ích — đúng ca lorebook[49] [initvar] trong bằng chứng user.
+      // - hasRealJsSignal: đòi bằng chứng chủ động của JS (const/let/arrow/gán…), chặn luôn các
+      //   entry YAML/văn xuôi khác không có entryType mà vẫn vô tình parse được.
+      if (translated && translated !== field.original
+        && field.entryType !== 'initvar' && field.entryType !== 'json_patch'
+        && isLikelyJsScript(field.original) && hasRealJsSignal(field.original)
+        && jsParseErrorAny(field.original) === null) {
         const jsErr = jsParseErrorAny(translated);
         if (jsErr) {
           // (bugNeedFix/95) CHỐNG RETRY VÔ ÍCH — lý do user mất 1-2 tiếng cho MỘT field Zod.
           // Dịch phẫu thuật là phép thay-thế-theo-từ-điển gần như TẤT ĐỊNH: chạy lại cho ra
-          // đúng kết quả cũ, nên lỗi y hệt (cùng dòng + cùng thông điệp) nghĩa là dịch lại
-          // KHÔNG BAO GIỜ khác. Nhớ dấu vân tay lỗi; trùng là dừng luôn, giữ gốc.
-          const errFingerprint = `${jsErr.line}|${jsErr.msg.slice(0, 80)}`;
+          // đúng kết quả cũ, nên lỗi y hệt nghĩa là dịch lại KHÔNG BAO GIỜ khác. Nhớ dấu vân
+          // tay lỗi; trùng là dừng luôn, giữ gốc.
+          // (bugNeedFix/128) Vân tay KHÔNG chứa số dòng/cột nữa: giữa hai lượt, phần văn xuôi
+          // dịch xê dịch làm lỗi trôi từ dòng 85 sang 81 — cùng một bệnh mà vân tay cũ coi là
+          // lỗi mới, đốt đủ 3 lượt retry MỖI LẦN CHẠY. Cùng LOẠI lỗi = cùng nguyên nhân.
+          const errFingerprint = jsErrorFingerprint(jsErr);
           const prevFingerprint = useStore.getState().fields.find(f => f.path === field.path)?.lastJsErrorFingerprint;
           const sameErrorAgain = prevFingerprint === errFingerprint;
           if (!sameErrorAgain && freshRetries() < (store.proxy.maxRetries || 3)) {

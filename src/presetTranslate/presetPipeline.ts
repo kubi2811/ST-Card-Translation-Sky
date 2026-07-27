@@ -200,6 +200,12 @@ export async function runPresetTranslation(
   // từ chính cặp prompt trước/sau dịch (pristine ↔ preset, ghép theo identifier) nên regex và
   // prompt không thể lệch nhau. Map kèm CẢ dấu hai chấm: preset gốc dùng ： fullwidth, bản dịch
   // dùng : thường — chỉ thay nhãn mà giữ dấu cũ thì vẫn trượt.
+  //
+  // (bug 124) User báo VẪN CÒN LỖI. Đo trên preset thật trong repo (三人逆行 v11 ↔ bản dịch
+  // chính thức) ra hai lỗ của bản 118, nay đã vá trong presetLabelSync: (a) đòi số nhãn hai
+  // bên bằng nhau nên vứt 89/213 cặp prompt — giờ neo bằng LCS, lệch đoạn nào chỉ mất đoạn đó;
+  // (b) chỉ học nhãn "NHÃN:" nên mù với TÊN THẺ GIẢ (<状态面板>) và nhãn <summary> — mà 4/36
+  // regex của preset thật bám đúng vào chúng.
   const labelMap = buildLabelMap(pristine.prompts, preset.prompts);
   for (const r of regexScripts) {
     // 5a. Nhãn văn bản (đồng bộ prompt) — chạy TRƯỚC để phần CJK còn lại (nếu có) mới tính

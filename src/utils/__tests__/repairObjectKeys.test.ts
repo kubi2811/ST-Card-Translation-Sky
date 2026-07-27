@@ -1,6 +1,6 @@
 // (bugNeedFix/109) "Mất mục khi dịch tool" — thực chất là <script> chết vì khoá object mất nháy.
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { repairUnquotedObjectKeys, repairUnquotedObjectKeysInHtml } from '../repairObjectKeys';
 import { jsParseErrorAny, extractScriptBodies } from '../scriptSafety';
 
@@ -124,7 +124,12 @@ obj.bar= 2;`;
   });
 });
 
-describe('BẰNG CHỨNG THẬT bugNeedFix/109 — file user gửi kèm', () => {
+// (Đồng bộ 2 máy) bugNeedFix/ bị gitignore — file bằng chứng chỉ nằm ở máy nhận file từ user.
+// Máy khác pull về không có ⇒ phải SKIP chứ không FAIL, y như compareCardsRealData.test.ts.
+const HAS_109 = existsSync('bugNeedFix/109/html dịch bằng tool bị lỗi.txt')
+  && existsSync('bugNeedFix/109/html đã được sữa lại cho đúng.txt');
+
+describe.skipIf(!HAS_109)('BẰNG CHỨNG THẬT bugNeedFix/109 — file user gửi kèm', () => {
   it('script trong bản "dịch bằng tool bị lỗi" đang VỠ, sau khi vá thì PARSE SẠCH', () => {
     const bad = readFileSync('bugNeedFix/109/html dịch bằng tool bị lỗi.txt', 'utf8');
     const errBefore = extractScriptBodies(bad).map(b => jsParseErrorAny(b)).filter(Boolean);

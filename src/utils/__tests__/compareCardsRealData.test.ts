@@ -20,23 +20,34 @@ const mapOf = (card: unknown) =>
   new Map(extractTranslatableFields(card as never, ALL).map((f) => [f.path, f.original]));
 
 describe.skipIf(!has)('kịch bản thật: tác giả chèn 2 entry vào giữa + sửa 1 entry', () => {
-  const zhOld = JSON.parse(fs.readFileSync(ZH, 'utf8'));
-  const vi = JSON.parse(fs.readFileSync(VI, 'utf8'));
+  // LƯỜI-DỰNG: `describe.skipIf` chỉ skip các `it` — THÂN describe vẫn CHẠY khi vitest thu
+  // thập test. Bản cũ readFileSync ngay tại đây nên máy KHÔNG có bugNeedFix/94 (thư mục bị
+  // gitignore, dữ liệu bằng chứng chỉ nằm ở máy nhận file) nổ ENOENT làm fail cả suite thay
+  // vì skip như thiết kế. Toàn bộ setup dời vào hàm này, chỉ gọi bên trong `it` (đã bị skip
+  // đúng cách khi thiếu file).
+  let cache: {
+    zhOldMap: Map<string, string>; viMap: Map<string, string>; zhNewMap: Map<string, string>;
+    editedIdx: number; editedKeys: string[];
+  } | null = null;
+  const load = () => {
+    if (cache) return cache;
+    const zhOld = JSON.parse(fs.readFileSync(ZH, 'utf8'));
+    const vi = JSON.parse(fs.readFileSync(VI, 'utf8'));
 
-  // Bản Trung MỚI = gốc + chèn 2 entry ở vị trí 100 và 300 + sửa nội dung entry 200.
-  const zhNew = JSON.parse(JSON.stringify(zhOld));
-  const es = zhNew.data.character_book.entries;
-  const mkEntry = (k: string) => ({ keys: [k], secondary_keys: [], comment: `🆕${k}`, content: `${k}的全新内容`.repeat(40), enabled: true, insertion_order: 0 });
-  es.splice(100, 0, mkEntry('全新甲'));
-  es.splice(300, 0, mkEntry('全新乙'));
-  // entry 200 (chỉ số cũ 199 sau khi chèn 1 cái ở 100) — viết lại nội dung
-  const editedIdx = 200;
-  const editedKeys = [...(es[editedIdx].keys || [])];
-  es[editedIdx].content = String(es[editedIdx].content) + '\n\n【作者新增段落】' + '补充设定内容。'.repeat(50);
+    // Bản Trung MỚI = gốc + chèn 2 entry ở vị trí 100 và 300 + sửa nội dung entry 200.
+    const zhNew = JSON.parse(JSON.stringify(zhOld));
+    const es = zhNew.data.character_book.entries;
+    const mkEntry = (k: string) => ({ keys: [k], secondary_keys: [], comment: `🆕${k}`, content: `${k}的全新内容`.repeat(40), enabled: true, insertion_order: 0 });
+    es.splice(100, 0, mkEntry('全新甲'));
+    es.splice(300, 0, mkEntry('全新乙'));
+    // entry 200 (chỉ số cũ 199 sau khi chèn 1 cái ở 100) — viết lại nội dung
+    const editedIdx = 200;
+    const editedKeys = [...(es[editedIdx].keys || [])];
+    es[editedIdx].content = String(es[editedIdx].content) + '\n\n【作者新增段落】' + '补充设定内容。'.repeat(50);
 
-  const zhOldMap = mapOf(zhOld);
-  const viMap = mapOf(vi);
-  const zhNewMap = mapOf(zhNew);
+    cache = { zhOldMap: mapOf(zhOld), viMap: mapOf(vi), zhNewMap: mapOf(zhNew), editedIdx, editedKeys };
+    return cache;
+  };
 
   const isNew = (p: string, m: Map<string, string>) => {
     const v = m.get(p) || '';
@@ -44,6 +55,7 @@ describe.skipIf(!has)('kịch bản thật: tác giả chèn 2 entry vào giữa
   };
 
   it('3 card (chính xác): chỉ 2 entry MỚI + entry BỊ SỬA vào diện dịch, phần còn lại tái dùng', () => {
+    const { zhOldMap, viMap, zhNewMap } = load();
     const p = planMerge(zhOldMap, viMap, zhNewMap);
     const changedContent = [...p.changed].filter((x) => /\.entries\[\d+\]\.content$/.test(x));
     const newOnes = changedContent.filter((x) => isNew(x, zhNewMap));
@@ -59,6 +71,7 @@ describe.skipIf(!has)('kịch bản thật: tác giả chèn 2 entry vào giữa
   });
 
   it('2 card (suy đoán): bắt đúng 2 entry MỚI; entry bị sửa rơi vào diện NGHI NGỜ', () => {
+    const { viMap, zhNewMap, editedIdx, editedKeys } = load();
     const p = planMergeTwoCard(viMap, zhNewMap);
     const changedContent = [...p.changed].filter((x) => /\.entries\[\d+\]\.content$/.test(x));
     const newOnes = changedContent.filter((x) => isNew(x, zhNewMap));

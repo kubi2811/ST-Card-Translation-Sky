@@ -12,6 +12,7 @@ import type {
   StepStatus,
   StepPreview,
   CardBlueprint,
+  AppliedEjsPolicy,
 } from '../types';
 
 interface AutoCreatorState {
@@ -55,6 +56,9 @@ interface AutoCreatorState {
     patch: Partial<AutoCreatorConfig['stepConfigs'][K]>
   ) => void;
   updateMnConfig: (patch: Partial<AutoCreatorConfig['mnConfig']>) => void;
+  /** (bug 126) EJS Studio áp chính sách EJS sang — Auto Creator hiện banner báo cho user biết. */
+  applyEjsPolicy: (policy: AppliedEjsPolicy) => void;
+  clearEjsPolicy: () => void;
   updateMnStepConfig: <K extends keyof AutoCreatorConfig['mnStepConfigs']>(
     step: K,
     patch: Partial<AutoCreatorConfig['mnStepConfigs'][K]>
@@ -241,6 +245,13 @@ export const useAutoCreatorStore = create<AutoCreatorState>()(persist((set, get)
   reorderMnSteps: (newOrder) => set((s) => ({
     config: { ...s.config, selectedMnSteps: newOrder }
   })),
+
+  applyEjsPolicy: (policy) => set((s) => ({ config: { ...s.config, appliedEjsPolicy: policy } })),
+  clearEjsPolicy: () => set((s) => {
+    const next = { ...s.config };
+    delete next.appliedEjsPolicy;
+    return { config: next };
+  }),
 
   updateStepConfig: (step, patch) => set((s) => ({
     config: {

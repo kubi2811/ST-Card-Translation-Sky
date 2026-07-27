@@ -454,6 +454,17 @@ async function executeStep(
       finalPrompt += `\n\n[YÊU CẦU & QUY TẮC BẮT BUỘC TỪ NGƯỜI DÙNG — ÁP DỤNG CHO TOÀN BỘ CARD, TUÂN THỦ TUYỆT ĐỐI]\n${config.userRules.trim()}`;
     }
 
+    // (bug 126) CHÍNH SÁCH EJS áp từ EJS Studio. Chỉ bơm vào những bước thật sự quyết định
+    // chế độ kích hoạt entry hoặc biến — bơm vào mọi bước chỉ làm loãng prompt và tốn token.
+    //
+    // Cố ý cộng THÊM vào prompt chứ không ghi đè `promptOverride` của bước lorebook: nút
+    // "Áp dụng sang Auto Creator" của AI Sinh Theo Batch đang dùng chỗ đó. Hai tính năng ghi
+    // hai chỗ khác nhau nên user bấm cả hai thì cả hai cùng có hiệu lực, không cái nào xoá cái nào.
+    const ejsPolicy = config.appliedEjsPolicy;
+    if (ejsPolicy?.directive?.trim() && (step === 'lorebook' || step === 'mvuzod')) {
+      finalPrompt += `\n\n[CHÍNH SÁCH EJS/KÍCH HOẠT ENTRY — áp từ EJS Studio (card nguồn: ${ejsPolicy.sourceCard})]\n${ejsPolicy.directive.trim()}`;
+    }
+
     if (ctx.generationParams.max_tokens && ctx.generationParams.max_tokens >= 4000) {
       finalPrompt += `\n\n[YÊU CẦU ĐỘ DÀI VÀ CHI TIẾT - QUAN TRỌNG]
 Người dùng đã cấp dung lượng output rất lớn (${ctx.generationParams.max_tokens} tokens). 

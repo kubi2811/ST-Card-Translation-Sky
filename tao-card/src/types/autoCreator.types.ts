@@ -195,6 +195,32 @@ export interface AutoCreatorConfig {
   };
   mnConfig: MinhNguyetGlobalConfig;      // Config chung cho Minh Nguyệt
   mnStepConfigs: MnStepConfigs;          // Config riêng cho từng bước Minh Nguyệt
+  /** (bug 126) Chính sách EJS được EJS Studio áp sang — xem AppliedEjsPolicy. */
+  appliedEjsPolicy?: AppliedEjsPolicy;
+}
+
+/**
+ * (bug 126) CHÍNH SÁCH EJS do EJS Studio áp sang Auto Creator.
+ *
+ * User muốn: sau khi duyệt kế hoạch EJS cho một card đã hoàn chỉnh, bấm một nút để Auto Creator
+ * làm theo cùng cách đó cho các card sau, và Auto Creator phải BÁO cho biết là đã áp.
+ *
+ * Cố ý tách riêng field này thay vì ghi đè `stepConfigs.lorebook.promptOverride`: nút "Áp dụng
+ * sang Auto Creator" của AI Sinh Theo Batch đã dùng promptOverride rồi. Hai nút ghi hai chỗ
+ * khác nhau thì bấm cả hai vẫn cộng hưởng, không cái nào xoá cái nào.
+ */
+export interface AppliedEjsPolicy {
+  /** ISO time — banner hiện "áp lúc nào" để user biết còn mới hay đã cũ. */
+  appliedAt: string;
+  /** Card đã lấy chính sách này ra. */
+  sourceCard: string;
+  /** Yêu cầu gốc user gõ ở EJS Studio. */
+  goal: string;
+  /** Số dòng kế hoạch đã duyệt. */
+  rowCount: number;
+  summary: { reclassify: number; createEjs: number; character: number; tokensSaved: number };
+  /** Chỉ dẫn bơm thêm vào prompt các bước liên quan của Auto Creator. */
+  directive: string;
 }
 
 // ═══ Step Preview (v3) ═══

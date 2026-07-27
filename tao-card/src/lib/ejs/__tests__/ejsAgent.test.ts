@@ -32,17 +32,28 @@ const draft = (over: Partial<EjsDraft>): EjsDraft => ({
 });
 
 describe('ejsAgent — parsePlan', () => {
-  it('parse kế hoạch JSON + chặn trần 6 bước', () => {
+  // (bug 126) HỢP ĐỒNG ĐỔI: kế hoạch giờ là BẢNG VIỆC `rows` (mỗi dòng một entry, có hiện
+  // trạng/đề xuất/lý do) chứ không còn `steps` văn xuôi; và TRẦN 6 BƯỚC ĐÃ BỎ vì user muốn
+  // ra kế hoạch cho cả card trong một lần thay vì phải chia nhỏ nhiều lượt.
+  it('không còn chặn trần 6 bước — 9 dòng ra đủ 9', () => {
     const domain = createEjsDomain(ctx);
-    const steps = Array.from({ length: 9 }, (_, i) => ({ id: `s${i}`, title: `B${i}`, requirement: `r${i}` }));
-    const plan = domain.parsePlan(JSON.stringify({ scope: 'ok', steps }));
-    expect(plan.steps).toHaveLength(6);
-    expect(plan.estCalls).toBe(7);
+    const rows = Array.from({ length: 9 }, (_, i) => ({
+      id: `s${i}`, action: 'create_ejs', target: 'lorebook',
+      name: `Khối ${i}`, proposal: 'p', reason: 'r', requirement: `r${i}`,
+    }));
+    const plan = domain.parsePlan(JSON.stringify({ scope: 'ok', rows }));
+    expect(plan.steps).toHaveLength(9);
   });
 
-  it('bước thiếu requirement bị loại', () => {
+  it('dòng thiếu requirement không sinh bước (nhưng vẫn là dòng duyệt được trong bảng)', () => {
     const domain = createEjsDomain(ctx);
-    const plan = domain.parsePlan(JSON.stringify({ scope: 's', steps: [{ id: 'a', title: 'thiếu' }, { id: 'b', title: 'đủ', requirement: 'r' }] }));
+    const plan = domain.parsePlan(JSON.stringify({
+      scope: 's',
+      rows: [
+        { id: 'a', action: 'reclassify', target: 'lorebook', name: 'Chỉ đổi chế độ', proposal: 'p', reason: 'r' },
+        { id: 'b', action: 'create_ejs', target: 'lorebook', name: 'Cần sinh code', proposal: 'p', reason: 'r', requirement: 'r' },
+      ],
+    }));
     expect(plan.steps).toHaveLength(1);
     expect(plan.steps[0].id).toBe('b');
   });
@@ -73,9 +84,11 @@ describe('ejsAgent — validate', () => {
     expect(domain.validate([noDir]).some((i) => i.code === 'ejs-missing-directive')).toBe(true);
   });
 
-  it('2 bước trùng tên entry → error ejs-dup-comment', () => {
+  // (bug 126) Kiểm trùng tên nay nằm trong bộ soát XUNG ĐỘT chung (ejs-name-conflict), soát
+  // cả với entry EJS đã có sẵn trong card chứ không chỉ giữa các bước mới.
+  it('2 bước trùng tên entry → error ejs-name-conflict', () => {
     const issues = domain.validate([draft({}), draft({ stepId: 's2' })]);
-    expect(issues.some((i) => i.code === 'ejs-dup-comment')).toBe(true);
+    expect(issues.some((i) => i.code === 'ejs-name-conflict')).toBe(true);
   });
 });
 

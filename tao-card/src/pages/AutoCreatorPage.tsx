@@ -489,6 +489,39 @@ export function AutoCreatorPage() {
             <p className="text-[10px] text-muted-foreground/70">{ui.acUserRulesDesc}</p>
           </div>
 
+          {/* (bug 126) THÔNG BÁO: EJS Studio đã áp chính sách EJS sang đây.
+              User yêu cầu "khi bấm nút áp dụng vào Auto Creator thì ở mục Auto Creator cần có
+              thông báo để người dùng biết tính năng này đã áp dụng" — không có banner thì họ
+              bấm xong chẳng biết nó có ăn hay không. Kèm nút Gỡ để không bị dính vĩnh viễn. */}
+          {store.config.appliedEjsPolicy && (
+            <div className="rounded-xl border border-purple-500/40 bg-purple-500/10 p-3 space-y-1.5">
+              <div className="flex items-start gap-2">
+                <Wand2 className="w-4 h-4 text-purple-300 shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-semibold text-purple-200">
+                    Đã áp chính sách EJS từ EJS Studio
+                  </div>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    Lấy từ card “{store.config.appliedEjsPolicy.sourceCard}” — {store.config.appliedEjsPolicy.rowCount} mục
+                    {store.config.appliedEjsPolicy.summary.reclassify > 0 && `, ${store.config.appliedEjsPolicy.summary.reclassify} mục đổi chế độ kích hoạt`}
+                    {store.config.appliedEjsPolicy.summary.createEjs > 0 && `, ${store.config.appliedEjsPolicy.summary.createEjs} khối EJS`}
+                    {store.config.appliedEjsPolicy.summary.tokensSaved > 0 && ` (~${store.config.appliedEjsPolicy.summary.tokensSaved} token/lượt tiết kiệm ở card nguồn)`}.
+                  </p>
+                  <p className="text-[10px] text-muted-foreground/80 mt-1">
+                    Chính sách này được bơm thêm vào bước <b>Lorebook</b> và <b>MVUZOD</b> khi tạo card mới —
+                    cộng thêm chứ không thay thế cấu hình bạn đã áp từ “AI Sinh Theo Batch”.
+                  </p>
+                </div>
+                <button
+                  onClick={() => { store.clearEjsPolicy(); useToastStore.getState().info('Đã gỡ chính sách EJS khỏi Auto Creator.'); }}
+                  disabled={store.isRunning}
+                  className="shrink-0 px-2 py-1 rounded text-[10px] border border-border text-muted-foreground hover:bg-muted transition-colors disabled:opacity-40">
+                  Gỡ
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* v3: Auto Apply toggle */}
           <div className="flex items-center justify-between px-1">
             <label className="text-xs text-muted-foreground flex items-center gap-2">

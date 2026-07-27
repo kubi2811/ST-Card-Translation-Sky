@@ -21,6 +21,8 @@ import { collectSchemaVarNames } from '../mvuzod/gameUiValidator';
 import { stripInitVarPreamble } from '../mvuzod/simulateCard';
 import { generateWorldbookEntries, applyGeneratedEntries, findExistingMVUZODEntries } from '../export/worldbookGenerator';
 import { OPENING_FORM_ANCHOR, STATUS_BAR_ANCHOR } from '../mvuzod/regexAnchors';
+import { checkMvuOutputContract } from '../mvuzod/mvuReference';
+import { buildProgrammaticRegex } from '../mvuzod/programmaticRegexBuilder';
 
 const FENCE = '`'.repeat(3);
 
@@ -320,6 +322,78 @@ export function repairMissingMvuzodEntries(
   return { card: out, fixed };
 }
 
+/**
+ * ═══ (bug 115) TỰ VÁ TOÀN BỘ HỆ BIẾN MVU ═══
+ *
+ * "Cần thêm mục tự fix lại toàn bộ biến mvu như zod, quy tắc, định dạng đầu ra và bảng
+ * thanh trạng thái." — `repairMissingMvuzodEntries` chỉ dựng entry THIẾU HẲN; entry tồn tại
+ * nhưng HỎNG (rỗng, mất khối <UpdateVariable>, zod không build nổi, status bar trống) thì
+ * trước giờ không ai đụng. Toàn bộ đều tái sinh TẤT ĐỊNH từ schema — không bịa nội dung,
+ * dùng đúng bộ sinh mà Export Wizard/pipeline dùng.
+ */
+export function repairMvuSystemIntegrity(
+  card: CharacterCardV3,
+  schema: MVUZODSchema | null,
+): { card: CharacterCardV3; fixed: RepairAction[] } {
+  const fixed: RepairAction[] = [];
+  if (!schema || !Array.isArray(schema.fields) || schema.fields.length === 0) return { card, fixed };
+
+  const out = cloneCard(card);
+  const entries = out.data.character_book?.entries ?? [];
+  const existing = findExistingMVUZODEntries(entries);
+
+  // 1. Entry hệ thống TỒN TẠI nhưng HỎNG → tái sinh từ schema.
+  //    Hỏng = nội dung rỗng/quá ngắn, hoặc (update_rules/output_format) mất hợp đồng
+  //    <UpdateVariable> + <Analysis> + <JSONPatch> mà engine MVU bắt buộc.
+  const broken: string[] = [];
+  for (const [systemId, ids] of Object.entries(existing)) {
+    const ent = entries.find(e => ids.includes(e.id));
+    if (!ent) continue;
+    const content = String(ent.content || '').trim();
+    if (content.length < 10) { broken.push(systemId); continue; }
+    if ((systemId === 'update_rules' || systemId === 'output_format')
+      && !checkMvuOutputContract(content).ok
+      // Hợp đồng chỉ cần xuất hiện Ở MỘT entry — kiểm gộp cả hai trước khi kết tội.
+      && !checkMvuOutputContract(
+        entries.filter(e => (existing.update_rules ?? []).concat(existing.output_format ?? []).includes(e.id))
+          .map(e => String(e.content || '')).join('\n'),
+      ).ok) {
+      broken.push(systemId);
+    }
+  }
+  if (broken.length > 0) {
+    const regen = generateWorldbookEntries(schema, entries, { include: broken, replaceExisting: true });
+    if (out.data.character_book) out.data.character_book.entries = applyGeneratedEntries(entries, regen);
+    fixed.push({
+      id: 'mvu_system_broken',
+      description: `Tái sinh ${broken.length} entry hệ thống MVU bị hỏng (${broken.join(', ')}) từ schema — entry có tên đúng nhưng nội dung rỗng/mất khối <UpdateVariable> thì vào game vẫn lỗi "变量更新失败"`,
+    });
+  }
+
+  // 2. BẢNG TRẠNG THÁI: không có script render nào bám mỏ neo, hoặc script bám mà nội dung
+  //    rỗng → dựng lại tất định từ schema (đúng bộ sinh của bước Game UI).
+  const ext = out.data.extensions as unknown as Record<string, unknown>;
+  const scripts = (ext?.regex_scripts as RegexScript[] | undefined) ?? [];
+  const statusRender = scripts.find(s =>
+    s.findRegex === STATUS_BAR_ANCHOR && !(s.promptOnly && !s.markdownOnly)
+    && String(s.replaceString || '').trim() !== '');
+  if (!statusRender) {
+    try {
+      const built = buildProgrammaticRegex({ schema, component: 'status_bar', gameName: out.data.name || 'Game' });
+      // Bỏ script cũ hỏng bám cùng mỏ neo (rỗng) rồi thêm bộ mới.
+      const cleaned = scripts.filter(s => !(s.findRegex === STATUS_BAR_ANCHOR
+        && !(s.promptOnly && !s.markdownOnly) && String(s.replaceString || '').trim() === ''));
+      (ext as Record<string, unknown>).regex_scripts = [...cleaned, ...built.scripts];
+      fixed.push({
+        id: 'status_bar_rebuilt',
+        description: 'Dựng lại bảng thanh trạng thái từ schema — card không có script render nào bám mỏ neo (hoặc script rỗng), bảng không bao giờ hiện',
+      });
+    } catch { /* schema không dựng được UI thì để nguyên — đừng phá regex đang có */ }
+  }
+
+  return { card: out, fixed };
+}
+
 /* ══════════════════════ CHẠY CẢ LƯỢT ══════════════════════ */
 
 /**
@@ -339,6 +413,11 @@ export function autoRepairCard(
   const mvuRes = repairMissingMvuzodEntries(out, schema);
   out = mvuRes.card;
   fixed.push(...mvuRes.fixed);
+
+  // 1b. (bug 115) Entry hệ thống TỒN TẠI nhưng HỎNG + bảng trạng thái trống → tái sinh từ schema.
+  const integrityRes = repairMvuSystemIntegrity(out, schema);
+  out = integrityRes.card;
+  fixed.push(...integrityRes.fixed);
 
   // 2. Tắt [initvar] (gồm cả entry vừa dựng ở bước 1).
   const entries = out.data.character_book?.entries ?? [];

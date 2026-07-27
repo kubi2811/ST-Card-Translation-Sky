@@ -45,6 +45,12 @@ export interface ProgrammaticBuildOptions {
   themeId?: string;
   /** Game name for header display */
   gameName?: string;
+  /**
+   * (bug 116) Vài bối cảnh bắt đầu sinh từ ý tưởng của người chơi — Opening Form thêm một
+   * trang cho người chơi CHỌN 1. Bối cảnh chọn được đưa vào văn bản hồ sơ để gửi làm tin
+   * nhắn đầu tiên. Không có thì form bỏ qua trang này.
+   */
+  scenarios?: Array<{ title: string; desc: string }>;
 }
 
 export interface ProgrammaticBuildResult {
@@ -410,6 +416,7 @@ function collectRecordFields(section: SectionAnalysis, result: FieldAnalysis[]):
 function buildOpeningForm(
   schema: MVUZODSchema,
   gameName?: string,
+  scenarios?: Array<{ title: string; desc: string }>,
 ): { html: string; js: string; fieldsRendered: number } {
   const analysis = analyzeSchema(schema);
   const pages: string[] = [];
@@ -436,8 +443,18 @@ function buildOpeningForm(
     fieldCount += editableLeafs.length;
   }
 
-  // ── Final page: Summary + Confirm ──
+  // ── (bug 116) Trang chọn BỐI CẢNH BẮT ĐẦU — chỉ khi Auto Creator sinh được bối cảnh ──
+  const validScenarios = (scenarios ?? []).filter(s => s?.title?.trim());
+  if (validScenarios.length > 0) {
+    pages.push(buildScenarioPage(pages.length, validScenarios));
+  }
+
+  // ── Summary + Confirm ──
   pages.push(buildSummaryPage(pages.length));
+
+  // ── (bug 116) Trang KẾT QUẢ — hiện sau khi bấm Xác nhận, theo khuôn thẻ mẫu One Piece:
+  //    "Đã ghi thành công biến MVU" + ô hồ sơ + nút Sao chép để gửi làm tin nhắn đầu. ──
+  pages.push(buildResultPage());
 
   const totalPages = pages.length;
 
@@ -461,7 +478,7 @@ function buildOpeningForm(
     ? '\n    // Slider init\n' + sliderInits.map(s => `    syncSlider('${s}', '${s}-display');`).join('\n')
     : '';
 
-  const submitJS = buildSubmitHandler(analysis);
+  const submitJS = buildSubmitHandler(analysis, gameName || 'Game', validScenarios);
 
   const fullJS = `${sharedJS}\n${sliderInitJS}\n\n${submitJS}\n\n    // Show first page\n    goToPage(0);`;
 
@@ -581,14 +598,56 @@ function buildFormPage(
   return { pageHtml: parts.join('\n'), sliders };
 }
 
+/**
+ * (bug 116) Trang chọn bối cảnh bắt đầu. Dùng lưới thẻ `.stcs-card-grid` sẵn có nên
+ * `collectFormData` thu được giá trị qua id `stcs-scenario-cards` mà không cần code thu riêng.
+ */
+function buildScenarioPage(
+  pageIndex: number,
+  scenarios: Array<{ title: string; desc: string }>,
+): string {
+  const cards = scenarios.map((s, i) =>
+    `<div class="stcs-card${i === 0 ? ' selected' : ''}" data-value="${escapeAttr(s.title)}" onclick="selectCard(this, 'stcs-scenario-cards')">` +
+    `<div style="font-weight:700;margin-bottom:4px">${escapeAttr(s.title)}</div>` +
+    `<div style="font-size:var(--fs-sm);color:var(--text-muted)">${escapeAttr(s.desc || '')}</div>` +
+    `</div>`,
+  ).join('');
+
+  return `<div class="stcs-page-title">🗺️ Chọn bối cảnh bắt đầu</div>` +
+    `<div class="stcs-page-desc">Câu chuyện sẽ mở màn theo bối cảnh bạn chọn.</div>` +
+    `<div class="stcs-card-grid" id="stcs-scenario-cards">${cards}</div>` +
+    `<div class="stcs-btn-row">` +
+    `<button class="stcs-btn" onclick="goToPage(${pageIndex - 1})">◀ Quay lại</button>` +
+    `<button class="stcs-btn stcs-btn-primary" onclick="goToPage(${pageIndex + 1})">Tiếp tục ▶</button>` +
+    `</div>`;
+}
+
+/**
+ * (bug 116) Trang kết quả sau khi Xác nhận — khuôn thẻ mẫu One Piece:
+ * trạng thái ghi biến + "Sao chép nội dung dưới đây và gửi làm tin nhắn đầu tiên" + nút Sao chép.
+ * Nội dung do JS đổ vào sau khi ghi xong (stcs-result-status / stcs-out-text).
+ */
+function buildResultPage(): string {
+  return `<div id="stcs-result-status" style="text-align:center;padding:8px 0"></div>` +
+    `<div class="stcs-page-desc" style="text-align:center">Sao chép nội dung dưới đây và gửi làm tin nhắn đầu tiên:</div>` +
+    `<textarea id="stcs-out-text" readonly rows="12" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:var(--fs-sm);` +
+    `background:var(--bg-input,rgba(0,0,0,0.25));color:inherit;border:1px solid var(--border,rgba(255,255,255,0.15));border-radius:8px;padding:10px"></textarea>` +
+    `<div class="stcs-btn-row" style="justify-content:center">` +
+    `<button class="stcs-btn stcs-btn-primary" id="stcs-copy-btn" onclick="copyProfileText()">📋 Sao chép</button>` +
+    `</div>`;
+}
+
 function buildSummaryPage(pageIndex: number): string {
   const parts: string[] = [];
 
   parts.push(`<div class="stcs-page-title">📋 Tổng kết</div>`);
-  parts.push(`<div class="stcs-page-desc">Xem lại các thông số đã chọn</div>`);
+  parts.push(`<div class="stcs-page-desc">Xem lại các thông số đã chọn rồi bấm Xác nhận — thiết lập sẽ được ghi vào biến MVU.</div>`);
 
+  // (bug 116) Bảng đổ dữ liệu NGAY KHI VÀO trang này (nút "Tiếp tục ▶" của trang trước gọi
+  // renderSummary qua goToPage-hook bên dưới) — bản cũ chỉ đổ sau khi bấm Xác nhận, lúc đó
+  // user đã chuyển sang trang kết quả rồi nên chẳng ai kịp "xem lại".
   parts.push(`<table class="stcs-summary-table" id="stcs-summary-table">`);
-  parts.push(`<tr><td colspan="2" style="text-align:center;color:var(--text-muted)">Nhấn Xác nhận để bắt đầu</td></tr>`);
+  parts.push(`<tr><td colspan="2" style="text-align:center;color:var(--text-muted)">…</td></tr>`);
   parts.push(`</table>`);
 
   // Navigation
@@ -602,60 +661,112 @@ function buildSummaryPage(pageIndex: number): string {
   return parts.join('\n');
 }
 
-function buildSubmitHandler(analysis: SchemaAnalysis): string {
+function buildSubmitHandler(
+  analysis: SchemaAnalysis,
+  gameName: string,
+  scenarios: Array<{ title: string; desc: string }>,
+): string {
   // Build field → stat_data path mappings
   const mappings: EditableMapping[] = [];
   for (const section of analysis.sections) {
     collectEditableMappings(section, mappings);
   }
 
+  // (bug 116) VIẾT LẠI theo ĐÚNG khuôn thẻ mẫu One Piece — thẻ đã chứng minh chạy được:
+  //   1. dựng cây stat_data từ form;
+  //   2. ghi MỘT đường duy nhất: insertOrAssignVariables({stat_data}, {type:'message',
+  //      message_id:'latest'}) — API này TavernHelper BƠM SẴN vào iframe nên luôn gọi được,
+  //      và ghi vào biến MESSAGE-scoped là đúng chỗ MVU đọc (trình quản lý biến hiện
+  //      message mới nhất). Bản cũ đi đường Mvu.parseMessage trước với chuỗi fallback
+  //      3 tầng — nhiều phong cách là nhiều chỗ hỏng, đúng lời user dặn.
+  //   3. xong thì sang trang kết quả: trạng thái + hồ sơ + nút Sao chép, người chơi gửi
+  //      hồ sơ đó làm tin nhắn đầu tiên.
   return `
-    function onConfirm() {
-        var data = collectFormData();
-        // Build summary
-        var summaryHtml = '';
-        Object.entries(data).forEach(function(pair) {
-            summaryHtml += '<tr><td>' + pair[0].replace(/stcs-|[-_]slider|-input|-cards|-check/g, ' ').trim() + '</td><td>' + pair[1] + '</td></tr>';
-        });
-        stcsSetHtml('stcs-summary-table', summaryHtml || '<tr><td colspan="2">Không có dữ liệu</td></tr>');
-        var mappings = ${JSON.stringify(mappings)};
+    var STCS_GAME_NAME = ${JSON.stringify(gameName)};
+    var STCS_SCENARIOS = ${JSON.stringify(scenarios)};
 
-        // (Goal 100.2 — giải bug #162) Ghi biến qua ĐÚNG API của MVU: Mvu.getMvuData →
-        // parseMessage("_.set(...)") → replaceMvuData. Bản cũ ghi vào kho biến CHAT của
-        // SillyTavern (lệnh setvar) — không phải stat_data của MVU, nên form nhập xong trình
-        // quản lý biến không thấy gì và status bar không hề đổi. Nguồn hợp đồng: mvuReference.ts
-        // (đối chiếu source MagVarUpdate src/function/global/index.ts).
-        var cmds = [];
+    function buildProfileText(data, mappings) {
+        var lines = [];
+        lines.push('══════════════════════════════════');
+        lines.push('⚙️ ' + STCS_GAME_NAME + ' · Hồ sơ khởi đầu');
+        lines.push('══════════════════════════════════');
+        var lastGroup = '';
         mappings.forEach(function(m) {
             var val = data[m.inputId];
-            if (val === undefined) return;
-            var path = m.path.join('.');
-            var lit;
-            if (m.type === 'number') {
-                var n = Number(val);
-                lit = isFinite(n) ? String(n) : JSON.stringify(String(val));
-            } else if (m.type === 'boolean') {
-                lit = (val === true || val === 'true') ? 'true' : 'false';
-            } else {
-                lit = JSON.stringify(String(val));
-            }
-            cmds.push("_.set('" + String(path).replace(/'/g, "\\\\'") + "', " + lit + ');//form thiết lập');
+            if (val === undefined || val === '') return;
+            var group = m.path.length > 1 ? m.path[0] : '';
+            if (group && group !== lastGroup) { lines.push(''); lines.push('─── ' + group + ' ───'); lastGroup = group; }
+            lines.push(m.path[m.path.length - 1] + ': ' + val);
         });
-        // (bugNeedFix/114) TUYỆT ĐỐI KHÔNG im lặng bỏ về. Bản cũ thoát ngay khi danh sách lệnh
-        // rỗng, không log không toast — mà vì id lệch nên nó LUÔN rỗng. Đó là lý do bug sống lâu:
-        // user tưởng đã lưu. Nay nói thẳng chưa ghi được gì và vì sao.
-        if (!cmds.length) {
-            var ids = mappings.map(function(m) { return m.inputId; });
-            console.error('[STCS] Không thu được giá trị nào từ form. Cần các id: ' + ids.join(', ')
-                + ' — nhưng form chỉ có: ' + Object.keys(data).join(', '));
-            if (typeof toastr !== 'undefined') toastr.error('Chưa ghi được biến nào — form và bảng biến không khớp id. Xem Console.');
-            return;
+        var chosen = data['stcs-scenario-cards'];
+        if (chosen) {
+            var sc = null;
+            STCS_SCENARIOS.forEach(function(s) { if (s.title === chosen) sc = s; });
+            lines.push('');
+            lines.push('─── Bối cảnh bắt đầu ───');
+            lines.push(chosen + (sc && sc.desc ? '\\n' + sc.desc : ''));
         }
+        lines.push('');
+        lines.push('(Thiết lập trên đã được ghi vào biến MVU — hãy mở màn câu chuyện theo đúng hồ sơ và bối cảnh này.)');
+        return lines.join('\\n');
+    }
 
-        var opts = { type: 'message', message_id: (typeof getCurrentMessageId === 'function') ? getCurrentMessageId() : 'latest' };
+    function showResult(ok, detail, profileText) {
+        var st = document.getElementById('stcs-result-status');
+        if (st) st.innerHTML = ok
+            ? '<div style="font-size:var(--fs-xl);font-weight:800;color:#22c55e">✅ Đã ghi thành công biến MVU</div>'
+            : '<div style="font-size:var(--fs-xl);font-weight:800;color:#f59e0b">⚠ Chưa ghi được biến MVU</div>'
+              + '<div style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:4px">' + (detail || '')
+              + ' — vẫn có thể sao chép hồ sơ bên dưới và gửi làm tin nhắn đầu tiên.</div>';
+        var out = document.getElementById('stcs-out-text');
+        if (out) out.value = profileText;
+        goToPage(totalPages - 1);
+    }
 
-        // Dựng sẵn cây stat_data cho đường ghi dự phòng (xem bên dưới).
+    function copyProfileText() {
+        var el = document.getElementById('stcs-out-text');
+        if (!el) return;
+        var done = function() {
+            var btn = document.getElementById('stcs-copy-btn');
+            if (btn) { btn.textContent = '✅ Đã sao chép'; setTimeout(function() { btn.textContent = '📋 Sao chép'; }, 2000); }
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(el.value).then(done).catch(function() {
+                el.select(); el.setSelectionRange(0, 999999); document.execCommand('copy'); done();
+            });
+        } else {
+            el.select(); el.setSelectionRange(0, 999999); document.execCommand('copy'); done();
+        }
+    }
+
+    // (bug 116) Đổ bảng tóm tắt NGAY KHI VÀO trang Tổng kết — để user thật sự "xem lại"
+    // trước khi Xác nhận. Trang tổng kết là trang áp chót (trang chót là kết quả).
+    function renderSummary() {
+        var data = collectFormData();
+        var mappings = ${JSON.stringify(mappings)};
+        var html = '';
+        mappings.forEach(function(m) {
+            var val = data[m.inputId];
+            if (val === undefined || val === '') return;
+            html += '<tr><td>' + m.path[m.path.length - 1] + '</td><td>' + val + '</td></tr>';
+        });
+        var chosen = data['stcs-scenario-cards'];
+        if (chosen) html += '<tr><td>Bối cảnh</td><td>' + chosen + '</td></tr>';
+        stcsSetHtml('stcs-summary-table', html || '<tr><td colspan="2">Chưa nhập thông tin nào</td></tr>');
+    }
+    var _stcsGoToPage = goToPage;
+    goToPage = function(n) {
+        if (n === totalPages - 2) renderSummary();
+        _stcsGoToPage(n);
+    };
+
+    function onConfirm() {
+        var data = collectFormData();
+        var mappings = ${JSON.stringify(mappings)};
+
+        // Dựng cây stat_data từ form.
         var tree = {};
+        var wrote = 0;
         mappings.forEach(function(m) {
             var val = data[m.inputId];
             if (val === undefined) return;
@@ -666,53 +777,45 @@ function buildSubmitHandler(analysis: SchemaAnalysis): string {
             var node = tree, p = m.path;
             for (var i = 0; i < p.length - 1; i++) { if (!node[p[i]] || typeof node[p[i]] !== 'object') node[p[i]] = {}; node = node[p[i]]; }
             node[p[p.length - 1]] = v;
+            wrote++;
         });
 
-        function reportOk(how) {
-            console.log('[STCS] Đã ghi biến (' + how + '):\\n' + cmds.join('\\n'));
-            if (typeof toastr !== 'undefined') toastr.success('Đã lưu thiết lập vào biến MVU.');
-        }
+        var profileText = buildProfileText(data, mappings);
 
-        // ĐƯỜNG DỰ PHÒNG — học từ thẻ mẫu chạy đúng (bugNeedFix/114): TavernHelper BƠM SẴN
-        // \`insertOrAssignVariables\` vào iframe, nên nó luôn gọi được; còn \`Mvu\` thì MagVarUpdate
-        // gắn lên window.parent (window.parent.Mvu) và có thể chưa kịp nạp.
-        function writeViaTavernHelper() {
-            var TH = (typeof insertOrAssignVariables === 'function') ? { insertOrAssignVariables: insertOrAssignVariables }
-                   : (window.TavernHelper || (window.parent && window.parent.TavernHelper) || null);
-            if (!TH || typeof TH.insertOrAssignVariables !== 'function') {
-                console.error('[STCS] Không có đường ghi biến nào khả dụng (thiếu cả Mvu lẫn insertOrAssignVariables).');
-                if (typeof toastr !== 'undefined') toastr.error('Chưa ghi được biến: thiếu MVU và TavernHelper API.');
-                return;
-            }
-            Promise.resolve(TH.insertOrAssignVariables({ stat_data: tree }, opts))
-                .then(function() { reportOk('insertOrAssignVariables'); })
-                .catch(function(e) {
-                    console.error('[STCS] insertOrAssignVariables thất bại:', e);
-                    if (typeof toastr !== 'undefined') toastr.error('Ghi biến thất bại: ' + e);
-                });
-        }
-
-        var M = (typeof Mvu !== 'undefined' && Mvu) ? Mvu
-              : (window.Mvu ? window.Mvu : (window.parent && window.parent.Mvu ? window.parent.Mvu : null));
-        if (!M || typeof M.parseMessage !== 'function' || typeof M.replaceMvuData !== 'function') {
-            console.warn('[STCS] Mvu chưa sẵn sàng — dùng đường ghi TavernHelper.');
-            writeViaTavernHelper();
+        // (bugNeedFix/114) TUYỆT ĐỐI KHÔNG im lặng: không thu được gì thì nói thẳng vì sao.
+        if (!wrote) {
+            var ids = mappings.map(function(m) { return m.inputId; });
+            console.error('[STCS] Không thu được giá trị nào từ form. Cần các id: ' + ids.join(', ')
+                + ' — nhưng form chỉ có: ' + Object.keys(data).join(', '));
+            showResult(false, 'Form và bảng biến không khớp id (xem Console)', profileText);
             return;
         }
-        var oldData = M.getMvuData(opts);
-        console.log('[STCS] Ghi biến qua Mvu.parseMessage:\\n' + cmds.join('\\n'));
-        Promise.resolve(M.parseMessage(cmds.join('\\n'), oldData)).then(function(newData) {
-            if (!newData) {
-                console.warn('[STCS] parseMessage không tạo thay đổi nào — thử đường TavernHelper.');
-                writeViaTavernHelper();
-                return;
-            }
-            return Promise.resolve(M.replaceMvuData(newData, opts)).then(function() {
-                reportOk('Mvu.parseMessage + replaceMvuData');
-            });
+
+        // (bug 116) MỘT đường ghi duy nhất — đúng khuôn thẻ One Piece:
+        // insertOrAssignVariables được TavernHelper bơm thẳng vào iframe; nếu vì lý do gì
+        // không có ở scope hiện tại thì với lên parent. Ghi MESSAGE-scoped 'latest' — đúng
+        // chỗ MVU đọc và trình quản lý biến hiển thị.
+        var opts = { type: 'message', message_id: 'latest' };
+        var fn = (typeof insertOrAssignVariables === 'function') ? insertOrAssignVariables
+               : (window.TavernHelper && typeof window.TavernHelper.insertOrAssignVariables === 'function') ? window.TavernHelper.insertOrAssignVariables
+               : (window.parent && window.parent.TavernHelper && typeof window.parent.TavernHelper.insertOrAssignVariables === 'function') ? window.parent.TavernHelper.insertOrAssignVariables
+               : null;
+        if (!fn) {
+            console.error('[STCS] Không tìm thấy API insertOrAssignVariables (TavernHelper chưa nạp?).');
+            showResult(false, 'Thiếu API TavernHelper', profileText);
+            return;
+        }
+        Promise.resolve(fn({ stat_data: tree }, opts)).then(function() {
+            console.log('[STCS] Đã ghi ' + wrote + ' biến vào stat_data (message latest).');
+            // Báo cho status bar / UI khác vẽ lại (nếu MVU có mặt) — giống thẻ mẫu.
+            try {
+                var M = (typeof Mvu !== 'undefined' && Mvu) ? Mvu : (window.parent && window.parent.Mvu);
+                if (M && M.events && typeof eventEmit === 'function') eventEmit(M.events.VARIABLE_UPDATE_ENDED);
+            } catch (e) { /* chỉ để vẽ lại UI — lỗi thì thôi */ }
+            showResult(true, '', profileText);
         }).catch(function(e) {
-            console.error('[STCS] Ghi biến qua Mvu thất bại, thử đường TavernHelper:', e);
-            writeViaTavernHelper();
+            console.error('[STCS] insertOrAssignVariables thất bại:', e);
+            showResult(false, String(e && e.message || e), profileText);
         });
     }
 `;
@@ -784,9 +887,9 @@ export function buildProgrammaticRegex(options: ProgrammaticBuildOptions): Progr
     case 'status_bar':
       return buildStatusBarResult(options.schema, theme, options.gameName);
     case 'opening_form':
-      return buildOpeningFormResult(options.schema, theme, options.gameName);
+      return buildOpeningFormResult(options.schema, theme, options.gameName, options.scenarios);
     case 'full_set':
-      return buildFullSetResult(options.schema, theme, options.gameName);
+      return buildFullSetResult(options.schema, theme, options.gameName, options.scenarios);
   }
 }
 
@@ -843,9 +946,10 @@ function buildOpeningFormResult(
   schema: MVUZODSchema,
   theme: ThemePreset,
   gameName?: string,
+  scenarios?: Array<{ title: string; desc: string }>,
 ): ProgrammaticBuildResult {
   const css = generateOpeningFormCSS(theme);
-  const { html, js, fieldsRendered } = buildOpeningForm(schema, gameName);
+  const { html, js, fieldsRendered } = buildOpeningForm(schema, gameName, scenarios);
   const fullHtml = assembleHtmlDocument(css, html, js, theme.fontImport);
 
   const scripts: Omit<RegexScript, 'id'>[] = [
@@ -898,9 +1002,10 @@ function buildFullSetResult(
   schema: MVUZODSchema,
   theme: ThemePreset,
   gameName?: string,
+  scenarios?: Array<{ title: string; desc: string }>,
 ): ProgrammaticBuildResult {
   const statusResult = buildStatusBarResult(schema, theme, gameName);
-  const formResult = buildOpeningFormResult(schema, theme, gameName);
+  const formResult = buildOpeningFormResult(schema, theme, gameName, scenarios);
 
   // Hide UpdateVariable scripts
   const hideScripts: Omit<RegexScript, 'id'>[] = [

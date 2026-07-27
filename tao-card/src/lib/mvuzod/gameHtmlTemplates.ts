@@ -1254,6 +1254,16 @@ export function generateOpeningFormSharedJS(totalPages: number): string {
     var totalPages = ${totalPages};
     var formData = {};
 
+    // (bug 116 — GỐC RỄ THẬT của "bấm Xác nhận không cập nhật biến") Hàm này trước đây CHỈ có
+    // trong sharedJS của STATUS BAR, không có ở đây — mà onConfirm của form lại gọi nó ngay
+    // DÒNG ĐẦU TIÊN để đổ bảng tóm tắt. Kết quả: ReferenceError ngay khi bấm nút, toàn bộ phần
+    // ghi biến phía sau (kể cả bản đã fix ở bug 114) KHÔNG BAO GIỜ chạy tới. Không toast, không
+    // báo gì — chỉ một dòng đỏ trong console của iframe mà chẳng ai mở.
+    function stcsSetHtml(id, html) {
+        var el = document.getElementById(id);
+        if (el) el.innerHTML = html;
+    }
+
     function goToPage(n) {
         if (n < 0 || n >= totalPages) return;
         document.querySelectorAll('.stcs-page').forEach(function(p) { p.classList.remove('active'); });

@@ -689,6 +689,9 @@ ${response.text}`;
         component: uiCfg.component,
         themeId: uiCfg.themeId,
         gameName: cardStore.card?.data?.name || 'Game',
+        // (bug 116) Bối cảnh mở đầu từ blueprint (Phase 0 sinh từ ý tưởng) — Opening Form
+        // thêm trang cho người chơi chọn 1, bối cảnh chọn đi vào hồ sơ tin nhắn đầu.
+        scenarios: blueprint?.openingScenarios,
       });
       // (bug 72) Form 0 field = wizard chỉ có trang bìa + trang xác nhận, user không nhập được
       // gì. Trước đây lỗi này im lặng đi thẳng vào card. Ném lỗi để vòng retry chạy lại bước.
@@ -757,7 +760,11 @@ ${response.text}`;
     }
 
     case 'first_message': {
-      const prompt = buildFirstMessagePrompt(config.idea, freshCardStr, config.stepConfigs.first_message, blueprint);
+      // (bug 116) Card sẽ có Opening Form khi bước game_ui được chọn với component có form.
+      // Lúc đó first_mes chỉ là lời dẫn ngắn — form mới là nhân vật chính của tin nhắn đầu.
+      const hasOpeningForm = config.selectedSteps.includes('game_ui')
+        && config.stepConfigs.game_ui.component !== 'status_bar';
+      const prompt = buildFirstMessagePrompt(config.idea, freshCardStr, config.stepConfigs.first_message, blueprint, hasOpeningForm);
       const result = await callAIAndExtract(prompt) as { first_mes?: string; alternate_greetings?: string[] };
       
       if (config.autoApplyAll) {

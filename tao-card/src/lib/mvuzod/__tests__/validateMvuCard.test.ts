@@ -61,10 +61,9 @@ describe('validateMvuCard — bộ kiểm hợp nhất', () => {
     expect(r.errors.find((e) => e.code === 'form-write-path')?.where).toBe('Form mở đầu');
   });
 
-  it('form ghi đúng đường Mvu → sạch', () => {
-    const okForm = `function onConfirm(){ var cmds=["_.set('a', 1);//form"];
-      Mvu.parseMessage(cmds.join('\\n'), Mvu.getMvuData({type:'message'})).then(function(nd){
-        return Mvu.replaceMvuData(nd, {type:'message'}); }); }
+  it('form ghi đúng đường (bug 116 — khuôn One Piece: insertOrAssignVariables message-scoped) → sạch', () => {
+    const okForm = `function onConfirm(){ var tree={};
+      insertOrAssignVariables({ stat_data: tree }, {type:'message', message_id:'latest'}); }
       function collectFormData(){}`;
     const r = validateMvuCard({ entries: [goodInitvar, goodUpdate], regexScripts: [{ scriptName: 'F', replaceString: okForm }] });
     expect(r.errors).toEqual([]);

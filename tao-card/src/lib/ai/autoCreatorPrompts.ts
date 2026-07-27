@@ -309,8 +309,42 @@ ${JSON_FORMAT_REQUIREMENT}
   return applyOverride(base, config.promptOverride, config.promptMode);
 }
 
-export function buildFirstMessagePrompt(idea: string, cardContext: string, config: FirstMessageStepConfig, bp: CardBlueprint | null): string {
-  const base = `
+export function buildFirstMessagePrompt(
+  idea: string,
+  cardContext: string,
+  config: FirstMessageStepConfig,
+  bp: CardBlueprint | null,
+  /**
+   * (bug 116) Card có Opening Form: tin nhắn đầu LÀ giao diện điền thông tin, nên KHÔNG cần
+   * kèm một bài văn mở màn dài — người chơi điền form → bấm Xác nhận → sao chép hồ sơ gửi
+   * làm tin nhắn đầu, AI mở màn dựa trên hồ sơ đó. Văn dài đứng cạnh form vừa thừa vừa
+   * mâu thuẫn với bối cảnh người chơi sẽ chọn. (Không TẮT bước này — tắt bật thủ công làm
+   * tool rối với người mới; bước tự thích nghi là đủ.)
+   */
+  hasOpeningForm = false,
+): string {
+  const base = hasOpeningForm
+    ? `
+Card này có OPENING FORM: tin nhắn đầu tiên hiển thị giao diện để người chơi điền thông tin nhân
+vật, chọn bối cảnh, rồi gửi hồ sơ làm tin nhắn mở đầu. Vì vậy first_mes KHÔNG ĐƯỢC là bài văn
+mở màn dài — nó chỉ là lời dẫn NGẮN (2-4 câu) chào mừng vào thế giới và mời điền form bên dưới.
+TUYỆT ĐỐI không viết cảnh truyện, không thoại nhân vật, không mô tả dài dòng.
+Ý TƯỞNG: "${idea}"
+${blueprintContext(bp)}
+
+NGỮ CẢNH:
+${cardContext}
+
+Yêu cầu định dạng JSON chính xác:
+{
+  "first_mes": "Lời dẫn ngắn 2-4 câu (giới thiệu không khí thế giới + mời thiết lập nhân vật ở form bên dưới)...",
+  "alternate_greetings": []
+}
+LƯU Ý: alternate_greetings để MẢNG RỖNG — mở màn thật sự do AI viết sau khi người chơi gửi hồ sơ,
+nhiều lời chào phụ chỉ gây lệch với bối cảnh người chơi chọn trong form.
+${JSON_FORMAT_REQUIREMENT}
+`
+    : `
 Hãy tạo first message mở đầu câu chuyện và ${config.alternateGreetings} alternate greetings.
 First message phải viết chi tiết, sống động, mô tả bối cảnh, hành động và cảm xúc nhân vật.
 Ý TƯỞNG: "${idea}"

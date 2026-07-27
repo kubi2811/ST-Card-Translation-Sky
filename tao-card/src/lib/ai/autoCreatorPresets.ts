@@ -12,7 +12,7 @@ export const AUTO_CREATOR_PRESETS: AutoCreatorPreset[] = [
     icon: '💕',
     description: 'Card nhân vật romance cơ bản, ít lorebook, không MVUZOD',
     config: {
-      selectedSteps: ['basic_info', 'lorebook', 'system_prompt', 'first_message', 'mes_example'],
+      selectedSteps: ['basic_info', 'lorebook', 'system_prompt', 'first_message', 'mes_example', 'final_check'],
       stepConfigs: {
         basic_info: { includePersonality: true, includeScenario: true, language: 'vi', promptMode: 'default' },
         lorebook: { totalEntries: 10, entriesPerBatch: 5, concurrentBatches: 1, category: 'custom', cardType: 'single', useWebSearch: false, promptMode: 'default' },
@@ -32,7 +32,7 @@ export const AUTO_CREATOR_PRESETS: AutoCreatorPreset[] = [
     icon: '⚔️',
     description: 'Card RPG đầy đủ: lorebook lớn, MVUZOD schema, regex game UI',
     config: {
-      selectedSteps: ['basic_info', 'lorebook', 'regex', 'mvuzod', 'system_prompt', 'first_message', 'mes_example'],
+      selectedSteps: ['basic_info', 'lorebook', 'regex', 'mvuzod', 'game_ui', 'system_prompt', 'first_message', 'mes_example', 'final_check'],
       stepConfigs: {
         basic_info: { includePersonality: true, includeScenario: true, language: 'vi', promptMode: 'default' },
         lorebook: { totalEntries: 40, entriesPerBatch: 5, concurrentBatches: 2, category: 'custom', cardType: 'single', useWebSearch: false, promptMode: 'default' },
@@ -52,7 +52,7 @@ export const AUTO_CREATOR_PRESETS: AutoCreatorPreset[] = [
     icon: '🏡',
     description: 'Cuộc sống thường nhật, trọng tâm tính cách và tương tác',
     config: {
-      selectedSteps: ['basic_info', 'lorebook', 'system_prompt', 'first_message', 'mes_example'],
+      selectedSteps: ['basic_info', 'lorebook', 'system_prompt', 'first_message', 'mes_example', 'final_check'],
       stepConfigs: {
         basic_info: { includePersonality: true, includeScenario: true, language: 'vi', promptMode: 'default' },
         lorebook: { totalEntries: 15, entriesPerBatch: 5, concurrentBatches: 1, category: 'custom', cardType: 'single', useWebSearch: false, promptMode: 'default' },
@@ -72,7 +72,7 @@ export const AUTO_CREATOR_PRESETS: AutoCreatorPreset[] = [
     icon: '🐉',
     description: 'Thế giới tu tiên đầy đủ: hệ thống cảnh giới, môn phái, biến trạng thái',
     config: {
-      selectedSteps: ['basic_info', 'lorebook', 'regex', 'mvuzod', 'system_prompt', 'first_message', 'mes_example'],
+      selectedSteps: ['basic_info', 'lorebook', 'regex', 'mvuzod', 'game_ui', 'system_prompt', 'first_message', 'mes_example', 'final_check'],
       stepConfigs: {
         basic_info: { includePersonality: true, includeScenario: true, language: 'vi', promptMode: 'default' },
         lorebook: { totalEntries: 50, entriesPerBatch: 5, concurrentBatches: 2, category: 'custom', cardType: 'single', useWebSearch: false, promptMode: 'default' },
@@ -92,7 +92,7 @@ export const AUTO_CREATOR_PRESETS: AutoCreatorPreset[] = [
     icon: '👥',
     description: 'Card group chat / nhiều NV: selective entries, lorebook lớn',
     config: {
-      selectedSteps: ['basic_info', 'lorebook', 'regex', 'system_prompt', 'first_message', 'mes_example'],
+      selectedSteps: ['basic_info', 'lorebook', 'regex', 'system_prompt', 'first_message', 'mes_example', 'final_check'],
       stepConfigs: {
         basic_info: { includePersonality: true, includeScenario: true, language: 'vi', promptMode: 'default' },
         lorebook: { totalEntries: 30, entriesPerBatch: 5, concurrentBatches: 2, category: 'custom', cardType: 'multi', useWebSearch: false, promptMode: 'default' },

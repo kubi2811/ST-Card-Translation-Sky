@@ -229,6 +229,8 @@ export interface CardBlueprint {
     mood: string;
   };
   estimatedComplexity: 'simple' | 'medium' | 'complex';
+  /** (bug 116) 2-4 bối cảnh mở đầu sinh từ ý tưởng — Opening Form cho người chơi chọn 1. */
+  openingScenarios?: Array<{ title: string; desc: string }>;
 }
 
 export interface BlueprintEntryTopic {

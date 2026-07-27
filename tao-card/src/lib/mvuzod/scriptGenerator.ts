@@ -253,7 +253,18 @@ function fieldsToYAML(fields: MVUZODField[], indent: number): string {
         lines.push(`${p}${name}: []`);
       }
     } else {
-      const val = formatYAMLValue(field.defaultValue ?? getDefaultForType(field.type));
+      // (bug 116 — học phong cách thẻ mẫu One Piece) Trường CHUỖI tự do (không enum, không
+      // readOnly) khởi tạo bằng "" — ô trống chờ Opening Form/AI điền lúc chơi. Bản cũ ghi
+      // thẳng placeholder AI bịa trong defaultValue ("Vô Danh", "Chưa thức tỉnh") → trình
+      // quản lý biến đầy giá trị giả, không phân biệt được ô nào user cần điền.
+      // Enum giữ default (là một lựa chọn hợp lệ, vd "Chủng Tộc: Con Người"); số/boolean giữ
+      // nguyên (0/100/false là giá trị thật) — đúng như thẻ mẫu.
+      const isFreeString = field.type === 'string'
+        && !field.constraints?.enumValues?.length
+        && !field.constraints?.readOnly;
+      const val = isFreeString
+        ? '""'
+        : formatYAMLValue(field.defaultValue ?? getDefaultForType(field.type));
       lines.push(`${p}${name}: ${val}`);
     }
   }

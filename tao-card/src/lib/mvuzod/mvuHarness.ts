@@ -17,7 +17,7 @@
  * KHÔNG phải bản cài lại đầy đủ engine — chỉ đủ tập lệnh mà generator của tool sinh ra,
  * để làm bài kiểm CHẤP NHẬN: form của card tự tạo phải làm biến đổi thật sự.
  */
-import { MVU_DIALECT_RE } from './mvuReference';
+
 
 /* ─── Đọc biến (mirror mvuGet nhúng trong UI — mvuRuntime.ts) ─── */
 
@@ -264,9 +264,28 @@ export function checkFormWritePath(script: string): FormScriptCheck {
   const s = String(script || '');
   const problems: string[] = [];
   if (/\/setvar\b/.test(s)) problems.push('còn /setvar — ghi vào kho biến chat của ST, stat_data không đổi (bug #162)');
-  if (!/parseMessage/.test(s)) problems.push('thiếu Mvu.parseMessage — không có đường ghi biến MVU');
-  if (!/replaceMvuData/.test(s)) problems.push('thiếu Mvu.replaceMvuData — parse xong không ghi lại');
-  if (!MVU_DIALECT_RE.functionCall.test(s)) problems.push('không sinh lệnh _.set nào — form không có gì để ghi');
+
+  // (bug 116) Hợp đồng ghi biến MỚI — đúng khuôn thẻ mẫu One Piece chạy được:
+  // MỘT đường duy nhất insertOrAssignVariables({stat_data}, {type:'message', message_id:'latest'}).
+  // Bản cũ đòi Mvu.parseMessage + replaceMvuData làm đường chính — chuỗi fallback 3 tầng,
+  // nhiều phong cách là nhiều chỗ hỏng, đúng lời user dặn phải tránh.
+  if (!/insertOrAssignVariables/.test(s)) problems.push('thiếu insertOrAssignVariables — không có đường ghi biến (khuôn One Piece)');
+  if (!/stat_data/.test(s)) problems.push('payload không bọc stat_data — ghi nhầm chỗ, MVU không đọc được');
+  if (!/type:\s*'message'/.test(s)) problems.push("thiếu {type:'message'} — ghi vào biến chat thay vì biến tin nhắn mà trình quản lý biến hiển thị");
+
+  // (bug 116 — GỐC RỄ THẬT) onConfirm cũ gọi stcsSetHtml ở DÒNG ĐẦU trong khi sharedJS của form
+  // không có hàm đó → ReferenceError ngay khi bấm nút, phần ghi biến phía sau (kể cả bản đã fix
+  // bug 114) không bao giờ chạy. Không toast, không báo — chỉ một dòng đỏ trong console iframe.
+  // Phép kiểm tổng quát: MỌI hàm stcs*/helper được GỌI trong script phải được KHAI BÁO trong đó.
+  {
+    const called = new Set([...s.matchAll(/\b(stcs[A-Z]\w*|renderSummary|showResult|copyProfileText|buildProfileText|collectFormData|goToPage|selectCard)\s*\(/g)].map(m => m[1]));
+    for (const fn of called) {
+      const declared = new RegExp(`(?:function\\s+${fn}\\s*\\(|(?:var|let|const)\\s+${fn}\\s*=)`).test(s);
+      if (!declared) {
+        problems.push(`hàm ${fn}() được gọi nhưng KHÔNG khai báo trong script — ReferenceError ngay khi chạy tới, mọi thứ phía sau chết theo (lớp lỗi bug 116)`);
+      }
+    }
+  }
 
   /* ─── (bugNeedFix/114) Ba phép kiểm mới ─── */
 
@@ -299,8 +318,8 @@ export function checkFormWritePath(script: string): FormScriptCheck {
   }
 
   // 3. THẤT BẠI IM LẶNG: không thu được gì thì phải BÁO, không được `return` êm.
-  if (/if\s*\(\s*!\s*cmds\.length\s*\)\s*return\s*;/.test(s)) {
-    problems.push('khi không thu được giá trị nào thì hàm thoát IM LẶNG — user tưởng đã lưu (bug 114). Phải log + toast lỗi');
+  if (/if\s*\(\s*!\s*(?:cmds\.length|wrote)\s*\)\s*return\s*;/.test(s)) {
+    problems.push('khi không thu được giá trị nào thì hàm thoát IM LẶNG — user tưởng đã lưu (bug 114). Phải báo rõ trên trang kết quả');
   }
 
   return { ok: problems.length === 0, problems };

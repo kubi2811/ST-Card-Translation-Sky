@@ -76,33 +76,49 @@ describe('collectFormData phải thu ĐỦ mọi loại input', () => {
 });
 
 describe('Không được thất bại IM LẶNG', () => {
-  it('thu không được gì thì log + toast lỗi, kèm danh sách id cần và id có', () => {
+  it('thu không được gì thì báo rõ trên trang kết quả, kèm danh sách id cần và id có', () => {
     expect(src).toMatch(/Không thu được giá trị nào từ form/);
-    expect(src).toContain('toastr.error');
-  });
-
-  it('không còn nhánh thoát êm khi danh sách lệnh rỗng', () => {
-    expect(src).not.toMatch(/if\s*\(\s*!\s*cmds\.length\s*\)\s*return\s*;/);
+    expect(src).toContain('showResult(false');
   });
 });
 
-describe('Đường ghi biến — chính + dự phòng (học từ thẻ mẫu chạy đúng)', () => {
-  it('đường chính vẫn là API MVU đúng chuẩn', () => {
-    expect(src).toContain('parseMessage');
-    expect(src).toContain('replaceMvuData');
-  });
-
-  it('có đường dự phòng insertOrAssignVariables với payload bọc stat_data', () => {
+describe('(bug 116) Đường ghi biến — MỘT đường duy nhất theo khuôn thẻ One Piece', () => {
+  it('ghi qua insertOrAssignVariables với payload bọc stat_data', () => {
     expect(src).toContain('insertOrAssignVariables');
     expect(src).toContain('stat_data: tree');
   });
 
-  it('tìm Mvu ở cả window.parent (MagVarUpdate gắn Mvu lên parent, không vào iframe)', () => {
-    expect(src).toContain('window.parent.Mvu');
+  it('ghi vào biến của TIN NHẮN mới nhất (đúng chỗ Trình quản lý biến đọc)', () => {
+    expect(src).toMatch(/type:\s*'message'/);
+    expect(src).toMatch(/message_id:\s*'latest'/);
   });
 
-  it('ghi vào biến của TIN NHẮN (đúng chỗ Trình quản lý biến đọc)', () => {
-    expect(src).toMatch(/type:\s*'message'/);
+  it('KHÔNG còn chuỗi fallback Mvu.parseMessage — nhiều phong cách là nhiều chỗ hỏng', () => {
+    expect(src).not.toContain('parseMessage');
+    expect(src).not.toContain('replaceMvuData');
+  });
+
+  it('với không tới được API thì thử TavernHelper ở parent trước khi bó tay', () => {
+    expect(src).toContain('window.parent.TavernHelper');
+  });
+});
+
+describe('(bug 116 — GỐC RỄ THẬT) hàm được gọi phải TỒN TẠI trong script', () => {
+  it('stcsSetHtml giờ có trong sharedJS của form (trước đây chỉ status bar có → ReferenceError ở dòng đầu onConfirm, phần ghi biến không bao giờ chạy)', () => {
+    expect(src).toMatch(/function stcsSetHtml/);
+  });
+
+  it('trang kết quả + copy: showResult / copyProfileText / buildProfileText đều khai báo đủ', () => {
+    for (const fn of ['showResult', 'copyProfileText', 'buildProfileText', 'renderSummary']) {
+      expect(src, `thiếu khai báo ${fn}`).toMatch(new RegExp(`function ${fn}\\s*\\(`));
+    }
+  });
+
+  it('trang kết quả có đủ khuôn One Piece: trạng thái + ô hồ sơ + nút Sao chép', () => {
+    expect(src).toContain('stcs-result-status');
+    expect(src).toContain('stcs-out-text');
+    expect(src).toContain('stcs-copy-btn');
+    expect(src).toMatch(/gửi làm tin nhắn đầu tiên/);
   });
 });
 
@@ -120,9 +136,40 @@ describe('Bộ kiểm harness bắt được đúng lớp lỗi này', () => {
     expect(r.problems.join(' ')).toContain('id TRẦN');
   });
 
-  it('form thoát im lặng bị bắt lỗi', () => {
-    const bad = src.replace(/if \(!cmds\.length\) \{[\s\S]*?\n        \}/, 'if (!cmds.length) return;');
+  it('gọi hàm không khai báo (ca stcsSetHtml của bug 116) bị bắt đích danh', () => {
+    const bad = src.replace(/function stcsSetHtml/g, 'function stcsSetHtml_renamed');
     const r = checkFormWritePath(bad);
-    expect(r.problems.join(' ')).toContain('IM LẶNG');
+    expect(r.ok).toBe(false);
+    expect(r.problems.join(' ')).toContain('stcsSetHtml');
+    expect(r.problems.join(' ')).toContain('ReferenceError');
+  });
+
+  it('thiếu hẳn đường ghi → bắt lỗi', () => {
+    const bad = src.replace(/insertOrAssignVariables/g, 'khongCoGi');
+    const r = checkFormWritePath(bad);
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe('(bug 116) Trang chọn bối cảnh bắt đầu', () => {
+  it('có scenarios → form thêm trang chọn, dùng lưới thẻ nên collectFormData thu được', () => {
+    const withSc = buildProgrammaticRegex({
+      schema: SCHEMA, component: 'opening_form',
+      scenarios: [
+        { title: 'Tân binh nhập ngũ', desc: 'Bắt đầu ở doanh trại.' },
+        { title: 'Kẻ trốn chạy', desc: 'Mở màn giữa rừng sâu.' },
+      ],
+    });
+    const s2 = withSc.scripts.map(s => s.replaceString ?? '').join('\n');
+    expect(s2).toContain('stcs-scenario-cards');
+    expect(s2).toContain('Tân binh nhập ngũ');
+    expect(s2).toContain('Chọn bối cảnh bắt đầu');
+  });
+
+  it('không có scenarios → không có trang bối cảnh (không phình form)', () => {
+    // id 'stcs-scenario-cards' vẫn xuất hiện trong JS (buildProfileText đọc nó an toàn) —
+    // thứ không được có là TRANG chọn trong HTML.
+    expect(src).not.toContain('Chọn bối cảnh bắt đầu');
+    expect(src).not.toContain('class="stcs-card-grid" id="stcs-scenario-cards"');
   });
 });

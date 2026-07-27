@@ -50,10 +50,14 @@ Trả về JSON object (KHÔNG code block, KHÔNG markdown) với cấu trúc ch
     "language": "Ngôn ngữ chính",
     "mood": "Tone/mood (u ám, tươi sáng, hài hước...)"
   },
+  "openingScenarios": [
+    { "title": "Tên bối cảnh mở đầu ngắn gọn", "desc": "1-2 câu mô tả tình huống người chơi bắt đầu" }
+  ],
   "estimatedComplexity": "simple|medium|complex"
 }
 
 QUY TẮC:
+- openingScenarios: đề xuất 2-4 bối cảnh MỞ ĐẦU khác nhau dựa trên ý tưởng — người chơi sẽ chọn 1 trong Opening Form (vd "Tân binh nhập môn", "Kẻ lưu vong trở về"). Mỗi bối cảnh phải khác biệt thật sự về tình huống, không chỉ đổi chữ.
 - suggestedEntryTopics: đề xuất 15-40 chủ đề tùy complexity
 - suggestedVariables: đề xuất 5-20 biến cần track
 - Phân loại entry đúng category và đặt suggestedPosition/suggestedConstant theo best practices SillyTavern
@@ -111,6 +115,7 @@ export async function analyzeIdea(
   }
   if (!parsed.suggestedEntryTopics) parsed.suggestedEntryTopics = [];
   if (!parsed.suggestedVariables) parsed.suggestedVariables = [];
+  if (!Array.isArray(parsed.openingScenarios)) parsed.openingScenarios = [];
   if (!parsed.estimatedComplexity) parsed.estimatedComplexity = 'medium';
 
   return parsed;

@@ -130,7 +130,41 @@ export function applyMvuToText(
         new RegExp(`(_\\.(?:get|set|has|result|pick|omit)\\s*\\([^,]+,\\s*['"])${escaped}(['"])`, 'g'),
         `$1${safeTranslated}$2`
       );
-      
+
+      // ── 5.8. (User 27/07 — việc 119) DOT-ACCESS: obj.KEY ──
+      // Bản dịch NHIỀU TỪ mà thay trần sau dấu chấm là vỡ cú pháp JS:
+      //     base.预言流言  →  base.Lời Tiên Tri Và Tin Đồn   ← "Missing } in template expression"
+      // Cả <script> chết theo, mọi nút ẩn/hiện tê liệt (bug/119: đúng MỘT dòng thế này giết
+      // nguyên giao diện). Phải chuyển sang bracket: base['Lời Tiên Tri Và Tin Đồn'].
+      // Chỉ cần khi bản dịch KHÔNG phải identifier hợp lệ; ký tự đứng trước dấu chấm phải là
+      // đuôi identifier/`]`/`)` để không đụng số thập phân hay chuỗi văn xuôi "xong. Rồi".
+      const translatedIsIdentifier = /^[A-Za-z_$][\w$]*$/.test(translated);
+      if (!translatedIsIdentifier) {
+        const bracket = `['${safeTranslated.replace(/'/g, "\\'")}']`;
+        // Dot thường: obj.KEY / arr[0].KEY / fn().KEY
+        newText = newText.replace(
+          new RegExp(`([\\w$\\]\\)])\\.${escaped}`, 'g'),
+          `$1${bracket}`
+        );
+        // Optional chaining: obj?.KEY — dạng bracket đúng là obj?.['KEY'] (file bug/119 dòng 940:
+        // detail.能量池?.当前值 — vá tầng đầu xong thì tầng sau đứng sau `?.`).
+        newText = newText.replace(
+          new RegExp(`\\?\\.${escaped}`, 'g'),
+          `?.${bracket}`
+        );
+        // TỰ LÀNH bản ĐÃ vỡ từ lượt dịch trước: obj.Tên Nhiều Từ (AI/fallback cũ đã ghi ra
+        // dạng dot vỡ). Có từ điển nên biết CHÍNH XÁC ranh giới tên — thay không đoán mò.
+        const escapedTranslated = escapeRegExp(translated);
+        newText = newText.replace(
+          new RegExp(`([\\w$\\]\\)])\\.${escapedTranslated}(?![\\w$])`, 'g'),
+          `$1${bracket}`
+        );
+        newText = newText.replace(
+          new RegExp(`\\?\\.${escapedTranslated}(?![\\w$])`, 'g'),
+          `?.${bracket}`
+        );
+      }
+
       // ── 6. General standalone occurrences (fallback) ──
       const isAsciiOnly = /^[a-zA-Z0-9_]+$/.test(original);
       let pattern = isAsciiOnly ? `\\b${escaped}\\b` : escaped;

@@ -33,15 +33,17 @@ Gold: <%= getvar('stat_data.Nhân vật.Gold') %>`,
   {
     id: 'conditional-inject',
     label: 'Conditional Worldbook',
-    description: 'Bật/tắt worldbook entry theo điều kiện',
+    description: 'Bật entry theo điều kiện — các entry này phải để TẮT sẵn trong worldbook',
     code: `@@preprocessing
 <%_
+/* (bug 125/128) ST-Prompt-template KHÔNG có hàm tắt entry từ EJS — chỉ BẬT được entry
+   đang tắt bằng await activewi(tên, true). Vậy 3 entry dưới đây phải để enabled=false
+   sẵn trong worldbook; mỗi lượt chat controller chỉ bật đúng cái khớp thời đại. */
 if (typeof _era === 'undefined') var _era = getvar('stat_data.Thế giới.Thời đại', { defaults: 'Hiện đại' });
 
-// Bật entry theo thời đại
-setEntryEnabled('WB: Thiết lập thế giới hiện đại', _era === 'Hiện đại');
-setEntryEnabled('WB: Thiết lập thế giới cổ đại', _era === 'Cổ đại');
-setEntryEnabled('WB: Thiết lập thế giới tương lai', _era === 'Tương lai');
+if (_era === 'Hiện đại') { await activewi('WB: Thiết lập thế giới hiện đại', true); }
+if (_era === 'Cổ đại') { await activewi('WB: Thiết lập thế giới cổ đại', true); }
+if (_era === 'Tương lai') { await activewi('WB: Thiết lập thế giới tương lai', true); }
 _%>`,
   },
   {
@@ -66,9 +68,9 @@ _%>`,
     label: 'getwi() Template',
     description: 'Đọc và tổ chức worldbook entries theo nhóm',
     code: `<%_
-// Đọc nội dung worldbook entry bằng comment
-var skillList = getwi('Danh sách kỹ năng');
-var inventory = getwi('Kho đồ');
+/* getwi là hàm ASYNC — thiếu await thì nhận về Promise, in ra "[object Promise]". */
+var skillList = await getwi('Danh sách kỹ năng');
+var inventory = await getwi('Kho đồ');
 
 if (skillList) {
   print('[Kỹ năng đã học]\\n');
@@ -99,14 +101,16 @@ export const EJS_ADVANCED_TEMPLATES: EJSAdvancedTemplate[] = [
   {
     id: 'adv-multi-era-switch',
     label: 'Multi-era Switch',
-    description: 'Chuyển đổi toàn bộ worldbook theo era/timeline hiện tại',
+    description: 'Bật đúng nhóm entry của era hiện tại (toàn bộ entry era phải TẮT sẵn)',
     category: 'flow',
-    tags: ['era', 'switch', 'setEntryEnabled'],
+    tags: ['era', 'switch', 'activewi'],
     code: `@@preprocessing
 <%_
+/* (bug 125/128) Mô hình đúng của ST-Prompt-template: KHÔNG có API tắt entry từ EJS.
+   Để TẤT CẢ entry era ở trạng thái tắt (enabled=false) trong worldbook — thế là "tắt
+   tất cả" miễn phí, không cần code — rồi mỗi lượt chỉ BẬT nhóm của era hiện tại. */
 var era = getvar('stat_data.Thế giới.Thời đại', { defaults: 'Hiện đại' });
 
-// Danh sách era → entries tương ứng
 var eraMap = {
   'Cổ đại': ['WB: Cổ đại', 'WB: Vũ khí cổ', 'WB: Ma thuật cổ'],
   'Trung cổ': ['WB: Trung cổ', 'WB: Hiệp sĩ', 'WB: Phong kiến'],
@@ -114,19 +118,9 @@ var eraMap = {
   'Tương lai': ['WB: Tương lai', 'WB: Cyberpunk', 'WB: AI Technology'],
 };
 
-// Tắt tất cả trước
-for (var e in eraMap) {
-  if (eraMap.hasOwnProperty(e)) {
-    for (var i = 0; i < eraMap[e].length; i++) {
-      setEntryEnabled(eraMap[e][i], false);
-    }
-  }
-}
-
-// Bật entries của era hiện tại
 if (eraMap[era]) {
   for (var j = 0; j < eraMap[era].length; j++) {
-    setEntryEnabled(eraMap[era][j], true);
+    await activewi(eraMap[era][j], true);
   }
 }
 _%>`,
@@ -144,11 +138,12 @@ var maxHp = Number(getvar('stat_data.Nhân vật.MaxHP', { defaults: 100 }));
 var ratio = maxHp > 0 ? hp / maxHp : 1;
 var danger = Number(getvar('stat_data.Thế giới.Mức nguy hiểm', { defaults: 0 }));
 
-// Cascade: càng nguy hiểm, càng nhiều entry bật
-setEntryEnabled('WB: Trạng thái bình thường', ratio > 0.5 && danger < 30);
-setEntryEnabled('WB: Cẩn thận', ratio <= 0.5 || danger >= 30);
-setEntryEnabled('WB: Nguy hiểm', ratio <= 0.3 || danger >= 60);
-setEntryEnabled('WB: Sắp chết', ratio <= 0.1 || danger >= 90);
+/* Cascade: càng nguy hiểm càng nhiều entry được BẬT (cả 4 entry phải TẮT sẵn —
+   EJS không tắt được entry, chỉ bật entry đang tắt bằng await activewi). */
+if (ratio > 0.5 && danger < 30) { await activewi('WB: Trạng thái bình thường', true); }
+if (ratio <= 0.5 || danger >= 30) { await activewi('WB: Cẩn thận', true); }
+if (ratio <= 0.3 || danger >= 60) { await activewi('WB: Nguy hiểm', true); }
+if (ratio <= 0.1 || danger >= 90) { await activewi('WB: Sắp chết', true); }
 
 // Inject cảnh báo cho AI
 if (ratio <= 0.2) {
@@ -169,17 +164,15 @@ var location = getvar('stat_data.Thế giới.Địa điểm', { defaults: 'Nhà
 var time = getvar('stat_data.Thế giới.Thời gian', { defaults: 'Ngày' });
 var trust = Number(getvar('stat_data.Nhân vật.Độ tin tưởng', { defaults: 50 }));
 
-// Combo: Buồn + Đêm + Ở nhà → Hội thoại tâm sự
+/* Ba entry combo dưới đây phải TẮT sẵn trong worldbook — controller chỉ BẬT khi đủ điều kiện. */
 var intimateMode = (mood === 'Buồn' || mood === 'Cô đơn') && time === 'Đêm' && location === 'Nhà';
-setEntryEnabled('WB: Hội thoại tâm sự', intimateMode && trust > 60);
+if (intimateMode && trust > 60) { await activewi('WB: Hội thoại tâm sự', true); }
 
-// Combo: Tức giận + Nơi công cộng → Kiềm chế
 var restrainMode = mood === 'Tức giận' && (location === 'Trường học' || location === 'Công ty');
-setEntryEnabled('WB: Persona kiềm chế', restrainMode);
+if (restrainMode) { await activewi('WB: Persona kiềm chế', true); }
 
-// Combo: Vui vẻ + Ngày đẹp → Đi chơi
 var dateMode = mood === 'Vui vẻ' && time === 'Ngày' && trust > 80;
-setEntryEnabled('WB: Sự kiện hẹn hò', dateMode);
+if (dateMode) { await activewi('WB: Sự kiện hẹn hò', true); }
 _%>`,
   },
 
@@ -380,7 +373,7 @@ if (lastEvent) {
   } else if (lastEvent === 'ITEM_FOUND') {
     print('[📦 Tìm được: ' + (eventData || 'vật phẩm bí ẩn') + ']');
   } else if (lastEvent === 'SCENE_CHANGE') {
-    setEntryEnabled('WB: Cảnh ' + eventData, true);
+    await activewi('WB: Cảnh ' + eventData, true);
   }
   
   // Clear event
@@ -404,11 +397,11 @@ var day = Number(getvar('stat_data.Thế giới.Ngày', { defaults: 1 }));
 var isNight = (timeSlot === 'Đêm' || timeSlot === 'Khuya');
 var isDawn = (timeSlot === 'Sáng sớm');
 
-// Toggle entries by time
-setEntryEnabled('WB: Bầu trời đêm', isNight);
-setEntryEnabled('WB: Bầu trời ngày', !isNight);
-setEntryEnabled('WB: Quái vật đêm', isNight && day > 3);
-setEntryEnabled('WB: NPC cửa hàng', !isNight);
+/* Cả 4 entry thời gian phải TẮT sẵn — mỗi lượt chỉ bật những cái khớp khung giờ. */
+if (isNight) { await activewi('WB: Bầu trời đêm', true); }
+if (!isNight) { await activewi('WB: Bầu trời ngày', true); }
+if (isNight && day > 3) { await activewi('WB: Quái vật đêm', true); }
+if (!isNight) { await activewi('WB: NPC cửa hàng', true); }
 
 // Inject time context
 var timeDesc = '';

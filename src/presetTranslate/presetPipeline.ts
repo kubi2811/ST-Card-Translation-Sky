@@ -24,6 +24,7 @@ import {
 import type { ScriptPipelineDeps, ScriptRunControl } from '../scriptTranslate/types';
 import { applyPresetDict } from './consistencyPass';
 import { transformRegex, decideRegex } from './regexScriptPass';
+import { buildLabelMap, applyLabelMapToRegex, applyLabelMapToText } from './presetLabelSync';
 import { getPresetExtras } from './inventory';
 import { validatePreset } from './validatePreset';
 import type {
@@ -190,8 +191,30 @@ export async function runPresetTranslation(
   const { regexScripts, helperScripts } = getPresetExtras(preset);
   let regexChanged = 0;
   let regexReverted = 0;
+  let regexLabelSynced = 0;
   const regexManual: string[] = [];
+
+  // (User 27/07 — việc 118) ĐỒNG BỘ NHÃN VĂN BẢN với prompt ĐÃ DỊCH. Prompt dạy AI xuất
+  // ">Lựa chọn 1:" nhưng findRegex vẫn rình ">选项一：" — nhãn không phải tag/var nên pass cũ
+  // trả 'manual' rồi bỏ qua NGUYÊN script, regex không bao giờ khớp đầu ra mới. Bảng nhãn dựng
+  // từ chính cặp prompt trước/sau dịch (pristine ↔ preset, ghép theo identifier) nên regex và
+  // prompt không thể lệch nhau. Map kèm CẢ dấu hai chấm: preset gốc dùng ： fullwidth, bản dịch
+  // dùng : thường — chỉ thay nhãn mà giữ dấu cũ thì vẫn trượt.
+  const labelMap = buildLabelMap(pristine.prompts, preset.prompts);
   for (const r of regexScripts) {
+    // 5a. Nhãn văn bản (đồng bộ prompt) — chạy TRƯỚC để phần CJK còn lại (nếu có) mới tính
+    //     là việc của dict tag/var.
+    if (Object.keys(labelMap).length > 0) {
+      const ls = applyLabelMapToRegex(r.findRegex || '', labelMap);
+      if (ls.changed) { r.findRegex = ls.text; regexLabelSynced++; }
+      if (ls.reverted) regexReverted++;
+      // replaceString (HTML làm đẹp) cũng phải gọi đúng nhãn mới — thay trần, không cần compile.
+      if (r.replaceString) {
+        const ts = applyLabelMapToText(String(r.replaceString), labelMap);
+        if (ts.changed) r.replaceString = ts.text;
+      }
+    }
+    // 5b. Tag/var theo từ điển như cũ.
     const fr = r.findRegex || '';
     const decision = decideRegex(fr, dict);
     if (decision === 'manual') { regexManual.push(r.scriptName || fr.slice(0, 40)); continue; }
@@ -203,14 +226,61 @@ export async function runPresetTranslation(
 
   // 6) Script TavernHelper nhúng → NGUYÊN pipeline Dịch Script, dict chung làm glossary
   let scriptsTranslated = 0;
+  let regexHtmlTranslated = 0;
   if (opts.translateEmbeddedScripts) {
     const scriptDeps: ScriptPipelineDeps = {
       ...deps,
       glossary: [
         ...dict.names,
         ...Object.entries(dict.tags).map(([source, target]) => ({ source, target })),
+        // (việc 118) Nhãn đồng bộ prompt cũng vào glossary — AI dịch replaceString phải gọi
+        // đúng "Lựa chọn 1:" như prompt, không được tự chế cách dịch khác cho 选项一.
+        ...Object.entries(labelMap).map(([source, target]) => ({ source, target })),
       ],
     };
+
+    // 6a. (việc 118) replaceString của REGEX SCRIPT — khối HTML/CSS làm đẹp 4-5KB, trước giờ
+    // KHÔNG BAO GIỜ được dịch: bước này chỉ chạy helperScripts, còn regex pass chỉ đụng
+    // findRegex. Đó là nửa còn lại của lời báo "phần đó nó không dịch". Đi cùng pipeline
+    // Dịch Script như helper (giữ cấu trúc code, chỉ dịch chuỗi hiển thị).
+    const htmlJobs = regexScripts.filter((r) => countCjk(String(r.replaceString || '')) > 0);
+    let hi = 0;
+    for (const r of htmlJobs) {
+      hi++;
+      const label = r.scriptName || `regex #${hi}`;
+      cb({ stage: 'scripts', done: 0, total: htmlJobs.length + helperScripts.filter((h) => countCjk(h.content || '') > 0).length, note: `${label} (HTML regex)` });
+      if (ctl.signal.aborted) throw new Error('Cancelled');
+      const sig = scriptRunSig(String(r.replaceString), false);
+      const saved = (await loadScriptTokenMap(sig)) || undefined;
+      try {
+        const res = await runScriptTranslation(
+          String(r.replaceString),
+          { beautify: false, nsfw: opts.nsfw, regexAlternation: true },
+          scriptDeps,
+          {
+            signal: ctl.signal,
+            isPaused: ctl.isPaused,
+            onTokensUpdated: (tokens) => {
+              const map = scriptTokensToMap(tokens);
+              if (Object.keys(map).length) void saveScriptTokenMap(sig, map);
+            },
+          },
+          (p) => {
+            if (p.stage === 'translate' && p.total) {
+              cb({ stage: 'scripts', done: hi, total: htmlJobs.length, note: `${label} — ${p.done ?? 0}/${p.total}` });
+            }
+          },
+          saved,
+        );
+        // Sau khi AI dịch, ép lại nhãn theo prompt lần nữa — AI có thể dịch 选项一 kiểu khác.
+        r.replaceString = applyLabelMapToText(res.output, labelMap).text;
+        regexHtmlTranslated++;
+      } catch (e) {
+        if ((e as Error)?.message === 'Cancelled' || ctl.signal.aborted) throw new Error('Cancelled');
+        // Một khối hỏng không được giết cả lượt dịch preset — giữ nguyên bản gốc khối đó.
+      }
+    }
+
     const jobs = helperScripts.filter((h) => countCjk(h.content || '') > 0);
     let si = 0;
     for (const h of jobs) {
@@ -262,6 +332,8 @@ export async function runPresetTranslation(
     regexChanged,
     regexReverted,
     regexManual,
+    regexLabelSynced,
+    regexHtmlTranslated,
     scriptsTranslated,
     unitsTotal: units.length,
     unitsFailed,

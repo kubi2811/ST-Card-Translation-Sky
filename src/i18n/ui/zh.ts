@@ -165,6 +165,8 @@ const ui: UiKeys = {
   psTrRepUnits: '{n}/{total} 条仍未翻译',
   psTrRepRegex: '正则：修补 {changed}，还原 {reverted}，{manual} 条待人工处理',
   psTrRepScripts: '已翻译 {n} 个内嵌脚本',
+  psTrRepLabelSync: '{n} 个正则已与提示词标签同步',
+  psTrRepRegexHtml: '已翻译 {n} 个正则美化 HTML 块',
   psTrDownload: '下载译好的预设',
 
   // ─── 更新按钮（侧栏 + 弹窗）───

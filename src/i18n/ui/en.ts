@@ -167,6 +167,8 @@ const ui = {
   psTrRepUnits: '{n}/{total} entries still untranslated',
   psTrRepRegex: 'Regex: {changed} patched, {reverted} reverted, {manual} left for manual review',
   psTrRepScripts: '{n} embedded scripts translated',
+  psTrRepLabelSync: '{n} regexes synced with prompt labels (e.g. 选项一 → Option 1)',
+  psTrRepRegexHtml: '{n} regex beautify HTML blocks translated',
   psTrDownload: 'Download translated preset',
 
   // ─── Nút Cập nhật (rail + modal) ───

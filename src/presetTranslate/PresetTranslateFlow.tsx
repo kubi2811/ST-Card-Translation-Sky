@@ -335,6 +335,13 @@ export default function PresetTranslateFlow() {
             </li>
             <li>{report.unitsFailed === 0 ? '✅' : '⚠️'} {fmt(ui.psTrRepUnits, { n: report.unitsFailed, total: report.unitsTotal })}</li>
             <li>🧩 {fmt(ui.psTrRepRegex, { changed: report.regexChanged, reverted: report.regexReverted, manual: report.regexManual.length })}</li>
+            {/* (việc 118) Nhãn regex đồng bộ prompt + HTML làm đẹp được dịch — user cần thấy để tin regex hết lệch */}
+            {(report.regexLabelSynced ?? 0) > 0 && (
+              <li>🔗 {fmt(ui.psTrRepLabelSync, { n: report.regexLabelSynced ?? 0 })}</li>
+            )}
+            {(report.regexHtmlTranslated ?? 0) > 0 && (
+              <li>🎨 {fmt(ui.psTrRepRegexHtml, { n: report.regexHtmlTranslated ?? 0 })}</li>
+            )}
             <li>📜 {fmt(ui.psTrRepScripts, { n: report.scriptsTranslated })}</li>
             <li>⏱️ {fmt(ui.scrTrRepTime, { s: Math.round(report.durationMs / 1000) })} · {Math.round(report.bytesIn / 1024)}KB → {Math.round(report.bytesOut / 1024)}KB</li>
           </ul>

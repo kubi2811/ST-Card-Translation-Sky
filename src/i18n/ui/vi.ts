@@ -169,6 +169,8 @@ const ui: UiKeys = {
   psTrRepUnits: '{n}/{total} mục còn chưa dịch',
   psTrRepRegex: 'Regex: vá {changed}, hoàn nguyên {reverted}, {manual} chờ chỉnh tay',
   psTrRepScripts: 'Đã dịch {n} script nhúng',
+  psTrRepLabelSync: 'Đồng bộ {n} regex với nhãn trong prompt (vd 选项一 → Lựa chọn 1)',
+  psTrRepRegexHtml: 'Đã dịch {n} khối HTML làm đẹp của regex',
   psTrDownload: 'Tải preset đã dịch',
 
   // ─── Nút Cập nhật (rail + modal) — nguyên văn từ HubUpdateButton ───

@@ -461,6 +461,7 @@ const t = {
   acPolishFail: 'Magic wand failed',
   acTunerBtn: 'Preview & Fine-tune',
   acTunerLocked: 'locked in',
+  acPolishTuningReset: 'The idea changed — the schema/UI locked in "Preview & Fine-tune" needs re-scanning before creating the card.',
   acIdeaCollapse: 'Collapse',
   acIdeaChars: '{n} characters',
   acIdeaPh: 'Describe the character, the setting, the RPG system in detail...\u000aThe AI analyses your idea (Phase 0) and then builds the whole card.',

@@ -462,6 +462,7 @@ const t: CardUiKeys = {
   acPolishFail: 'Đũa thần lỗi',
   acTunerBtn: 'Xem trước & Tinh chỉnh',
   acTunerLocked: 'đã chốt',
+  acPolishTuningReset: 'Ý tưởng đã đổi — bản schema/giao diện chốt ở "Xem trước & Tinh chỉnh" cần quét lại trước khi tạo card.',
   acIdeaCollapse: 'Thu gọn',
   acIdeaChars: '{n} ký tự',
   acIdeaPh: 'Nhập chi tiết ý tưởng về nhân vật, bối cảnh, hệ thống RPG...\u000aAI sẽ phân tích ý tưởng (Phase 0) rồi tạo toàn bộ card.',

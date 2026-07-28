@@ -460,6 +460,7 @@ const t: CardUiKeys = {
   acPolishFail: '魔法棒失败',
   acTunerBtn: '预览与微调',
   acTunerLocked: '已锁定',
+  acPolishTuningReset: '想法已更改 — "预览与微调"中锁定的 schema/界面需要重新扫描后才能创建卡片。',
   acIdeaCollapse: '收起',
   acIdeaChars: '{n} 个字符',
   acIdeaPh: '详细描述角色、背景、RPG 系统……\u000aAI 会先分析创意（Phase 0），再生成整张卡片。',

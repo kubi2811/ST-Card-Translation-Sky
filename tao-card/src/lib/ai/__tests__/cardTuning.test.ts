@@ -40,12 +40,58 @@ describe('(bug 141) tuning lifecycle', () => {
     expect(ideaSignature(IDEA)).not.toBe(ideaSignature(IDEA + 'x'));
   });
 
-  it('applyLockedSchema ÉP kết quả AI dùng nguyên schema đã duyệt — "áp dụng đúng 100%"', () => {
+  it('applyLockedSchema ÉP kết quả AI dùng nguyên FIELD đã duyệt — "áp dụng đúng 100%"', () => {
     const t = { ...makeTuning(SCHEMA, IDEA), confirmed: true };
     const aiResult = { schema: { version: '1.0', fields: [{ path: '/Khác', type: 'number' }] }, initVarEntry: 'x' };
-    const locked = applyLockedSchema(aiResult, t);
-    expect(JSON.stringify(locked.schema)).toBe(JSON.stringify(t.schema));
+    const locked = applyLockedSchema(aiResult, t) as { schema: MVUZODSchema; initVarEntry: string };
+    expect(JSON.stringify(locked.schema.fields)).toBe(JSON.stringify(t.schema.fields));
     expect(locked.initVarEntry).toBe('x');   // phần AI sáng tác vẫn giữ
+  });
+
+  // (bug 142 — rà đồng bộ 141↔129) statRelations là dữ liệu cảnh báo MỀM, không phải field —
+  // khoá schema không được làm nó bốc hơi; relation trỏ field user đã xoá thì tự bị lọc.
+  it('khoá schema GIỮ statRelations của AI; relation trỏ field đã xoá bị lọc', () => {
+    const t = { ...makeTuning(SCHEMA, IDEA), confirmed: true };
+    const aiResult = {
+      schema: {
+        version: '1.0', fields: [],
+        statRelations: [
+          { anchorPath: '/Nhân vật/HP', dependentPath: '/Nhân vật/Tên', basis: 'x', landmarks: [] },        // dep không phải số → lọc
+          { anchorPath: '/Nhân vật/HP', dependentPath: '/Đã Xoá', basis: 'y', landmarks: [{ anchor: 1, plausibleMax: 5 }] }, // field không tồn tại → lọc
+        ],
+      },
+    };
+    const locked = applyLockedSchema(aiResult, t) as { schema: MVUZODSchema & { statRelations?: unknown[] } };
+    // Cả 2 relation đều không hợp lệ với schema ĐÃ DUYỆT → bị lọc sạch, không còn key rác.
+    expect(locked.schema.statRelations).toBeUndefined();
+    expect(JSON.stringify(locked.schema.fields)).toBe(JSON.stringify(t.schema.fields));
+  });
+
+  it('khoá schema giữ statRelations HỢP LỆ (trỏ đúng field đã duyệt)', () => {
+    const schemaWithEnum = {
+      version: '1.0',
+      fields: [{
+        path: '/Nhân vật', type: 'object', label: 'Nhân vật', defaultValue: {}, constraints: {},
+        children: [
+          { path: '/Nhân vật/Cấp', type: 'number', label: 'Cấp', defaultValue: 1, constraints: { min: 1, max: 10 } },
+          { path: '/Nhân vật/Năng lượng', type: 'number', label: 'Năng lượng', defaultValue: 10, constraints: {} },
+        ],
+      }],
+    } as unknown as MVUZODSchema;
+    const t = { ...makeTuning(schemaWithEnum, IDEA), confirmed: true };
+    const aiResult = {
+      schema: {
+        version: '1.0', fields: [],
+        statRelations: [{
+          anchorPath: '/Nhân vật/Cấp', dependentPath: '/Nhân vật/Năng lượng',
+          basis: 'theo mô tả sức mạnh trong ý tưởng',
+          landmarks: [{ anchor: [1, 10], plausibleMin: 5, plausibleMax: 200 }],
+        }],
+      },
+    };
+    const locked = applyLockedSchema(aiResult, t) as unknown as { schema: MVUZODSchema };
+    expect(locked.schema.statRelations).toHaveLength(1);
+    expect(locked.schema.statRelations![0].basis).toContain('mô tả sức mạnh');
   });
 });
 

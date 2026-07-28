@@ -104,6 +104,12 @@ export function AutoCreatorPage() {
         return;   // 1-1 vỡ → giữ nguyên văn gốc, không âm thầm đổi ý user
       }
       store.setIdea(polishedIdea);
+      // (bug 142 — 137↔141) Đũa thần ĐỔI văn bản ý tưởng ⇒ bản schema đã duyệt ở "Xem trước &
+      // Tinh chỉnh" (nếu có) hết hiệu lực theo thiết kế ideaSig. Nói thẳng thay vì để user
+      // chạy pipeline rồi mới thấy log "bị bỏ qua".
+      if (store.config.tuning?.confirmed) {
+        toast.info(ui.acPolishTuningReset);
+      }
       if (suggestedRules.length > 0) {
         const cur = store.config.userRules.trim();
         const fresh = suggestedRules.filter(r => !cur.includes(r.replace(/^[-•\s]+/, '').slice(0, 40)));

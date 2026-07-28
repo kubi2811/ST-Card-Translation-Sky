@@ -120,9 +120,21 @@ export function buildThemeChoices(schema: MVUZODSchema, gameName: string, count 
  * (Bước 3 — "áp dụng đúng 100%") ÉP kết quả bước mvuzod dùng NGUYÊN schema đã duyệt.
  * AI vẫn sinh initvar/quy tắc/danh sách biến (việc cần sáng tác), nhưng schema thì KHÔNG
  * được khác một ly so với bản user đã chốt.
+ *
+ * (bug 142 — rà đồng bộ với bug 129) NGOẠI LỆ DUY NHẤT: `statRelations` (ràng buộc MỀM giữa
+ * chỉ số liên quan) do AI suy từ ý tưởng + lorebook — nó KHÔNG đổi field nào của schema, chỉ
+ * thêm dữ liệu cảnh báo cho Opening Form. Ghi đè thô thì mọi card đi qua "Xem trước & Tinh
+ * chỉnh" mất sạch cảnh báo mềm. Giữ statRelations của AI rồi normalize lại — relation nào trỏ
+ * vào field user đã xoá/đổi tên sẽ tự bị lọc (normalizeStatRelations làm việc đó).
  */
 export function applyLockedSchema<T extends { schema?: unknown }>(result: T, tuning: CardTuning): T {
-  return { ...result, schema: JSON.parse(JSON.stringify(tuning.schema)) };
+  const lockedRaw = JSON.parse(JSON.stringify(tuning.schema)) as MVUZODSchema & { statRelations?: unknown };
+  const aiRelations = (result.schema as { statRelations?: unknown } | undefined)?.statRelations;
+  if (aiRelations !== undefined && lockedRaw.statRelations === undefined) {
+    lockedRaw.statRelations = aiRelations as never;
+  }
+  // normalize: dựng cây + lọc relation trỏ vào field không tồn tại trong schema ĐÃ DUYỆT.
+  return { ...result, schema: normalizeMVUZODSchema(lockedRaw) };
 }
 
 /** Khối prompt "schema đã khoá" — nối vào buildMvuzodPrompt khi tuning được dùng. */

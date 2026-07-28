@@ -3,6 +3,10 @@ import { useApp } from '../storeContext';
 import { callAI } from '../utils/ai';
 import { extractJSONsFromText, ExtractedJSON } from '../utils/parser';
 import { buildProjectContext, resolveReferences, buildReferencedContext } from '../utils/contextBuilder';
+import {
+  loadPresetLibrary, savePresetLibrary, upsertPreset, buildPresetLibraryContext,
+  type ImportedPreset,
+} from '../utils/presetLibrary';
 import { PromptBlock, RegexScript, ChatMessage } from '../types';
 import { Send, RefreshCw, Sparkles, Plus, Calendar, Code, Paperclip, X, FileJson } from 'lucide-react';
 import { t, fmt } from '../i18n';
@@ -63,6 +67,17 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ onOpenSettings }) => {
   const abortRef = useRef<AbortController | null>(null); // nút Dừng: hủy call AI đang chạy
   const [streamingText, setStreamingText] = useState('');
   const [attachedFile, setAttachedFile] = useState<{ name: string; content: string; summary: string } | null>(null);
+  // (bug 139) Thư viện preset mẫu — nạp một lần, MỌI lượt chat sau tự có ngữ cảnh.
+  const [presetLib, setPresetLib] = useState<ImportedPreset[]>(() => loadPresetLibrary());
+  const updateLib = (next: ImportedPreset[]) => { setPresetLib(next); savePresetLibrary(next); };
+  const importLibFiles = async (files: File[]) => {
+    let next = presetLib;
+    for (const f of files) {
+      if (!/\.(json|txt|ya?ml|md)$/i.test(f.name)) continue;
+      try { next = upsertPreset(next, f.name, await f.text()); } catch { /* file hỏng — bỏ */ }
+    }
+    updateLib(next);
+  };
   
   const templateFileRef = useRef<HTMLInputElement>(null);
   
@@ -160,7 +175,10 @@ ${textToSend}`;
     try {
       // 2. Build RAG context
       const actionLog = getActionLog();
-      const projectContext = buildProjectContext(activeProject, actionLog);
+      // (bug 139) Thư viện preset nạp sẵn đi kèm MỌI lượt chat: preset được nhắc tên/ghim gửi
+      // nguyên văn, còn lại gửi tóm tắt (cache) — user chỉ cần nói "sửa preset A", "gộp A với B".
+      const libContext = buildPresetLibraryContext(presetLib, userText);
+      const projectContext = buildProjectContext(activeProject, actionLog) + (libContext ? `\n\n${libContext}` : '');
       const refs = resolveReferences(userText, activeProject, actionLog);
       const referencedContext = buildReferencedContext(refs);
 
@@ -393,6 +411,36 @@ ${textToSend}`;
       </div>
 
       {/* Attached file indicator */}
+      {/* (bug 139) Thư viện preset mẫu — nạp nhiều file .json/.txt/.yaml, MỌI lượt chat sau
+          tự có ngữ cảnh (nhắc tên hoặc ghim = gửi nguyên văn; còn lại là tóm tắt). */}
+      <div
+        className="px-4 py-1.5 border-t border-theme-border flex items-center gap-1.5 flex-wrap"
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => { e.preventDefault(); void importLibFiles(Array.from(e.dataTransfer.files)); }}
+      >
+        <button
+          onClick={() => {
+            const inp = document.createElement('input');
+            inp.type = 'file'; inp.multiple = true; inp.accept = '.json,.txt,.yaml,.yml,.md';
+            inp.onchange = () => { void importLibFiles(Array.from(inp.files ?? [])); };
+            inp.click();
+          }}
+          className="text-[10px] px-2 py-0.5 rounded border border-theme-border hover:bg-white/5 flex items-center gap-1"
+          title={t.plImportTip}
+        >📚 {t.plImportBtn}{presetLib.length > 0 ? ` (${presetLib.length})` : ''}</button>
+        {presetLib.map(p => (
+          <span key={p.id}
+            className={`text-[10px] px-1.5 py-0.5 rounded-full border flex items-center gap-1 ${p.pinned ? 'border-amber-400/60 text-amber-300' : 'border-theme-border text-theme-muted'}`}
+            title={`${p.format} · ${p.raw.length.toLocaleString()} ký tự\n${p.summary}`}>
+            <button onClick={() => updateLib(presetLib.map(x => x.id === p.id ? { ...x, pinned: !x.pinned } : x))}
+              title={p.pinned ? t.plUnpin : t.plPin}>{p.pinned ? '📌' : '📄'}</button>
+            {p.name}
+            <button onClick={() => updateLib(presetLib.filter(x => x.id !== p.id))} title={t.plRemove}><X size={10} /></button>
+          </span>
+        ))}
+        {presetLib.length === 0 && <span className="text-[10px] text-theme-muted">{t.plEmptyHint}</span>}
+      </div>
+
       {attachedFile && (
         <div className="px-4 py-2 border-t border-theme-border bg-emerald-500/[0.05] flex items-center gap-2 animate-fade-in">
           <FileJson size={14} className="text-emerald-400 flex-shrink-0" />

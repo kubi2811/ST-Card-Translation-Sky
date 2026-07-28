@@ -185,6 +185,26 @@ export function StoryToCardPage() {
     toast.success(fmt(ui.s2cEntriesAdded, { count: entries.length }));
   };
 
+  // (bug 136) Đọc nhiều file truyện → NỐI vào ô truyện (không ghi đè phần đã dán).
+  const [importing, setImporting] = useState(false);
+  const importFiles = async (files: File[]) => {
+    if (!files.length) return;
+    setImporting(true);
+    try {
+      const { readStoryFiles } = await import('../lib/ai/storyFileImport');
+      const r = await readStoryFiles(files);
+      if (r.text) {
+        setStory((prev: string) => (prev.trim() ? `${prev.trimEnd()}\n\n${r.text}` : r.text));
+        toast.success(fmt(ui.s2cFilesDone, { n: r.parts.length, chars: r.parts.reduce((s, p) => s + p.chars, 0).toLocaleString() }));
+      }
+      for (const sk of r.skipped) toast.warning(`${sk.name}: ${sk.reason}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const applyToCard = (c: GeneratedStoryCard) => {
     updateCard((card) => {
       if (c.name) card.data.name = c.name;
@@ -193,6 +213,10 @@ export function StoryToCardPage() {
       if (c.firstMes) card.data.first_mes = c.firstMes;
     });
     if (c.worldEntries.length) applyEntries(c.worldEntries);
+    // (bug 136) Văn phong tác giả → một entry constant riêng, AI nào viết tiếp cũng thấy.
+    if (c.styleGuide) {
+      applyEntries([{ keys: ['văn phong', 'giọng văn'], content: `[Văn phong tác giả — bám theo khi kể chuyện]\n${c.styleGuide}` }]);
+    }
     toast.success(ui.s2cApplied);
   };
 
@@ -217,6 +241,28 @@ export function StoryToCardPage() {
       {/* 01 — Truyện + tùy chọn */}
       <section className="rounded-xl border border-border/60 bg-muted/20 p-4 space-y-3">
         <div className="text-sm font-semibold flex items-center gap-2"><ScanLine className="w-4 h-4" /> {ui.s2cStep1}</div>
+
+        {/* (bug 136) NHẬP FILE thay vì dán tay: kéo thả / chọn NHIỀU file .txt/.md/.epub một lúc.
+            File được xếp theo thứ tự tự nhiên của tên ("chương 2" trước "chương 10") rồi ghép có
+            mốc ranh giới vào đúng ô truyện — workflow dán tay giữ nguyên. */}
+        <div
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => { e.preventDefault(); void importFiles(Array.from(e.dataTransfer.files)); }}
+          className="rounded-lg border-2 border-dashed border-border/70 px-3 py-2.5 text-xs text-muted-foreground flex items-center gap-2 hover:border-primary/40 transition-colors"
+        >
+          <span className="flex-1">{importing ? ui.s2cFilesReading : ui.s2cFilesHint}</span>
+          <button
+            onClick={() => {
+              const inp = document.createElement('input');
+              inp.type = 'file'; inp.multiple = true; inp.accept = '.txt,.md,.text,.markdown,.epub,application/epub+zip';
+              inp.onchange = () => { void importFiles(Array.from(inp.files ?? [])); };
+              inp.click();
+            }}
+            disabled={importing}
+            className="px-2.5 py-1 rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50 shrink-0"
+          >📂 {ui.s2cFilesBtn}</button>
+        </div>
+
         <textarea value={story} onChange={(e) => setStory(e.target.value)} rows={8}
           className="settings-input text-sm resize-y w-full" placeholder={ui.s2cStoryPh} />
         <div className="text-xs text-muted-foreground">{fmt(ui.s2cChars, { n: story.length.toLocaleString() })}{chunkSize > 0 && story.length > chunkSize ? fmt(ui.s2cChunks, { n: Math.min(Math.ceil(story.length / chunkSize), maxChunks) }) : ''}</div>
@@ -261,6 +307,8 @@ export function StoryToCardPage() {
           <label className="flex items-center gap-1.5"><input type="checkbox" checked={!!opts.omitEmptyFields} onChange={(e) => set({ omitEmptyFields: e.target.checked })} /> {ui.s2cOmitEmpty}</label>
           <label className="flex items-center gap-1.5"><input type="checkbox" checked={!!opts.autoContinue} onChange={(e) => set({ autoContinue: e.target.checked })} /> {ui.s2cAutoContinue}</label>
           <label className="flex items-center gap-1.5"><input type="checkbox" checked={!!opts.withWorldEntries} onChange={(e) => set({ withWorldEntries: e.target.checked })} /> {ui.s2cWithWorld}</label>
+          {/* (bug 136) Học văn phong tác giả từ chính truyện → entry hướng dẫn giọng văn. */}
+          <label className="flex items-center gap-1.5"><input type="checkbox" checked={!!opts.analyzeStyle} onChange={(e) => set({ analyzeStyle: e.target.checked })} /> {ui.s2cAnalyzeStyle}</label>
         </div>
 
         {/* Nâng cao: chunk + scan */}

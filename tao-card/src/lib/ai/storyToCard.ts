@@ -61,6 +61,9 @@ export interface StoryCardOptions {
   withWorldEntries?: boolean;
   /** Thiết lập bổ sung chung cho thẻ (free text). */
   extraNotes?: string;
+  /** (bug 136) Phân tích VĂN PHONG tác giả (nhịp kể, câu chữ, hội thoại, sắc thái) thành
+   *  bản hướng dẫn để AI viết tiếp gần giọng nguyên tác. */
+  analyzeStyle?: boolean;
 }
 
 export interface WorldEntry { keys: string[]; content: string; }
@@ -71,6 +74,8 @@ export interface GeneratedStoryCard {
   scenario: string;
   firstMes: string;
   worldEntries: WorldEntry[];
+  /** (bug 136) Bản phân tích văn phong tác giả — áp thành entry lorebook constant. */
+  styleGuide?: string;
   raw: string;
 }
 
@@ -289,6 +294,10 @@ function buildCardSystem(characterName: string, opts: StoryCardOptions): string 
 [Thân mật 71–100] ...
 [Xuyên suốt] nét chung mọi giai đoạn.</persona>`;
 
+  // (bug 136) Học văn phong tác giả — phân tích từ CHÍNH truyện, không bịa.
+  const styleBlock = opts.analyzeStyle
+    ? '\n<style_guide>Phân tích VĂN PHONG của tác giả từ chính truyện (KHÔNG bịa): nhịp kể nhanh/chậm, độ dài câu, mật độ miêu tả, cách dựng hội thoại + khẩu khí, từ ngữ/thành ngữ đặc trưng, sắc thái cảm xúc, cách đẩy cao trào. Viết thành 5-10 gạch đầu dòng CHỈ DẪN để một AI khác viết tiếp GẦN GIỌNG nguyên tác. Mỗi ý kèm ví dụ ngắn trích từ truyện.</style_guide>'
+    : '';
   const worldBlock = opts.withWorldEntries
     ? '\n<world_entries>\n<entry><keys>từ khoá 1, từ khoá 2</keys><content>Nội dung lore QUAN TRỌNG (địa danh/thế lực/vật phẩm/sự kiện then chốt). Áp dụng quy tắc CHẤT LƯỢNG ở trên.</content></entry>\n... (chỉ 3–8 entry thật sự đáng có)\n</world_entries>'
     : '';
@@ -306,7 +315,7 @@ ${directives.length ? directives.map((d) => `- ${d}`).join('\n') + '\n' : ''}Đ�
 <basic>Thông tin cơ bản (gạch đầu dòng): ngoại hình nhận diện, xuất thân/lai lịch, năng lực, vai trò trong truyện.</basic>
 ${persona}
 <scenario>Bối cảnh {{char}} gặp/tương tác với {{user}} (2–4 câu).</scenario>
-<first_mes>Lời chào/mở màn nhập vai của {{char}} với {{user}} — có hành động *nghiêng*, lời thoại, không thay lời {{user}}.</first_mes>${worldBlock}
+<first_mes>Lời chào/mở màn nhập vai của {{char}} với {{user}} — có hành động *nghiêng*, lời thoại, không thay lời {{user}}.</first_mes>${worldBlock}${styleBlock}
 </card>`;
 }
 
@@ -410,6 +419,8 @@ export async function generateCardFromStory(
         .filter((e) => e.content)
     : [];
 
+  const styleGuide = opts.analyzeStyle ? tag(block, 'style_guide').trim() : '';
+
   const card: GeneratedStoryCard = {
     name: tag(block, 'name') || characterName,
     description: [tag(block, 'basic'), tag(block, 'persona')].filter(Boolean).join('\n\n'),
@@ -417,6 +428,7 @@ export async function generateCardFromStory(
     scenario: tag(block, 'scenario'),
     firstMes: tag(block, 'first_mes'),
     worldEntries,
+    ...(styleGuide ? { styleGuide } : {}),
     raw: text,
   };
 

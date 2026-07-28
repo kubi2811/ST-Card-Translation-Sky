@@ -7,7 +7,7 @@
  * (test node) — cùng một hợp đồng đầu ra.
  */
 
-import type { PageDoc, WikiPlatform } from './types';
+import type { PageDoc } from './types';
 import type { PlatformInfo } from './platform';
 import { isArticleLink, normalizeArticleUrl } from './platform';
 
@@ -66,7 +66,7 @@ export function extractPageDoc(
   wiki: PlatformInfo,
   depth: number,
 ): PageDoc | null {
-  if (typeof DOMParser === 'undefined') return extractPageDocRegex(html, pageUrl, wiki.platform, depth);
+  if (typeof DOMParser === 'undefined') return extractPageDocRegex(html, pageUrl, wiki, depth);
 
   const doc = new DOMParser().parseFromString(html, 'text/html');
 
@@ -152,7 +152,7 @@ export function extractPageDoc(
 }
 
 /* ─── Fallback không-DOM (node test): đủ dùng cho title/links/text thô ─── */
-function extractPageDocRegex(html: string, pageUrl: string, platform: WikiPlatform, depth: number): PageDoc | null {
+function extractPageDocRegex(html: string, pageUrl: string, wiki: PlatformInfo, depth: number): PageDoc | null {
   const title = (html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1] || html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '')
     .replace(/<[^>]+>/g, '').replace(/ [-|–|] .+$/, '').trim();
   if (!title) return null;
@@ -161,12 +161,19 @@ function extractPageDocRegex(html: string, pageUrl: string, platform: WikiPlatfo
     .replace(/<[^>]+>/g, '\n');
   body = body.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/\n{3,}/g, '\n\n').trim();
   if (body.length < 80) return null;
+  // (bug 133) Lọc link bằng ĐÚNG bộ luật của đường DOM. Bản cũ gom mọi href — kể cả
+  // User:/Special:/ảnh/CSS — nên hai đường trả `links` khác hẳn nhau; crawler có lọc lại nên
+  // không sinh lỗi thấy được, nhưng bất kỳ ai đọc `links` trực tiếp (test tích hợp, thống kê)
+  // đều nhận số liệu sai. Một hợp đồng đầu ra thì phải một bộ luật.
   const links: string[] = [];
   for (const m of html.matchAll(/href="([^"#]+)"/g)) {
-    try { links.push(normalizeArticleUrl(new URL(m[1], pageUrl).toString())); } catch { /* bỏ */ }
+    try {
+      const abs = new URL(m[1], pageUrl).toString();
+      if (isArticleLink(abs, wiki)) links.push(normalizeArticleUrl(abs));
+    } catch { /* bỏ */ }
   }
   return {
     url: normalizeArticleUrl(pageUrl), title, aliases: [], text: body.slice(0, 60000),
-    infobox: {}, links: [...new Set(links)], categories: [], platform, depth,
+    infobox: {}, links: [...new Set(links)], categories: [], platform: wiki.platform, depth,
   };
 }

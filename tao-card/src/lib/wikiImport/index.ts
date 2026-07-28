@@ -69,8 +69,18 @@ export async function runWikiImport(
     client, ctl, state,
     (s) => saveCrawlState(config.url, s),
   );
-  if (pages.length === 0) throw new Error('Không cào được trang nào — kiểm tra URL hoặc thử lại (wiki có thể chặn mọi proxy).');
-  ctl.log(`✅ Cào xong ${pages.length} trang (${state.dead.length} trang lỗi đã bỏ qua).`);
+  if (pages.length === 0) {
+    // (bug 133) Bản cũ đoán "wiki có thể chặn mọi proxy" — câu đó đúng kiểu gì cũng nói được
+    // nên chẳng giúp chẩn đoán, và lần này thủ phạm thật lại là tool gọi sai đường proxy nội
+    // bộ. Nay nêu ĐÍCH DANH từng đường đã thử và lý do hỏng của nó.
+    const why = client.failureReasons();
+    throw new Error(
+      'Không cào được trang nào. Đã thử các đường sau:\n' +
+      (why.length ? why.map(r => `  • ${r}`).join('\n') : '  • (không có đường nào chạy được)') +
+      '\nKiểm tra lại URL, hoặc mở tool bằng dev server (npm run dev) để dùng proxy nội bộ.',
+    );
+  }
+  ctl.log(`✅ Cào xong ${pages.length} trang qua đường "${client.successTransport() ?? '?'}" (${state.dead.length} trang lỗi đã bỏ qua).`);
 
   /* ─── Pha 2: GENERATE — batch song song, dữ liệu tách hẳn ─── */
   const entriesTarget = config.totalEntries;

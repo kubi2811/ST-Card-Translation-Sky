@@ -3502,6 +3502,12 @@ export function useTranslation() {
         failedChunkIndex: undefined,
       });
       store.addLog('success', `Re-translated: ${field.label}`);
+      // (bug 132) GHI TIẾN TRÌNH XUỐNG ĐĨA. Vòng dịch chính vẫn tự lưu sau mỗi đợt, nhưng dịch
+      // LẺ từng field — đường mà tab "Regex" dùng cho mọi nút Dịch/Dịch lại — thì trước giờ
+      // không lưu chỗ nào cả. Nên bản dịch regex chỉ sống trong RAM: F5 hay nhập lại thẻ là
+      // quay về nguyên bản, đúng lời user báo. Lưu ở ĐÂY để mọi caller (Regex, Lorebook,
+      // TavernHelper…) đều được, khỏi phải nhớ gọi ở từng nút.
+      store.saveTranslationCache();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg === 'Cancelled' || msg === 'The operation was aborted' || msg === 'The user aborted a request.') {
@@ -3518,6 +3524,9 @@ export function useTranslation() {
           totalChunks: err.totalChunks,
         });
         store.addLog('error', `Dịch lại lỗi: ${field.label} — phần ${err.failedChunkIndex + 1}/${err.totalChunks} (đã lưu ${err.completedChunks.length})`);
+        // Lỗi giữa chừng vẫn phải lưu: các chunk đã dịch xong là công sức thật, mất là dịch lại
+        // từ đầu (và tốn tiền API lần nữa).
+        store.saveTranslationCache();
       } else {
         store.updateField(path, { status: 'error', error: msg });
         store.addLog('error', `Re-translate failed: ${field.label} — ${msg}`);

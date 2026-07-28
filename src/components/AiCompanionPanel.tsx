@@ -321,33 +321,30 @@ Bạn có khả năng TÁC ĐỘNG TRỰC TIẾP vào thẻ nhân vật đang m�
 Người dùng sẽ thấy preview và xác nhận trước khi action được thực thi.
 
 CÁC ACTION HIỆN CÓ:
-1. CREATE_REGEX — Tạo regex script mới
-   Params: { scriptName, findRegex, replaceString, placement?, disabled? }
-2. EDIT_REGEX — Sửa một trường của regex script theo index
-   Params: { scriptIndex, field, newValue }
-   field: "scriptName" | "findRegex" | "replaceString" | "disabled" | "placement" | etc.
-3. PATCH_REGEX_REPLACE — Tìm/thay thế trong replaceString của regex
-   Params: { scriptIndex, find, replace } hoặc { scriptIndex, appendToEnd } hoặc { scriptIndex, prependToStart }
-4. INJECT_FUNCTION — Thêm hàm JS mới vào replaceString (hệ thống tự tìm chỗ an toàn)
-   Params: { scriptIndex, functionCode, insertPosition?: "auto" | "before_script_end" | "new_script_block" }
-5. DELETE_REGEX — Xóa regex script
-   Params: { scriptIndex }
-6. CREATE_ENTRY — Tạo lorebook entry mới
+1. CREATE_ENTRY — Tạo lorebook entry mới
    Params: { keys, comment, content, name?, position?, constant?, enabled? }
-7. EDIT_ENTRY — Sửa lorebook entry
+2. EDIT_ENTRY — Sửa lorebook entry
    Params: { entryIndex, field, newValue }
-8. DELETE_ENTRY — Xóa lorebook entry
+3. DELETE_ENTRY — Xóa lorebook entry
    Params: { entryIndex }
-9. CREATE_TAVERN_HELPER — Tạo TavernHelper script
+4. CREATE_TAVERN_HELPER — Tạo TavernHelper script
    Params: { name, content, info? }
-10. VIEW_FULL_REGEX — Xem full nội dung regex (khi context bị truncate)
+5. VIEW_FULL_REGEX — ĐỌC full nội dung regex (khi context bị truncate). CHỈ ĐỌC, không sửa gì.
     Params: { scriptIndex }
-11. RUN_SCRIPT — Chạy script (sẽ hỏi user xác nhận trước khi thực thi)
+6. RUN_SCRIPT — Chạy script (sẽ hỏi user xác nhận trước khi thực thi)
     Params: { code, language?, description }
 
+KHÔNG CÓ ACTION GHI VÀO REGEX (quan trọng):
+- CREATE_REGEX / EDIT_REGEX / PATCH_REGEX_REPLACE / INJECT_FUNCTION / DELETE_REGEX ĐÃ BỊ GỠ. Đừng
+  bao giờ trả về chúng — hệ thống sẽ chặn và báo lỗi cho người dùng.
+- Lý do: regex của thẻ có hai bản — bản GỐC trong thẻ và bản DỊCH trong tab "Regex" của app.
+  Action ghi vào bản gốc nên người dùng không thấy gì đổi, rồi lúc xuất thẻ bản dịch ghi đè lên,
+  xoá sạch thay đổi. Ghi kiểu đó là làm hỏng dữ liệu chứ không phải giúp.
+- Khi user nhờ sửa/thêm code regex: dùng VIEW_FULL_REGEX để ĐỌC, rồi đưa ĐOẠN CODE HOÀN CHỈNH
+  trong code block kèm hướng dẫn ngắn "mở tab Regex → chọn script → dán vào ô nội dung", hoặc
+  nhắc họ dùng nút "AI Quét & Sửa" ngay trong tab Regex (nút đó sửa đúng bản dịch).
+
 QUY TẮC QUAN TRỌNG KHI DÙNG ACTIONS:
-- Luôn kiểm tra danh sách regex_scripts trong ngữ cảnh để xác định đúng scriptIndex trước khi sửa.
-- Khi thêm hàm vào replaceString, ưu tiên dùng INJECT_FUNCTION (hệ thống tự tìm vị trí an toàn: trước </script>, trong <script> block, hoặc tạo block mới).
 - Giải thích bằng text TRƯỚC khi đưa action block.
 - Có thể đưa NHIỀU actions trong 1 response.
 - Luôn thêm "reasoning" vào action block để giải thích tại sao chọn action này.
@@ -356,11 +353,13 @@ QUY TẮC QUAN TRỌNG KHI DÙNG ACTIONS:
 VÍ DỤ FORMAT:
 User: "Thêm hàm hiển thị thanh HP cho regex 'Tô màu hội thoại'"
 Response:
-Tôi tìm thấy regex "Tô màu hội thoại" ở index 0. Tôi sẽ thêm hàm hiển thị thanh HP vào replaceString của nó.
+Regex "Tô màu hội thoại" đang ở index 0, tôi đọc trọn nội dung của nó trước đã.
 
 <AI_ACTION>
-{"action":"INJECT_FUNCTION","params":{"scriptIndex":0,"functionCode":"function renderHPBar(hp,maxHp){...}"},"reasoning":"Thêm hàm renderHPBar vào script đã có sẵn"}
+{"action":"VIEW_FULL_REGEX","params":{"scriptIndex":0},"reasoning":"Cần xem trọn replaceString trước khi đề xuất chỗ chèn hàm"}
 </AI_ACTION>
+
+(Sau khi có nội dung, đưa hàm hoàn chỉnh trong code block và chỉ chỗ dán trong tab "Regex".)
 `;
 
 /** Max chars for regex replaceString preview in context (full content via VIEW_FULL_REGEX) */

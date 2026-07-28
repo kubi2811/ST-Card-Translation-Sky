@@ -229,7 +229,9 @@ interface RegexFieldRow {
    ════════════════════════════════════════════════════════════════════ */
 export default function RegexManagerPanel({ onClose, isFullscreen }: { onClose: () => void; isFullscreen?: boolean }) {
   const t = useT();
-  const { card, updateCard, addToast, fields, updateField, phase, deleteCurrentCardCache, translationConfig, addLog, proxy, jumpToFieldPath, setJumpToFieldPath } = useStore();
+  // (bug 132) saveTranslationCache: mọi việc làm trong tab này (dịch lẻ, AI sửa, áp vào thẻ,
+  // bật/tắt) phải xuống đĩa — trước đây tab Regex không hề gọi nó nên F5/nhập lại là mất trắng.
+  const { card, updateCard, addToast, fields, updateField, phase, deleteCurrentCardCache, translationConfig, addLog, proxy, jumpToFieldPath, setJumpToFieldPath, saveTranslationCache } = useStore();
   const { retranslateField, cancelTranslation, cancelFieldTranslation, cancelAllFieldTranslations } = useTranslation();
 
   // ─── Regex scripts from card ───
@@ -352,7 +354,12 @@ export default function RegexManagerPanel({ onClose, isFullscreen }: { onClose: 
       const { issues, fixes } = await aiRegexProcess(
         fields, proxy, translationConfig.targetLanguage,
         translationConfig.mvuDictionary, translationConfig.sourceLanguage,
-        (fieldPath, newTranslated) => updateField(fieldPath, { translated: newTranslated, status: 'done' }),
+        // (bug 132) Lưu ngay sau mỗi field AI sửa — đường này KHÔNG đi qua retranslateField nên
+        // không hưởng lệnh lưu ở đó; bỏ quên là mất sạch khi F5/nhập lại thẻ.
+        (fieldPath, newTranslated) => {
+          updateField(fieldPath, { translated: newTranslated, status: 'done' });
+          saveTranslationCache();
+        },
         (p) => setRegexAutoProgress({ ...p, issues: [...p.issues], fixes: [...p.fixes] }),
         abort.signal,
       );
@@ -369,7 +376,7 @@ export default function RegexManagerPanel({ onClose, isFullscreen }: { onClose: 
       setIsRegexAuto(false);
       regexAutoAbortRef.current = null;
     }
-  }, [fields, proxy, translationConfig, updateField, addLog, addToast]);
+  }, [fields, proxy, translationConfig, updateField, addLog, addToast, saveTranslationCache]);
 
   const handleCancelRegexAuto = useCallback(() => {
     regexAutoAbortRef.current?.abort();
@@ -472,6 +479,8 @@ export default function RegexManagerPanel({ onClose, isFullscreen }: { onClose: 
     });
 
     updateCard(newCard);
+    // (bug 132) Thay đổi vừa ghi vào THẺ cũng phải xuống đĩa — snapshot có `regexScripts`.
+    saveTranslationCache();
     addToast('success', fmt(ui.rmApplied, { count: applied }));
   };
 
@@ -486,9 +495,10 @@ export default function RegexManagerPanel({ onClose, isFullscreen }: { onClose: 
     if (!rs || !rs[idx]) return;
     rs[idx].disabled = !rs[idx].disabled;
     updateCard(newCard);
+    saveTranslationCache();   // (bug 132) cờ bật/tắt cũng là dữ liệu người dùng — đừng để mất
     const name = rs[idx].scriptName || `Script ${idx + 1}`;
     addToast('info', fmt(rs[idx].disabled ? ui.rmToggleOff : ui.rmToggleOn, { name }));
-  }, [card, updateCard, addToast, ui]);
+  }, [card, updateCard, addToast, ui, saveTranslationCache]);
 
   // Thống kê bật/tắt để hiện ở thanh dưới.
   const enabledCount = useMemo(() => scripts.filter(s => !s.disabled).length, [scripts]);

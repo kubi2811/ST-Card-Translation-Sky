@@ -2,9 +2,8 @@
 // AI Actions Engine — Parse & Execute structured actions from AI responses
 // ═══════════════════════════════════════════════════════════════════════════════
 
-import type { CharacterCard, CharacterBookEntry, RegexScript, TavernHelperScript } from '../types/card';
-import { generateUUID, injectCustomTavernHelperScript } from './mvuGenerator';
-import { injectFunction as regexInjectFunction } from './regexInjector';
+import type { CharacterCard, CharacterBookEntry, TavernHelperScript } from '../types/card';
+import { injectCustomTavernHelperScript } from './mvuGenerator';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -12,14 +11,39 @@ export type ActionType =
   | 'CREATE_ENTRY'
   | 'EDIT_ENTRY'
   | 'DELETE_ENTRY'
-  | 'CREATE_REGEX'
-  | 'EDIT_REGEX'
-  | 'PATCH_REGEX_REPLACE'
-  | 'DELETE_REGEX'
-  | 'INJECT_FUNCTION'
   | 'CREATE_TAVERN_HELPER'
   | 'VIEW_FULL_REGEX'
   | 'RUN_SCRIPT';
+
+/**
+ * ═══ (bug 132) NHÓM ACTION GHI REGEX ĐÃ BỊ GỠ ═══
+ * User: "Lệnh <AI_ACTION> import/chỉnh sửa nội dung regex trong Trợ lý A.I không hoạt động.
+ * Đề xuất nên xoá bỏ luôn lệnh này."
+ *
+ * Đúng — và lý do nó không bao giờ chạy đúng là LỖI THIẾT KẾ chứ không phải lỗi vặt sửa được:
+ * trong app này regex có HAI nguồn sự thật khác nhau.
+ *   • `card.data.extensions.regex_scripts` — bản GỐC của thẻ.
+ *   • `fields` (group 'regex') — bản DỊCH, là thứ tab "Regex" hiển thị và là thứ được ghi
+ *     ngược vào thẻ lúc xuất file (applyTranslationsToCard).
+ * Các action này ghi vào NHÁNH THỨ NHẤT. Hệ quả: người dùng bấm xác nhận, tool báo "đã sửa",
+ * nhưng tab Regex không đổi một chữ (nó đọc `fields`) — và đến lúc xuất thì `fields` ghi đè
+ * lên đúng chỗ vừa sửa, xoá sạch việc AI vừa làm. Tức là action vừa VÔ HÌNH vừa BỊ MẤT.
+ *
+ * Sửa cho "chạy" nghĩa là phải cho AI ghi song song vào cả hai nhánh và giữ ánh xạ index khớp
+ * qua mọi thao tác thêm/xoá script — rủi ro hỏng dữ liệu cao hơn nhiều so với lợi ích, trong
+ * khi tab "Regex" đã có sẵn đủ đồ nghề (dịch lại từng dòng, AI Quét & Sửa, áp vào thẻ).
+ * Nên: gỡ hẳn, và khi model cũ vẫn trả về các action này thì BÁO RÕ + chỉ đường, không im lặng.
+ *
+ * VIEW_FULL_REGEX được GIỮ: nó chỉ ĐỌC, không đụng vào thẻ, và giúp AI đọc trọn replaceString
+ * để tư vấn/nêu code cho người dùng tự dán.
+ */
+export const REMOVED_REGEX_ACTIONS = [
+  'CREATE_REGEX', 'EDIT_REGEX', 'PATCH_REGEX_REPLACE', 'DELETE_REGEX', 'INJECT_FUNCTION',
+] as const;
+
+export function isRemovedRegexAction(name: string): boolean {
+  return (REMOVED_REGEX_ACTIONS as readonly string[]).includes(name);
+}
 
 export interface AiAction {
   action: ActionType;
@@ -60,6 +84,7 @@ const ACTION_BLOCK_RE = /<AI_ACTION>\s*([\s\S]*?)\s*<\/AI_ACTION>/gi;
  */
 export function parseAiActions(response: string): ParsedResponse {
   const actions: AiAction[] = [];
+  const removed: string[] = [];
   let textContent = response;
 
   // Extract all action blocks
@@ -71,6 +96,12 @@ export function parseAiActions(response: string): ParsedResponse {
     try {
       const parsed = JSON.parse(rawJson);
       if (parsed && typeof parsed.action === 'string') {
+        // (bug 132) Action ghi regex đã bị gỡ — KHÔNG đẩy vào hàng thực thi, nhưng cũng KHÔNG
+        // nuốt im lặng: gom lại để báo cho người dùng biết AI vừa định làm gì và làm ở đâu.
+        if (isRemovedRegexAction(parsed.action)) {
+          removed.push(parsed.action);
+          continue;
+        }
         actions.push({
           action: parsed.action as ActionType,
           params: parsed.params || {},
@@ -87,6 +118,16 @@ export function parseAiActions(response: string): ParsedResponse {
 
   // Clean up multiple consecutive newlines left by removal
   textContent = textContent.replace(/\n{3,}/g, '\n\n');
+
+  // (bug 132) Nói thẳng thay vì để người dùng ngồi chờ một thay đổi không bao giờ tới.
+  if (removed.length > 0) {
+    const uniq = [...new Set(removed)];
+    textContent += `\n\n> ⚠️ Trợ lý vừa định dùng ${uniq.join(', ')} để ghi thẳng vào regex của thẻ. ` +
+      `Nhóm lệnh này **đã được gỡ** vì nó ghi vào bản gốc trong khi tab **Regex** làm việc trên bản dịch — ` +
+      `sửa kiểu đó vừa không hiện ra, vừa bị ghi đè lúc xuất thẻ.\n` +
+      `> Cách làm đúng: mở tab **Regex**, chọn script rồi dùng **Dịch lại** / **AI Quét & Sửa**, ` +
+      `hoặc chép đoạn code trợ lý đưa ở trên vào ô nội dung của script.`;
+  }
 
   return { textContent, actions };
 }
@@ -109,16 +150,6 @@ export function executeAction(
         return executeEditEntry(action.params, card);
       case 'DELETE_ENTRY':
         return executeDeleteEntry(action.params, card);
-      case 'CREATE_REGEX':
-        return executeCreateRegex(action.params, card);
-      case 'EDIT_REGEX':
-        return executeEditRegex(action.params, card);
-      case 'PATCH_REGEX_REPLACE':
-        return executePatchRegexReplace(action.params, card);
-      case 'DELETE_REGEX':
-        return executeDeleteRegex(action.params, card);
-      case 'INJECT_FUNCTION':
-        return executeInjectFunction(action.params, card);
       case 'CREATE_TAVERN_HELPER':
         return executeCreateTavernHelper(action.params, card);
       case 'VIEW_FULL_REGEX':
@@ -126,6 +157,14 @@ export function executeAction(
       case 'RUN_SCRIPT':
         return executeRunScript(action.params);
       default:
+        // (bug 132) Chốt chặn cuối: dù lọt qua đường nào thì cũng không được ghi vào regex.
+        if (isRemovedRegexAction(action.action)) {
+          return {
+            success: false,
+            message: `${action.action} đã được gỡ — sửa regex ở tab "Regex" (Dịch lại / AI Quét & Sửa), ` +
+              'vì tab đó làm việc trên bản dịch, còn action này ghi vào bản gốc rồi bị ghi đè lúc xuất thẻ.',
+          };
+        }
         return { success: false, message: `Action không xác định: ${action.action}` };
     }
   } catch (err: any) {
@@ -229,189 +268,6 @@ function executeDeleteEntry(params: Record<string, any>, card: CharacterCard): A
   };
 }
 
-/** CREATE_REGEX — Create a new regex script */
-function executeCreateRegex(params: Record<string, any>, card: CharacterCard): ActionResult {
-  const { scriptName, findRegex, replaceString, placement, disabled, markdownOnly, promptOnly, runOnEdit, substituteRegex } = params;
-  if (!findRegex) {
-    return { success: false, message: 'CREATE_REGEX cần ít nhất findRegex' };
-  }
-
-  // Validate regex syntax
-  try {
-    const match = findRegex.match(/^\/(.+)\/([gimsuy]*)$/);
-    if (match) {
-      new RegExp(match[1], match[2]);
-    } else {
-      new RegExp(findRegex);
-    }
-  } catch (err: any) {
-    return { success: false, message: `Regex không hợp lệ: ${err.message}` };
-  }
-
-  const c = ensureCardStructure(card);
-
-  const newRegex: RegexScript = {
-    scriptName: scriptName || 'Regex Script mới',
-    findRegex,
-    replaceString: replaceString || '',
-    placement: Array.isArray(placement) ? placement : ['1'],
-    disabled: disabled ?? false,
-    markdownOnly: markdownOnly ?? false,
-    promptOnly: promptOnly ?? false,
-    runOnEdit: runOnEdit ?? true,
-    substituteRegex: substituteRegex ?? true,
-    minDepth: 0,
-    maxDepth: 0,
-  };
-
-  c.data!.extensions!.regex_scripts!.push(newRegex);
-
-  return {
-    success: true,
-    message: `Đã tạo regex script "${newRegex.scriptName}" (find: ${findRegex.slice(0, 40)})`,
-    newCard: c,
-  };
-}
-
-/** EDIT_REGEX — Edit an existing regex script field */
-function executeEditRegex(params: Record<string, any>, card: CharacterCard): ActionResult {
-  const { scriptIndex, field, newValue } = params;
-  if (scriptIndex === undefined || !field) {
-    return { success: false, message: 'EDIT_REGEX cần scriptIndex và field' };
-  }
-
-  const c = ensureCardStructure(card);
-  const scripts = c.data!.extensions!.regex_scripts!;
-
-  if (scriptIndex < 0 || scriptIndex >= scripts.length) {
-    return { success: false, message: `Script index ${scriptIndex} không hợp lệ (có ${scripts.length} scripts)` };
-  }
-
-  // Validate if editing findRegex
-  if (field === 'findRegex' && typeof newValue === 'string') {
-    try {
-      const match = newValue.match(/^\/(.+)\/([gimsuy]*)$/);
-      if (match) {
-        new RegExp(match[1], match[2]);
-      } else {
-        new RegExp(newValue);
-      }
-    } catch (err: any) {
-      return { success: false, message: `Regex mới không hợp lệ: ${err.message}` };
-    }
-  }
-
-  const script = scripts[scriptIndex];
-  const oldValue = (script as any)[field];
-  (script as any)[field] = newValue;
-
-  return {
-    success: true,
-    message: `Đã sửa regex[${scriptIndex}].${field} ("${script.scriptName}")`,
-    newCard: c,
-  };
-}
-
-/** PATCH_REGEX_REPLACE — Find/replace within a regex's replaceString */
-function executePatchRegexReplace(params: Record<string, any>, card: CharacterCard): ActionResult {
-  const { scriptIndex, find, replace, appendToEnd, prependToStart } = params;
-  if (scriptIndex === undefined) {
-    return { success: false, message: 'PATCH_REGEX_REPLACE cần scriptIndex' };
-  }
-
-  const c = ensureCardStructure(card);
-  const scripts = c.data!.extensions!.regex_scripts!;
-
-  if (scriptIndex < 0 || scriptIndex >= scripts.length) {
-    return { success: false, message: `Script index ${scriptIndex} không hợp lệ` };
-  }
-
-  const script = scripts[scriptIndex];
-  let result = script.replaceString || '';
-
-  if (find && replace !== undefined) {
-    // Find/replace mode
-    const count = (result.match(new RegExp(escapeRegex(find), 'g')) || []).length;
-    if (count === 0) {
-      return { success: false, message: `Không tìm thấy "${find.slice(0, 50)}" trong replaceString của regex[${scriptIndex}]` };
-    }
-    result = result.replace(find, replace);
-  } else if (appendToEnd) {
-    result = result + appendToEnd;
-  } else if (prependToStart) {
-    result = prependToStart + result;
-  } else {
-    return { success: false, message: 'PATCH_REGEX_REPLACE cần find+replace hoặc appendToEnd hoặc prependToStart' };
-  }
-
-  script.replaceString = result;
-
-  return {
-    success: true,
-    message: `Đã patch replaceString của regex[${scriptIndex}] ("${script.scriptName}")`,
-    newCard: c,
-  };
-}
-
-/** DELETE_REGEX — Delete a regex script */
-function executeDeleteRegex(params: Record<string, any>, card: CharacterCard): ActionResult {
-  const { scriptIndex } = params;
-  if (scriptIndex === undefined) {
-    return { success: false, message: 'DELETE_REGEX cần scriptIndex' };
-  }
-
-  const c = ensureCardStructure(card);
-  const scripts = c.data!.extensions!.regex_scripts!;
-
-  if (scriptIndex < 0 || scriptIndex >= scripts.length) {
-    return { success: false, message: `Script index ${scriptIndex} không hợp lệ` };
-  }
-
-  const removed = scripts.splice(scriptIndex, 1)[0];
-  return {
-    success: true,
-    message: `Đã xóa regex script "${removed.scriptName}"`,
-    newCard: c,
-  };
-}
-
-/** INJECT_FUNCTION — Inject a JS function into a regex's replaceString */
-function executeInjectFunction(params: Record<string, any>, card: CharacterCard): ActionResult {
-  const { scriptIndex, functionCode, insertPosition } = params;
-  if (scriptIndex === undefined || !functionCode) {
-    return { success: false, message: 'INJECT_FUNCTION cần scriptIndex và functionCode' };
-  }
-
-  const c = ensureCardStructure(card);
-  const scripts = c.data!.extensions!.regex_scripts!;
-
-  if (scriptIndex < 0 || scriptIndex >= scripts.length) {
-    return { success: false, message: `Script index ${scriptIndex} không hợp lệ` };
-  }
-
-  const script = scripts[scriptIndex];
-  const replaceStr = script.replaceString || '';
-
-  // Use the regex injector engine
-  const injectionResult = regexInjectFunction(replaceStr, functionCode, {
-    position: insertPosition || 'auto',
-    wrapInScript: true,
-    validateSyntax: true,
-  });
-
-  if (!injectionResult.success) {
-    return { success: false, message: `Inject thất bại: ${injectionResult.error}` };
-  }
-
-  script.replaceString = injectionResult.result;
-
-  return {
-    success: true,
-    message: `Đã inject function vào regex[${scriptIndex}] ("${script.scriptName}")`,
-    newCard: c,
-  };
-}
-
 /** CREATE_TAVERN_HELPER — Create a new TavernHelper script */
 function executeCreateTavernHelper(params: Record<string, any>, card: CharacterCard): ActionResult {
   const { name, content, info } = params;
@@ -491,12 +347,6 @@ function executeRunScript(params: Record<string, any>): ActionResult {
   };
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 /**
  * Generate a human-readable summary of an action for the confirmation UI.
  */
@@ -519,60 +369,6 @@ export function describeAction(action: AiAction): {
           `Comment: ${action.params.comment || '(mặc định)'}`,
           `Content: ${(action.params.content || '').slice(0, 100)}${(action.params.content || '').length > 100 ? '...' : ''}`,
         ],
-      };
-    case 'CREATE_REGEX':
-      return {
-        title: 'Tạo Regex Script',
-        type: 'create',
-        color: '#a855f7',
-        icon: '🔧',
-        details: [
-          `Tên: ${action.params.scriptName || 'Regex Script mới'}`,
-          `Find: ${action.params.findRegex || '(chưa có)'}`,
-          `Replace: ${(action.params.replaceString || '').slice(0, 80)}...`,
-        ],
-      };
-    case 'EDIT_REGEX':
-      return {
-        title: `Sửa Regex #${action.params.scriptIndex}`,
-        type: 'edit',
-        color: '#f59e0b',
-        icon: '✏️',
-        details: [
-          `Trường: ${action.params.field}`,
-          `Giá trị mới: ${String(action.params.newValue).slice(0, 100)}`,
-        ],
-      };
-    case 'PATCH_REGEX_REPLACE':
-      return {
-        title: `Patch Regex #${action.params.scriptIndex}`,
-        type: 'edit',
-        color: '#f59e0b',
-        icon: '🩹',
-        details: [
-          action.params.find ? `Tìm: "${action.params.find.slice(0, 50)}"` : '',
-          action.params.replace !== undefined ? `Thay: "${String(action.params.replace).slice(0, 50)}"` : '',
-          action.params.appendToEnd ? 'Thêm vào cuối' : '',
-        ].filter(Boolean),
-      };
-    case 'INJECT_FUNCTION':
-      return {
-        title: `Inject Function → Regex #${action.params.scriptIndex}`,
-        type: 'edit',
-        color: '#10b981',
-        icon: '💉',
-        details: [
-          `Code: ${(action.params.functionCode || '').slice(0, 80)}...`,
-          `Vị trí: ${action.params.insertPosition || 'auto'}`,
-        ],
-      };
-    case 'DELETE_REGEX':
-      return {
-        title: `Xóa Regex #${action.params.scriptIndex}`,
-        type: 'delete',
-        color: '#ef4444',
-        icon: '🗑️',
-        details: [],
       };
     case 'DELETE_ENTRY':
       return {

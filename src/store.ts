@@ -63,6 +63,11 @@ export function buildProgressSnapshot(cur: AppState) {
     currentFieldIndex: cur.currentFieldIndex,
     fields: cur.fields,
     mvuKeyMetadata: cur.mvuKeyMetadata,
+    // (bug 132) Regex có hai nửa: bản DỊCH nằm trong `fields`, còn các thao tác ghi THẲNG vào thẻ
+    // (nút "Áp bản dịch vào card", bật/tắt cờ disabled, MVU đổi tên biến trong regex) nằm ở
+    // `card.data.extensions.regex_scripts`. Nửa sau trước giờ KHÔNG được lưu ở đâu cả, nên nhập
+    // lại thẻ là quay về nguyên bản. Chụp cùng lúc với `fields` để hai nửa luôn cùng một mốc.
+    regexScripts: cur.card?.data?.extensions?.regex_scripts ?? null,
     dicts: {
       mvuDictionary: cur.translationConfig.mvuDictionary,
       ejsEntryNameDict: cur.translationConfig.ejsEntryNameDict,
@@ -76,7 +81,14 @@ export function flushProgressBeacon() {
   try {
     const cur = useStore.getState();
     if (!cur.cardFileName || cur.fields.length === 0) return;
-    if (cur.phase !== 'translating' && cur.phase !== 'paused') return;
+    // (bug 132) TRƯỚC ĐÂY chỉ chốt khi phase là 'translating'/'paused'. Nhưng người dùng dịch
+    // regex từ tab "Regex" thì vòng dịch chính KHÔNG chạy — phase vẫn 'idle' (chưa từng chạy)
+    // hoặc 'done' (đã chạy xong) — nên đóng tab/F5 là mất trắng phần vừa dịch. Nay chỉ cần có
+    // việc đáng lưu: bất kỳ field nào đã dịch xong hoặc đang dở.
+    const worthSaving =
+      cur.phase === 'translating' || cur.phase === 'paused' ||
+      cur.fields.some(f => f.status === 'done' || (f.translated ?? '').length > 0);
+    if (!worthSaving) return;
     const payload = JSON.stringify({ key: cur.cardFileName, data: buildProgressSnapshot(cur) });
     navigator.sendBeacon?.('/api/progress/save', new Blob([payload], { type: 'application/json' }));
   } catch { /* best-effort */ }
@@ -1059,6 +1071,19 @@ export const useStore = create<AppState>((set) => ({
     const entry = await FsCache.load<any>(fileName);
     const snap = entry?.data;
     if (!snap || !Array.isArray(snap.fields) || snap.fields.length === 0) return false;
+
+    // (bug 132) Trả lại nửa REGEX GHI THẲNG VÀO THẺ. `fields` bên dưới khôi phục bản dịch, còn
+    // đoạn này khôi phục thẻ: script đã áp bản dịch, cờ bật/tắt, tên biến MVU đã đổi. Thiếu nó
+    // thì tab Regex hiện bản dịch cũ nhưng thẻ lại là bản gốc — hai nửa lệch nhau.
+    // Bản chụp và `fields` cùng một mốc thời gian nên index script luôn khớp.
+    const cur = useStore.getState();
+    if (Array.isArray(snap.regexScripts) && cur.card) {
+      const restored = JSON.parse(JSON.stringify(cur.card)) as CharacterCard;
+      if (!restored.data) restored.data = {} as CharacterCard['data'];
+      if (!restored.data!.extensions) restored.data!.extensions = {};
+      restored.data!.extensions!.regex_scripts = snap.regexScripts;
+      set({ card: restored });
+    }
 
     set((s) => ({
       fields: snap.fields,

@@ -21,13 +21,24 @@ describe('validateAgentAction — whitelist + zod chặn action lệch chuẩn',
     expect(r.ok).toBe(false);
     expect(r.reason).toContain('ngoài phạm vi');
   });
-  it('codefixer được EDIT_REGEX nhưng params sai schema (thiếu field) → CHẶN', () => {
-    expect(validateAgentAction('codefixer', 'EDIT_REGEX', { scriptIndex: 0, field: 'findRegex', newValue: 'x' }).ok).toBe(true);
-    const bad = validateAgentAction('codefixer', 'EDIT_REGEX', { scriptIndex: -1, field: 'findRegex', newValue: 'x' });
-    expect(bad.ok).toBe(false);
+  // (bug 132) Nhóm action GHI regex đã gỡ khỏi engine — không agent nào còn quyền, kể cả
+  // codefixer (trước đây nó được cấp đủ 5 action này) lẫn general.
+  it('KHÔNG agent nào — kể cả codefixer/general — còn được dùng action ghi regex', () => {
+    for (const act of ['CREATE_REGEX', 'EDIT_REGEX', 'PATCH_REGEX_REPLACE', 'INJECT_FUNCTION', 'DELETE_REGEX']) {
+      for (const agent of ['codefixer', 'general', 'translator', 'lorearchitect'] as const) {
+        expect(validateAgentAction(agent, act, { scriptIndex: 0, field: 'findRegex', newValue: 'x' }).ok,
+          `${agent} vẫn còn quyền ${act}`).toBe(false);
+      }
+    }
   });
-  it('general đủ quyền như cũ (zero regression); action lạ vẫn bị chặn', () => {
-    expect(AGENT_DEFS.general.allowedActions.length).toBeGreaterThanOrEqual(11);
+  it('VIEW_FULL_REGEX (chỉ đọc) được GIỮ cho codefixer', () => {
+    expect(validateAgentAction('codefixer', 'VIEW_FULL_REGEX', { scriptIndex: 0 }).ok).toBe(true);
+  });
+  it('general vẫn đủ quyền phần còn lại; action lạ vẫn bị chặn', () => {
+    expect(AGENT_DEFS.general.allowedActions).toEqual(
+      expect.arrayContaining(['CREATE_ENTRY', 'EDIT_ENTRY', 'DELETE_ENTRY', 'CREATE_TAVERN_HELPER', 'VIEW_FULL_REGEX', 'RUN_SCRIPT']),
+    );
+    expect(validateAgentAction('general', 'EDIT_ENTRY', { entryIndex: 0, field: 'content', newValue: 'x' }).ok).toBe(true);
     expect(validateAgentAction('general', 'HACK_EVERYTHING', {}).ok).toBe(false);
   });
 });

@@ -18,8 +18,11 @@ export interface AgentDef {
   allowedActions: readonly string[];
 }
 
+// (bug 132) Nhóm action GHI regex (CREATE_REGEX/EDIT_REGEX/PATCH_REGEX_REPLACE/INJECT_FUNCTION/
+// DELETE_REGEX) đã bị gỡ khỏi engine — chúng ghi vào bản GỐC trong khi tab Regex làm việc trên
+// bản DỊCH, nên vừa không hiện ra vừa bị ghi đè lúc xuất thẻ. Xem chú thích ở utils/aiActions.ts.
+// VIEW_FULL_REGEX (chỉ đọc) được giữ.
 const ALL_ACTIONS = [
-  'CREATE_REGEX', 'EDIT_REGEX', 'PATCH_REGEX_REPLACE', 'INJECT_FUNCTION', 'DELETE_REGEX',
   'CREATE_ENTRY', 'EDIT_ENTRY', 'DELETE_ENTRY', 'CREATE_TAVERN_HELPER', 'VIEW_FULL_REGEX', 'RUN_SCRIPT',
 ] as const;
 
@@ -33,8 +36,8 @@ export const AGENT_DEFS: Record<AgentId, AgentDef> = {
   codefixer: {
     id: 'codefixer',
     label: 'CodeFixer',
-    personaPrompt: '[SUB-AGENT: CODEFIXER] Lượt này tập trung SỬA CODE/REGEX/SCRIPT: chẩn đoán lỗi trước, giải thích ngắn, sửa TRIỆT ĐỂ giữ nguyên cấu trúc; code trả về phải qua được parse (không SyntaxError).',
-    allowedActions: ['CREATE_REGEX', 'EDIT_REGEX', 'PATCH_REGEX_REPLACE', 'INJECT_FUNCTION', 'DELETE_REGEX', 'CREATE_TAVERN_HELPER', 'VIEW_FULL_REGEX', 'RUN_SCRIPT'],
+    personaPrompt: '[SUB-AGENT: CODEFIXER] Lượt này tập trung SỬA CODE/REGEX/SCRIPT: chẩn đoán lỗi trước, giải thích ngắn, sửa TRIỆT ĐỂ giữ nguyên cấu trúc; code trả về phải qua được parse (không SyntaxError). Với REGEX: KHÔNG có action ghi thẳng vào thẻ — đưa code đã sửa trong code block và chỉ người dùng dán vào tab "Regex".',
+    allowedActions: ['CREATE_TAVERN_HELPER', 'VIEW_FULL_REGEX', 'RUN_SCRIPT'],
   },
   lorearchitect: {
     id: 'lorearchitect',
@@ -69,12 +72,6 @@ export function routeIntent(text: string): AgentId {
 
 const idx = z.number().int().min(0);
 const ACTION_SCHEMAS: Record<string, z.ZodTypeAny> = {
-  CREATE_REGEX: z.object({ scriptName: z.string().min(1), findRegex: z.string(), replaceString: z.string() }).passthrough(),
-  EDIT_REGEX: z.object({ scriptIndex: idx, field: z.string().min(1), newValue: z.any() }).passthrough(),
-  PATCH_REGEX_REPLACE: z.object({ scriptIndex: idx }).passthrough()
-    .refine(p => 'find' in p || 'appendToEnd' in p || 'prependToStart' in p, { message: 'cần find/appendToEnd/prependToStart' }),
-  INJECT_FUNCTION: z.object({ scriptIndex: idx, functionCode: z.string().min(1) }).passthrough(),
-  DELETE_REGEX: z.object({ scriptIndex: idx }).passthrough(),
   CREATE_ENTRY: z.object({ keys: z.union([z.string(), z.array(z.string())]), content: z.string().min(1) }).passthrough(),
   EDIT_ENTRY: z.object({ entryIndex: idx, field: z.string().min(1), newValue: z.any() }).passthrough(),
   DELETE_ENTRY: z.object({ entryIndex: idx }).passthrough(),

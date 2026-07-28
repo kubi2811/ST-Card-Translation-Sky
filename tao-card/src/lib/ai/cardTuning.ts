@@ -18,6 +18,7 @@ import { normalizeMVUZODSchema } from '../mvuzod/normalizeSchema';
 import { schemaToZodCode } from '../mvuzod/schemaInferencer';
 import { buildProgrammaticRegex } from '../mvuzod/programmaticRegexBuilder';
 import { THEME_PRESETS } from '../mvuzod/gameHtmlTemplates';
+import { AI_THEME_ID } from './themeDesigner';
 
 /** Chữ ký ý tưởng — tuning sinh từ ý tưởng nào thì chỉ dùng cho đúng ý tưởng đó. */
 export function ideaSignature(idea: string): string {
@@ -100,7 +101,13 @@ const THEME_LABELS: Record<string, string> = {
  * không tốn call AI nào, nên đổi schema ở Bước 1 là 3 phương án đổi theo ngay.
  */
 export function buildThemeChoices(schema: MVUZODSchema, gameName: string, count = 3): ThemeChoice[] {
-  const ids = Object.keys(THEME_PRESETS).slice(0, Math.max(2, count));
+  // (bugNeedFix/145) Theme do AI sinh được cắm vào THEME_PRESETS ở CUỐI bảng, nên cắt
+  // slice(0, count) như cũ sẽ không bao giờ lấy được nó. Cho nó đứng đầu — vừa chắc chắn hiện,
+  // vừa hợp lẽ: user vừa đặt làm ra nó thì phải thấy ngay.
+  const builtIn = Object.keys(THEME_PRESETS).filter(id => id !== AI_THEME_ID);
+  const ids = THEME_PRESETS[AI_THEME_ID]
+    ? [AI_THEME_ID, ...builtIn.slice(0, Math.max(1, count - 1))]
+    : builtIn.slice(0, Math.max(2, count));
   const out: ThemeChoice[] = [];
   for (const themeId of ids) {
     try {
@@ -110,7 +117,9 @@ export function buildThemeChoices(schema: MVUZODSchema, gameName: string, count 
         themeId,
         gameName,
       });
-      out.push({ themeId, label: THEME_LABELS[themeId] ?? themeId, previewHtml: built.previewHtml });
+      // Theme AI không có trong THEME_LABELS — dùng chính tên AI đặt cho nó.
+      const label = THEME_LABELS[themeId] ?? THEME_PRESETS[themeId]?.name ?? themeId;
+      out.push({ themeId, label, previewHtml: built.previewHtml });
     } catch { /* theme lỗi thì bỏ phương án đó, không chặn các phương án còn lại */ }
   }
   return out;

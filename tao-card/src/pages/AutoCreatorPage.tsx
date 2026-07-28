@@ -91,17 +91,33 @@ export function AutoCreatorPage() {
     try {
       const { callAI } = await import('../lib/ai/client');
       const { buildIdeaPolishMessages, parseIdeaPolishResponse, verifyIdeaPolish } = await import('../lib/ai/ideaPolish');
-      const res = await callAI({
-        profile: activeProfile,
-        params: { ...settings.generationParams, temperature: 0.2, useJsonResponseFormat: true, stream: false },
-        messages: buildIdeaPolishMessages(original),
-        label: 'Đũa thần ý tưởng',
-      });
-      const { polishedIdea, suggestedRules } = parseIdeaPolishResponse(res.text);
-      const check = verifyIdeaPolish(original, polishedIdea);
-      if (!check.ok) {
-        toast.error(fmt(ui.acPolishDropped, { tokens: check.dropped.slice(0, 4).join(', ') }));
-        return;   // 1-1 vỡ → giữ nguyên văn gốc, không âm thầm đổi ý user
+
+      // (bugNeedFix/145) Rơi chi tiết thì THỬ LẠI có chỉ đích danh, chứ không bắt user tự bấm
+      // lại — lần sau AI cũng hỏng y hệt nếu không ai nói nó sai chỗ nào. Chỉ khi lượt sửa
+      // cũng rơi mới chịu thua và giữ nguyên văn gốc.
+      let polishedIdea = '';
+      let suggestedRules: string[] = [];
+      let dropped: string[] = [];
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const res = await callAI({
+          profile: activeProfile,
+          params: { ...settings.generationParams, temperature: 0.2, useJsonResponseFormat: true, stream: false },
+          messages: buildIdeaPolishMessages(original, attempt > 0 ? dropped : undefined),
+          label: attempt === 0 ? 'Đũa thần ý tưởng' : 'Đũa thần ý tưởng (bù chi tiết rơi)',
+        });
+        const parsed = parseIdeaPolishResponse(res.text);
+        const check = verifyIdeaPolish(original, parsed.polishedIdea);
+        if (check.ok) {
+          polishedIdea = parsed.polishedIdea;
+          suggestedRules = parsed.suggestedRules;
+          dropped = [];
+          break;
+        }
+        dropped = check.dropped;
+      }
+      if (!polishedIdea) {
+        toast.error(fmt(ui.acPolishDropped, { tokens: dropped.slice(0, 4).join(', ') }));
+        return;   // 1-1 vỡ cả hai lượt → giữ nguyên văn gốc, không âm thầm đổi ý user
       }
       store.setIdea(polishedIdea);
       // (bug 142 — 137↔141) Đũa thần ĐỔI văn bản ý tưởng ⇒ bản schema đã duyệt ở "Xem trước &

@@ -36,27 +36,81 @@ tạo card SillyTavern viết lộn xộn. Việc của bạn có ĐÚNG HAI ph�
 
 Trả về DUY NHẤT JSON: {"polishedIdea": "...", "suggestedRules": ["...", "..."]}`;
 
-export function buildIdeaPolishMessages(idea: string): ChatMessage[] {
-  return [
+export function buildIdeaPolishMessages(idea: string, droppedLastTime?: string[]): ChatMessage[] {
+  const msgs: ChatMessage[] = [
     { role: 'system', content: IDEA_POLISH_SYSTEM },
     { role: 'user', content: `Ý TƯỞNG GỐC (giữ 1-1 về ý, chỉ sắp xếp lại):\n${'─'.repeat(30)}\n${idea}` },
   ];
+  // (bugNeedFix/145) Lượt trước rơi mất chi tiết thì NÓI ĐÍCH DANH rồi cho làm lại, thay vì
+  // bắt user tự "bấm thử lại" mà lần sau cũng hỏng y hệt vì AI không biết mình sai ở đâu.
+  if (droppedLastTime && droppedLastTime.length > 0) {
+    msgs.push({
+      role: 'user',
+      content: `LẦN TRƯỚC BẠN LÀM RƠI những chi tiết sau — chúng CÓ trong ý tưởng gốc nhưng KHÔNG có trong bản bạn trả về:\n`
+        + droppedLastTime.map(t => `  • ${t}`).join('\n')
+        + `\n\nLàm lại, giữ NGUYÊN VĂN từng chi tiết trên trong bản sắp xếp. Không được bỏ, không được viết khác đi.`,
+    });
+  }
+  return msgs;
+}
+
+/**
+ * (bugNeedFix/145) SỐ THỨ TỰ MỤC LỤC KHÔNG PHẢI LÀ NỘI DUNG.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Đây là gốc bệnh làm đũa thần KHÔNG BAO GIỜ chạy được. Người ta viết ý tưởng theo dàn ý
+ * đánh số — "1.", "2.1 Đại lục…", "2.2 Cảnh giới…" — mà việc của đũa thần đúng là XOÁ những
+ * số đó đi để thay bằng tiêu đề "## …". Bản gốc coi "2.1"/"2.2" là CON SỐ NỘI DUNG cần giữ
+ * 1-1, nên lần nào cũng báo "AI làm rơi chi tiết (2.1, 2.2, 2.3, 2.4…)" rồi vứt kết quả —
+ * user không bao giờ nhận được bản sắp xếp lẫn bộ quy tắc rút ra.
+ *
+ * Phân biệt: số ĐÁNH DẤU MỤC nằm ở ĐẦU DÒNG và theo sau là dấu phân cách/khoảng trắng
+ * ("2.1 Đại lục", "3) Cốt truyện", "4. Kết"). Số NỘI DUNG nằm giữa câu ("100 linh thạch",
+ * "5 tông môn") — những cái này vẫn phải giữ nguyên và vẫn được đo.
+ */
+export function isOutlineNumber(text: string, index: number, token: string): boolean {
+  const lineStart = text.lastIndexOf('\n', index - 1) + 1;
+  const before = text.slice(lineStart, index);
+  // Chỉ chấp nhận bullet/khoảng trắng trước số → số này mở đầu một mục.
+  if (!/^[\s>*\-–—•+#]*$/.test(before)) return false;
+  const after = text.slice(index + token.length);
+  // Theo sau là dấu kết thúc số mục rồi tới chữ, hoặc hết dòng.
+  return /^[.)\]:、]?[ \t]/.test(after) || /^[.)\]:、]?$/.test(after) || /^[.)\]:、]?\r?\n/.test(after);
 }
 
 /** Bóc TÊN RIÊNG (cụm chữ hoa liền nhau) + CON SỐ — phần "1-1" đo được bằng máy. */
 export function extractAnchorTokens(text: string): string[] {
   const out = new Set<string>();
   // Số (kể cả 3.5, 1000000) — bỏ số quá ngắn đứng trong từ.
-  for (const m of text.matchAll(/(?<![\w.])\d+(?:[.,]\d+)?(?![\w])/g)) out.add(m[0]);
+  // (bugNeedFix/145) Bỏ qua số đánh dấu mục lục: chúng là ĐỊNH DẠNG, không phải nội dung,
+  // và đũa thần được giao nhiệm vụ thay chúng bằng tiêu đề "## …".
+  for (const m of text.matchAll(/(?<![\w.])\d+(?:[.,]\d+)*(?![\w])/g)) {
+    if (isOutlineNumber(text, m.index ?? 0, m[0])) continue;
+    out.add(m[0]);
+  }
   // Cụm viết hoa (tên riêng): 1-4 từ bắt đầu bằng chữ hoa liền nhau, bỏ từ đầu câu đơn lẻ
   // phổ biến bằng cách đòi cụm ≥ 2 từ HOẶC từ đơn dài ≥ 4 ký tự có mặt ≥ 2 lần.
+  //
+  // (bugNeedFix/145) Từ đơn viết hoa còn phải xuất hiện GIỮA CÂU ít nhất một lần mới tính là
+  // tên riêng. Tiếng Việt viết hoa đầu câu và đầu mục theo ngữ pháp, nên "Nhân" trong
+  // "Nhân vật chính" hay "Cảnh" trong "Cảnh giới:" bị đếm thành tên riêng rồi bắt AI phải
+  // giữ y nguyên — trong khi đũa thần có quyền viết lại tiêu đề. Tên riêng thật (Lâm Uyển,
+  // Thiên Nam) hầu như luôn có lần nằm giữa câu.
   const single = new Map<string, number>();
+  const singleMidSentence = new Set<string>();
   for (const m of text.matchAll(/\p{Lu}[\p{L}\p{N}]*(?:[ ]\p{Lu}[\p{L}\p{N}]*){0,3}/gu)) {
     const t = m[0].trim();
-    if (t.split(' ').length >= 2) out.add(t);
-    else if (t.length >= 4) single.set(t, (single.get(t) ?? 0) + 1);
+    if (t.split(' ').length >= 2) { out.add(t); continue; }
+    if (t.length < 4) continue;
+    single.set(t, (single.get(t) ?? 0) + 1);
+    const idx = m.index ?? 0;
+    const lineStart = text.lastIndexOf('\n', idx - 1) + 1;
+    const before = text.slice(lineStart, idx);
+    // Đầu dòng / sau bullet / sau số mục / sau dấu chấm câu ⇒ viết hoa do ngữ pháp, không tính.
+    const isSentenceStart = /^[\s>*\-–—•+#]*(?:\d+(?:[.,]\d+)*[.)\]:、]?[ \t]*)?$/.test(before)
+      || /[.!?;:][ \t]*$/.test(before);
+    if (!isSentenceStart) singleMidSentence.add(t);
   }
-  for (const [t, n] of single) if (n >= 2) out.add(t);
+  for (const [t, n] of single) if (n >= 2 && singleMidSentence.has(t)) out.add(t);
   return [...out];
 }
 

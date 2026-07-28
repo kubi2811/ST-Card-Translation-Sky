@@ -17,6 +17,10 @@ import { callAI } from '../../lib/ai/client';
 import { buildMvuzodPrompt } from '../../lib/ai/autoCreatorPrompts';
 import { extractJsonFromText } from '../../lib/ai/autoCreatorPipeline';
 import { makeTuning, validateTunedSchema, buildThemeChoices, ideaSignature } from '../../lib/ai/cardTuning';
+import {
+  buildThemeDesignMessages, parseThemeSpec, registerAiTheme, checkThemeReadability,
+  AI_THEME_ID, type AiThemeSpec,
+} from '../../lib/ai/themeDesigner';
 import { normalizeMVUZODSchema } from '../../lib/mvuzod/normalizeSchema';
 import type { MVUZODField, MVUZODSchema } from '../../types/mvuzod.types';
 
@@ -82,12 +86,23 @@ export function PreviewTunerModal({ open, onClose, onStart }: Props) {
   const store = useAutoCreatorStore();
   const settings = useSettingsStore();
   const tuning = store.config.tuning;
-  const [busy, setBusy] = useState<'analyze' | 'copilot' | null>(null);
+  const [busy, setBusy] = useState<'analyze' | 'copilot' | 'theme' | null>(null);
   const [copilotAsk, setCopilotAsk] = useState('');
+  // (bugNeedFix/145) Bước 2 — "Nhờ AI tạo giao diện". Giữ NGUYÊN spec đang có để lượt chỉnh sau
+  // gửi lại cho AI, nhờ đó nó sửa đúng chỗ bị chê thay vì vẽ lại từ đầu.
+  const [themeAsk, setThemeAsk] = useState('');
+  const [aiSpec, setAiSpec] = useState<AiThemeSpec | null>(null);
+  const [aiWarn, setAiWarn] = useState<string[]>([]);
+  const [aiNonce, setAiNonce] = useState(0);   // đổi để buildThemeChoices dựng lại preview
 
   const activeProfile = settings.getActiveProfile();
   const idea = store.config.idea;
   const ideaChanged = !!tuning && tuning.ideaSig !== ideaSignature(idea);
+  // (bugNeedFix/145) Tên gợi cho AI biết thẻ nói về gì — lấy dòng có chữ đầu tiên của ý tưởng.
+  const ideaHeadline = useMemo(
+    () => (idea.split(/\r?\n/).map(l => l.replace(/^[#\-*\s]+/, '').trim()).find(Boolean) ?? 'Thẻ nhân vật').slice(0, 80),
+    [idea],
+  );
 
   const flat = useMemo(() => (tuning ? schemaToFlat(tuning.schema) : []), [tuning]);
   const setFlat = useCallback((next: FlatVar[]) => {
@@ -96,10 +111,46 @@ export function PreviewTunerModal({ open, onClose, onStart }: Props) {
   }, []);
 
   // Bước 2 dựng thuần máy — đổi schema là preview tự đổi.
+  // (bugNeedFix/145) aiNonce nằm trong deps để khi AI sinh xong theme mới thì danh sách phương
+  // án dựng lại và thẻ "Giao diện AI" hiện ra ngay cạnh 3 mẫu dựng sẵn.
   const themeChoices = useMemo(
-    () => (tuning && tuning.step >= 2 ? buildThemeChoices(tuning.schema, 'Preview') : []),
-    [tuning],
+    () => (tuning && tuning.step >= 2 ? buildThemeChoices(tuning.schema, 'Preview', aiSpec ? 4 : 3) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tuning, aiNonce, aiSpec],
   );
+
+  /**
+   * (bugNeedFix/145) Bước 2 — nhờ AI dựng giao diện theo phong cách/màu người dùng mô tả.
+   * AI chỉ quyết BẢNG MÀU + FONT; khung HTML vẫn do buildProgrammaticRegex dựng như 3 mẫu sẵn,
+   * nên giao diện AI tạo ra chắc chắn còn nguyên đường ghi/đọc biến (bài học bug 114).
+   * Bấm lần nữa với yêu cầu mới = CHỈNH bản vừa tạo, không phải làm lại từ số không.
+   */
+  const handleDesignTheme = useCallback(async () => {
+    const toast = useToastStore.getState();
+    if (!activeProfile) { toast.warning('Chưa cấu hình API.'); return; }
+    if (!themeAsk.trim()) { toast.warning('Hãy tả phong cách bạn muốn (tông màu, không khí, thời đại…).'); return; }
+    setBusy('theme');
+    try {
+      const res = await callAI({
+        profile: activeProfile,
+        params: { ...settings.generationParams, temperature: 0.6, useJsonResponseFormat: true, stream: false },
+        messages: buildThemeDesignMessages(themeAsk.trim(), ideaHeadline, aiSpec ?? undefined),
+        label: aiSpec ? 'Chỉnh giao diện AI' : 'Thiết kế giao diện AI',
+      });
+      const spec = parseThemeSpec(res.text);
+      registerAiTheme(spec);
+      setAiSpec(spec);
+      setAiWarn(checkThemeReadability(spec));
+      setAiNonce(n => n + 1);
+      useAutoCreatorStore.getState().setTuning({ themeId: AI_THEME_ID, confirmed: false });
+      setThemeAsk('');
+      toast.success(`Đã dựng giao diện "${spec.name}" — xem trước bên dưới, chưa ưng thì tả tiếp để chỉnh.`);
+    } catch (e) {
+      toast.error(`Không dựng được giao diện: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(null);
+    }
+  }, [activeProfile, themeAsk, aiSpec, settings.generationParams, ideaHeadline]);
 
   /** Bước 1 — gọi AI sinh schema từ ý tưởng (chỉ khi chưa có hoặc ý tưởng đã đổi). */
   const handleAnalyze = useCallback(async () => {
@@ -263,7 +314,54 @@ export function PreviewTunerModal({ open, onClose, onStart }: Props) {
           {/* ═══ BƯỚC 2 — GIAO DIỆN ═══ */}
           {step === 2 && tuning && (
             <>
-              <p className="text-xs text-muted-foreground">3 phương án dựng TỪ schema bạn vừa chốt (mỗi phương án = Opening Form + Status Bar cùng tông). Chọn 1:</p>
+              <p className="text-xs text-muted-foreground">Các phương án dựng TỪ schema bạn vừa chốt (mỗi phương án = Opening Form + Status Bar cùng tông). Chọn 1:</p>
+
+              {/* ═══ (bugNeedFix/145) NHỜ AI TẠO GIAO DIỆN ═══
+                  AI chỉ quyết bảng màu + font; khung HTML vẫn do máy dựng như các mẫu sẵn, nên
+                  giao diện AI tạo không thể làm hỏng đường ghi/đọc biến (bài học bug 114). */}
+              <div className="rounded-xl border border-primary/30 bg-primary/5 p-2.5 space-y-2">
+                <div className="flex items-center gap-1.5 text-[11px] font-semibold text-primary">
+                  <Sparkles className="w-3.5 h-3.5" />
+                  {aiSpec ? `Giao diện AI: ${aiSpec.icon} ${aiSpec.name}` : 'Nhờ AI tạo giao diện riêng'}
+                </div>
+                <p className="text-[10px] text-muted-foreground leading-relaxed">
+                  {aiSpec
+                    ? 'Chưa ưng chỗ nào thì tả tiếp — AI giữ nguyên phần còn lại và chỉ sửa đúng chỗ bạn nói.'
+                    : 'Tả phong cách bạn thích: tông màu chủ đạo, không khí (u ám / tươi sáng / cổ trang / công nghệ), thời đại… AI sẽ phối màu và chọn font cho vừa thế giới của thẻ.'}
+                </p>
+                <div className="flex gap-1.5">
+                  <input
+                    value={themeAsk}
+                    onChange={(e) => setThemeAsk(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !busy) handleDesignTheme(); }}
+                    placeholder={aiSpec ? 'VD: nền tối hơn, chữ vàng đồng, bớt tím' : 'VD: tiên hiệp thanh nhã, tông xanh ngọc, nền tối'}
+                    className="flex-1 px-2 py-1.5 rounded-lg bg-background border border-border text-[11px]"
+                  />
+                  <button
+                    onClick={handleDesignTheme}
+                    disabled={busy !== null || !themeAsk.trim()}
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-[11px] bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                  >
+                    {busy === 'theme' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5" />}
+                    {aiSpec ? 'Chỉnh lại' : 'Tạo giao diện'}
+                  </button>
+                </div>
+                {aiSpec && (
+                  <div className="flex flex-wrap gap-1 pt-0.5">
+                    {Object.entries(aiSpec.colors).slice(0, 12).map(([k, v]) => (
+                      <span key={k} title={`${k}: ${v}`} className="w-4 h-4 rounded border border-border/50" style={{ background: v }} />
+                    ))}
+                  </div>
+                )}
+                {aiWarn.length > 0 && (
+                  <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-1.5 space-y-0.5">
+                    {aiWarn.map((w, i) => (
+                      <p key={i} className="text-[10px] text-amber-500 leading-snug">⚠️ {w}</p>
+                    ))}
+                    <p className="text-[10px] text-muted-foreground">Bảo AI &quot;tăng tương phản chữ&quot; rồi bấm Chỉnh lại.</p>
+                  </div>
+                )}
+              </div>
               <div className="grid md:grid-cols-3 gap-2">
                 {themeChoices.map(c => (
                   <button key={c.themeId}

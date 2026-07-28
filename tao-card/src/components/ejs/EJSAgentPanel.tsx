@@ -19,15 +19,13 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   Bot, Loader2, Play, Undo2, AlertTriangle, Check, X, BookPlus,
-  ListChecks, Square, RotateCcw, Wand2, Info, ArrowRight,
+  ListChecks, Square, RotateCcw, Info, ArrowRight,
 } from 'lucide-react';
 import type { MVUZODSchema } from '../../types/mvuzod.types';
 import type { ChatMessage, LorebookEntry } from '../../types';
 import { DEFAULT_ENTRY_EXT } from '../../types/lorebook.types';
 import { useCardStore } from '../../store/cardStore';
 import { useSettingsStore } from '../../store/settingsStore';
-import { useToastStore } from '../../store/toastStore';
-import { useAutoCreatorStore } from '../../store/autoCreatorStore';
 import { useEjsStudioStore } from '../../store/ejsStudioStore';
 import { callAI } from '../../lib/ai/client';
 import { nextEntryId } from '../../lib/converters/cardDefaults';
@@ -38,7 +36,6 @@ import {
 } from '../../lib/ejs/ejsAgent';
 import { ACTIVATION_LABEL, findOrphanConditionalEntries, type EjsPlanRow } from '../../lib/ejs/ejsPlanModel';
 import { QUICK_PRESETS } from '../../lib/ejs/ejsQuickPresets';
-import { buildEjsPolicy, isCardReadyForPolicy } from '../../lib/ejs/ejsPolicy';
 import { groupPlanRows, extractEntryRefs } from '../../lib/ejs/ejsPlanGroups';
 import { buildSplitMessages, parseSplitResponse } from '../../lib/ejs/ejsSplit';
 import { scanBrokenRefs, rewriteRefs, fuzzyRepairMapping } from '../../lib/ejs/ejsRefIntegrity';
@@ -399,19 +396,15 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
     s.pushProgress('↩️ Đã hoàn tác: xoá entry vừa tạo + trả entry bị đổi về trạng thái cũ.');
   }, []);
 
-  // ─── Áp chính sách sang Auto Creator ───
-  const readiness = useMemo(() => isCardReadyForPolicy(card), [card]);
-  const handleApplyToAutoCreator = useCallback(() => {
-    const s = useEjsStudioStore.getState();
-    if (!s.plan) return;
-    const policy = buildEjsPolicy(s.plan, s.acceptedIds(), characterName, s.goal, new Date().toISOString());
-    if (!policy.directive.trim()) {
-      useToastStore.getState().error('Kế hoạch chưa có mục nào đủ dữ kiện để rút thành chính sách.');
-      return;
-    }
-    useAutoCreatorStore.getState().applyEjsPolicy(policy);
-    useToastStore.getState().success(`Đã áp ${policy.rowCount} mục sang Auto Creator — mở tab Auto Creator sẽ thấy thông báo.`);
-  }, [characterName]);
+  // (bug 134) NÚT "Áp dụng sang Auto Creator" ĐÃ BỎ.
+  // User: "để dùng được 'Bạn muốn EJS làm gì?' thì card cần có sẵn vài entry, sau đó mới ra
+  // bảng kế hoạch, rồi mới có nút áp dụng. Nhưng tới lúc đó card đã tạo xong rồi, không còn
+  // trong quá trình Auto Creator nữa — nên đặt nút này ở đây là không hợp lý."
+  // Đúng: điều kiện để nút bật (`isCardReadyForPolicy` đòi card đã có tên + mô tả + lorebook)
+  // chính là điều kiện card đã hoàn chỉnh, tức luôn nằm SAU khi Auto Creator xong việc. Giữ
+  // lại chỉ tạo cảm giác có đường tắt mà thực tế không dùng được đúng lúc.
+  // `ejsPolicy.ts` vẫn còn (Auto Creator vẫn đọc chính sách cũ nếu người dùng đã áp trước đây,
+  // và banner ở Auto Creator vẫn cho Gỡ) — chỉ bỏ ĐƯỜNG TẠO MỚI từ EJS Studio.
 
   const busy = st.phase === 'planning' || st.phase === 'running';
   const rows = st.plan?.rows ?? [];
@@ -722,24 +715,7 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
                 ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Đang chạy…</>
                 : <><Play className="w-3.5 h-3.5" /> Chạy {acceptedCount}/{rows.length} mục đã duyệt</>}
             </button>
-
-            <button
-              onClick={handleApplyToAutoCreator}
-              disabled={!readiness.ready || rows.length === 0}
-              title={readiness.ready
-                ? 'Rút kế hoạch này thành chính sách để Auto Creator làm theo khi tạo card mới'
-                : `Card chưa tạo xong — còn thiếu: ${readiness.missing.join(', ')}`}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium border
-                border-purple-500/50 bg-purple-600/15 text-purple-300 hover:bg-purple-600/25
-                disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
-              <Wand2 className="w-3.5 h-3.5" /> Áp dụng sang Auto Creator
-            </button>
           </div>
-          {!readiness.ready && (
-            <p className="text-[10px] text-muted-foreground">
-              Nút áp dụng sang Auto Creator chỉ bật khi card đã tạo xong — hiện còn thiếu: {readiness.missing.join(', ')}.
-            </p>
-          )}
         </div>
       )}
 

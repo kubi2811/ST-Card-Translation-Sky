@@ -485,6 +485,26 @@ mà quy tắc CHO PHÉP. Thà trả về ít entry hơn còn hơn tạo thứ us
 // JSON ARRAY EXTRACTION
 // ═══════════════════════════════════════════════════════════════════════════
 
+/**
+ * (bug 134) Phản hồi này có dấu hiệu BỊ CẮT GIỮA CHỪNG không — đo bằng chính cấu trúc văn bản.
+ * Không thể chỉ trông vào `finishReason`: rất nhiều provider (nhất là khi đi qua proxy) không
+ * trả trường đó, nên tool im lặng thử lại y nguyên và lỗi lặp mãi đúng như user gặp.
+ */
+export function looksTruncated(text: string): boolean {
+  const t = (text || '').trim();
+  if (!t) return false;
+  let inStr = false, esc = false, depth = 0;
+  for (const c of t) {
+    if (esc) { esc = false; continue; }
+    if (c === '\\') { if (inStr) esc = true; continue; }
+    if (c === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (c === '{' || c === '[') depth++;
+    else if (c === '}' || c === ']') depth--;
+  }
+  return inStr || depth > 0;
+}
+
 export function tryExtractJsonArray(text: string): AIGeneratedEntry[] | null {
   const t = text.trim();
   // (bugNeedFix/96) LUẬT CHUNG cho mọi bước bóc bên dưới: chỉ TRẢ VỀ khi thật sự bóc được
@@ -616,7 +636,20 @@ function salvageObjects(text: string): Record<string, unknown>[] {
       if (c === '{') depth++;
       else if (c === '}') { depth--; if (depth === 0) { end = j; break; } }
     }
-    if (end === -1) break; // object cuối bị cụt — dừng
+    if (end === -1) {
+      // (bug 134) Object CUỐI bị cụt. Bản cũ `break` bỏ luôn — mà khi lô chỉ có 1-2 entry
+      // content dài (bảng phả hệ, danh sách kỹ năng…) thì entry cụt ĐÓ chính là toàn bộ lô,
+      // nên cả batch thành "không đọc được JSON". Thử VÁ ĐUÔI: đóng chuỗi/ngoặc còn hở rồi
+      // parse lại; phần chữ đã nhận được vẫn là nội dung thật của entry.
+      const tail = closeTruncatedObject(text.slice(i));
+      if (tail) {
+        try {
+          const obj = JSON.parse(tail);
+          if (obj && typeof obj === 'object' && !Array.isArray(obj)) out.push(obj as Record<string, unknown>);
+        } catch { /* vá không cứu được — chịu */ }
+      }
+      break;
+    }
     try {
       const obj = JSON.parse(text.substring(i, end + 1));
       if (obj && typeof obj === 'object' && !Array.isArray(obj)) out.push(obj as Record<string, unknown>);
@@ -626,16 +659,113 @@ function salvageObjects(text: string): Record<string, unknown>[] {
   return out;
 }
 
+/**
+ * (bug 134) Vá một object JSON bị cắt giữa chừng thành object đóng kín:
+ * cắt bỏ phần đuôi dở dang (khoá viết dở, dấu phẩy treo), đóng chuỗi đang mở, rồi đóng đủ
+ * `}`/`]`. Trả null khi không còn gì đáng cứu.
+ */
+function closeTruncatedObject(src: string): string | null {
+  let body = src;
+
+  // 1. Đuôi kết thúc bằng dấu escape lẻ (`…\`) thì bỏ đi — nếu không, đóng nháy vào sẽ biến
+  //    nó thành `\"` và chuỗi lại hở tiếp.
+  const trailingSlashes = body.match(/\\+$/)?.[0].length ?? 0;
+  if (trailingSlashes % 2 === 1) body = body.slice(0, -1);
+
+  // 2. Quét trạng thái: đang trong chuỗi? còn ngoặc nào hở?
+  let inStr = false, esc = false;
+  const closers: string[] = [];
+  for (const c of body) {
+    if (esc) { esc = false; continue; }
+    if (c === '\\') { if (inStr) esc = true; continue; }
+    if (c === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (c === '{') closers.push('}');
+    else if (c === '[') closers.push(']');
+    else if (c === '}' || c === ']') closers.pop();
+  }
+  if (closers.length === 0) return null;   // không có gì hở → không phải ca bị cắt
+
+  // 3. Chuỗi đang mở thì ĐÓNG LẠI, giữ trọn phần chữ đã nhận được. Đây là điểm mấu chốt:
+  //    chỗ bị cắt gần như luôn nằm giữa `content` — mà content chính là thứ đáng cứu nhất.
+  //    Ký tự điều khiển thô (xuống dòng thật) trong chuỗi làm JSON.parse trượt, nên escape lại.
+  if (inStr) {
+    const q = body.lastIndexOf('"');
+    const head = body.slice(0, q + 1);
+    const tail = body.slice(q + 1)
+      .replace(/[ -]/g, (m) => (m === '\n' ? '\\n' : m === '\t' ? '\\t' : m === '\r' ? '\\r' : ''));
+    body = head + tail + '"';
+  } else {
+    // 4. Không ở trong chuỗi: bỏ phần đuôi dở dang — dấu phẩy treo, khoá chưa có giá trị,
+    //    hoặc token viết dở (`tru`, `12.`).
+    body = body
+      .replace(/,\s*$/, '')
+      .replace(/,?\s*"[^"]*"\s*:\s*$/, '')
+      .replace(/,?\s*"[^"]*"\s*$/, '')
+      .replace(/:\s*[A-Za-z0-9.+-]*$/, (m) => (/:\s*(true|false|null|-?\d+(\.\d+)?)$/.test(m) ? m : ''))
+      .replace(/,?\s*"[^"]*"\s*:\s*$/, '');
+  }
+  if (!/[:{]/.test(body)) return null;   // chẳng còn cặp khoá-giá trị nào thì thôi
+
+  return body + closers.reverse().join('');
+}
+
+/**
+ * (bug 134) NHÃN và TỪ KHOÁ suy được thì đừng vứt cả lô.
+ *
+ * User báo Auto Creator liên tục "Batch X — không đọc được JSON", log cho thấy AI trả về
+ * `[{ "keys": [...], "content": "<System>…"` — JSON HỢP LỆ nhưng entry thiếu `comment`.
+ * Luật cũ đòi đủ CẢ BA (comment + keys + content) mới nhận, thiếu một là loại; loại hết thì
+ * validateEntries trả null và cả batch bị coi như "không đọc được JSON" rồi thử lại — thử lại
+ * cũng ra y hệt, nên vòng lặp lỗi kéo dài đúng như user mô tả.
+ *
+ * Thứ THẬT SỰ đáng giá của một entry là `content` — nhãn và từ khoá suy lại được:
+ *   • comment ← name/title/entryName → keys[0] → dòng đầu của content
+ *   • keys    ← comment (tách cụm) — thà có key thô còn hơn mất nguyên entry
+ * Vẫn giữ đủ chặt để không bắt nhầm object linh tinh: `content` phải là chuỗi có thực chất.
+ */
+const MIN_CONTENT_CHARS = 20;
+
+function deriveComment(e: Record<string, unknown>): string {
+  for (const k of ['comment', 'name', 'title', 'entryName', 'entry_name', 'label']) {
+    const v = e[k];
+    if (typeof v === 'string' && v.trim()) return v.trim().slice(0, 120);
+  }
+  const keys = Array.isArray(e.keys) ? e.keys.filter(x => typeof x === 'string' && x.trim()) : [];
+  if (keys.length) return String(keys[0]).trim().slice(0, 120);
+  // Dòng đầu content, bỏ ký tự trang trí markdown/tag mở đầu.
+  const first = String(e.content ?? '').split('\n').map(l => l.trim()).find(Boolean) ?? '';
+  const cleaned = first
+    .replace(/^[<[#*\-•\s]+/, '')          // bullet/heading/thẻ mở đầu
+    .replace(/[>\]*_\s]+$/, '')             // đuôi trang trí: **, __, >, ]
+    .replace(/[:：]\s*$/, '')
+    .trim();
+  return cleaned.slice(0, 120) || 'Entry không tên';
+}
+
+function deriveKeys(e: Record<string, unknown>, comment: string): string[] {
+  const raw = Array.isArray(e.keys) ? e.keys
+    : typeof e.keys === 'string' ? String(e.keys).split(',')
+    : [];
+  const keys = raw.map(k => String(k).trim()).filter(Boolean);
+  if (keys.length) return keys;
+  // Không có key nào: dùng chính nhãn entry. Entry sẽ kích hoạt theo tên nó — thô nhưng dùng
+  // được, và người dùng sửa được trong Lorebook; mất hẳn entry thì không sửa được gì.
+  return comment ? [comment] : [];
+}
+
 function validateEntries(arr: unknown[]): AIGeneratedEntry[] | null {
   const valid: AIGeneratedEntry[] = [];
   for (const item of arr) {
-    if (!item || typeof item !== 'object') continue;
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
     const e = item as Record<string, unknown>;
-    if (typeof e.comment !== 'string' || !Array.isArray(e.keys) || typeof e.content !== 'string') continue;
-    if (!e.comment.trim() || !e.content.trim() || e.keys.length === 0) continue;
+    if (typeof e.content !== 'string' || e.content.trim().length < MIN_CONTENT_CHARS) continue;
+    const comment = deriveComment(e);
+    const keys = deriveKeys(e, comment);
+    if (!comment || keys.length === 0) continue;
     valid.push({
-      comment: e.comment,
-      keys: e.keys.map(String),
+      comment,
+      keys,
       secondary_keys: Array.isArray(e.secondary_keys) ? e.secondary_keys.map(String) : undefined,
       content: e.content,
       constant: typeof e.constant === 'boolean' ? e.constant : undefined,
@@ -782,30 +912,45 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
     // Execute all tasks in this round
     const results = await Promise.all(tasks.map(async (task) => {
       let result: AIGeneratedEntry[] | null = null;
+      // (bug 134) Lô bị cắt vì quá dài mà thử lại Y NGUYÊN thì lần nào cũng cắt — đúng cảnh
+      // "lỗi liên tục". Mỗi lần thử lại vì bị cắt sẽ HẠ số entry của lô xuống một nửa.
+      let askCount = task.countThisBatch;
+      let messages = task.messages;
       for (let attempt = 0; attempt <= config.maxRetriesPerBatch; attempt++) {
         if (ctx.stopped) return { batchIndex: task.batchIndex, entries: null };
         try {
-          ctx.log(`📡 Batch ${task.batchIndex}/${totalBatches} — gọi AI${attempt > 0 ? ` (thử lại ${attempt})` : ''}...`);
+          ctx.log(`📡 Batch ${task.batchIndex}/${totalBatches} — gọi AI${attempt > 0 ? ` (thử lại ${attempt}${askCount !== task.countThisBatch ? `, rút còn ${askCount} entry` : ''})` : ''}...`);
           const raw = await callAI({
             profile,
             // (bugNeedFix/96) KHÔNG ép chế độ "chỉ trả JSON object": prompt ở đây đòi một
             // MẢNG entry, mà chế độ đó của provider CẤM mảng ở cấp cao nhất — model buộc phải
             // bọc lung tung hoặc trả một object, rồi tool báo "không phải JSON array" hàng loạt.
             params: { ...ctx.generationParams, useJsonResponseFormat: false },
-            messages: task.messages,
+            messages,
             signal: ctx.signal,
           });
           result = tryExtractJsonArray(raw.text);
           if (result) break;
           // (bugNeedFix/96) Nói rõ AI đã trả về CÁI GÌ — trước đây chỉ báo "không phải JSON
           // array" nên không ai biết vì sao, cứ thử lại mù rồi bỏ batch.
-          const cutOff = ['length', 'MAX_TOKENS', 'max_tokens'].includes(raw.finishReason || '');
+          // (bug 134) Nhận diện "bị cắt" bằng CẤU TRÚC nữa, không chỉ finishReason — nhiều
+          // provider không trả trường đó nên trước giờ luôn báo nhầm thành "JSON sai".
+          const cutOff = ['length', 'MAX_TOKENS', 'max_tokens'].includes(raw.finishReason || '')
+            || looksTruncated(raw.text);
           const peek = (raw.text || '').trim().replace(/\s+/g, ' ').slice(0, 160) || '(rỗng)';
           ctx.log(
             `⚠️ Batch ${task.batchIndex} — không đọc được JSON` +
-            (cutOff ? ' (output BỊ CẮT do chạm giới hạn token — hãy giảm "số entry mỗi lô" hoặc tăng max tokens)' : '') +
+            (cutOff ? ' (output BỊ CẮT giữa chừng — output dài quá giới hạn token của model)' : '') +
             `. AI trả về: «${peek}${(raw.text || '').length > 160 ? '…' : ''}» → thử lại...`,
           );
+          if (cutOff && askCount > 1) {
+            const next = Math.max(1, Math.floor(askCount / 2));
+            // Sửa TRỰC TIẾP con số trong lời nhắc: prompt tự nó nêu "hãy tạo N entry".
+            messages = messages.map((m, i) => i === messages.length - 1
+              ? { ...m, content: `${m.content}\n\n[ĐIỀU CHỈNH]: Lần trước output bị cắt vì quá dài. Lần này CHỈ tạo ${next} entry (thay vì ${askCount}), nội dung vẫn đủ chất nhưng gọn hơn.` }
+              : m);
+            askCount = next;
+          }
         } catch (err) {
           // Người dùng bấm Dừng → abort: thoát ngay, KHÔNG coi là lỗi/thử lại.
           if (ctx.stopped || (err instanceof DOMException && err.name === 'AbortError')) {

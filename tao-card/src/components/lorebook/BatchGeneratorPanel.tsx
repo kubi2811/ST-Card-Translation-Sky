@@ -122,11 +122,24 @@ export function BatchGeneratorPanel() {
 
   // (User 19/07) Bơm cấu hình AI Sinh Theo Batch vào bước Lorebook của Auto Creator:
   // map các field trùng khái niệm; minEntries lấy từ Tiêu chí hoàn thành (nếu bật).
-  const handleApplyToAutoCreator = useCallback(() => {
+  // (bug 134) Đổi từ NÚT BẤM sang CÔNG TẮC. User: "không rõ khi Reset trang thì cái AI Sinh
+  // Theo Batch có tắt hay không" — đúng, vì nút bấm ghi giá trị vào vài ô cấu hình rời rạc rồi
+  // biến mất, chẳng còn dấu vết nào để biết nó đang có hiệu lực. Nay trạng thái nằm ở MỘT khối
+  // `appliedBatchPreset`: bật thì cả hai màn đều hiện, tắt thì trả cấu hình về đúng bản chụp.
+  const appliedBatch = useAutoCreatorStore(s => s.config.appliedBatchPreset);
+
+  const handleToggleAutoCreator = useCallback(() => {
+    const store = useAutoCreatorStore.getState();
+    if (store.config.appliedBatchPreset) {
+      store.clearBatchPreset();
+      useToastStore.getState().info(ui.bgUnappliedAcToast);
+      return;
+    }
     const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.round(v) || lo));
     const tab = TABS.find(t => t.id === activeTab)!;
     const total = clamp(totalEntries, 5, 100);
-    useAutoCreatorStore.getState().updateStepConfig('lorebook', {
+    const prev = store.config.stepConfigs.lorebook;
+    const patch = {
       totalEntries: total,
       minEntries: criteria.enabled ? clamp(criteria.minEntryCount ?? 0, 0, total) : 0,
       entriesPerBatch: clamp(entriesPerBatch, 1, 10),
@@ -135,8 +148,24 @@ export function BatchGeneratorPanel() {
       category: tab.category,
       cardType: tab.cardType,
       promptOverride: prompts[activeTab]?.trim() || undefined,
-      promptMode: prompts[activeTab]?.trim() ? 'append' : 'default',
-    });
+      promptMode: (prompts[activeTab]?.trim() ? 'append' : 'default') as 'append' | 'default',
+    };
+    // Chụp ĐÚNG những khoá mình sắp ghi đè — tắt là hoàn nguyên chừng đó, không đụng phần khác.
+    const previousConfig = Object.fromEntries(
+      Object.keys(patch).map(k => [k, (prev as unknown as Record<string, unknown>)[k]]),
+    ) as Partial<typeof prev>;
+
+    store.applyBatchPreset({
+      appliedAt: new Date().toISOString(),
+      tabLabel: tab.label,
+      summary: {
+        totalEntries: patch.totalEntries,
+        entriesPerBatch: patch.entriesPerBatch,
+        concurrentBatches: patch.concurrentBatches,
+        hasPrompt: !!patch.promptOverride,
+      },
+      previousConfig,
+    }, patch);
     useToastStore.getState().success(ui.bgAppliedAcToast);
   }, [TABS, activeTab, totalEntries, entriesPerBatch, concurrentBatches, useWebSearch, prompts, criteria]);
 
@@ -512,12 +541,30 @@ export function BatchGeneratorPanel() {
           className="flex items-center gap-2 px-4 py-2 rounded-xl border border-emerald-500/50 bg-emerald-600/15 text-emerald-400 text-sm font-medium hover:bg-emerald-600/25 transition-colors">
           💾 {ui.bgSaveBtn}
         </button>
-        <button onClick={handleApplyToAutoCreator}
-          className="flex items-center gap-2 px-4 py-2 rounded-xl border border-purple-500/50 bg-purple-600/15 text-purple-400 text-sm font-medium hover:bg-purple-600/25 transition-colors"
-          title={ui.bgApplyAcTip}>
+        {/* (bug 134) CÔNG TẮC, không phải nút bấm: nhìn là biết đang bật hay tắt. */}
+        <button onClick={handleToggleAutoCreator}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-medium transition-colors ${
+            appliedBatch
+              ? 'border-purple-400 bg-purple-600/30 text-purple-200'
+              : 'border-purple-500/50 bg-purple-600/15 text-purple-400 hover:bg-purple-600/25'
+          }`}
+          title={appliedBatch ? ui.bgApplyAcOnTip : ui.bgApplyAcTip}>
+          <span className={`inline-flex items-center w-8 h-4 rounded-full px-0.5 transition-colors ${appliedBatch ? 'bg-purple-400/80 justify-end' : 'bg-muted-foreground/30 justify-start'}`}>
+            <span className="w-3 h-3 rounded-full bg-white/90" />
+          </span>
           🪄 {ui.bgApplyAcBtn}
+          <span className="text-[10px] opacity-80">{appliedBatch ? ui.bgApplyAcOn : ui.bgApplyAcOff}</span>
         </button>
       </div>
+      {appliedBatch && (
+        <p className="text-[11px] text-purple-300/90">
+          {fmt(ui.bgApplyAcActiveNote, {
+            tab: appliedBatch.tabLabel,
+            total: appliedBatch.summary.totalEntries,
+            per: appliedBatch.summary.entriesPerBatch,
+          })}
+        </p>
+      )}
 
       {/* Control buttons */}
       <div className="flex gap-2">

@@ -197,6 +197,29 @@ export interface AutoCreatorConfig {
   mnStepConfigs: MnStepConfigs;          // Config riêng cho từng bước Minh Nguyệt
   /** (bug 126) Chính sách EJS được EJS Studio áp sang — xem AppliedEjsPolicy. */
   appliedEjsPolicy?: AppliedEjsPolicy;
+  /** (bug 134) Cấu hình "AI Sinh Theo Batch" đang được áp — xem AppliedBatchPreset. */
+  appliedBatchPreset?: AppliedBatchPreset;
+}
+
+/**
+ * (bug 134) CẤU HÌNH "AI SINH THEO BATCH" đang áp cho Auto Creator.
+ *
+ * User: "Nút Áp dụng vào Auto Creator của AI Sinh Theo Batch nên đổi thành bật/tắt (toggle)
+ * thay vì nút bấm — vì không rõ khi Reset trang thì nó có tắt hay không. Đổi thành toggle sẽ
+ * thấy rõ trạng thái hiện tại đang bật hay tắt."
+ *
+ * Nút bấm một lần thì trạng thái tan vào các ô cấu hình rời rạc, không ai biết nó còn hiệu lực
+ * hay đã bị Reset xoá. Ghi thành MỘT khối có tên: bật thì thấy, tắt thì trả cấu hình về nguyên
+ * trạng đã lưu. `previousConfig` chính là bản chụp TRƯỚC khi áp, để tắt là hoàn nguyên đúng
+ * những gì mình đã đụng — không đoán, không để lại rác.
+ */
+export interface AppliedBatchPreset {
+  appliedAt: string;
+  /** Tab (loại nội dung) của AI Sinh Theo Batch lúc áp — hiện trong banner. */
+  tabLabel: string;
+  summary: { totalEntries: number; entriesPerBatch: number; concurrentBatches: number; hasPrompt: boolean };
+  /** Bản chụp cấu hình lorebook TRƯỚC khi áp — dùng để tắt toggle là trả về như cũ. */
+  previousConfig: Partial<LorebookStepConfig>;
 }
 
 /**

@@ -13,6 +13,7 @@ import type {
   StepPreview,
   CardBlueprint,
   AppliedEjsPolicy,
+  AppliedBatchPreset,
 } from '../types';
 
 interface AutoCreatorState {
@@ -59,6 +60,13 @@ interface AutoCreatorState {
   /** (bug 126) EJS Studio áp chính sách EJS sang — Auto Creator hiện banner báo cho user biết. */
   applyEjsPolicy: (policy: AppliedEjsPolicy) => void;
   clearEjsPolicy: () => void;
+  /**
+   * (bug 134) BẬT/TẮT cấu hình "AI Sinh Theo Batch" cho bước Lorebook.
+   * Bật: chụp cấu hình hiện tại rồi ghi cấu hình của Batch đè lên.
+   * Tắt: trả lại đúng bản chụp đó — không để lại promptOverride/category mồ côi.
+   */
+  applyBatchPreset: (preset: AppliedBatchPreset, patch: Partial<AutoCreatorConfig['stepConfigs']['lorebook']>) => void;
+  clearBatchPreset: () => void;
   updateMnStepConfig: <K extends keyof AutoCreatorConfig['mnStepConfigs']>(
     step: K,
     patch: Partial<AutoCreatorConfig['mnStepConfigs'][K]>
@@ -250,6 +258,28 @@ export const useAutoCreatorStore = create<AutoCreatorState>()(persist((set, get)
   clearEjsPolicy: () => set((s) => {
     const next = { ...s.config };
     delete next.appliedEjsPolicy;
+    return { config: next };
+  }),
+
+  // (bug 134) Toggle cấu hình AI Sinh Theo Batch — bật ghi đè, tắt hoàn nguyên đúng bản chụp.
+  applyBatchPreset: (preset, patch) => set((s) => ({
+    config: {
+      ...s.config,
+      appliedBatchPreset: preset,
+      stepConfigs: { ...s.config.stepConfigs, lorebook: { ...s.config.stepConfigs.lorebook, ...patch } },
+    },
+  })),
+  clearBatchPreset: () => set((s) => {
+    const prev = s.config.appliedBatchPreset?.previousConfig;
+    const next = { ...s.config };
+    delete next.appliedBatchPreset;
+    if (prev) {
+      // Hoàn nguyên: các khoá có trong bản chụp trả về giá trị cũ. `promptOverride` từng là
+      // undefined thì phải XOÁ hẳn, không để chuỗi rỗng làm prompt vẫn coi như có override.
+      const restored = { ...next.stepConfigs.lorebook, ...prev } as unknown as Record<string, unknown>;
+      for (const [k, v] of Object.entries(prev)) if (v === undefined) delete restored[k];
+      next.stepConfigs = { ...next.stepConfigs, lorebook: restored as unknown as typeof next.stepConfigs.lorebook };
+    }
     return { config: next };
   }),
 

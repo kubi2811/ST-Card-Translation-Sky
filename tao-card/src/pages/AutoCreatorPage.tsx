@@ -522,6 +522,37 @@ export function AutoCreatorPage() {
             </div>
           )}
 
+          {/* (bug 134) THÔNG BÁO: đang chạy theo cấu hình "AI Sinh Theo Batch".
+              User: "hiển thị thông báo ở Auto Creator khi sử dụng, trước đó bạn đã làm nhưng
+              chưa hiển thị" — đúng, vì bản cũ chỉ ghi giá trị vào các ô cấu hình rồi thôi, ở
+              đây không có gì cho biết cấu hình đó từ đâu tới. Nay công tắc bật là banner hiện,
+              tắt là mất; gỡ ngay tại đây cũng được. */}
+          {store.config.appliedBatchPreset && (
+            <div className="rounded-xl border border-purple-500/40 bg-purple-500/10 p-3">
+              <div className="flex items-start gap-2">
+                <Wand2 className="w-4 h-4 text-purple-300 shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-semibold text-purple-200">{ui.acBatchPresetBanner}</div>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    {fmt(ui.acBatchPresetDetail, {
+                      tab: store.config.appliedBatchPreset.tabLabel,
+                      total: store.config.appliedBatchPreset.summary.totalEntries,
+                      per: store.config.appliedBatchPreset.summary.entriesPerBatch,
+                      conc: store.config.appliedBatchPreset.summary.concurrentBatches,
+                      prompt: store.config.appliedBatchPreset.summary.hasPrompt ? ui.acBatchPresetPrompt : '',
+                    })}
+                  </p>
+                </div>
+                <button
+                  onClick={() => { store.clearBatchPreset(); useToastStore.getState().info(ui.bgUnappliedAcToast); }}
+                  disabled={store.isRunning}
+                  className="shrink-0 px-2 py-1 rounded text-[10px] border border-border text-muted-foreground hover:bg-muted transition-colors disabled:opacity-40">
+                  Gỡ
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* v3: Auto Apply toggle */}
           <div className="flex items-center justify-between px-1">
             <label className="text-xs text-muted-foreground flex items-center gap-2">

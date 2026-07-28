@@ -228,6 +228,113 @@ export const QUICK_PRESETS: QuickPreset[] = [
     },
   },
 
+  // ── (Goal 28/07) Nhóm tính năng MVU ──────────────────────────────────────
+
+  {
+    id: 'mvu-sanitize',
+    title: 'Chuẩn hoá dữ liệu MVU',
+    icon: '🧹',
+    effect:
+      'Khối EJS kiểm tra giá trị biến mỗi lượt và sửa GIÁ TRỊ đang lệch: số vượt miền cho phép, ' +
+      'enum sai chính tả, kiểu bị đổi (số thành chữ). KHÔNG sửa schema — chỉ nắn giá trị về đúng ' +
+      'khuôn đã khai, để lỗi AI viết bậy không tích luỹ qua các lượt.',
+    build: (ctx) => {
+      const b = needSchema(ctx);
+      return {
+        goal: b.length ? '' : [
+          'Tạo khối EJS "chuẩn hoá dữ liệu MVU" chạy mỗi lượt (@@preprocessing):',
+          `Biến của card: ${varList(ctx, 30)}.`,
+          '',
+          '- Với biến SỐ có miền (min/max/enum đã khai trong schema): giá trị vượt miền thì setvar về',
+          '  đúng biên gần nhất; NaN/chuỗi thì đưa về giá trị hợp lệ gần nhất có thể suy ra.',
+          '- Với biến ENUM: giá trị không nằm trong danh sách thì đối chiếu gần đúng (sai hoa thường,',
+          '  thừa khoảng trắng) rồi setvar về giá trị chuẩn; không suy ra được thì GIỮ NGUYÊN và bỏ qua.',
+          '- TUYỆT ĐỐI không đổi schema, không đổi tên biến, không đụng biến đang hợp lệ.',
+          '- Khối chạy im lặng, không chèn chữ nào vào prompt.',
+        ].join('\n'),
+        blockers: b,
+        notes: ['Chỉ sửa giá trị lệch — schema và biến hợp lệ không bị đụng.'],
+      };
+    },
+  },
+
+  {
+    id: 'mvu-summary',
+    title: 'Tóm tắt trạng thái cho AI',
+    icon: '📝',
+    effect:
+      'Thay vì đổ nguyên cây biến vào prompt, khối EJS diễn giải trạng thái thành vài câu tự nhiên ' +
+      '("đang kiệt sức", "quan hệ ở mức thân thiết") — AI đọc hiểu nhanh hơn và tốn ít token hơn ' +
+      'so với bảng số khô.',
+    build: (ctx) => {
+      const b = needSchema(ctx);
+      return {
+        goal: b.length ? '' : [
+          'Tạo khối EJS tóm tắt trạng thái nhân vật thành VĂN cho AI đọc mỗi lượt:',
+          `Biến của card: ${varList(ctx, 30)}.`,
+          '',
+          '- Chọn các biến ảnh hưởng nhất tới cách viết (quan hệ, trạng thái cơ thể, vị trí, giai đoạn).',
+          '- Diễn giải thành 2-4 câu tự nhiên theo MỨC (ví dụ HP thấp → "đang bị thương nặng"),',
+          '  không liệt kê con số khô trừ khi con số tự nó có nghĩa (tiền, ngày).',
+          '- Chèn qua injectPrompt ở vị trí phù hợp, ngắn gọn tối đa.',
+        ].join('\n'),
+        blockers: b,
+        notes: [],
+      };
+    },
+  },
+
+  {
+    id: 'mvu-watchdog',
+    title: 'Cảnh báo ngưỡng chỉ số',
+    icon: '🚨',
+    effect:
+      'Khi một chỉ số vượt/tụt qua ngưỡng đáng chú ý (HP sắp cạn, thiện cảm chạm mốc mới, hết tiền), ' +
+      'khối EJS nhắc AI đúng một câu chỉ dẫn để cảnh đó được phản ánh trong lời kể — thay vì AI ' +
+      'bỏ qua con số.',
+    build: (ctx) => {
+      const b = needSchema(ctx);
+      return {
+        goal: b.length ? '' : [
+          'Tạo khối EJS "cảnh báo ngưỡng" cho các chỉ số quan trọng:',
+          `Biến của card: ${varList(ctx, 30)}.`,
+          '',
+          '- Tự chọn 3-5 ngưỡng đáng kể dựa trên miền giá trị trong schema (cạn máu, chạm mốc quan hệ,',
+          '  hết tài nguyên…). Mỗi ngưỡng một câu chỉ dẫn NGẮN chèn vào prompt chỉ KHI điều kiện đúng.',
+          '- Không ngưỡng nào đúng thì khối không chèn gì cả.',
+        ].join('\n'),
+        blockers: b,
+        notes: [],
+      };
+    },
+  },
+
+  {
+    id: 'mvu-delta',
+    title: 'Diễn giải thay đổi chỉ số',
+    icon: '📈',
+    effect:
+      'So giá trị hiện tại với lượt trước (lưu bản chụp bằng biến message) và nói cho AI biết cái gì ' +
+      'vừa TĂNG/GIẢM — AI phản ánh được diễn biến ("vừa mất nhiều máu", "thiện cảm tăng vọt") thay vì ' +
+      'chỉ thấy con số tĩnh.',
+    build: (ctx) => {
+      const b = needSchema(ctx);
+      return {
+        goal: b.length ? '' : [
+          'Tạo khối EJS "diễn giải thay đổi chỉ số giữa các lượt":',
+          `Biến của card: ${varList(ctx, 20)}.`,
+          '',
+          '- Mỗi lượt: đọc giá trị hiện tại của 3-6 biến số quan trọng, so với bản chụp lượt trước',
+          '  (lưu bằng setMessageVar/getMessageVar), rồi chèn 1-2 câu nêu thay đổi đáng kể',
+          '  ("HP giảm mạnh từ 80 xuống 35"). Thay đổi nhỏ hoặc không đổi thì im lặng.',
+          '- Sau khi so xong, cập nhật bản chụp bằng giá trị hiện tại.',
+        ].join('\n'),
+        blockers: b,
+        notes: [],
+      };
+    },
+  },
+
   {
     id: 'full-suite',
     title: 'Áp dụng TẤT CẢ tính năng EJS',

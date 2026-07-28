@@ -33,7 +33,7 @@ export interface VarDecl {
 }
 
 export interface CollisionIssue {
-  code: 'ejs-var-conflict' | 'ejs-setvar-conflict' | 'ejs-name-conflict';
+  code: 'ejs-var-conflict' | 'ejs-setvar-conflict' | 'ejs-name-conflict' | 'ejs-activation-overlap';
   message: string;
   where: string;
   /** Máy sửa được không (quyết định có cần gọi AI hay không). */
@@ -143,6 +143,88 @@ export function findCollisions(blocks: EjsBlock[]): CollisionIssue[] {
   }
 
   return issues;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// (Goal 28/07) RÀ XUNG ĐỘT KÍCH HOẠT — chỉ báo khi THẬT SỰ có, sạch thì thôi
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Hai khối EJS cùng activewi MỘT entry: có thể cố ý (nhiều đường mở cùng một lore) nhưng
+ * thường là hai controller giẫm chân nhau — báo mức CẢNH BÁO để user tự quyết, máy không
+ * tự vá (không đủ căn cứ biết bên nào là chủ). Đây là kiểm "có thì báo, không thì im" —
+ * không phải cứ có tính năng vá là phải nặn ra lỗi.
+ */
+export function findActivationOverlaps(blocks: EjsBlock[]): CollisionIssue[] {
+  const owners = new Map<string, string[]>();   // tên entry được bật (chuẩn hoá) → các khối bật nó
+  const display = new Map<string, string>();    // giữ tên NGUYÊN GỐC để hiện cho user
+  const re = /\b(?:activewi|activateWorldInfo)\s*\(\s*([^)]*)\)/g;
+  for (const b of blocks) {
+    let m: RegExpExecArray | null;
+    re.lastIndex = 0;
+    while ((m = re.exec(String(b.code || ''))) !== null) {
+      const strings = [...m[1].matchAll(/['"`]([^'"`]+)['"`]/g)].map(s => s[1]);
+      if (!strings.length) continue;
+      const raw = strings[strings.length - 1].trim();
+      const key = raw.toLowerCase();
+      if (!display.has(key)) display.set(key, raw);
+      owners.set(key, [...(owners.get(key) ?? []), b.name]);
+    }
+  }
+  const issues: CollisionIssue[] = [];
+  for (const [key, who] of owners) {
+    const target = display.get(key) ?? key;
+    const uniq = [...new Set(who)];
+    if (uniq.length > 1) {
+      issues.push({
+        code: 'ejs-activation-overlap',
+        message: `Entry "${target}" được BẬT bởi ${uniq.length} khối khác nhau (${uniq.join(', ')}) — nếu điều kiện của chúng chồng nhau, entry sẽ hiện cả ở tình huống không mong muốn. Kiểm lại xem có chủ đích không.`,
+        where: target,
+        autofixable: false,
+      });
+    }
+  }
+  return issues;
+}
+
+/**
+ * Từ khoá TRÙNG/BAO NHAU giữa các entry keyword: key giống hệt ở ≥2 entry, hoặc key của A
+ * là chuỗi con của key của B (nhắc B là A cũng bật — kích hoạt nhầm). Trả về câu cảnh báo
+ * cho bảng kế hoạch; KHÔNG tự sửa entry sẵn có của user.
+ */
+export function scanKeywordOverlap(
+  entries: Array<{ comment?: string; id?: number; keys?: string[]; enabled?: boolean; constant?: boolean }>,
+): string[] {
+  const warnings: string[] = [];
+  const keyed = entries
+    .filter(e => e.enabled !== false && !e.constant)
+    .map(e => ({
+      name: String(e.comment || `#${e.id}`),
+      keys: (e.keys ?? []).map(k => String(k).trim().toLowerCase()).filter(k => k.length >= 2),
+    }))
+    .filter(e => e.keys.length);
+
+  const byKey = new Map<string, string[]>();
+  for (const e of keyed) for (const k of new Set(e.keys)) byKey.set(k, [...(byKey.get(k) ?? []), e.name]);
+  for (const [k, names] of byKey) {
+    if (names.length > 1) {
+      warnings.push(`Từ khoá "${k}" dùng chung ở ${names.length} entry (${names.slice(0, 4).join(', ')}) — nhắc tới là bật cả loạt, kiểm xem có chủ đích không.`);
+    }
+  }
+
+  // Key bao nhau (chuỗi con) giữa hai entry khác nhau — chỉ soát key đủ dài để đỡ nhiễu.
+  for (let i = 0; i < keyed.length; i++) {
+    for (let j = 0; j < keyed.length; j++) {
+      if (i === j) continue;
+      const short = keyed[i], long = keyed[j];
+      const pair = short.keys.find(a => a.length >= 3 && long.keys.some(b => b.length > a.length && b.includes(a)));
+      if (pair) {
+        const b = long.keys.find(x => x.length > pair.length && x.includes(pair))!;
+        warnings.push(`Key "${pair}" của "${short.name}" nằm TRONG key "${b}" của "${long.name}" — nhắc "${b}" là cả hai cùng bật. Cân nhắc đổi key cho tách bạch.`);
+      }
+    }
+  }
+  return [...new Set(warnings)].slice(0, 10);
 }
 
 export interface PatchResult {

@@ -39,6 +39,10 @@ import {
 import { ACTIVATION_LABEL, findOrphanConditionalEntries, type EjsPlanRow } from '../../lib/ejs/ejsPlanModel';
 import { QUICK_PRESETS } from '../../lib/ejs/ejsQuickPresets';
 import { buildEjsPolicy, isCardReadyForPolicy } from '../../lib/ejs/ejsPolicy';
+import { groupPlanRows } from '../../lib/ejs/ejsPlanGroups';
+import { buildSplitMessages, parseSplitResponse } from '../../lib/ejs/ejsSplit';
+import { scanBrokenRefs, rewriteRefs, fuzzyRepairMapping } from '../../lib/ejs/ejsRefIntegrity';
+import { proposeTestValues, simulateActivation } from '../../lib/ejs/ejsTestMode';
 
 interface EJSAgentPanelProps {
   schema: MVUZODSchema | null;
@@ -51,7 +55,11 @@ const ACTION_LABEL: Record<EjsPlanRow['action'], string> = {
   reclassify: 'Đổi chế độ kích hoạt',
   edit_content: 'Sửa nội dung',
   edit_character: 'Sửa Character Definition',
+  split_entry: 'Tách entry',
 };
+
+/** Rút gọn văn bản cho khung trước/sau. */
+const clip = (s: string, n = 400) => (s.length > n ? s.slice(0, n) + '…' : s);
 
 export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
   const card = useCardStore(s => s.card);
@@ -147,11 +155,19 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
 
     // Snapshot hoàn tác — chụp TRƯỚC khi đụng vào bất cứ thứ gì, kể cả khi chạy dở bị dừng.
     const changed: Array<{ id: number; enabled: boolean; constant: boolean; keys: string[] }> = [];
+    const changedContents: Array<{ id: number; content: string }> = [];
     const createdIds: number[] = [];
     const snap = (e: LorebookEntry) => {
       if (changed.some(c => c.id === e.id)) return;
       changed.push({ id: e.id, enabled: e.enabled, constant: e.constant, keys: [...(e.keys ?? [])] });
     };
+    const snapContent = (e: LorebookEntry) => {
+      if (changedContents.some(c => c.id === e.id)) return;
+      changedContents.push({ id: e.id, content: String(e.content ?? '') });
+    };
+    // (Goal 28/07) Mapping tên cũ → tên mới (tách/đổi tên) — nguồn để vá tham chiếu getwi.
+    const refMapping = new Map<string, string[]>();
+    s.setBeforeAfter([]);
 
     try {
       // 2a. Dòng "đổi chế độ kích hoạt" là thao tác CẤU HÌNH thuần — máy làm thẳng, 0 call AI.
@@ -171,8 +187,61 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
         useCardStore.getState().updateEntry(target.id, patch);
         reclassified++;
         s.pushProgress(`⚙️ "${r.name}" → ${ACTIVATION_LABEL[r.proposedMode]}`);
+        s.pushBeforeAfter({
+          name: r.name, kind: 'reclassified',
+          before: r.currentMode ? ACTIVATION_LABEL[r.currentMode] : '(không rõ)',
+          after: ACTIVATION_LABEL[r.proposedMode],
+        });
       }
       if (reclassified) s.pushProgress(`✅ Đổi chế độ kích hoạt cho ${reclassified} entry (không tốn call AI).`);
+
+      // 2a-bis. (Goal 28/07) DÒNG TÁCH ENTRY — đã duyệt trước trong bảng, giờ mới thực thi.
+      // 1 call AI/dòng; validate tất định (đủ phần, không rơi chữ) rồi mới áp. Entry gốc TẮT
+      // (không xoá — còn hoàn tác); mapping cũ→mới đưa cho bộ vá tham chiếu ở bước chốt.
+      const splitRows = plan.rows.filter(r => accepted.has(r.id) && r.action === 'split_entry');
+      for (const r of splitRows) {
+        if (ac.signal.aborted) throw new DOMException('Aborted', 'AbortError');
+        const original = byName.get(r.name.trim().toLowerCase());
+        if (!original) { s.pushProgress(`⚠️ Bỏ qua tách "${r.name}" — không tìm thấy entry trong card.`); continue; }
+        s.pushProgress(`✂️ Đang tách "${r.name}" thành ${r.splitInto?.length ?? '?'} phần…`);
+        try {
+          const raw = await makeCall(ac.signal)(buildSplitMessages(original, r), { temperature: 0.3, label: `EJS Split: ${r.name}` });
+          const { parts, warnings } = parseSplitResponse(raw, original, r);
+          for (const w of warnings) s.pushProgress(`⚠️ ${w}`);
+
+          let cur = useCardStore.getState().card.data.character_book?.entries ?? [];
+          const newNames: string[] = [];
+          for (const part of parts) {
+            const newId = nextEntryId(cur);
+            const newEntry: LorebookEntry = {
+              id: newId,
+              keys: part.mode === 'keyword' ? part.keys : [],
+              secondary_keys: [], comment: part.comment, content: part.content,
+              constant: part.mode === 'constant', selective: false,
+              insertion_order: original.insertion_order ?? 100,
+              enabled: part.mode !== 'conditional' && part.mode !== 'disabled',
+              position: original.position ?? 'before_char', use_regex: false,
+              extensions: { ...DEFAULT_ENTRY_EXT, display_index: newId },
+            };
+            addEntry(newEntry);
+            createdIds.push(newId);
+            cur = [...cur, newEntry];
+            newNames.push(part.comment);
+          }
+          snap(original);
+          useCardStore.getState().updateEntry(original.id, { enabled: false, constant: false });
+          refMapping.set(String(original.comment || `#${original.id}`), newNames);
+          s.pushProgress(`✅ Đã tách "${r.name}" → ${newNames.join(' · ')} (entry gốc tắt, còn hoàn tác).`);
+          s.pushBeforeAfter({
+            name: r.name, kind: 'split',
+            before: clip(String(original.content ?? '')),
+            after: parts.map(x => `▸ ${x.comment} [${ACTIVATION_LABEL[x.mode]}${x.keys.length ? ` | keys: ${x.keys.join(', ')}` : ''}]\n${clip(x.content, 160)}`).join('\n\n'),
+          });
+        } catch (e) {
+          if (e instanceof DOMException && e.name === 'AbortError') throw e;
+          s.pushProgress(`⚠️ Tách "${r.name}" thất bại: ${e instanceof Error ? e.message : String(e)} — entry gốc giữ nguyên.`);
+        }
+      }
 
       // 2b. Dòng cần sinh code → khung goalAgent (kiểm + tự sửa hội tụ).
       const agentPlan = buildAgentPlanFromRows(plan, accepted);
@@ -199,6 +268,7 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
             addEntry(newEntry);
             createdIds.push(newId);
             cur = [...cur, newEntry];
+            s.pushBeforeAfter({ name: d.entryComment, kind: 'created', before: '(chưa có entry này)', after: clip(d.code) });
 
             for (const action of d.entryActions) {
               if (action.action !== 'disable') continue;
@@ -232,11 +302,51 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
         );
       }
 
-      s.setUndo({ createdEntryIds: createdIds, changedEntries: changed });
+      // (Goal 28/07) CHỐT THAM CHIẾU: quét toàn bộ getwi/activewi trong lorebook xem còn trỏ
+      // đúng entry tồn tại không. Vá tất định theo mapping tách/đổi tên + khớp không phân biệt
+      // hoa-thường; còn lại BÁO RÕ, không đoán mò. Sạch thì báo sạch.
+      {
+        const curEntries = useCardStore.getState().card.data.character_book?.entries ?? [];
+        // Cả entry đang TẮT cũng là đích hợp lệ (activewi chính là để bật entry tắt).
+        const names = curEntries.map(e => String(e.comment || `#${e.id}`));
+        const blocks = curEntries
+          .filter(e => String(e.content ?? '').includes('<%'))
+          .map(e => ({ name: String(e.comment || `#${e.id}`), code: String(e.content ?? ''), id: e.id }));
+
+        let broken = scanBrokenRefs(blocks, names);
+        if (broken.length && (refMapping.size || true)) {
+          // Vá theo mapping tách/đổi tên trước, rồi khớp gần cho phần còn lại.
+          const fuzzy = fuzzyRepairMapping(broken, names);
+          const mapping = new Map([...refMapping, ...fuzzy]);
+          if (mapping.size) {
+            for (const b of blocks) {
+              const { code, changes } = rewriteRefs(b.code, mapping);
+              if (changes.length) {
+                const entry = curEntries.find(e => e.id === b.id)!;
+                snapContent(entry);
+                useCardStore.getState().updateEntry(b.id, { content: code });
+                for (const c of changes) s.pushProgress(`🔗 Vá tham chiếu trong "${b.name}": ${c}`);
+                s.pushBeforeAfter({ name: b.name, kind: 'ref_patched', before: clip(b.code), after: clip(code) });
+                b.code = code;
+              }
+            }
+            broken = scanBrokenRefs(blocks, names);
+          }
+        }
+        if (broken.length) {
+          for (const b of broken) {
+            s.pushProgress(`❌ Tham chiếu GÃY: "${b.from}" gọi ${b.kind} tới "${b.ref}" — entry này không tồn tại (đổi tên/xoá?). Máy không đủ căn cứ tự vá, hãy kiểm lại.`);
+          }
+        } else {
+          s.pushProgress('🔗 Kiểm tham chiếu getwi/activewi: tất cả đều trỏ đúng entry tồn tại.');
+        }
+      }
+
+      s.setUndo({ createdEntryIds: createdIds, changedEntries: changed, changedContents });
       s.setPhase('done');
     } catch (e) {
       // Dừng giữa chừng vẫn phải giữ snapshot, nếu không user mất đường lùi.
-      s.setUndo({ createdEntryIds: createdIds, changedEntries: changed });
+      s.setUndo({ createdEntryIds: createdIds, changedEntries: changed, changedContents });
       if (e instanceof DOMException && e.name === 'AbortError') {
         s.pushProgress('⏹ Đã dừng theo yêu cầu.');
         s.setPhase('review');
@@ -256,6 +366,8 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
     const cs = useCardStore.getState();
     for (const id of u.createdEntryIds) cs.deleteEntry(id);
     for (const c of u.changedEntries) cs.updateEntry(c.id, { enabled: c.enabled, constant: c.constant, keys: c.keys });
+    // (Goal 28/07) Trả cả nội dung bị vá tham chiếu về nguyên bản.
+    for (const c of u.changedContents ?? []) cs.updateEntry(c.id, { content: c.content });
     s.setUndo(null);
     s.resetRunOnly();
     s.pushProgress('↩️ Đã hoàn tác: xoá entry vừa tạo + trả entry bị đổi về trạng thái cũ.');
@@ -278,6 +390,42 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
   const busy = st.phase === 'planning' || st.phase === 'running';
   const rows = st.plan?.rows ?? [];
   const acceptedCount = rows.filter(r => st.decisions[r.id] !== 'rejected').length;
+
+  // (Goal 28/07) Nhóm các mục theo liên quan (máy đo, tất định) + tổng token ước tính.
+  const groups = useMemo(
+    () => (st.plan ? groupPlanRows(st.plan.rows, entries) : []),
+    [st.plan, entries],
+  );
+  const rowById = useMemo(() => new Map(rows.map(r => [r.id, r])), [rows]);
+  const tokensTotal = rows
+    .filter(r => st.decisions[r.id] !== 'rejected')
+    .reduce((sum, r) => sum + (r.tokensDelta ?? 0), 0);
+
+  // (Goal 28/07) Test mode: đề xuất giá trị từ chính điều kiện trong code vừa sinh + controller sẵn có.
+  const testProposals = useMemo(() => {
+    if (st.phase !== 'done') return [];
+    const codes = [
+      ...st.drafts.map(d => d.code),
+      ...entries.filter(e => String(e.content ?? '').includes('<%')).map(e => String(e.content ?? '')),
+    ];
+    return proposeTestValues(codes);
+  }, [st.phase, st.drafts, entries]);
+
+  const handleSimulate = useCallback(async () => {
+    const s = useEjsStudioStore.getState();
+    const values: Record<string, unknown> = {};
+    for (const [path, raw] of Object.entries(s.testValues)) {
+      if (raw.trim() === '') continue;
+      const n = Number(raw);
+      values[path] = raw === 'true' ? true : raw === 'false' ? false : Number.isFinite(n) && raw.trim() !== '' ? n : raw;
+    }
+    const cur = useCardStore.getState().card.data.character_book?.entries ?? [];
+    const controllers = cur
+      .filter(e => String(e.content ?? '').includes('<%'))
+      .map(e => ({ name: String(e.comment || `#${e.id}`), code: String(e.content ?? '') }));
+    const report = await simulateActivation(controllers, cur, values, s.testSampleText);
+    s.setSimReport(report);
+  }, []);
 
   return (
     <div className="max-w-4xl mx-auto space-y-4 p-4">
@@ -383,6 +531,17 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary">
                   ~{st.plan.estCalls} call AI
                 </span>
+                {tokensTotal !== 0 && (
+                  <span
+                    title="Ước tính tất định từ độ dài entry và chế độ kích hoạt — hiệu quả thật tuỳ diễn biến chat"
+                    className={`text-[10px] px-2 py-0.5 rounded-full ${
+                      tokensTotal < 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'
+                    }`}>
+                    {tokensTotal < 0
+                      ? `ước tiết kiệm ~${-tokensTotal} token/lượt`
+                      : `ước tăng ~+${tokensTotal} token/lượt`}
+                  </span>
+                )}
               </div>
               <p className="text-xs text-muted-foreground mt-1 whitespace-pre-wrap">{st.plan.scope}</p>
             </div>
@@ -409,64 +568,112 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
             </div>
           ))}
 
-          <div className="space-y-1.5">
-            {rows.map(r => {
-              const rejected = st.decisions[r.id] === 'rejected';
-              return (
-                <div key={r.id}
-                  className={`rounded-lg border p-2.5 transition-colors ${
-                    rejected ? 'border-border/40 bg-muted/10 opacity-50' : 'border-border bg-background/60'
-                  }`}>
-                  <div className="flex items-start gap-2">
-                    <div className="flex-1 min-w-0 space-y-1">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="px-1.5 py-0.5 rounded text-[9px] bg-purple-500/15 text-purple-300">
-                          {ACTION_LABEL[r.action]}
-                        </span>
-                        {r.target === 'character' && (
-                          <span className="px-1.5 py-0.5 rounded text-[9px] bg-orange-500/15 text-orange-300">
-                            Character Definition
+          <div className="space-y-2">
+            {/* (Goal 28/07) Mục được GOM NHÓM theo liên quan (chung biến / getwi tới nhau /
+                cùng chuỗi if-else). Từ chối cả nhóm chỉ đụng nhóm đó; trong nhóm vẫn duyệt
+                từng mục. Mục độc lập đứng riêng, không khung nhóm. */}
+            {groups.map(g => {
+              const gRows = g.rowIds.map(id => rowById.get(id)!).filter(Boolean);
+              const renderRow = (r: EjsPlanRow) => {
+                const rejected = st.decisions[r.id] === 'rejected';
+                return (
+                  <div key={r.id}
+                    className={`rounded-lg border p-2.5 transition-colors ${
+                      rejected ? 'border-border/40 bg-muted/10 opacity-50' : 'border-border bg-background/60'
+                    }`}>
+                    <div className="flex items-start gap-2">
+                      <div className="flex-1 min-w-0 space-y-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="px-1.5 py-0.5 rounded text-[9px] bg-purple-500/15 text-purple-300">
+                            {ACTION_LABEL[r.action]}
                           </span>
+                          {r.target === 'character' && (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] bg-orange-500/15 text-orange-300">
+                              Character Definition
+                            </span>
+                          )}
+                          <span className="text-xs font-medium truncate">{r.name}</span>
+                          {typeof r.tokensDelta === 'number' && r.tokensDelta !== 0 && (
+                            <span className={`px-1.5 py-0.5 rounded text-[9px] ${
+                              r.tokensDelta < 0 ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300'
+                            }`}>
+                              {r.tokensDelta < 0 ? '' : '+'}{r.tokensDelta} token/lượt
+                            </span>
+                          )}
+                        </div>
+
+                        {(r.currentMode || r.proposedMode) && (
+                          <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                            <span className="text-muted-foreground">
+                              {r.currentMode ? ACTIVATION_LABEL[r.currentMode] : '(entry mới)'}
+                            </span>
+                            <ArrowRight className="w-3 h-3 text-muted-foreground/60" />
+                            <span className="text-emerald-400">
+                              {r.proposedMode ? ACTIVATION_LABEL[r.proposedMode] : 'giữ nguyên'}
+                            </span>
+                          </div>
                         )}
-                        <span className="text-xs font-medium truncate">{r.name}</span>
+
+                        <div className="text-[11px]">{r.proposal}</div>
+                        {/* (Goal 28/07) Dòng tách: liệt kê từng entry con + điều kiện — duyệt TRƯỚC khi tách. */}
+                        {r.action === 'split_entry' && r.splitInto?.length ? (
+                          <div className="text-[10px] space-y-0.5 pl-2 border-l-2 border-purple-500/30">
+                            {r.splitInto.map((p2, i2) => (
+                              <div key={i2}>
+                                <span className="text-purple-300">▸ {p2.name}</span>
+                                <span className="text-muted-foreground"> · {ACTIVATION_LABEL[p2.mode]} · {p2.criterion}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+                        <div className="text-[10px] text-muted-foreground">Lý do: {r.reason}</div>
                       </div>
 
-                      {(r.currentMode || r.proposedMode) && (
-                        <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
-                          <span className="text-muted-foreground">
-                            {r.currentMode ? ACTIVATION_LABEL[r.currentMode] : '(entry mới)'}
-                          </span>
-                          <ArrowRight className="w-3 h-3 text-muted-foreground/60" />
-                          <span className="text-emerald-400">
-                            {r.proposedMode ? ACTIVATION_LABEL[r.proposedMode] : 'giữ nguyên'}
-                          </span>
-                          {r.tokensSaved ? (
-                            <span className="text-amber-400/80">· tiết kiệm ~{r.tokensSaved} token/lượt</span>
-                          ) : null}
-                        </div>
-                      )}
-
-                      <div className="text-[11px]">{r.proposal}</div>
-                      <div className="text-[10px] text-muted-foreground">Lý do: {r.reason}</div>
-                    </div>
-
-                    <div className="flex flex-col gap-1 shrink-0">
-                      <button onClick={() => st.setDecision(r.id, 'accepted')} title="Đồng ý mục này"
-                        className={`p-1.5 rounded border transition-colors ${
-                          !rejected ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-400'
-                                    : 'border-border text-muted-foreground hover:bg-muted'
-                        }`}>
-                        <Check className="w-3 h-3" />
-                      </button>
-                      <button onClick={() => st.setDecision(r.id, 'rejected')} title="Từ chối mục này"
-                        className={`p-1.5 rounded border transition-colors ${
-                          rejected ? 'border-red-500/50 bg-red-500/15 text-red-400'
-                                   : 'border-border text-muted-foreground hover:bg-muted'
-                        }`}>
-                        <X className="w-3 h-3" />
-                      </button>
+                      <div className="flex flex-col gap-1 shrink-0">
+                        <button onClick={() => st.setDecision(r.id, 'accepted')} title="Đồng ý mục này"
+                          className={`p-1.5 rounded border transition-colors ${
+                            !rejected ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-400'
+                                      : 'border-border text-muted-foreground hover:bg-muted'
+                          }`}>
+                          <Check className="w-3 h-3" />
+                        </button>
+                        <button onClick={() => st.setDecision(r.id, 'rejected')} title="Từ chối mục này"
+                          className={`p-1.5 rounded border transition-colors ${
+                            rejected ? 'border-red-500/50 bg-red-500/15 text-red-400'
+                                     : 'border-border text-muted-foreground hover:bg-muted'
+                          }`}>
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
                     </div>
                   </div>
+                );
+              };
+
+              if (gRows.length === 1) return renderRow(gRows[0]);
+
+              const allRejected = gRows.every(r => st.decisions[r.id] === 'rejected');
+              return (
+                <div key={g.id} className="rounded-xl border border-sky-500/30 bg-sky-500/5 p-2 space-y-1.5">
+                  <div className="flex items-center gap-2 px-1">
+                    <span className="text-[10px] font-semibold text-sky-300">🧩 {g.label}</span>
+                    <span className="text-[9px] text-muted-foreground truncate flex-1" title={g.reasons.join('\n')}>
+                      {g.reasons[0] ?? ''}
+                    </span>
+                    <button
+                      onClick={() => st.setDecisions(g.rowIds, allRejected ? 'accepted' : 'rejected')}
+                      title={allRejected
+                        ? 'Đồng ý lại cả nhóm này'
+                        : 'Từ chối cả nhóm này — chỉ ảnh hưởng các mục trong nhóm, không lan sang nhóm khác'}
+                      className={`px-2 py-0.5 rounded text-[9px] border transition-colors shrink-0 ${
+                        allRejected
+                          ? 'border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10'
+                          : 'border-red-500/40 text-red-400 hover:bg-red-500/10'
+                      }`}>
+                      {allRejected ? 'Đồng ý cả nhóm' : 'Từ chối cả nhóm'}
+                    </button>
+                  </div>
+                  {gRows.map(renderRow)}
                 </div>
               );
             })}
@@ -556,6 +763,105 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
               </pre>
             </div>
           ))}
+
+          {/* ═══ (Goal 28/07) TRƯỚC / SAU — xem máy đã đổi GÌ, không chỉ tên ═══ */}
+          {st.beforeAfter.length > 0 && (
+            <div className="space-y-2">
+              <div className="text-xs font-semibold flex items-center gap-1.5">
+                <ArrowRight className="w-3.5 h-3.5 text-sky-400" /> Trước / Sau ({st.beforeAfter.length} thay đổi)
+              </div>
+              {st.beforeAfter.map((ba, i) => (
+                <details key={i} className="rounded-lg border border-border overflow-hidden">
+                  <summary className="px-3 py-1.5 text-[11px] cursor-pointer bg-muted/20 flex items-center gap-2">
+                    <span className={`px-1.5 py-0.5 rounded text-[9px] ${
+                      ba.kind === 'created' ? 'bg-emerald-500/15 text-emerald-300'
+                      : ba.kind === 'split' ? 'bg-purple-500/15 text-purple-300'
+                      : ba.kind === 'ref_patched' ? 'bg-sky-500/15 text-sky-300'
+                      : 'bg-amber-500/15 text-amber-300'
+                    }`}>
+                      {ba.kind === 'created' ? 'Tạo mới' : ba.kind === 'split' ? 'Tách' : ba.kind === 'ref_patched' ? 'Vá tham chiếu' : 'Đổi kích hoạt'}
+                    </span>
+                    <span className="font-medium truncate">{ba.name}</span>
+                  </summary>
+                  <div className="grid sm:grid-cols-2 gap-px bg-border">
+                    <div className="bg-background/60 p-2">
+                      <div className="text-[9px] uppercase text-muted-foreground mb-1">Trước</div>
+                      <pre className="text-[9px] font-mono whitespace-pre-wrap max-h-40 overflow-y-auto scrollbar-thin">{ba.before}</pre>
+                    </div>
+                    <div className="bg-background/60 p-2">
+                      <div className="text-[9px] uppercase text-emerald-400/80 mb-1">Sau</div>
+                      <pre className="text-[9px] font-mono whitespace-pre-wrap max-h-40 overflow-y-auto scrollbar-thin">{ba.after}</pre>
+                    </div>
+                  </div>
+                </details>
+              ))}
+            </div>
+          )}
+
+          {/* ═══ (Goal 28/07) TEST MODE — thử điều kiện kích hoạt ngay trong tool ═══ */}
+          <div className="rounded-lg border border-border p-3 space-y-2">
+            <div className="text-xs font-semibold">🧪 Test mode — thử xem entry nào kích hoạt</div>
+            <p className="text-[10px] text-muted-foreground">
+              Giá trị đề xuất lấy từ CHÍNH các mốc so sánh trong code (tại mốc và hai phía ranh giới).
+              Nhập giá trị muốn thử rồi bấm Chạy thử — mô phỏng ngay trong tool, không cần ra chat thật.
+            </p>
+            {testProposals.length === 0 && (
+              <p className="text-[10px] text-muted-foreground">Không tìm thấy điều kiện đọc biến nào trong các khối EJS của card.</p>
+            )}
+            {testProposals.map(tp => (
+              <div key={tp.path} className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[10px] font-mono text-sky-300 min-w-[120px]">{tp.path}</span>
+                <input
+                  value={st.testValues[tp.path] ?? ''}
+                  onChange={e => st.setTestValue(tp.path, e.target.value)}
+                  placeholder="giá trị thử"
+                  className="px-2 py-1 text-[10px] rounded border border-border bg-background w-28 focus:outline-none focus:ring-1 focus:ring-emerald-500/30"
+                />
+                <span className="text-[9px] text-muted-foreground">gợi ý:</span>
+                {tp.values.slice(0, 6).map((v, i) => (
+                  <button key={i} onClick={() => st.setTestValue(tp.path, String(v))}
+                    title={tp.fromConditions.join(' · ')}
+                    className="px-1.5 py-0.5 rounded text-[9px] border border-border hover:bg-muted transition-colors font-mono">
+                    {String(v)}
+                  </button>
+                ))}
+              </div>
+            ))}
+            <div className="flex items-center gap-2">
+              <input
+                value={st.testSampleText}
+                onChange={e => st.setTestSampleText(e.target.value)}
+                placeholder="(tuỳ chọn) đoạn chat mẫu — để thử entry kích hoạt theo từ khoá"
+                className="flex-1 px-2 py-1 text-[10px] rounded border border-border bg-background focus:outline-none focus:ring-1 focus:ring-emerald-500/30"
+              />
+              <button onClick={handleSimulate}
+                className="px-3 py-1.5 rounded-lg text-[10px] font-medium bg-emerald-600/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-600/30 transition-colors">
+                ▶ Chạy thử
+              </button>
+            </div>
+            {st.simReport && (
+              <div className="space-y-1 pt-1 border-t border-border/50">
+                {st.simReport.errors.map((e, i) => (
+                  <p key={`e${i}`} className="text-[10px] text-red-400">❌ Lỗi khi chạy controller {e}</p>
+                ))}
+                {st.simReport.missingVars.length > 0 && (
+                  <p className="text-[10px] text-amber-400/90">
+                    ⚠️ Controller đọc các biến chưa nhập giá trị: {st.simReport.missingVars.join(', ')} (đang dùng giá trị mặc định).
+                  </p>
+                )}
+                <div className="grid sm:grid-cols-2 gap-1">
+                  {st.simReport.results.map((r, i) => (
+                    <div key={i} className={`px-2 py-1 rounded text-[10px] flex items-start gap-1.5 ${
+                      r.activated ? 'bg-emerald-500/10 text-emerald-300' : 'bg-muted/20 text-muted-foreground'
+                    }`}>
+                      <span>{r.activated ? '✅' : '⬜'}</span>
+                      <span className="min-w-0"><b>{r.entry}</b> — {r.via}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

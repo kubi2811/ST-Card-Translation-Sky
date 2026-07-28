@@ -45,9 +45,20 @@ export type PlanAction =
   | 'create_ejs'        // tạo entry EJS mới (controller, hiển thị biến…)
   | 'reclassify'        // đổi chế độ kích hoạt của entry sẵn có
   | 'edit_content'      // sửa nội dung entry sẵn có
-  | 'edit_character';   // sửa trường Character Definition
+  | 'edit_character'    // sửa trường Character Definition
+  | 'split_entry';      // (Goal 28/07) tách 1 entry gộp thành nhiều entry độc lập
 
 export type PlanTarget = 'lorebook' | 'character';
+
+/** (Goal 28/07) MỘT entry con khi tách — khai TRƯỚC trong kế hoạch để user duyệt. */
+export interface SplitPart {
+  /** Tên entry mới. */
+  name: string;
+  /** Chế độ kích hoạt của entry mới. */
+  mode: ActivationMode;
+  /** Điều kiện/thời điểm kích hoạt — user đọc để duyệt ("tháng 3", "khi tới Vọng Nguyệt Lâu"…). */
+  criterion: string;
+}
 
 /** MỘT DÒNG trong bảng kế hoạch — đơn vị user duyệt/từ chối. */
 export interface EjsPlanRow {
@@ -70,6 +81,13 @@ export interface EjsPlanRow {
   varsUsed?: string[];
   /** Ước lượng token tiết kiệm được mỗi lượt nếu áp dòng này (constant → có điều kiện). */
   tokensSaved?: number;
+  /** (Goal 28/07) action='split_entry': các entry con sẽ tách ra — hiện trong bảng để duyệt TRƯỚC. */
+  splitInto?: SplitPart[];
+  /**
+   * (Goal 28/07) Ước token TĂNG/GIẢM mỗi lượt nếu áp dòng này (âm = tiết kiệm).
+   * Là ƯỚC LƯỢNG tất định từ dữ liệu đo được, hiện trong bảng để user thấy hiệu quả trước khi duyệt.
+   */
+  tokensDelta?: number;
 }
 
 /** Kế hoạch đầy đủ — thay cho AgentPlan văn xuôi của bản cũ. */
@@ -104,6 +122,73 @@ export function estimateEntryTokens(entry: LorebookEntry): number {
   const text = String(entry.content ?? '');
   const cjk = (text.match(/[一-鿿]/g) ?? []).length;
   return Math.round(cjk + (text.length - cjk) / 4);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// (Goal 28/07) ENTRY MVU — KHÔNG áp "Tiết kiệm Token" vào đây
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Entry thuộc BỘ MÁY MVU/EJS của card: [initvar], quy tắc cập nhật, danh sách biến, khối EJS,
+ * entry chứa <UpdateVariable>. Hạ cấp/tắt chúng để "tiết kiệm token" là phá hệ biến của card
+ * (initvar tắt là đúng chuẩn nhưng đổi chế độ nó vẫn là phá; quy tắc cập nhật mà kích hoạt
+ * theo từ khoá thì AI trong game không còn biết cách cập nhật biến). User dặn thẳng:
+ * "Tính năng Tiết kiệm Token không nên áp dụng vào các entry MVU".
+ */
+const MVU_NAME_HINT =
+  /(\[initvar\]|initvar|update\s*rules?|quy\s*t[aắ]c\s*c[aậ]p\s*nh[aậ]t|variable\s*list|danh\s*s[aá]ch\s*bi[eế]n|update\s*variable|变量|更新规则|初始化)/i;
+
+export function isMvuCriticalEntry(entry: LorebookEntry): boolean {
+  const name = String(entry.comment ?? '');
+  if (MVU_NAME_HINT.test(name)) return true;
+  const body = String(entry.content ?? '');
+  // Khối EJS (@@preprocessing / thẻ <% %>) là code chạy, không phải lore để hạ cấp.
+  if (body.includes('@@preprocessing') || body.includes('<%')) return true;
+  // Entry dạy định dạng <UpdateVariable> hoặc khởi tạo stat_data.
+  if (/<\/?UpdateVariable>|<\/?JSONPatch>/i.test(body)) return true;
+  if (/\bstat_data\b/.test(body) && /(_.set\(|"op"\s*:|'op'\s*:)/.test(body)) return true;
+  return false;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// (Goal 28/07) ƯỚC TOKEN TĂNG/GIẢM CHO TỪNG DÒNG KẾ HOẠCH
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Khối controller EJS chạy ngầm — chi phí prompt nhỏ, lấy ước lượng cố định. */
+export const EJS_BLOCK_OVERHEAD_TOKENS = 40;
+
+/**
+ * Ước token TĂNG/GIẢM mỗi lượt của một dòng kế hoạch (âm = tiết kiệm). Chỉ là ước lượng
+ * tất định từ dữ liệu đo được — nêu rõ trong UI, không hứa con số chính xác:
+ *  • reclassify RỜI constant  → −token(entry): entry không còn bị nhồi mọi lượt.
+ *  • reclassify VỀ constant   → +token(entry).
+ *  • split_entry (gốc constant, N phần) → −token×(N−1)/N: coi như trung bình 1 phần kích hoạt.
+ *  • create_ejs → +EJS_BLOCK_OVERHEAD_TOKENS.
+ *  • edit_content / edit_character → 0 (chưa biết nội dung mới dài bao nhiêu).
+ */
+export function estimateRowTokensDelta(
+  row: Pick<EjsPlanRow, 'action' | 'currentMode' | 'proposedMode' | 'splitInto'>,
+  existing: LorebookEntry | undefined,
+): number {
+  const tokens = existing ? estimateEntryTokens(existing) : 0;
+  switch (row.action) {
+    case 'reclassify': {
+      if (!existing || !row.proposedMode || row.proposedMode === row.currentMode) return 0;
+      if (row.currentMode === 'constant' && row.proposedMode !== 'constant') return -tokens;
+      if (row.currentMode !== 'constant' && row.proposedMode === 'constant') return tokens;
+      return 0;
+    }
+    case 'split_entry': {
+      const n = row.splitInto?.length ?? 0;
+      if (!existing || n < 2) return 0;
+      if (row.currentMode === 'constant') return -Math.round((tokens * (n - 1)) / n);
+      return 0; // gốc đã kích hoạt có điều kiện — tách không đổi tổng lượng nạp
+    }
+    case 'create_ejs':
+      return EJS_BLOCK_OVERHEAD_TOKENS;
+    default:
+      return 0;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -205,6 +290,8 @@ export function suggestReclassification(
   for (const e of entries) {
     if (detectActivationMode(e) !== 'constant') continue;
     if (isUiEntry(e)) continue;
+    // (Goal 28/07) Entry thuộc bộ máy MVU/EJS: không bao giờ đề xuất hạ cấp để tiết kiệm token.
+    if (isMvuCriticalEntry(e)) continue;
     const name = e.comment || `#${e.id}`;
     const tokens = estimateEntryTokens(e);
 

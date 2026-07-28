@@ -15,6 +15,7 @@
 import { create } from 'zustand';
 import type { EjsRichPlan } from '../lib/ejs/ejsPlanModel';
 import type { EjsDraft } from '../lib/ejs/ejsAgent';
+import type { SimulationReport } from '../lib/ejs/ejsTestMode';
 
 export type EjsPhase = 'idle' | 'planning' | 'review' | 'running' | 'done';
 
@@ -25,6 +26,18 @@ export interface EjsUndoInfo {
   createdEntryIds: number[];
   /** id entry → trạng thái enabled TRƯỚC khi ta đụng vào. */
   changedEntries: Array<{ id: number; enabled: boolean; constant: boolean; keys: string[] }>;
+  /** (Goal 28/07) entry bị SỬA NỘI DUNG (vá tham chiếu getwi) — content cũ để hoàn tác. */
+  changedContents?: Array<{ id: number; content: string }>;
+}
+
+/** (Goal 28/07) Một mục "trước/sau" — user xem được máy đã đổi GÌ, không chỉ tên. */
+export interface BeforeAfterItem {
+  name: string;
+  kind: 'created' | 'reclassified' | 'split' | 'ref_patched';
+  /** Trạng thái/nội dung TRƯỚC (rút gọn). */
+  before: string;
+  /** Trạng thái/nội dung SAU (rút gọn). */
+  after: string;
 }
 
 interface EjsStudioState {
@@ -40,11 +53,27 @@ interface EjsStudioState {
   /** Card mà kế hoạch này thuộc về — đổi card thì kế hoạch cũ vô nghĩa. */
   cardKey: string;
 
+  /** (Goal 28/07) Trước/sau từng đối tượng đã đổi trong lượt chạy. */
+  beforeAfter: BeforeAfterItem[];
+  /** (Goal 28/07) Test mode: giá trị biến user đang thử (path → chuỗi nhập). */
+  testValues: Record<string, string>;
+  /** (Goal 28/07) Test mode: đoạn chat mẫu để so từ khoá. */
+  testSampleText: string;
+  /** (Goal 28/07) Kết quả mô phỏng gần nhất. */
+  simReport: SimulationReport | null;
+
   setGoal: (v: string) => void;
   setPhase: (p: EjsPhase) => void;
   setPlan: (p: EjsRichPlan | null, cardKey: string) => void;
   setDecision: (rowId: string, d: RowDecision) => void;
   setAllDecisions: (d: RowDecision) => void;
+  /** (Goal 28/07) Từ chối/đồng ý CẢ NHÓM — chỉ đụng đúng các row trong nhóm, không lan. */
+  setDecisions: (rowIds: string[], d: RowDecision) => void;
+  setBeforeAfter: (items: BeforeAfterItem[]) => void;
+  pushBeforeAfter: (item: BeforeAfterItem) => void;
+  setTestValue: (path: string, v: string) => void;
+  setTestSampleText: (v: string) => void;
+  setSimReport: (r: SimulationReport | null) => void;
   pushProgress: (line: string) => void;
   setProgress: (lines: string[]) => void;
   setDrafts: (d: EjsDraft[]) => void;
@@ -69,6 +98,10 @@ const EMPTY = {
   drafts: [] as EjsDraft[],
   error: null,
   undo: null,
+  beforeAfter: [] as BeforeAfterItem[],
+  testValues: {} as Record<string, string>,
+  testSampleText: '',
+  simReport: null as SimulationReport | null,
 };
 
 export const useEjsStudioStore = create<EjsStudioState>((set, get) => ({
@@ -86,9 +119,24 @@ export const useEjsStudioStore = create<EjsStudioState>((set, get) => ({
     drafts: [],
     undo: null,
     error: null,
+    beforeAfter: [],
+    testValues: {},
+    simReport: null,
   }),
 
   setDecision: (rowId, d) => set(s => ({ decisions: { ...s.decisions, [rowId]: d } })),
+
+  setDecisions: (rowIds, d) => set(s => {
+    const next = { ...s.decisions };
+    for (const id of rowIds) next[id] = d;
+    return { decisions: next };
+  }),
+
+  setBeforeAfter: (items) => set({ beforeAfter: items }),
+  pushBeforeAfter: (item) => set(s => ({ beforeAfter: [...s.beforeAfter, item] })),
+  setTestValue: (path, v) => set(s => ({ testValues: { ...s.testValues, [path]: v } })),
+  setTestSampleText: (v) => set({ testSampleText: v }),
+  setSimReport: (r) => set({ simReport: r }),
 
   setAllDecisions: (d) => set(s => {
     const next: Record<string, RowDecision> = {};
@@ -104,7 +152,10 @@ export const useEjsStudioStore = create<EjsStudioState>((set, get) => ({
 
   reset: () => set({ ...EMPTY }),
 
-  resetRunOnly: () => set({ drafts: [], progress: [], undo: null, error: null, phase: 'review' }),
+  resetRunOnly: () => set({
+    drafts: [], progress: [], undo: null, error: null, phase: 'review',
+    beforeAfter: [], simReport: null,
+  }),
 
   ensureCard: (cardKey) => {
     if (get().cardKey && get().cardKey !== cardKey) set({ ...EMPTY, cardKey });

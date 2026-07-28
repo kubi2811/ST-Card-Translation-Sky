@@ -29,10 +29,10 @@ import { validateEJSEntry } from './ejsParser';
 import { STPT_API_PROMPT_BLOCK } from './stptApi';
 import {
   detectActivationMode, estimateEntryTokens, suggestReclassification, detectExistingStatusUi,
-  ACTIVATION_LABEL,
-  type ActivationMode, type EjsPlanRow, type EjsRichPlan, type PlanAction, type PlanTarget,
+  ACTIVATION_LABEL, isMvuCriticalEntry, estimateRowTokensDelta,
+  type ActivationMode, type EjsPlanRow, type EjsRichPlan, type PlanAction, type PlanTarget, type SplitPart,
 } from './ejsPlanModel';
-import { findCollisions, autopatchCollisions, type EjsBlock } from './ejsCollision';
+import { findCollisions, autopatchCollisions, findActivationOverlaps, scanKeywordOverlap, type EjsBlock } from './ejsCollision';
 
 // ═══ Kiểu dữ liệu ═════════════════════════════════════════════════════════
 
@@ -186,6 +186,14 @@ ${STPT_API_PROMPT_BLOCK}
 6. Nếu ngữ cảnh báo card ĐÃ CÓ thanh trạng thái thì TUYỆT ĐỐI không tạo thanh mới.
 7. Các khối EJS bạn tạo KHÔNG ĐƯỢC ĐỤNG NHAU: mỗi khối một tên entry riêng; biến đọc từ hai
    đường dẫn khác nhau thì PHẢI đặt hai tên khác nhau (mọi khối chạy chung một context).
+8. KHÔNG áp "tiết kiệm token" vào entry thuộc BỘ MÁY MVU ([initvar], quy tắc cập nhật biến,
+   danh sách biến, khối EJS sẵn có, entry dạy <UpdateVariable>): không reclassify, không tắt,
+   không hạ cấp chúng — đổi chế độ kích hoạt của chúng là phá hệ biến của card.
+9. TÁCH ENTRY GỘP (action "split_entry"): entry nhồi nhiều phần có ĐIỀU KIỆN KÍCH HOẠT KHÁC
+   NHAU và ĐỘC LẬP (vd 15 sự kiện của 12 tháng chung một entry) thì đề xuất tách, khai rõ
+   "splitInto": từng entry con + chế độ + điều kiện kích hoạt của nó. KHÔNG tách nội dung
+   luôn đi cùng nhau. Việc tách chỉ được thực hiện sau khi user duyệt dòng này — tham chiếu
+   getwi tới entry gốc sẽ được máy tự vá theo các entry mới.
 
 Trả về DUY NHẤT JSON:
 {
@@ -193,23 +201,27 @@ Trả về DUY NHẤT JSON:
   "rows": [
     {
       "id": "r1",
-      "action": "create_ejs" | "reclassify" | "edit_content" | "edit_character",
+      "action": "create_ejs" | "reclassify" | "edit_content" | "edit_character" | "split_entry",
       "target": "lorebook" | "character",
       "name": "TÊN CHÍNH XÁC của entry/trường",
       "proposedMode": "constant" | "keyword" | "conditional" | "disabled" | null,
       "proposal": "một câu: sẽ làm gì với dòng này",
       "reason": "vì sao nên làm — cụ thể, dựa vào nội dung/biến thật của card",
       "requirement": "chỉ dẫn CỤ THỂ cho bước sinh code: khối EJS làm gì, đọc biến nào, bật entry nào",
-      "varsUsed": ["stat_data.đường.dẫn"]
+      "varsUsed": ["stat_data.đường.dẫn"],
+      "splitInto": [
+        { "name": "Tên entry con", "mode": "keyword" | "conditional" | "constant", "criterion": "điều kiện/thời điểm kích hoạt của phần này" }
+      ]
     }
   ],
   "notes": ["lưu ý cho user nếu có"]
 }
-Dòng chỉ đổi chế độ kích hoạt (action "reclassify") thì "requirement" để chuỗi rỗng.`;
+Dòng chỉ đổi chế độ kích hoạt (action "reclassify") thì "requirement" để chuỗi rỗng.
+"splitInto" CHỈ dùng cho action "split_entry" (≥ 2 phần); action khác bỏ key này.`;
 
 // ═══ Kế hoạch chi tiết ════════════════════════════════════════════════════
 
-const ACTIONS: PlanAction[] = ['create_ejs', 'reclassify', 'edit_content', 'edit_character'];
+const ACTIONS: PlanAction[] = ['create_ejs', 'reclassify', 'edit_content', 'edit_character', 'split_entry'];
 const MODES: ActivationMode[] = ['constant', 'keyword', 'conditional', 'disabled'];
 
 function parseRichPlan(raw: string, ctx: EjsAgentContext): EjsRichPlan {
@@ -221,6 +233,7 @@ function parseRichPlan(raw: string, ctx: EjsAgentContext): EjsRichPlan {
 
   const byName = new Map<string, LorebookEntry>();
   for (const e of ctx.entries) byName.set(String(e.comment || `#${e.id}`).trim().toLowerCase(), e);
+  const warnings: string[] = [];
 
   const rows: EjsPlanRow[] = (p.rows ?? [])
     .filter(r => r && String(r.name ?? '').trim())
@@ -232,7 +245,19 @@ function parseRichPlan(raw: string, ctx: EjsAgentContext): EjsRichPlan {
       const proposed = MODES.includes(r.proposedMode as ActivationMode) ? (r.proposedMode as ActivationMode) : null;
       // Hiện trạng lấy từ CARD, không lấy từ lời AI khai — AI hay nói sai chỗ này.
       const currentMode = existing ? detectActivationMode(existing) : null;
-      return {
+
+      // (Goal 28/07) splitInto — chỉ có nghĩa cho split_entry, và phải ≥ 2 phần có tên.
+      const splitInto: SplitPart[] | undefined = action === 'split_entry'
+        ? (Array.isArray(r.splitInto) ? r.splitInto : [])
+            .filter((x): x is Record<string, unknown> => !!x && !!String((x as Record<string, unknown>).name ?? '').trim())
+            .map(x => ({
+              name: String(x.name).trim(),
+              mode: MODES.includes(x.mode as ActivationMode) ? (x.mode as ActivationMode) : 'keyword',
+              criterion: String(x.criterion ?? '').trim() || '(AI không nêu điều kiện)',
+            }))
+        : undefined;
+
+      const row: EjsPlanRow = {
         id: String(r.id || `r${i + 1}`),
         action, target, name,
         currentMode,
@@ -245,11 +270,37 @@ function parseRichPlan(raw: string, ctx: EjsAgentContext): EjsRichPlan {
           existing && currentMode === 'constant' && proposed && proposed !== 'constant'
             ? estimateEntryTokens(existing)
             : undefined,
+        splitInto,
       };
+      // Dòng tách hiện đúng khuôn user yêu cầu: "sẽ tách Entry X thành N Entry: tên 1, tên 2…"
+      if (action === 'split_entry' && splitInto?.length) {
+        row.proposal = `Sẽ tách "${name}" thành ${splitInto.length} entry: ${splitInto.map(s => s.name).join(', ')}.`;
+      }
+      row.tokensDelta = estimateRowTokensDelta(row, existing);
+      return row;
+    })
+    // (Goal 28/07) "Tiết kiệm Token" KHÔNG áp vào entry MVU: dòng reclassify/tắt trỏ vào entry
+    // thuộc bộ máy MVU bị LOẠI khỏi kế hoạch, kèm cảnh báo nói rõ — không âm thầm.
+    .filter(row => {
+      if (row.target !== 'lorebook' || (row.action !== 'reclassify' && row.action !== 'split_entry')) return true;
+      const existing = byName.get(row.name.trim().toLowerCase());
+      if (existing && isMvuCriticalEntry(existing)) {
+        warnings.push(`Đã loại mục "${row.name}": entry thuộc bộ máy MVU ([initvar]/quy tắc cập nhật/khối EJS…) — không áp Tiết kiệm Token hay tách vào đây.`);
+        return false;
+      }
+      // split_entry đòi ≥ 2 phần mới có nghĩa.
+      if (row.action === 'split_entry' && (row.splitInto?.length ?? 0) < 2) {
+        warnings.push(`Đã loại mục tách "${row.name}": AI không khai đủ ≥ 2 entry con trong splitInto.`);
+        return false;
+      }
+      if (row.action === 'split_entry' && !existing) {
+        warnings.push(`Đã loại mục tách "${row.name}": không tìm thấy entry này trong card.`);
+        return false;
+      }
+      return true;
     });
 
   // Cảnh báo do MÁY phát hiện — độc lập với việc AI có nói hay không.
-  const warnings: string[] = [];
   const ui = detectExistingStatusUi(ctx.entries, ctx.regexScripts ?? [], ctx.tavernScripts ?? []);
   if (ui.hasStatusUi) {
     warnings.push(`Card đã có thanh trạng thái sẵn (${ui.places.slice(0, 3).join('; ')}) — kế hoạch không nên tạo thêm cái mới.`);
@@ -276,13 +327,18 @@ function parseRichPlan(raw: string, ctx: EjsAgentContext): EjsRichPlan {
     );
   }
 
-  const codeRows = rows.filter(r => r.requirement).length;
+  // (Goal 28/07) Rà từ khoá trùng/bao nhau giữa các entry keyword của card — có thì báo,
+  // sạch thì thôi (không nặn lỗi để có cái vá).
+  warnings.push(...scanKeywordOverlap(ctx.entries));
+
+  const codeRows = rows.filter(r => r.action !== 'split_entry' && r.requirement).length;
+  const splitRows = rows.filter(r => r.action === 'split_entry').length;
   return {
     scope: p.scope || '(AI không mô tả phạm vi)',
     rows,
     notes: Array.isArray(p.notes) ? p.notes.filter(Boolean).map(String) : [],
     warnings,
-    estCalls: 1 + codeRows,
+    estCalls: 1 + codeRows + splitRows,
   };
 }
 
@@ -312,7 +368,8 @@ export async function planEjsRich(
  */
 export function buildAgentPlanFromRows(plan: EjsRichPlan, acceptedIds: Set<string>): AgentPlan {
   const steps: AgentStepSpec[] = plan.rows
-    .filter(r => acceptedIds.has(r.id) && r.requirement)
+    // split_entry đi đường thực thi riêng (ejsSplit) — không phải bước sinh code EJS.
+    .filter(r => acceptedIds.has(r.id) && r.requirement && r.action !== 'split_entry')
     .map(r => ({
       id: r.id,
       title: r.name,
@@ -408,6 +465,10 @@ export function createEjsDomain(ctx: EjsAgentContext): GoalAgentDomain<EjsDraft>
       ];
       for (const c of findCollisions(blocks)) {
         issues.push({ level: 'error', code: c.code, message: c.message, where: c.where });
+      }
+      // (Goal 28/07) Hai khối cùng BẬT một entry — có thể cố ý nên chỉ CẢNH BÁO, không chặn.
+      for (const c of findActivationOverlaps(blocks)) {
+        issues.push({ level: 'warning', code: c.code, message: c.message, where: c.where });
       }
 
       return issues;

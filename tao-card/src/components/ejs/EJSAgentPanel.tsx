@@ -16,7 +16,7 @@
  *     kèm nút "Làm lại từ đầu" khi user muốn xoá sạch.
  *   • Nút áp chính sách sang Auto Creator, chỉ bật khi card đã tạo xong.
  */
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot, Loader2, Play, Undo2, AlertTriangle, Check, X, BookPlus,
   ListChecks, Square, RotateCcw, Info, ArrowRight,
@@ -35,8 +35,15 @@ import {
   type EjsDraft, type EjsAgentContext,
 } from '../../lib/ejs/ejsAgent';
 import { ACTIVATION_LABEL, findOrphanConditionalEntries, type EjsPlanRow } from '../../lib/ejs/ejsPlanModel';
-import { QUICK_PRESETS } from '../../lib/ejs/ejsQuickPresets';
+import { QUICK_PRESETS, PRESET_GROUP_LABEL, type PresetGroup } from '../../lib/ejs/ejsQuickPresets';
+
+/** Thứ tự nhóm preset hiện trên màn — đi từ việc hay dùng nhất tới việc nâng cao. */
+const PRESET_GROUP_ORDER: PresetGroup[] = ['all', 'condition', 'mvu', 'ui', 'bigdata', 'dynamic', 'orchestrate'];
 import { groupPlanRows, extractEntryRefs } from '../../lib/ejs/ejsPlanGroups';
+import {
+  buildEditMessages, parseEditResponse, verifyEdit,
+  resolveCharacterField, characterFieldLabel, EDITABLE_CHARACTER_FIELDS,
+} from '../../lib/ejs/ejsEditActions';
 import { buildSplitMessages, parseSplitResponse } from '../../lib/ejs/ejsSplit';
 import { scanBrokenRefs, rewriteRefs, fuzzyRepairMapping } from '../../lib/ejs/ejsRefIntegrity';
 import { proposeTestValues, simulateActivation } from '../../lib/ejs/ejsTestMode';
@@ -66,6 +73,8 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
 
   const st = useEjsStudioStore();
   const abortRef = useRef<AbortController | null>(null);
+  // (bugNeedFix/147) Preset nào đang mở phần giải thích đầy đủ (chỉ một cái một lúc).
+  const [expandedPreset, setExpandedPreset] = useState<string | null>(null);
 
   // Đổi card → kế hoạch cũ trỏ vào entry của card khác nên phải bỏ (xem ejsStudioStore).
   const cardKey = card.data.name || '(chưa đặt tên)';
@@ -164,6 +173,14 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
     };
     // (Goal 28/07) Mapping tên cũ → tên mới (tách/đổi tên) — nguồn để vá tham chiếu getwi.
     const refMapping = new Map<string, string[]>();
+    // (bugNeedFix/147 — mục 1&2) SỔ GHI THẬT: đếm đúng số thay đổi ĐÃ VÀO CARD, và gom lý do
+    // của những dòng KHÔNG vào được. Trước đây chạy xong là phase 'done' vô điều kiện, khối
+    // "✅ Hoàn thành" hiện kèm code in đẹp, trong khi card có thể không đổi một chữ nào —
+    // đúng thứ user tả: "báo đã tạo/chạy được nhưng thực tế không có entry nào được sửa/tạo".
+    let writes = 0;
+    const blockedReasons: string[] = [];
+    // Bản cũ của các trường Character Definition bị sửa — để nút Hoàn tác trả lại được.
+    const charEdits: Array<{ field: string; before: string }> = [];
     // Phần tách mang mode 'conditional' (tắt sẵn, chờ controller) — phải soát mồ côi kiểu bug 127.
     const conditionalParts: string[] = [];
     s.setBeforeAfter([]);
@@ -174,8 +191,20 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
       let reclassified = 0;
       for (const r of plan.rows) {
         if (!accepted.has(r.id) || r.action !== 'reclassify' || r.target !== 'lorebook') continue;
-        const target = byName.get(r.name.trim().toLowerCase());
-        if (!target || !r.proposedMode) continue;
+        // (bugNeedFix/147) Khớp tên trước đây là so khớp CHÍNH XÁC (chỉ trim+lowercase). AI trả
+        // tên kèm dấu nháy, thêm tiền tố "Entry: ", sai một dấu — cả dòng biến mất không dấu vết.
+        // Nay: thử khớp gần (bỏ dấu nháy/tiền tố) rồi mới chịu thua, và thua thì NÓI RA.
+        const target = byName.get(r.name.trim().toLowerCase())
+          ?? byName.get(r.name.trim().toLowerCase().replace(/^["'\u201C\u2018]|["'\u201D\u2019]$/g, '').replace(/^(entry|mục)\s*[:\-]\s*/i, '').trim());
+        if (!target) {
+          blockedReasons.push(`Không tìm thấy entry tên "${r.name}" trong thẻ — AI có thể đã ghi sai tên. Dòng này bị bỏ qua.`);
+          s.pushProgress(`⚠️ Bỏ qua đổi chế độ "${r.name}" — không có entry nào tên như vậy trong thẻ.`);
+          continue;
+        }
+        if (!r.proposedMode) {
+          blockedReasons.push(`Dòng "${r.name}" không nêu chế độ kích hoạt đề xuất — không biết đổi sang gì.`);
+          continue;
+        }
         snap(target);
         // 'conditional' = entry TẮT sẵn, chờ controller EJS gọi activewi bật lên (xem stptApi).
         const patch =
@@ -185,6 +214,7 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
           : { enabled: false };
         useCardStore.getState().updateEntry(target.id, patch);
         reclassified++;
+        writes++;
         s.pushProgress(`⚙️ "${r.name}" → ${ACTIVATION_LABEL[r.proposedMode]}`);
         s.pushBeforeAfter({
           name: r.name, kind: 'reclassified',
@@ -233,6 +263,7 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
             };
             addEntry(newEntry);
             createdIds.push(newId);
+            writes++;
             cur = [...cur, newEntry];
             newNames.push(part.comment);
             if (part.mode === 'conditional') conditionalParts.push(part.comment);
@@ -249,6 +280,81 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
         } catch (e) {
           if (e instanceof DOMException && e.name === 'AbortError') throw e;
           s.pushProgress(`⚠️ Tách "${r.name}" thất bại: ${e instanceof Error ? e.message : String(e)} — entry gốc giữ nguyên.`);
+        }
+      }
+
+      // ═══ 2a-ter. (bugNeedFix/147) SỬA NỘI DUNG CÓ SẴN — entry lorebook & Character Definition ═══
+      // Hai action này trước đây KHÔNG có đường ghi nào: chúng rơi thẳng vào bước sinh khối EJS
+      // mới, nên kết quả là tạo thêm một entry lạ còn entry gốc / phần mô tả nhân vật không đổi
+      // một chữ. Cũng chính là thứ user xin ở bug 126 ("cho AI xử lý luôn Character Definition").
+      // Sửa ĐÈ lên văn bản người ta viết là thao tác phá huỷ ⇒ qua verifyEdit mới được ghi.
+      const editRows = plan.rows.filter(r =>
+        accepted.has(r.id) && (r.action === 'edit_content' || r.action === 'edit_character'));
+      for (const r of editRows) {
+        if (ac.signal.aborted) throw new DOMException('Aborted', 'AbortError');
+        if (!r.requirement) {
+          blockedReasons.push(`Dòng "${r.name}" không nêu rõ cần sửa gì — bỏ qua.`);
+          continue;
+        }
+        const isChar = r.action === 'edit_character';
+        const card = useCardStore.getState().card;
+        let current = '';
+        let field: string | null = null;
+        let entryTarget: LorebookEntry | undefined;
+
+        if (isChar) {
+          field = resolveCharacterField(r.name);
+          if (!field) {
+            blockedReasons.push(
+              `Không rõ "${r.name}" là trường nào của nhân vật — chỉ sửa được: ${EDITABLE_CHARACTER_FIELDS.join(', ')}.`);
+            s.pushProgress(`⚠️ Bỏ qua "${r.name}" — không phải trường Character Definition hợp lệ.`);
+            continue;
+          }
+          current = String((card.data as unknown as Record<string, unknown>)[field] ?? '');
+        } else {
+          entryTarget = byName.get(r.name.trim().toLowerCase());
+          if (!entryTarget) {
+            blockedReasons.push(`Không tìm thấy entry "${r.name}" để sửa nội dung.`);
+            s.pushProgress(`⚠️ Bỏ qua sửa nội dung "${r.name}" — không có entry nào tên như vậy.`);
+            continue;
+          }
+          current = String(entryTarget.content ?? '');
+        }
+
+        if (!current.trim()) {
+          blockedReasons.push(`"${r.name}" đang rỗng — không có gì để sửa (dùng mục tạo mới thay vì sửa).`);
+          continue;
+        }
+
+        const what = isChar ? `trường "${characterFieldLabel(field!)}" của nhân vật` : `entry "${r.name}"`;
+        s.pushProgress(`✏️ Đang sửa ${what}…`);
+        try {
+          const raw = await makeCall(ac.signal)(
+            buildEditMessages(current, r.requirement, what),
+            { temperature: 0.3, label: `EJS Edit: ${r.name}` },
+          );
+          const next = parseEditResponse(raw);
+          const check = verifyEdit(current, next);
+          if (!check.ok) {
+            blockedReasons.push(`Bản sửa cho "${r.name}" bị từ chối — ${check.problems.join(' · ')}`);
+            s.pushProgress(`⚠️ Giữ nguyên ${what}: ${check.problems.join(' · ')}`);
+            continue;
+          }
+          if (isChar) {
+            // Lưu bản cũ để hoàn tác được — dùng chung sổ changedContents với entry (id âm để
+            // không đụng id entry thật; handleUndo phân biệt bằng chính khoảng giá trị này).
+            charEdits.push({ field: field!, before: current });
+            useCardStore.getState().updateField(`data.${field}`, next);
+          } else {
+            snapContent(entryTarget!);
+            useCardStore.getState().updateEntry(entryTarget!.id, { content: next });
+          }
+          writes++;
+          s.pushProgress(`✅ Đã sửa ${what} (${current.length} → ${next.length} ký tự).`);
+          s.pushBeforeAfter({ name: r.name, kind: 'ref_patched', before: clip(current), after: clip(next) });
+        } catch (e) {
+          if (e instanceof DOMException && e.name === 'AbortError') throw e;
+          blockedReasons.push(`Sửa "${r.name}" thất bại: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
 
@@ -276,6 +382,7 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
             };
             addEntry(newEntry);
             createdIds.push(newId);
+            writes++;
             cur = [...cur, newEntry];
             s.pushBeforeAfter({ name: d.entryComment, kind: 'created', before: '(chưa có entry này)', after: clip(d.code) });
 
@@ -290,10 +397,33 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
           }
         }
         if (!r.ok) {
+          // (bugNeedFix/147) Đây là ca hay gặp nhất khiến "chạy xong mà không có gì": code sinh ra
+          // không qua nổi validator (thiếu await, thiếu force, biến lệch schema…) nên bị CHẶN ghi.
+          // Trước đây chỉ có một dòng log 10px trong khung cuộn — rất dễ trôi khuất, còn banner
+          // vẫn báo Hoàn thành. Nay đưa thẳng lên phần kết luận.
+          const why = (r.issues ?? []).filter(i => i.level === 'error').slice(0, 3).map(i => i.message);
+          blockedReasons.push(
+            `${r.items.length} khối EJS đã sinh ra nhưng KHÔNG qua kiểm nên không được ghi vào thẻ`
+            + (why.length ? `: ${why.join(' · ')}` : '.'),
+          );
           s.pushProgress('⚠️ Còn lỗi chưa tự sửa được — xem danh sách bên dưới, entry KHÔNG được ghi vào card.');
         }
       } else if (!reclassified) {
-        s.pushProgress('⚠️ Không có mục nào được duyệt — không có gì để chạy.');
+        // (bugNeedFix/147) Thông báo cũ nói "không có mục nào được duyệt" — SAI nguyên nhân khi
+        // user đã duyệt nhưng AI quên khai `requirement` cho dòng đó (buildAgentPlanFromRows lọc
+        // im lặng). Phân biệt hai ca để user biết phải làm gì.
+        const acceptedRows = plan.rows.filter(r2 => accepted.has(r2.id));
+        const droppedNoReq = acceptedRows.filter(r2 =>
+          r2.action !== 'reclassify' && r2.action !== 'split_entry' && !r2.requirement);
+        if (droppedNoReq.length) {
+          blockedReasons.push(
+            `${droppedNoReq.length} mục đã duyệt bị bỏ vì AI không mô tả rõ cần làm gì `
+            + `(${droppedNoReq.slice(0, 3).map(x => x.name).join(', ')}) — bấm "Lên kế hoạch" lại để AI khai đủ.`,
+          );
+        } else if (acceptedRows.length === 0) {
+          blockedReasons.push('Bạn chưa duyệt mục nào — không có gì để chạy.');
+        }
+        s.pushProgress('⚠️ Không có mục nào chạy được — xem phần kết luận bên dưới để biết vì sao.');
       }
 
       // (bug 127) Chốt cuối: entry vừa bị TẮT để "kích hoạt theo điều kiện" mà không controller
@@ -365,11 +495,24 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
         }
       }
 
-      s.setUndo({ createdEntryIds: createdIds, changedEntries: changed, changedContents });
+      s.setUndo({ createdEntryIds: createdIds, changedEntries: changed, changedContents, charEdits });
+      // (bugNeedFix/147) KẾT LUẬN TRUNG THỰC. `writes` đếm số thay đổi THẬT SỰ vào thẻ; 0 nghĩa là
+      // không có gì đổi, dù pipeline chạy trót lọt và code vẫn hiện ra để xem. Nói thẳng ra thay
+      // vì treo cờ Hoàn thành rồi để user tự phát hiện lúc mang thẻ qua SillyTavern.
+      s.setRunSummary({ writes, blockedReasons });
+      if (writes === 0) {
+        s.pushProgress(
+          '❌ KHÔNG có thay đổi nào được ghi vào thẻ.'
+          + (blockedReasons.length ? ` Lý do: ${blockedReasons.join(' | ')}` : ''),
+        );
+      } else {
+        s.pushProgress(`✅ Đã ghi ${writes} thay đổi vào thẻ.`
+          + (blockedReasons.length ? ` (${blockedReasons.length} mục KHÔNG vào được — xem kết luận.)` : ''));
+      }
       s.setPhase('done');
     } catch (e) {
       // Dừng giữa chừng vẫn phải giữ snapshot, nếu không user mất đường lùi.
-      s.setUndo({ createdEntryIds: createdIds, changedEntries: changed, changedContents });
+      s.setUndo({ createdEntryIds: createdIds, changedEntries: changed, changedContents, charEdits });
       if (e instanceof DOMException && e.name === 'AbortError') {
         s.pushProgress('⏹ Đã dừng theo yêu cầu.');
         s.setPhase('review');
@@ -391,6 +534,8 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
     for (const c of u.changedEntries) cs.updateEntry(c.id, { enabled: c.enabled, constant: c.constant, keys: c.keys });
     // (Goal 28/07) Trả cả nội dung bị vá tham chiếu về nguyên bản.
     for (const c of u.changedContents ?? []) cs.updateEntry(c.id, { content: c.content });
+    // (bugNeedFix/147) Trả cả trường Character Definition đã sửa về nguyên bản.
+    for (const c of u.charEdits ?? []) cs.updateField(`data.${c.field}`, c.before);
     s.setUndo(null);
     s.resetRunOnly();
     s.pushProgress('↩️ Đã hoàn tác: xoá entry vừa tạo + trả entry bị đổi về trạng thái cũ.');
@@ -460,34 +605,81 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
           bạn duyệt hoặc từ chối riêng từng mục trước khi chạy. Chưa quen EJS thì bấm một Preset Nhanh bên dưới.
         </p>
 
-        <div className="space-y-1.5">
-          <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">Preset nhanh</div>
-          <div className="grid gap-1.5 sm:grid-cols-2">
-            {presets.map(({ preset, built }) => {
-              const blocked = built.blockers.length > 0;
-              return (
-                <button
-                  key={preset.id}
-                  disabled={busy || blocked}
-                  onClick={() => st.setGoal(built.goal)}
-                  title={blocked ? built.blockers.join('\n') : built.notes.join('\n')}
-                  className={`text-left p-2 rounded-lg border transition-colors ${
-                    blocked
-                      ? 'border-border/40 bg-muted/10 opacity-50 cursor-not-allowed'
-                      : 'border-border hover:border-emerald-500/40 hover:bg-emerald-500/5'
-                  }`}
-                >
-                  <div className="text-xs font-medium flex items-center gap-1.5">
-                    <span>{preset.icon}</span>{preset.title}
-                  </div>
-                  <div className="text-[10px] text-muted-foreground mt-0.5 leading-snug">{preset.effect}</div>
-                  {blocked
-                    ? <div className="text-[10px] text-amber-400/90 mt-1">⚠️ {built.blockers[0]}</div>
-                    : built.notes[0] ? <div className="text-[10px] text-sky-400/80 mt-1">ℹ️ {built.notes[0]}</div> : null}
-                </button>
-              );
-            })}
+        {/* ═══ (bugNeedFix/147 — mục 4) PRESET NHANH: LƯỚI THẺ GỌN ═══
+            User: "hiện các preset đầy chữ mô tả dài, khi cần quét nhanh nhiều preset thì mệt.
+            Rút gọn mặc định chỉ còn icon + tiêu đề ngắn + 1 dòng mô tả; mô tả chi tiết đưa vào
+            tooltip/expand. Ưu tiên lưới thẻ nhỏ gọn, đồng đều, dễ quét mắt."
+            Thẻ nay cao BẰNG NHAU (1 dòng mô tả cắt gọn), xếp theo nhóm chức năng, và bấm dấu ⓘ
+            mới mở phần giải thích đầy đủ. */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
+              Preset nhanh · {presets.filter(x => x.built.blockers.length === 0).length}/{presets.length} dùng được với thẻ này
+            </div>
+            {expandedPreset && (
+              <button onClick={() => setExpandedPreset(null)}
+                className="text-[10px] text-muted-foreground hover:text-foreground">Thu gọn</button>
+            )}
           </div>
+
+          {PRESET_GROUP_ORDER.map(g => {
+            const inGroup = presets.filter(x => x.preset.group === g);
+            if (!inGroup.length) return null;
+            return (
+              <div key={g} className="space-y-1">
+                <div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground/60">
+                  {PRESET_GROUP_LABEL[g]}
+                </div>
+                <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
+                  {inGroup.map(({ preset, built }) => {
+                    const blocked = built.blockers.length > 0;
+                    const open = expandedPreset === preset.id;
+                    return (
+                      <div key={preset.id}
+                        className={`rounded-lg border transition-colors ${
+                          blocked ? 'border-border/40 bg-muted/10' : 'border-border hover:border-emerald-500/40'
+                        }`}>
+                        <div className="flex items-start gap-1 p-1.5">
+                          <button
+                            disabled={busy || blocked}
+                            onClick={() => st.setGoal(built.goal)}
+                            title={blocked ? built.blockers.join('\n') : preset.effect}
+                            className={`flex-1 min-w-0 text-left ${blocked ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                          >
+                            <div className="text-[11px] font-medium flex items-center gap-1 truncate">
+                              <span className="shrink-0">{preset.icon}</span>
+                              <span className="truncate">{preset.title}</span>
+                            </div>
+                            <div className="text-[9px] text-muted-foreground mt-0.5 leading-snug line-clamp-2">
+                              {blocked ? built.blockers[0] : preset.short}
+                            </div>
+                          </button>
+                          <button
+                            onClick={() => setExpandedPreset(open ? null : preset.id)}
+                            title="Xem giải thích đầy đủ"
+                            className="shrink-0 p-0.5 rounded text-muted-foreground/60 hover:text-foreground hover:bg-muted/30"
+                          >
+                            <Info className="w-3 h-3" />
+                          </button>
+                        </div>
+                        {open && (
+                          <div className="px-2 pb-2 space-y-1 border-t border-border/50 pt-1.5">
+                            <p className="text-[10px] text-muted-foreground leading-relaxed">{preset.effect}</p>
+                            {built.blockers.map((b, i) => (
+                              <p key={i} className="text-[10px] text-amber-400/90">⚠️ {b}</p>
+                            ))}
+                            {built.notes.map((n, i) => (
+                              <p key={i} className="text-[10px] text-sky-400/80">ℹ️ {n}</p>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
         </div>
 
         <textarea
@@ -736,9 +928,22 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
       {/* ═══ Kết quả ═══ */}
       {st.phase === 'done' && (
         <div className="rounded-xl border border-border bg-card/40 p-4 space-y-3">
+          {/* (bugNeedFix/147) KẾT LUẬN TRUNG THỰC — thay cho banner "Hoàn thành" vô điều kiện.
+              Code sinh ra vẫn hiện bên dưới để xem, nhưng dòng đầu phải nói đúng thẻ có đổi
+              hay không: user từng tưởng đã xong rồi mang thẻ qua SillyTavern mới biết trống trơn. */}
           <div className="flex items-center gap-2">
-            <Check className="w-4 h-4 text-green-400" />
-            <span className="text-sm font-semibold">Hoàn thành</span>
+            {st.runSummary && st.runSummary.writes === 0 ? (
+              <AlertTriangle className="w-4 h-4 text-red-400" />
+            ) : (
+              <Check className="w-4 h-4 text-green-400" />
+            )}
+            <span className="text-sm font-semibold">
+              {st.runSummary
+                ? st.runSummary.writes === 0
+                  ? 'Không có thay đổi nào được ghi vào thẻ'
+                  : `Đã ghi ${st.runSummary.writes} thay đổi vào thẻ`
+                : 'Hoàn thành'}
+            </span>
             {st.undo && (
               <button onClick={handleUndo}
                 className="ml-auto flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium text-amber-400 hover:bg-amber-500/10 transition-colors">
@@ -746,6 +951,20 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
               </button>
             )}
           </div>
+
+          {/* (bugNeedFix/147) Lý do các mục KHÔNG vào được thẻ — trước đây chỉ nằm trong log
+              tiến trình cỡ chữ 10px trong khung cuộn, rất dễ trôi khuất. */}
+          {st.runSummary && st.runSummary.blockedReasons.length > 0 && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 space-y-1">
+              <p className="text-[11px] font-semibold text-amber-400">Vì sao chưa vào được thẻ:</p>
+              {st.runSummary.blockedReasons.map((r, i) => (
+                <p key={i} className="text-[10px] text-muted-foreground leading-relaxed">• {r}</p>
+              ))}
+              <p className="text-[10px] text-muted-foreground pt-1">
+                Code sinh ra vẫn hiện bên dưới để bạn xem/sửa tay — nhưng thẻ thì CHƯA có nó.
+              </p>
+            </div>
+          )}
 
           {st.drafts.map(d => (
             <div key={d.stepId + d.entryComment} className="rounded-lg border border-border overflow-hidden">

@@ -28,6 +28,11 @@ export interface EjsUndoInfo {
   changedEntries: Array<{ id: number; enabled: boolean; constant: boolean; keys: string[] }>;
   /** (Goal 28/07) entry bị SỬA NỘI DUNG (vá tham chiếu getwi) — content cũ để hoàn tác. */
   changedContents?: Array<{ id: number; content: string }>;
+  /**
+   * (bugNeedFix/147) Trường Character Definition bị AI sửa (description/personality/…) — bản cũ
+   * để hoàn tác. Sửa mô tả nhân vật là đụng vào văn người ta viết, phải lùi lại được.
+   */
+  charEdits?: Array<{ field: string; before: string }>;
 }
 
 /** (Goal 28/07) Một mục "trước/sau" — user xem được máy đã đổi GÌ, không chỉ tên. */
@@ -50,6 +55,12 @@ interface EjsStudioState {
   drafts: EjsDraft[];
   error: string | null;
   undo: EjsUndoInfo | null;
+  /**
+   * (bugNeedFix/147) Kết quả THẬT của lượt chạy: đếm số thay đổi đã vào thẻ + lý do các mục
+   * không vào được. Trước đây chạy xong là banner "✅ Hoàn thành" vô điều kiện, dù card có thể
+   * không đổi một chữ nào — user chỉ phát hiện lúc mang thẻ qua SillyTavern.
+   */
+  runSummary: { writes: number; blockedReasons: string[] } | null;
   /** Card mà kế hoạch này thuộc về — đổi card thì kế hoạch cũ vô nghĩa. */
   cardKey: string;
 
@@ -79,6 +90,7 @@ interface EjsStudioState {
   setDrafts: (d: EjsDraft[]) => void;
   setError: (e: string | null) => void;
   setUndo: (u: EjsUndoInfo | null) => void;
+  setRunSummary: (r: { writes: number; blockedReasons: string[] } | null) => void;
   /** Nút "Làm lại từ đầu" — xoá sạch, kể cả ô yêu cầu. */
   reset: () => void;
   /** Bỏ kết quả chạy nhưng GIỮ kế hoạch, để user chạy lại sau khi sửa lựa chọn. */
@@ -98,6 +110,7 @@ const EMPTY = {
   drafts: [] as EjsDraft[],
   error: null,
   undo: null,
+  runSummary: null,
   beforeAfter: [] as BeforeAfterItem[],
   testValues: {} as Record<string, string>,
   testSampleText: '',
@@ -118,6 +131,7 @@ export const useEjsStudioStore = create<EjsStudioState>((set, get) => ({
     decisions: {},
     drafts: [],
     undo: null,
+  runSummary: null,
     error: null,
     beforeAfter: [],
     testValues: {},
@@ -149,6 +163,7 @@ export const useEjsStudioStore = create<EjsStudioState>((set, get) => ({
   setDrafts: (d) => set({ drafts: d }),
   setError: (e) => set({ error: e }),
   setUndo: (u) => set({ undo: u }),
+  setRunSummary: (r) => set({ runSummary: r }),
 
   reset: () => set({ ...EMPTY }),
 

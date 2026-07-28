@@ -31,11 +31,38 @@ export interface QuickPresetResult {
   notes: string[];
 }
 
+/**
+ * (bugNeedFix/147) Nhóm chức năng — dùng để xếp preset thành từng cụm trong UI.
+ * User: "rút gọn hiển thị mặc định chỉ còn icon + tiêu đề ngắn + 1 dòng mô tả ngắn; phần mô tả
+ * chi tiết đưa vào tooltip/expand… bố cục dạng lưới thẻ nhỏ gọn, dễ quét mắt."
+ */
+export type PresetGroup =
+  | 'condition'   // Nội dung theo giai đoạn/điều kiện
+  | 'mvu'         // Dữ liệu MVU & hiển thị trạng thái
+  | 'ui'          // Giao diện trực quan
+  | 'bigdata'     // Xử lý dữ liệu lớn
+  | 'dynamic'     // Nội dung động không phụ thuộc chỉ số
+  | 'orchestrate' // Điều phối cấp cao
+  | 'all';        // Gói tổng
+
+export const PRESET_GROUP_LABEL: Record<PresetGroup, string> = {
+  condition: 'Nội dung theo điều kiện',
+  mvu: 'Dữ liệu MVU & trạng thái',
+  ui: 'Giao diện cho người chơi',
+  bigdata: 'Dữ liệu lớn',
+  dynamic: 'Nội dung động',
+  orchestrate: 'Điều phối cấp cao',
+  all: 'Gói tổng',
+};
+
 export interface QuickPreset {
   id: string;
   title: string;
-  /** Công dụng khi đưa vào card — user mới đọc cái này để chọn. */
+  /** Công dụng khi đưa vào card — user mới đọc cái này để chọn (hiện trong tooltip/mở rộng). */
   effect: string;
+  /** (bugNeedFix/147) MỘT DÒNG cực ngắn hiện mặc định trên thẻ, để quét mắt nhanh. */
+  short: string;
+  group: PresetGroup;
   icon: string;
   build: (ctx: PresetCardContext) => QuickPresetResult;
 }
@@ -79,6 +106,8 @@ function varList(ctx: PresetCardContext, max = 20): string {
 export const QUICK_PRESETS: QuickPreset[] = [
   {
     id: 'save-tokens',
+    group: 'condition',
+    short: 'Hạ bớt entry luôn-bật để đỡ tốn token mỗi lượt.',
     title: 'Tiết kiệm token',
     icon: '💰',
     effect:
@@ -120,6 +149,8 @@ export const QUICK_PRESETS: QuickPreset[] = [
 
   {
     id: 'conditional-lore',
+    group: 'condition',
+    short: 'Lore chỉ mở khi người chơi đạt tới mốc.',
     title: 'Lore hiện theo tiến trình',
     icon: '🔓',
     effect:
@@ -148,6 +179,8 @@ export const QUICK_PRESETS: QuickPreset[] = [
 
   {
     id: 'keyword-npc',
+    group: 'condition',
+    short: 'NPC/địa điểm hiện đúng lúc được nhắc tới.',
     title: 'NPC/địa điểm theo từ khoá',
     icon: '🔑',
     effect:
@@ -180,6 +213,8 @@ export const QUICK_PRESETS: QuickPreset[] = [
 
   {
     id: 'status-display',
+    group: 'mvu',
+    short: 'Chèn khối biến gọn cho AI đọc mỗi lượt.',
     title: 'Hiển thị biến cho AI đọc',
     icon: '📊',
     effect:
@@ -209,6 +244,8 @@ export const QUICK_PRESETS: QuickPreset[] = [
 
   {
     id: 'persona-phase',
+    group: 'condition',
+    short: 'Tính cách đổi theo mốc chỉ số.',
     title: 'Tính cách đổi theo chỉ số',
     icon: '🎭',
     effect:
@@ -236,6 +273,8 @@ export const QUICK_PRESETS: QuickPreset[] = [
 
   {
     id: 'split-bloated',
+    group: 'condition',
+    short: 'Tách entry gộp nhiều phần khác điều kiện.',
     title: 'Tách entry gộp',
     icon: '🪓',
     effect:
@@ -273,6 +312,8 @@ export const QUICK_PRESETS: QuickPreset[] = [
 
   {
     id: 'mvu-sanitize',
+    group: 'mvu',
+    short: 'Nắn giá trị biến lệch về đúng khuôn mỗi lượt.',
     title: 'Chuẩn hoá dữ liệu MVU',
     icon: '🧹',
     effect:
@@ -301,6 +342,8 @@ export const QUICK_PRESETS: QuickPreset[] = [
 
   {
     id: 'mvu-summary',
+    group: 'mvu',
+    short: 'Diễn giải trạng thái thành vài câu cho AI.',
     title: 'Tóm tắt trạng thái cho AI',
     icon: '📝',
     effect:
@@ -327,6 +370,8 @@ export const QUICK_PRESETS: QuickPreset[] = [
 
   {
     id: 'mvu-watchdog',
+    group: 'mvu',
+    short: 'Nhắc AI khi chỉ số vượt/tụt qua ngưỡng.',
     title: 'Cảnh báo ngưỡng chỉ số',
     icon: '🚨',
     effect:
@@ -352,6 +397,8 @@ export const QUICK_PRESETS: QuickPreset[] = [
 
   {
     id: 'mvu-delta',
+    group: 'mvu',
+    short: 'Cho AI biết cái gì vừa tăng/giảm so lượt trước.',
     title: 'Diễn giải thay đổi chỉ số',
     icon: '📈',
     effect:
@@ -376,8 +423,202 @@ export const QUICK_PRESETS: QuickPreset[] = [
     },
   },
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // (bugNeedFix/147) NHÓM 3-6 — bổ sung theo bản đặc tả user gửi.
+  // Mỗi preset vẫn tự đo ngữ cảnh card thật (có schema chưa, đã có UI chưa, dữ liệu có phình
+  // không) rồi mới dựng yêu cầu — không phải chuỗi cứng.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // ── Nhóm 3: Giao diện trực quan ──
+  {
+    id: 'ui-hud',
+    group: 'ui',
+    short: 'Thanh máu/mana có màu cho NGƯỜI CHƠI xem.',
+    title: 'Thanh trạng thái đồ hoạ (HUD)',
+    effect: 'Dựng thanh trạng thái dạng đồ hoạ thật (thanh máu/mana/thiện cảm có màu, badge trạng thái) bằng @@iframe + HTML/CSS, đọc trực tiếp giá trị biến MVU. Khác hẳn "Hiển thị biến cho AI đọc" — cái này CHO NGƯỜI CHƠI XEM, không gửi cho AI, dùng @@render_after nên không tốn token của AI.',
+    icon: '🖥️',
+    build: (ctx) => {
+      const hasSchema = !!ctx.schema?.fields?.length;
+      const ui = detectExistingStatusUi(ctx.entries, ctx.regexScripts ?? [], ctx.tavernScripts ?? []);
+      const nums = leafPaths(ctx.schema).slice(0, 6);
+      const blockers: string[] = [];
+      if (!hasSchema) blockers.push('Chưa có MVUZOD schema — HUD không biết đọc biến nào.');
+      const notes: string[] = [];
+      if (ui.hasStatusUi) notes.push(`Thẻ ĐÃ có thanh trạng thái (${ui.places[0]}) — preset sẽ dặn AI bổ sung phần Regex không làm được (tính %, đổi màu theo ngưỡng) thay vì dựng cái mới đè lên.`);
+      return {
+        goal: [
+          'Dựng THANH TRẠNG THÁI ĐỒ HOẠ cho NGƯỜI CHƠI xem (không gửi cho AI).',
+          '- Dùng @@render_after + @@iframe, HTML/CSS nhúng trong entry; đọc giá trị bằng getvar.',
+          nums.length ? `- Chỉ số nên vẽ thành thanh: ${nums.join(', ')}.` : '',
+          '- Thanh có màu đổi theo ngưỡng (đầy → xanh, thấp → đỏ); kèm badge cho trạng thái dạng chữ.',
+          '- KHÔNG ghi ngược vào biến MVU, chỉ đọc để hiển thị.',
+          ui.hasStatusUi
+            ? `- LƯU Ý: thẻ đã có thanh trạng thái sẵn (${ui.places.join(', ')}). KHÔNG tạo cái mới hiển thị cùng dữ liệu — chỉ bổ sung phần Regex không làm được.`
+            : '',
+        ].filter(Boolean).join('\n'),
+        blockers, notes,
+      };
+    },
+  },
+  {
+    id: 'ui-panel',
+    group: 'ui',
+    short: 'Thêm nút bấm/tab ngay trong thanh trạng thái.',
+    title: 'Bảng điều khiển tương tác',
+    effect: 'Thêm nút bấm/toggle ngay trong thanh trạng thái (thu gọn chi tiết, chuyển tab xem nhiều nhân vật) bằng JS nhúng trong iframe — vẫn chỉ ĐỌC dữ liệu qua biến, không ghi ngược vào MVU.',
+    icon: '🎛️',
+    build: (ctx) => {
+      const ui = detectExistingStatusUi(ctx.entries, ctx.regexScripts ?? [], ctx.tavernScripts ?? []);
+      return {
+        goal: [
+          'Thêm BẢNG ĐIỀU KHIỂN TƯƠNG TÁC vào thanh trạng thái:',
+          '- Nút thu gọn/mở rộng phần chi tiết; nếu có nhiều nhân vật thì thêm tab chuyển qua lại.',
+          '- JS nhúng trong @@iframe, chỉ thao tác DOM bên trong iframe.',
+          '- KHÔNG ghi ngược vào biến MVU (trừ khi có cơ chế sendPrompt rõ ràng) — tránh làm lệch dữ liệu.',
+        ].join('\n'),
+        blockers: ui.hasStatusUi ? [] : ['Thẻ chưa có thanh trạng thái nào để gắn nút — chạy preset "Thanh trạng thái đồ hoạ" trước.'],
+        notes: [],
+      };
+    },
+  },
+
+  // ── Nhóm 4: Xử lý dữ liệu lớn ──
+  {
+    id: 'ctx-compress',
+    group: 'bigdata',
+    short: 'Nhánh dữ liệu phình to chỉ tả kỹ phần đang liên quan.',
+    title: 'Lọc / nén ngữ cảnh động',
+    effect: 'Với các nhánh dữ liệu có thể phình to (danh sách NPC phụ, sự kiện, vật phẩm, tổ chức), khối EJS tự chọn nhóm "đang liên quan" để mô tả đầy đủ, nhóm còn lại chỉ tóm tắt một dòng — AI vẫn nhận biết thực thể cũ mà không tốn token mô tả lại toàn bộ.',
+    icon: '🗂️',
+    build: (ctx) => {
+      const hasSchema = !!ctx.schema?.fields?.length;
+      return {
+        goal: [
+          'Tạo khối EJS LỌC/NÉN NGỮ CẢNH cho các nhánh dữ liệu có thể phình to:',
+          '- Chọn ra nhóm "đang liên quan" (được nhắc trong vài tin nhắn gần nhất, hoặc đang ở cùng khu vực) → mô tả đầy đủ.',
+          '- Nhóm còn lại chỉ in một dòng: mã + tên + tóm tắt ngắn, để AI vẫn biết thực thể đó tồn tại.',
+          '- Dùng matchChatMessages để biết cái gì đang được nhắc tới.',
+        ].join('\n'),
+        blockers: hasSchema ? [] : ['Chưa có MVUZOD schema — không biết nhánh dữ liệu nào để nén.'],
+        notes: [],
+      };
+    },
+  },
+  {
+    id: 'data-cleanup',
+    group: 'bigdata',
+    short: 'Nhắc AI dọn dữ liệu khi danh sách vượt ngưỡng.',
+    title: 'Tự động dọn dẹp khi vượt ngưỡng',
+    effect: 'Tạo entry chỉ tự kích hoạt khi một nhánh dữ liệu vượt số lượng cho phép (ví dụ quá 20 sự kiện đang hoạt động), chứa quy tắc: cái gì bắt buộc giữ, cái gì có thể gộp, cái gì nên xoá — tránh biến MVU phình vô hạn qua hàng trăm lượt chat.',
+    icon: '🧹',
+    build: (ctx) => {
+      const hasSchema = !!ctx.schema?.fields?.length;
+      return {
+        goal: [
+          'Tạo khối EJS TỰ ĐỘNG DỌN DẸP dữ liệu lớn:',
+          '- Chỉ kích hoạt khi một nhánh vượt ngưỡng số lượng (tự chọn ngưỡng hợp lý theo schema).',
+          '- Nội dung là QUY TẮC cho AI: cái gì bắt buộc giữ, cái gì gộp được, cái gì nên xoá.',
+          '- TRƯỚC khi bảo xoá một thực thể, phải dặn AI quét và dọn mọi tham chiếu tới nó — xoá trống tay sẽ để lại tham chiếu gãy.',
+        ].join('\n'),
+        blockers: hasSchema ? [] : ['Chưa có MVUZOD schema — không biết nhánh nào có thể phình to.'],
+        notes: [],
+      };
+    },
+  },
+
+  // ── Nhóm 5: Nội dung động ──
+  {
+    id: 'dyn-random',
+    group: 'dynamic',
+    short: 'Thời tiết/sự kiện bất ngờ sinh ngay lúc chạy.',
+    title: 'Sinh giá trị động',
+    effect: 'Chèn thời gian thực, số ngẫu nhiên, hoặc lựa chọn ngẫu nhiên có trọng số vào prompt (thời tiết đổi ngẫu nhiên, sự kiện bất ngờ theo xác suất) — nội dung không tồn tại sẵn ở đâu, được tạo ngay lúc chạy.',
+    icon: '🎲',
+    build: () => ({
+      goal: [
+        'Tạo khối EJS SINH GIÁ TRỊ ĐỘNG:',
+        '- Dùng _.random / _.sample để chọn ngẫu nhiên có trọng số (thời tiết, sự kiện nhỏ, tin đồn).',
+        '- Có thể lấy thời gian thực để đổi không khí theo giờ.',
+        '- In ra dạng gợi ý ngắn cho AI, KHÔNG ép AI phải dùng.',
+      ].join('\n'),
+      blockers: [], notes: [],
+    }),
+  },
+  {
+    id: 'dyn-timing',
+    group: 'dynamic',
+    short: 'Entry chỉ hiện sau N lượt hoặc khi chat nhắc tới.',
+    title: 'Kích hoạt theo thời gian / số lượt',
+    effect: 'Entry chỉ xuất hiện sau N lượt chat, sau một giờ nhất định (thời gian thật), hoặc khi quét thấy từ khoá/mẫu trong vài tin nhắn gần nhất — thông minh hơn cơ chế đèn xanh lá gốc.',
+    icon: '🕓',
+    build: () => ({
+      goal: [
+        'Tạo bộ điều khiển KÍCH HOẠT THEO THỜI GIAN / SỐ LƯỢT:',
+        '- Đếm số lượt bằng getChatMessages, bật entry khi vượt mốc.',
+        '- Hoặc quét từ khoá trong 2-3 tin gần nhất bằng matchChatMessages rồi bật entry tương ứng.',
+        '- Entry được bật phải để TẮT SẴN trong cấu hình; bật bằng await activewi(tên, true).',
+      ].join('\n'),
+      blockers: [], notes: [],
+    }),
+  },
+
+  // ── Nhóm 6: Điều phối cấp cao ──
+  {
+    id: 'orch-dynkeys',
+    group: 'orchestrate',
+    short: 'Sinh từ khoá theo biến để mồi entry đèn xanh.',
+    title: 'Từ khoá động',
+    effect: 'Entry tự sinh chuỗi từ khoá dựa trên biến số, dùng chuỗi đó làm "mồi" kích hoạt entry đèn xanh lá khác có từ khoá trùng — kết hợp được cơ chế EJS với cơ chế keyword gốc thay vì phải chọn một trong hai.',
+    icon: '🔑',
+    build: (ctx) => ({
+      goal: [
+        'Tạo khối @@preprocessing SINH TỪ KHOÁ ĐỘNG:',
+        '- Đọc biến hiện tại rồi in ra chuỗi từ khoá tương ứng, làm mồi cho entry đèn xanh lá khớp key.',
+        '- Entry được mồi KHÔNG được đồng thời bị getwi gọi trực tiếp ở nơi khác — tránh kích hoạt hai đường cùng lúc.',
+      ].join('\n'),
+      blockers: ctx.schema?.fields?.length ? [] : ['Chưa có MVUZOD schema — không có biến để sinh từ khoá.'],
+      notes: [],
+    }),
+  },
+  {
+    id: 'orch-inject',
+    group: 'orchestrate',
+    short: 'Soạn nội dung ở Worldbook, hút vào đúng chỗ trong Preset.',
+    title: 'Đồng bộ Worldbook ↔ Preset',
+    effect: 'Dùng injectPrompt() để soạn nội dung (ví dụ khối chuỗi suy luận) trong Worldbook rồi "hút" đúng vào vị trí đã định trong Preset — khỏi phải sửa Preset mỗi lần đổi nội dung Worldbook.',
+    icon: '🔗',
+    build: () => ({
+      goal: [
+        'Tạo khối EJS ĐỒNG BỘ WORLDBOOK → PRESET:',
+        '- Soạn nội dung trong entry worldbook, đẩy vào prompt bằng injectPrompt({ text, position, depth }).',
+        '- Ghi rõ vị trí/độ sâu để nội dung rơi đúng chỗ mong muốn trong preset.',
+      ].join('\n'),
+      blockers: [], notes: [],
+    }),
+  },
+  {
+    id: 'orch-postfix',
+    group: 'orchestrate',
+    short: 'Dọn output SAU khi AI trả lời (xoá khối thừa, sửa link).',
+    title: 'Sửa output sau khi AI trả lời',
+    effect: 'Dùng activateRegex() để xử lý HẬU KỲ: xoá khối suy luận thừa, thay link ảnh hỏng, chuẩn hoá định dạng — chạy SAU khi AI đã trả lời, khác hẳn mọi preset khác vốn chỉ xử lý TRƯỚC khi gửi.',
+    icon: '🩹',
+    build: (ctx) => ({
+      goal: [
+        'Tạo khối EJS XỬ LÝ HẬU KỲ output của AI:',
+        '- Dùng activateRegex() để bật đúng regex cần thiết sau khi AI trả lời.',
+        '- Mục tiêu: xoá khối suy luận thừa, chuẩn hoá định dạng, sửa link hỏng.',
+        '- KHÔNG đụng tới nội dung kể chuyện của AI.',
+      ].join('\n'),
+      blockers: (ctx.regexScripts ?? []).length ? [] : ['Thẻ chưa có regex nào để bật — tạo regex ở tab Regex Lab trước.'],
+      notes: [],
+    }),
+  },
+
   {
     id: 'full-suite',
+    group: 'all',
+    short: 'Rà cả thẻ và áp mọi tính năng EJS theo đúng thứ tự.',
     title: 'Áp dụng TẤT CẢ tính năng EJS',
     icon: '🚀',
     effect:

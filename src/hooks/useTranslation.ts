@@ -589,7 +589,10 @@ export function useTranslation() {
           store.translationConfig.cssCjkHandling,
           // (User yêu cầu 2026) KHÔNG còn đẩy retry xuống model phụ: model phụ CHỈ chạy entry ngắn
           // theo ngưỡng ký tự (xem laneOrder). Retry đi lại đúng model theo độ dài entry.
-          false
+          false,
+          // (bugNeedFix/144) Chunk GỐC lần trước — engine đối chiếu để biết nhịp cắt có đổi không.
+          // Đổi mà vẫn ghép bản dịch cũ vào là dán nhầm đoạn ⇒ "ghép xong thiếu/sai chunk".
+          field.rawChunks
         );
       }
 

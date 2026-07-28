@@ -3128,6 +3128,13 @@ export async function translateText(
   cssCjkHandling?: 'preserve' | 'translate',
   /** Lượt THỬ LẠI ở tầng trên (field.retries>0) ⇒ ưu tiên model phụ (flash) cho nhanh + chừa lane chính. */
   preferSecondary?: boolean,
+  /**
+   * (bugNeedFix/144) Chunk GỐC của lần chạy trước — dùng để xác minh nhịp cắt KHÔNG đổi trước
+   * khi dùng lại bản dịch cũ. Kích thước chunk là thích ứng theo số lane API, nên cùng một
+   * entry chạy hai lần với cấu hình khác nhau có thể ra số chunk khác nhau; ghép bản dịch cũ
+   * vào nhịp cắt mới là dán nhầm chỗ, đúng triệu chứng "ghép xong thiếu/sai chunk".
+   */
+  previousRawChunks?: string[],
 ): Promise<string> {
   if (!text || text.trim() === '') return '';
 
@@ -3281,7 +3288,19 @@ export async function translateText(
   // ═══ CHUNK-LEVEL RESUME: Support both contiguous (sequential) and sparse (parallel) ═══
   // For parallel, completedChunks may have undefined gaps: [chunk0, undefined, chunk2]
   // For sequential, completedChunks is always contiguous from index 0
-  const hasResume = !!(previouslyCompletedChunks && previouslyCompletedChunks.length > 0 && (
+  // (bugNeedFix/144) NHỊP CẮT PHẢI KHỚP MỚI ĐƯỢC DÙNG LẠI BẢN DỊCH CŨ.
+  // chunkSize thích ứng theo số lane API (xem đoạn tính chunkSize ở trên), nên cùng một entry
+  // chạy lại lúc cấu hình khác sẽ cắt ra số chunk khác. Khi đó chunk cũ số 3 KHÔNG còn ứng với
+  // đoạn văn số 3 nữa — ghép vào là dán nhầm chỗ, và nếu mảng cũ dài hơn thì vòng prefill còn
+  // ghi TRÀN qua chunks.length, kéo theo cả đoạn thừa vào bản ghép. Đây chính là ca "đã dịch
+  // xong mà ghép lại bị thiếu hụt / sai" user báo. Lệch nhịp thì thà dịch lại từ đầu.
+  const chunkingChanged = !!(previouslyCompletedChunks?.length)
+    && (previouslyCompletedChunks.length > chunks.length
+      || (!!previousRawChunks?.length && previousRawChunks.some((rc, i) => i < chunks.length && rc !== chunks[i])));
+  if (chunkingChanged) {
+    console.warn(`[translateText] ${fieldName}: nhịp cắt chunk đã đổi (${previouslyCompletedChunks!.length} → ${chunks.length}) — BỎ bản dịch cũ, dịch lại từ đầu để không ghép nhầm đoạn.`);
+  }
+  const hasResume = !chunkingChanged && !!(previouslyCompletedChunks && previouslyCompletedChunks.length > 0 && (
     previouslyCompletedChunks.length < chunks.length ||
     previouslyCompletedChunks.some(c => !c)
   ));
@@ -3296,7 +3315,10 @@ export async function translateText(
   // Pre-fill results array with previously completed chunks
   const translatedChunks: (string | undefined)[] = new Array(chunks.length).fill(undefined);
   if (hasResume) {
-    for (let ri = 0; ri < previouslyCompletedChunks!.length; ri++) {
+    // Chốt chặn thứ hai: KHÔNG bao giờ ghi quá chunks.length (ghi tràn làm mảng dài ra và
+    // đoạn thừa bị join vào kết quả cuối).
+    const upTo = Math.min(previouslyCompletedChunks!.length, chunks.length);
+    for (let ri = 0; ri < upTo; ri++) {
       if (previouslyCompletedChunks![ri]) {
         translatedChunks[ri] = previouslyCompletedChunks![ri];
       }
@@ -3650,7 +3672,26 @@ export async function translateText(
   console.log(`[translateText] ${fieldName}: All ${chunks.length} chunks done. Verifying seams...`);
 
   // ═══ SEAM VERIFICATION — check chunk boundaries for coherence ═══
-  const finalChunks = translatedChunks.filter((c): c is string => c !== undefined);
+  // (bugNeedFix/144) CHỐT CHẶN GHÉP THIẾU.
+  // Bản cũ lọc `c !== undefined` rồi join — chunk dịch ra CHUỖI RỖNG lọt qua cả cổng kiểm
+  // "đủ chunk chưa" (rỗng vẫn tính là đã xong) lẫn bộ lọc này, nên đoạn đó biến mất mà không
+  // một dòng log nào. Lọc kiểu ấy còn làm các chunk sau DỒN LÊN thay vì báo lỗi.
+  // Nay: đúng chunks.length ô, ô nào trống là ném ChunkError để tầng trên resume đúng chỗ.
+  const missingIdx: number[] = [];
+  for (let i = 0; i < chunks.length; i++) {
+    if (!translatedChunks[i] || !String(translatedChunks[i]).trim()) missingIdx.push(i);
+  }
+  if (missingIdx.length > 0) {
+    const soFar = translatedChunks.slice(0, chunks.length).map(c => c || '') as string[];
+    throw new ChunkError(
+      `Ghép hụt: ${missingIdx.length}/${chunks.length} chunk rỗng sau khi dịch (chunk ${missingIdx.slice(0, 5).map(i => i + 1).join(', ')}${missingIdx.length > 5 ? '…' : ''}). Giữ lại phần đã dịch để chạy tiếp đúng chỗ.`,
+      soFar,
+      missingIdx[0],
+      chunks.length,
+      new Error('empty chunk after translation'),
+    );
+  }
+  const finalChunks = translatedChunks.slice(0, chunks.length) as string[];
   const verifiedChunks = await verifySeams(finalChunks, chunks, config, targetLang, signal, enableChunkVerification, isCodeHeavy);
 
   // For HTML and Code/Regex content, join without separator

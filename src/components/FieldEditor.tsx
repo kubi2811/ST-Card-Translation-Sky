@@ -6,6 +6,7 @@ import { useT, useUi } from '../i18n/useLocale';
 import { fmt } from '../i18n';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { FieldGroup, TranslationField, TranslationStatus } from '../types/card';
+import { auditChunks, joinChunks, summarizeAudit } from '../utils/chunkAudit';
 import { RotateCcw, AlertTriangle, CheckCircle2, Clock, ArrowLeftRight, BarChart3, Ban, Search, X, Copy, Check, Eye, Wand2, Zap, Brain, Download } from 'lucide-react';
 import { countCjkText } from '../utils/cjk';
 import { TranslatedTextarea } from './TranslatedTextarea';
@@ -328,6 +329,88 @@ function ChunkStatusAndResume({
     );
   };
 
+  // ═══ (bugNeedFix/144) SOI CHUNK + GHÉP LẠI + DỊCH LẠI TỪNG CHUNK ═══
+  // User: "10-20 chunk mà chỉ 1-2 cái lỗi thì phải có nút soi ra cái nào lỗi để dịch lại
+  // riêng nó, và nút ghép lại — chứ dịch lại cả entry rất mất thời gian."
+  const rawList: string[] = Array.from({ length: totalChunks }, (_, i) => field.rawChunks?.[i] || '');
+  const doneList: (string | undefined)[] = Array.from({ length: totalChunks }, (_, i) => field.completedChunks?.[i]);
+  const audit = auditChunks(rawList, doneList);
+  const issueByIndex = new Map(audit.issues.map(x => [x.index, x]));
+
+  const copyText = async (text: string, what: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      useStore.getState().addLog('info', `📋 Đã chép ${what}.`);
+    } catch {
+      useStore.getState().addLog('warning', `Không chép được ${what} (trình duyệt chặn clipboard).`);
+    }
+  };
+
+  /**
+   * Dịch lại ĐÚNG một chunk: xoá ô đó rồi chạy tiếp (resume). Engine vốn chỉ dịch những ô
+   * còn trống, nên không phải thêm đường đi mới — và các chunk đã dịch giữ nguyên, không tốn
+   * lượt gọi API nào cho chúng.
+   */
+  const retranslateOneChunk = (idx: number) => {
+    const cur = [...(field.completedChunks || [])];
+    while (cur.length <= idx) cur.push('');
+    cur[idx] = '';
+    useStore.getState().updateField(field.path, { completedChunks: cur, status: 'pending' });
+    useStore.getState().addLog('info', `🔁 Dịch lại riêng chunk ${idx + 1}/${totalChunks} của ${field.label} — các chunk khác giữ nguyên.`);
+    retranslateField(field.path, true);
+  };
+
+  /** Ghép lại từ các chunk đang có — đúng quy tắc engine dùng (HTML/code nối liền). */
+  const rejoinFromChunks = () => {
+    if (audit.suspectIndices.length > 0) {
+      useStore.getState().addLog('warning',
+        `⚠️ Chưa ghép: ${summarizeAudit(audit)} Ghép lúc này sẽ ra bản thiếu — dịch lại các chunk đó trước.`);
+      return;
+    }
+    const joined = joinChunks(doneList.map(c => c || ''), field.original);
+    useStore.getState().updateField(field.path, { translated: joined, status: 'done' });
+    useStore.getState().addLog('success', `🧩 Đã ghép lại ${totalChunks} chunk của ${field.label} (${joined.length.toLocaleString()} ký tự).`);
+  };
+
+  const renderChunkToolbar = () => (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '6px', alignItems: 'center' }}>
+      <span style={{
+        fontSize: '0.55rem', fontWeight: 600, padding: '2px 6px', borderRadius: 'var(--radius-xs)',
+        background: audit.suspectIndices.length ? 'rgba(245,158,11,0.15)' : 'rgba(34,197,94,0.15)',
+        color: audit.suspectIndices.length ? 'var(--warning, #f59e0b)' : 'var(--success, #22c55e)',
+      }}>
+        {summarizeAudit(audit)}
+      </span>
+      <button onClick={rejoinFromChunks} title="Ghép các chunk đã dịch thành entry hoàn chỉnh (đúng cách engine ghép)"
+        style={{ padding: '2px 6px', fontSize: '0.55rem', fontWeight: 600, background: 'rgba(124,106,240,0.15)',
+          color: 'var(--accent-primary)', border: '1px solid rgba(124,106,240,0.25)', borderRadius: 'var(--radius-xs)', cursor: 'pointer' }}>
+        🧩 Ghép lại
+      </button>
+      {audit.suspectIndices.length > 0 && (
+        <button
+          onClick={() => {
+            const cur = [...(field.completedChunks || [])];
+            for (const i of audit.suspectIndices) { while (cur.length <= i) cur.push(''); cur[i] = ''; }
+            useStore.getState().updateField(field.path, { completedChunks: cur, status: 'pending' });
+            useStore.getState().addLog('info',
+              `🔁 Dịch lại ${audit.suspectIndices.length} chunk có vấn đề (số ${audit.suspectIndices.map(i => i + 1).join(', ')}) — ${totalChunks - audit.suspectIndices.length} chunk còn lại giữ nguyên.`);
+            retranslateField(field.path, true);
+          }}
+          title="Chỉ dịch lại những chunk bị đánh dấu — không đụng tới chunk đã tốt"
+          style={{ padding: '2px 6px', fontSize: '0.55rem', fontWeight: 600, background: 'rgba(245,158,11,0.15)',
+            color: 'var(--warning, #f59e0b)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 'var(--radius-xs)', cursor: 'pointer' }}>
+          🔁 Dịch lại {audit.suspectIndices.length} chunk lỗi
+        </button>
+      )}
+      <button onClick={() => copyText(joinChunks(doneList.map(c => c || ''), field.original), 'toàn bộ bản dịch đã ghép')}
+        title="Chép bản GHÉP của các chunk đang có (đúng thứ sẽ ghi vào entry)"
+        style={{ padding: '2px 6px', fontSize: '0.55rem', fontWeight: 600, background: 'rgba(255,255,255,0.06)',
+          color: 'var(--text-secondary)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 'var(--radius-xs)', cursor: 'pointer' }}>
+        📋 Chép bản ghép
+      </button>
+    </div>
+  );
+
   const renderDetailsList = () => {
     if (!expanded) return null;
     return (
@@ -359,28 +442,61 @@ function ChunkStatusAndResume({
               gap: '4px'
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '0.65rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                <span style={{ fontSize: '0.65rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                   Chunk {idx + 1}
+                  {issueByIndex.has(idx) && (
+                    <span title={issueByIndex.get(idx)!.detail}
+                      style={{ fontSize: '0.5rem', fontWeight: 700, padding: '1px 4px', borderRadius: '3px',
+                        background: 'rgba(245,158,11,0.18)', color: 'var(--warning, #f59e0b)' }}>
+                      ⚠️ {issueByIndex.get(idx)!.kind === 'missing' ? 'thiếu'
+                        : issueByIndex.get(idx)!.kind === 'untranslated' ? 'chưa dịch'
+                        : issueByIndex.get(idx)!.kind === 'too-short' ? 'nghi cụt' : 'nghi thừa'}
+                    </span>
+                  )}
                 </span>
-                <button
-                  onClick={() => downloadChunk(idx)}
-                  style={{
-                    padding: '2px 6px',
-                    fontSize: '0.55rem',
-                    fontWeight: 600,
-                    background: 'rgba(124, 106, 240, 0.15)',
-                    color: 'var(--accent-primary)',
-                    border: '1px solid rgba(124, 106, 240, 0.25)',
-                    borderRadius: 'var(--radius-xs)',
-                    cursor: 'pointer',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '3px'
-                  }}
-                  title="Download JSON for this chunk"
-                >
-                  <Download size={10} /> JSON
-                </button>
+                <div style={{ display: 'flex', gap: '3px', alignItems: 'center' }}>
+                  {/* (bugNeedFix/144) Chép riêng bản gốc / bản dịch của chunk — trước chỉ có tải JSON. */}
+                  <button onClick={() => copyText(raw, `bản gốc chunk ${idx + 1}`)} disabled={!raw}
+                    title="Chép bản GỐC của chunk này"
+                    style={{ padding: '2px 5px', fontSize: '0.55rem', fontWeight: 600, background: 'rgba(255,255,255,0.06)',
+                      color: 'var(--text-secondary)', border: '1px solid rgba(255,255,255,0.1)',
+                      borderRadius: 'var(--radius-xs)', cursor: raw ? 'pointer' : 'not-allowed', opacity: raw ? 1 : 0.4 }}>
+                    📋 Gốc
+                  </button>
+                  <button onClick={() => copyText(trans, `bản dịch chunk ${idx + 1}`)} disabled={!trans}
+                    title="Chép BẢN DỊCH của chunk này"
+                    style={{ padding: '2px 5px', fontSize: '0.55rem', fontWeight: 600, background: 'rgba(34,197,94,0.12)',
+                      color: 'var(--success, #22c55e)', border: '1px solid rgba(34,197,94,0.25)',
+                      borderRadius: 'var(--radius-xs)', cursor: trans ? 'pointer' : 'not-allowed', opacity: trans ? 1 : 0.4 }}>
+                    📋 Dịch
+                  </button>
+                  <button onClick={() => retranslateOneChunk(idx)}
+                    title="Chỉ dịch lại RIÊNG chunk này — các chunk khác giữ nguyên"
+                    style={{ padding: '2px 5px', fontSize: '0.55rem', fontWeight: 600, background: 'rgba(245,158,11,0.12)',
+                      color: 'var(--warning, #f59e0b)', border: '1px solid rgba(245,158,11,0.25)',
+                      borderRadius: 'var(--radius-xs)', cursor: 'pointer' }}>
+                    🔁 Dịch lại
+                  </button>
+                  <button
+                    onClick={() => downloadChunk(idx)}
+                    style={{
+                      padding: '2px 6px',
+                      fontSize: '0.55rem',
+                      fontWeight: 600,
+                      background: 'rgba(124, 106, 240, 0.15)',
+                      color: 'var(--accent-primary)',
+                      border: '1px solid rgba(124, 106, 240, 0.25)',
+                      borderRadius: 'var(--radius-xs)',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '3px'
+                    }}
+                    title="Download JSON for this chunk"
+                  >
+                    <Download size={10} /> JSON
+                  </button>
+                </div>
               </div>
               
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
@@ -441,6 +557,7 @@ function ChunkStatusAndResume({
           </span>
         </div>
         {renderDetailsButton()}
+        {renderChunkToolbar()}
         {renderDetailsList()}
       </div>
     );
@@ -451,6 +568,7 @@ function ChunkStatusAndResume({
     return (
       <div style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
         {renderDetailsButton()}
+        {renderChunkToolbar()}
         {renderDetailsList()}
       </div>
     );
@@ -524,6 +642,7 @@ function ChunkStatusAndResume({
           </div>
         </div>
         {renderDetailsButton()}
+        {renderChunkToolbar()}
         {renderDetailsList()}
       </div>
     );
@@ -555,6 +674,7 @@ function ChunkStatusAndResume({
           </button>
         </div>
         {renderDetailsButton()}
+        {renderChunkToolbar()}
         {renderDetailsList()}
       </div>
     );

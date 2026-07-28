@@ -236,6 +236,11 @@ Yêu cầu định dạng JSON chính xác:
 }
 
 QUY TẮC BẮT BUỘC VỀ SCHEMA:
+- (bug 135) Field "type": "number" thì "defaultValue" PHẢI là SỐ, không phải chuỗi ("100" là sai,
+  100 mới đúng) — default kiểu chuỗi làm mọi phép so sánh so theo chữ ("9" > "10").
+- (bug 135) Entry "danh sách biến"/bảng trạng thái (constant, gửi mọi lượt) TUYỆT ĐỐI không chứa
+  ví dụ <UpdateVariable> với giá trị cứng — AI trong game sẽ đọc ví dụ đó như trạng thái thật
+  ngay từ lượt đầu. Ví dụ định dạng chỉ nằm trong entry quy tắc cập nhật.
 - MỌI field (kể cả field lồng trong "children") BẮT BUỘC phải có key "constraints" — nếu không có ràng buộc nào thì dùng object rỗng {}.
 - "constraints.enumValues" (nếu dùng) phải là MẢNG chuỗi, ví dụ ["Thấp","Trung","Cao"].
 - MỌI field phải có đủ "path", "type", "label", "defaultValue".

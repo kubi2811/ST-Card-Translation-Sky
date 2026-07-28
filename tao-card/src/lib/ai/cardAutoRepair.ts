@@ -23,6 +23,7 @@ import { generateWorldbookEntries, applyGeneratedEntries, findExistingMVUZODEntr
 import { OPENING_FORM_ANCHOR, STATUS_BAR_ANCHOR } from '../mvuzod/regexAnchors';
 import { checkMvuOutputContract } from '../mvuzod/mvuReference';
 import { buildProgrammaticRegex } from '../mvuzod/programmaticRegexBuilder';
+import { auditCardQuality, collectLeafFields, extractEnumComparisons, foldVi, nearestEnumValue } from '../mvuzod/cardQualityAudit';
 
 const FENCE = '`'.repeat(3);
 
@@ -397,6 +398,114 @@ export function repairMvuSystemIntegrity(
 /* ══════════════════════ CHẠY CẢ LƯỢT ══════════════════════ */
 
 /**
+ * ═══ (bug 135) VÁ CÁC LỖI CHẤT LƯỢNG mà cardQualityAudit bắt được ═══
+ * Chỉ vá 4 lớp máy CHẮC TAY; lớp cần sáng tác (bảng biến chứa ví dụ) đẩy sang needsAi.
+ * Nguyên tắc bug 140 áp cả ở đây: SỬA cấu hình/giá trị, TUYỆT ĐỐI không xoá nội dung.
+ */
+export function repairQualityIssues(
+  card: CharacterCardV3,
+  schema: MVUZODSchema | null,
+): RepairResult {
+  const out = cloneCard(card);
+  const fixed: RepairAction[] = [];
+  const needsAi: string[] = [];
+  const entries = out.data.character_book?.entries ?? [];
+  const issues = auditCardQuality({ entries, schema });
+  if (issues.length === 0) return { card: out, fixed, needsAi };
+
+  const enumLeaves = collectLeafFields(schema).filter(f => (f.constraints?.enumValues?.length ?? 0) > 0);
+
+  // 1. EJS so sai giá trị enum → thay đúng chuỗi trong ĐÚNG entry (chỉ khi đoán được duy nhất).
+  for (const e of entries) {
+    const code = String(e.content ?? '');
+    if (!code.includes('<%') && !code.includes('@@preprocessing')) continue;
+    let next = code;
+    for (const [f, compared] of extractEnumComparisons(code, enumLeaves)) {
+      const values = f.constraints!.enumValues!;
+      const folded = new Set(values.map(foldVi));
+      for (const bad of new Set(compared.filter(s => !folded.has(foldVi(s))))) {
+        const near = nearestEnumValue(bad, values);
+        if (!near) continue;
+        const esc = bad.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        next = next.replace(new RegExp(`(['"\`])${esc}\\1`, 'g'), (_m, q: string) => q + near + q);
+        fixed.push({
+          id: 'ejs-enum-mismatch',
+          description: `EJS "${e.comment}": đổi so sánh "${bad}" → "${near}" cho khớp enum của biến — nhánh này trước đây không bao giờ đúng.`,
+        });
+      }
+    }
+    if (next !== code) e.content = next;
+  }
+
+  // 2. Entry CHẾT (tắt + không key + không constant + không EJS bật) → CỨU bằng cách đặt
+  //    từ khoá từ chính tên entry và bật lại. Không xoá gì cả.
+  for (const iss of issues.filter(i => i.code === 'dead-entry')) {
+    const e = entries.find(x => String(x.comment || `#${x.id}`) === iss.where);
+    if (!e) continue;
+    const baseName = String(e.comment ?? '').replace(/^[\d.\s]+/, '').split(':').pop()?.trim() || String(e.comment ?? '');
+    e.keys = [...new Set([baseName, String(e.comment ?? '').trim()].filter(k => k.length >= 2))];
+    e.enabled = true;
+    (e as { disable?: boolean }).disable = false;
+    fixed.push({
+      id: 'dead-entry',
+      description: `Entry "${e.comment}" không có đường nào kích hoạt — đã bật lại và đặt từ khoá "${e.keys.join('", "')}" từ chính tên nó (nội dung giữ nguyên).`,
+    });
+  }
+
+  // 3. Biến số defaultValue kiểu chuỗi → ép về số (chỉ khi parse được).
+  if (schema) {
+    const ext = out.data.extensions as unknown as Record<string, any>;
+    const schemaInCard = ext?.mvuzod?.schema as MVUZODSchema | undefined;
+    if (schemaInCard) {
+      const walk = (fs: Array<{ type?: string; defaultValue?: unknown; path?: string; children?: unknown[] }>) => {
+        for (const f of fs ?? []) {
+          if (Array.isArray(f.children) && f.children.length) walk(f.children as never);
+          else if (f.type === 'number' && typeof f.defaultValue === 'string' && f.defaultValue.trim() !== '') {
+            const n = Number(f.defaultValue);
+            if (Number.isFinite(n)) {
+              fixed.push({ id: 'number-default-string', description: `Biến số "${f.path}": đổi giá trị mặc định "${f.defaultValue}" (chuỗi) → ${n} (số) để phép so sánh không so theo chữ.` });
+              f.defaultValue = n;
+            }
+          }
+        }
+      };
+      walk(schemaInCard.fields as never);
+    }
+  }
+
+  // 4. Nhiều entry cùng (order, position) → giãn order cho thứ tự xác định. Giữ entry đầu,
+  //    các entry sau nhích dần sang số order CHƯA AI DÙNG tại cùng vị trí.
+  {
+    const posOf = (e: LorebookEntry) => (e as { extensions?: { position?: number } }).extensions?.position ?? e.position;
+    const used = new Map<string, Set<number>>();
+    for (const e of entries) {
+      const k = String(posOf(e));
+      if (!used.has(k)) used.set(k, new Set());
+      used.get(k)!.add(e.insertion_order ?? 100);
+    }
+    const seen = new Map<string, LorebookEntry>();
+    for (const e of entries) {
+      if (e.enabled === false) continue;
+      const k = `${e.insertion_order ?? 100}|${posOf(e)}`;
+      if (!seen.has(k)) { seen.set(k, e); continue; }
+      const posKey = String(posOf(e));
+      let next = (e.insertion_order ?? 100) + 1;
+      while (used.get(posKey)!.has(next)) next++;
+      used.get(posKey)!.add(next);
+      fixed.push({ id: 'order-position-clash', description: `Entry "${e.comment}": đổi thứ tự nạp ${e.insertion_order} → ${next} để hết trùng chỗ với "${seen.get(k)!.comment}" (thứ tự hiển thị thành xác định).` });
+      e.insertion_order = next;
+    }
+  }
+
+  // Lỗi cần sáng tác nội dung → AI.
+  for (const iss of issues.filter(i => i.code === 'varlist-example-content')) {
+    needsAi.push(iss.message);
+  }
+
+  return { card: out, fixed, needsAi };
+}
+
+/**
  * Chạy TẤT CẢ phép vá tất định trên card. Thuần hàm: không đụng store, không gọi mạng.
  * Thứ tự có chủ ý — dựng entry thiếu TRƯỚC rồi mới tắt [initvar], để entry vừa dựng cũng
  * được tắt đúng chuẩn.
@@ -408,6 +517,12 @@ export function autoRepairCard(
   let out = cloneCard(card);
   const fixed: RepairAction[] = [];
   const needsAi: string[] = [];
+
+  // 0. (bug 135) Lỗi chất lượng: EJS so sai enum, entry chết, default sai kiểu, order trùng.
+  const qualityRes = repairQualityIssues(out, schema);
+  out = qualityRes.card;
+  fixed.push(...qualityRes.fixed);
+  needsAi.push(...qualityRes.needsAi);
 
   // 1. Dựng lại entry hệ thống MVU còn thiếu.
   const mvuRes = repairMissingMvuzodEntries(out, schema);

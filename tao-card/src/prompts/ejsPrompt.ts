@@ -170,6 +170,12 @@ _%>
 10. Card nhiều entries (>50): ưu tiên dùng getwi() load nội dung thay vì kích hoạt từng entry
 11. Entries được getwi() load PHẢI ở trạng thái DISABLED trong worldbook
 12. matchChatMessages() dùng để phát hiện keyword context trong chat gần nhất
+13. (bug 135) SO SÁNH VỚI BIẾN ENUM: chuỗi đem so PHẢI chép NGUYÊN VĂN một giá trị trong
+    enumValues của schema (đúng dấu, đúng hoa-thường). Đo trên card thật: so "Chưa rõ" trong
+    khi enum chỉ có "Chưa thức tỉnh" ⇒ nhánh đó KHÔNG BAO GIỜ đúng, cơ chế chết im lặng.
+    Khi phân nhánh theo enum, phủ ĐỦ mọi giá trị hoặc chốt bằng else cho phần còn lại.
+14. (bug 135) Entry nào bạn để TẮT thì PHẢI có đường bật lại (activewi trong controller hoặc
+    getwi đọc nội dung). Tắt + không key + không ai gọi tên = lore chết trong file.
 
 ═══ ĐỊNH DẠNG OUTPUT ═══
 

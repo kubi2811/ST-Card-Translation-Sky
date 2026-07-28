@@ -10,6 +10,7 @@ import type { RegexPlacement, MVUZODSchema } from '../../types';
 import { useCardStore } from '../../store/cardStore';
 import { buildSchemaContextForBatch } from '../mvuzod/schemaContextBuilder';
 import { normalizeMVUZODSchema } from '../mvuzod/normalizeSchema';
+import { auditCardQuality } from '../mvuzod/cardQualityAudit';
 import { buildOutputFormatContent, buildEmphasisContent } from '../mvuzod/systemEntriesBuilder';
 import { nestFlatInitvarKeys } from '../mvuzod/nestFlatInitvar';
 import { buildMVUZODScripts } from '../mvuzod/tavernScriptBuilder';
@@ -1259,6 +1260,23 @@ export async function buildFinalCheckReport(
     problems++;
   } else if (regexScripts.some(rs => /<script[^>]*type\s*=\s*["']module["']/i.test(String((rs as { replaceString?: string }).replaceString || '')))) {
     lines.push('✅ Mọi handler gọi từ onclick= đều đã được đưa ra global (nút bấm chạy được)');
+  }
+
+  // 3d. (bug 135) SOÁT CHẤT LƯỢNG CHÉO — lớp lỗi im lặng đo được trên 2 card thật của user:
+  // EJS so chuỗi không có trong enum (cơ chế chết), entry không đường nào kích hoạt (lore chết),
+  // biến số default kiểu chuỗi, entry cùng order+position, bảng biến chứa ví dụ giá trị cứng.
+  {
+    const audit = auditCardQuality({
+      entries: entries as never,
+      schema: usesMvu && schema && Array.isArray(schema.fields) ? normalizeMVUZODSchema(schema) : null,
+    });
+    for (const iss of audit) {
+      lines.push(`${iss.level === 'error' ? '❌' : '⚠️'} ${iss.message}`);
+      if (iss.level === 'error') problems++;
+    }
+    if (audit.length === 0 && entries.length > 0) {
+      lines.push('✅ Soát chéo chất lượng (enum↔EJS, đường kích hoạt, kiểu dữ liệu, thứ tự nạp): sạch');
+    }
   }
 
   // 4. Lorebook: chất lượng + cấu hình

@@ -11,6 +11,7 @@ import { useCardStore } from '../../store/cardStore';
 import { buildSchemaContextForBatch } from '../mvuzod/schemaContextBuilder';
 import { normalizeMVUZODSchema } from '../mvuzod/normalizeSchema';
 import { auditCardQuality } from '../mvuzod/cardQualityAudit';
+import { tuningUsable, applyLockedSchema } from './cardTuning';
 import { buildOutputFormatContent, buildEmphasisContent } from '../mvuzod/systemEntriesBuilder';
 import { nestFlatInitvarKeys } from '../mvuzod/nestFlatInitvar';
 import { buildMVUZODScripts } from '../mvuzod/tavernScriptBuilder';
@@ -55,7 +56,7 @@ export interface AutoCreatorContext {
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // ═══ JSON extraction helper ═══
-function extractJsonFromText(text: string): unknown {
+export function extractJsonFromText(text: string): unknown {
   const trimmed = text.trim();
   try { return JSON.parse(trimmed); } catch { /* ignore */ }
   
@@ -698,8 +699,21 @@ ${response.text}`;
     }
 
     case 'mvuzod': {
-      const prompt = buildMvuzodPrompt(config.idea, freshCardStr, config.stepConfigs.mvuzod, blueprint);
-      const result = await callAIAndExtract(prompt);
+      // (bug 141) User đã duyệt schema ở "Xem trước & Tinh chỉnh" → KHOÁ: prompt cấm AI đổi
+      // schema, và kết quả bị ÉP dùng nguyên bản đã duyệt ("áp dụng đúng 100%"). Ý tưởng đổi
+      // sau khi duyệt thì tuning hết giá trị — bỏ qua và nói rõ.
+      const tuning = config.tuning;
+      const locked = tuningUsable(tuning, config.idea);
+      if (tuning?.confirmed && !locked) {
+        store.addLog({ step, level: 'warning', message: '⚠️ Schema đã duyệt ở Xem trước bị BỎ QUA vì ý tưởng đã thay đổi sau khi duyệt — chạy như bình thường.' });
+      }
+      if (locked) {
+        store.addLog({ step, level: 'info', message: `🔒 Dùng schema đã duyệt ở "Xem trước & Tinh chỉnh" (${tuning!.schema.fields.length} nhóm biến) — AI chỉ sinh initvar/quy tắc/danh sách biến khớp schema đó.` });
+      }
+      const prompt = buildMvuzodPrompt(config.idea, freshCardStr, config.stepConfigs.mvuzod, blueprint,
+        locked ? tuning!.schema : undefined);
+      let result = await callAIAndExtract(prompt);
+      if (locked) result = applyLockedSchema(result as { schema?: unknown }, tuning!);
 
       // (User 19/07 — "MVU tạo xong chơi card bị lỗi") KIỂM NGAY sau khi AI trả về, TRƯỚC khi
       // apply: schema phải dựng được Zod code, các entry đã yêu cầu phải có mặt. Fail → ném lỗi
@@ -725,10 +739,15 @@ ${response.text}`;
         throw new Error('Chưa có schema MVU — bật bước "MVUZOD Schema" chạy trước để sinh Game UI.');
       }
       const uiCfg = config.stepConfigs.game_ui;
+      // (bug 141) Theme user đã chọn ở Bước 2 của "Xem trước & Tinh chỉnh" thắng cấu hình bước.
+      const tunedTheme = tuningUsable(config.tuning, config.idea) ? config.tuning?.themeId : undefined;
+      if (tunedTheme) {
+        store.addLog({ step, level: 'info', message: `🔒 Dùng giao diện đã chọn ở "Xem trước & Tinh chỉnh": ${tunedTheme}.` });
+      }
       const built = buildProgrammaticRegex({
         schema: normalizeMVUZODSchema(sch),
         component: uiCfg.component,
-        themeId: uiCfg.themeId,
+        themeId: tunedTheme ?? uiCfg.themeId,
         gameName: cardStore.card?.data?.name || 'Game',
         // (bug 116) Bối cảnh mở đầu từ blueprint (Phase 0 sinh từ ý tưởng) — Opening Form
         // thêm trang cho người chơi chọn 1, bối cảnh chọn đi vào hồ sơ tin nhắn đầu.

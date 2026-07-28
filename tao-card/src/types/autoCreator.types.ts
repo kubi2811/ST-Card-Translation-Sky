@@ -1,4 +1,5 @@
 import type { EntryCategory, CardType } from '../lib/worldbook/worldbookConfig';
+import type { MVUZODSchema } from './mvuzod.types';
 
 // ═══ Phương pháp Pipeline ═══
 export type PipelineMethod = 'standard' | 'minh_nguyet';
@@ -199,6 +200,28 @@ export interface AutoCreatorConfig {
   appliedEjsPolicy?: AppliedEjsPolicy;
   /** (bug 134) Cấu hình "AI Sinh Theo Batch" đang được áp — xem AppliedBatchPreset. */
   appliedBatchPreset?: AppliedBatchPreset;
+  /** (bug 141) Trạng thái "Xem trước & Tinh chỉnh" (schema + giao diện đã duyệt) — xem CardTuning. */
+  tuning?: CardTuning;
+}
+
+/**
+ * (bug 141) "XEM TRƯỚC & TINH CHỈNH" — schema MVU + giao diện được duyệt TRƯỚC khi tạo card.
+ * Nằm trong config (được persist) nên thoát giữa chừng quay lại vẫn còn — đúng yêu cầu
+ * "toàn bộ 3 bước này nên được lưu tạm và có thể thoát giữa chừng".
+ */
+export interface CardTuning {
+  /** Schema đang chỉnh (Bước 1) — bản sẽ được dùng khi confirmed. */
+  schema: MVUZODSchema;
+  /** Bản AI đề xuất ban đầu — nút "Reset về bản AI đưa". */
+  originalSchema: MVUZODSchema;
+  /** Theme giao diện chọn ở Bước 2. */
+  themeId?: string;
+  /** Đang ở bước nào của wizard (1..3) — thoát giữa chừng vào lại đúng chỗ. */
+  step: 1 | 2 | 3;
+  /** Đã bấm xác nhận ở Bước 3 — pipeline PHẢI dùng đúng 100% schema+theme này. */
+  confirmed: boolean;
+  /** Chữ ký ý tưởng lúc sinh schema — ý tưởng đổi thì tuning cũ không còn giá trị. */
+  ideaSig: string;
 }
 
 /**

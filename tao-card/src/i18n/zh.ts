@@ -458,6 +458,8 @@ const t: CardUiKeys = {
   acPolishDone: '想法已整理，并提炼 {rules} 条规则。',
   acPolishDropped: 'AI 丢失了细节（{tokens}…）— 已保留您的原文。可重试。',
   acPolishFail: '魔法棒失败',
+  acTunerBtn: '预览与微调',
+  acTunerLocked: '已锁定',
   acIdeaCollapse: '收起',
   acIdeaChars: '{n} 个字符',
   acIdeaPh: '详细描述角色、背景、RPG 系统……\u000aAI 会先分析创意（Phase 0），再生成整张卡片。',

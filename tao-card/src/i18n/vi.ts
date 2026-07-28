@@ -460,6 +460,8 @@ const t: CardUiKeys = {
   acPolishDone: 'Đã sắp xếp lại ý tưởng + rút được {rules} quy tắc từ chính nội dung ý tưởng.',
   acPolishDropped: 'AI làm rơi chi tiết ({tokens}…) — đã GIỮ NGUYÊN văn gốc của bạn. Bấm thử lại nếu muốn.',
   acPolishFail: 'Đũa thần lỗi',
+  acTunerBtn: 'Xem trước & Tinh chỉnh',
+  acTunerLocked: 'đã chốt',
   acIdeaCollapse: 'Thu gọn',
   acIdeaChars: '{n} ký tự',
   acIdeaPh: 'Nhập chi tiết ý tưởng về nhân vật, bối cảnh, hệ thống RPG...\u000aAI sẽ phân tích ý tưởng (Phase 0) rồi tạo toàn bộ card.',

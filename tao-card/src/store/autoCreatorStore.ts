@@ -14,6 +14,7 @@ import type {
   CardBlueprint,
   AppliedEjsPolicy,
   AppliedBatchPreset,
+  CardTuning,
 } from '../types';
 
 interface AutoCreatorState {
@@ -67,6 +68,9 @@ interface AutoCreatorState {
    */
   applyBatchPreset: (preset: AppliedBatchPreset, patch: Partial<AutoCreatorConfig['stepConfigs']['lorebook']>) => void;
   clearBatchPreset: () => void;
+  /** (bug 141) Cập nhật trạng thái "Xem trước & Tinh chỉnh" (persist theo config). */
+  setTuning: (patch: Partial<CardTuning> | CardTuning | undefined) => void;
+  clearTuning: () => void;
   updateMnStepConfig: <K extends keyof AutoCreatorConfig['mnStepConfigs']>(
     step: K,
     patch: Partial<AutoCreatorConfig['mnStepConfigs'][K]>
@@ -269,6 +273,24 @@ export const useAutoCreatorStore = create<AutoCreatorState>()(persist((set, get)
       stepConfigs: { ...s.config.stepConfigs, lorebook: { ...s.config.stepConfigs.lorebook, ...patch } },
     },
   })),
+  setTuning: (patch) => set((s) => {
+    if (patch === undefined) {
+      const next = { ...s.config };
+      delete next.tuning;
+      return { config: next };
+    }
+    const cur = s.config.tuning;
+    const merged = ('schema' in patch && 'originalSchema' in patch && 'ideaSig' in patch)
+      ? (patch as CardTuning)
+      : ({ ...(cur as CardTuning), ...patch } as CardTuning);
+    return { config: { ...s.config, tuning: merged } };
+  }),
+  clearTuning: () => set((s) => {
+    const next = { ...s.config };
+    delete next.tuning;
+    return { config: next };
+  }),
+
   clearBatchPreset: () => set((s) => {
     const prev = s.config.appliedBatchPreset?.previousConfig;
     const next = { ...s.config };

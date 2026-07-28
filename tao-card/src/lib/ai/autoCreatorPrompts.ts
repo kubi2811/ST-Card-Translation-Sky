@@ -6,6 +6,8 @@
 import { MVU_WORKING_CARD_EXAMPLE } from '../mvuzod/mvuReference';
 
 import { POLISHED_IDEA_READING_HINT } from './ideaPolish';
+import { lockedSchemaBlock } from './cardTuning';
+import type { MVUZODSchema as MVUZODSchemaLike } from '../../types/mvuzod.types';
 
 /**
  * (bug 137) Khối "Ý TƯỞNG" dùng chung cho MỌI prompt của Auto Creator. Ý tưởng đã qua cây đũa
@@ -194,7 +196,14 @@ ${JSON_FORMAT_REQUIREMENT}
   return applyOverride(base, config.promptOverride, config.promptMode);
 }
 
-export function buildMvuzodPrompt(idea: string, cardContext: string, config: MvuzodStepConfig, bp: CardBlueprint | null): string {
+export function buildMvuzodPrompt(
+  idea: string,
+  cardContext: string,
+  config: MvuzodStepConfig,
+  bp: CardBlueprint | null,
+  /** (bug 141) Schema user đã duyệt ở "Xem trước & Tinh chỉnh" — có là KHOÁ, AI không được đổi. */
+  lockedSchema?: MVUZODSchemaLike,
+): string {
   const varHints = bp?.suggestedVariables
     ?.map(v => `- ${v.path} (${v.type}): ${v.description} [nhóm: ${v.group}]`)
     .join('\n') ?? '';
@@ -214,6 +223,7 @@ ${cardContext}
 
 CẤU HÌNH:
 - Auto-detect từ lorebook: ${config.autoDetect}
+${lockedSchema ? lockedSchemaBlock(lockedSchema as never) : ''}
 - Tạo InitVar: ${config.createInitVar}
 - Tạo Update Rules: ${config.createUpdateRules}
 - Tạo Variable List: ${config.createVarList}

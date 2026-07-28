@@ -17,6 +17,8 @@ import { MINH_NGUYET_STEP_LABELS } from '../prompts/minhNguyetTemplates';
 import type { AutoCreatorStep, MinhNguyetStep, AnyPipelineStep } from '../types';
 import { cn } from '../lib/utils';
 import { t as ui, fmt } from '../i18n';
+import { PreviewTunerModal } from '../components/autocreator/PreviewTunerModal';
+import { tuningUsable } from '../lib/ai/cardTuning';
 
 // (User 19/07) Thứ tự hiển thị khớp thứ tự CHẠY mới: mvuzod trước regex (regex bám schema),
 // game_ui sau mvuzod, final_check cuối cùng.
@@ -74,6 +76,7 @@ export function AutoCreatorPage() {
   const [showMnPromptOverride, setShowMnPromptOverride] = useState<MinhNguyetStep | null>(null);
   const [ideaExpanded, setIdeaExpanded] = useState(false); // ô "Ý tưởng của bạn" phóng to toàn màn hình
   const [isPolishing, setIsPolishing] = useState(false);   // (bug 137) đũa thần đang chạy
+  const [tunerOpen, setTunerOpen] = useState(false);       // (bug 141) wizard Xem trước & Tinh chỉnh
 
   /**
    * (bug 137) CÂY ĐŨA THẦN: sắp xếp lại ý tưởng (1-1 về ý) + rút quy tắc.
@@ -687,6 +690,19 @@ export function AutoCreatorPage() {
               <AlertTriangle className="w-4 h-4" /> {ui.acNoProfile}
             </div>
           )}
+          {/* (bug 141) "Xem trước & Tinh chỉnh" đứng TRƯỚC nút tạo — duyệt schema + giao diện
+              rồi mới chạy; card ra lò áp đúng 100% bản đã chốt. Nút tạo thường vẫn còn cho ai
+              muốn đi nhanh. */}
+          {!store.isRunning && (
+            <button onClick={() => setTunerOpen(true)}
+              disabled={!activeProfile || !store.config.idea.trim()}
+              className="w-full mb-2 py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 border border-primary/50 text-primary hover:bg-primary/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+              <Eye className="w-4 h-4" /> {ui.acTunerBtn}
+              {store.config.tuning?.confirmed && tuningUsable(store.config.tuning, store.config.idea) && (
+                <span className="px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-[10px]">{ui.acTunerLocked}</span>
+              )}
+            </button>
+          )}
           <button onClick={handleStart} disabled={!activeProfile || !store.config.idea.trim() || (store.isRunning && !store.isPaused)}
             className={cn("w-full py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-sm",
               store.isRunning && !store.isPaused ? "bg-muted text-muted-foreground cursor-not-allowed" : "bg-primary text-primary-foreground hover:bg-primary/90 hover:shadow")}>
@@ -888,6 +904,9 @@ export function AutoCreatorPage() {
           </div>
         </div>
       )}
+
+      {/* (bug 141) Wizard Xem trước & Tinh chỉnh — trạng thái nằm trong config (persist). */}
+      <PreviewTunerModal open={tunerOpen} onClose={() => setTunerOpen(false)} onStart={handleStart} />
     </div>
   );
 }

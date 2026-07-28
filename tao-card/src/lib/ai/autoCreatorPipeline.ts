@@ -1339,6 +1339,12 @@ function applyParsedDataToCard(
           };
         }
         if (result.schema) {
+          // (Goal 28/07) statRelations đúng chỗ là TRONG schema, nhưng AI hay trả ở cấp ngoài
+          // (cạnh "schema") — vớt vào trước khi normalize kẻo mất ràng buộc mềm.
+          const rawSchema = result.schema as Record<string, unknown>;
+          if (rawSchema.statRelations === undefined && Array.isArray((result as Record<string, unknown>).statRelations)) {
+            rawSchema.statRelations = (result as Record<string, unknown>).statRelations;
+          }
           // (Bug enumValues 19/07) Schema AI trả về hay THIẾU key `constraints` (nhất là field
           // string/children) — cast thô là consumer phía sau crash "reading 'enumValues'".
           // Normalize tại biên: constraints luôn là object, children đệ quy sạch.

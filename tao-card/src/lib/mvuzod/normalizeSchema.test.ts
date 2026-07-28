@@ -72,3 +72,66 @@ describe('đường crash cũ hết sập với schema bẩn đã normalize', ()
     expect(() => buildSchemaContextForBatch(DIRTY as MVUZODSchema)).not.toThrow();
   });
 });
+
+// (Goal 28/07) Ràng buộc mềm giữa chỉ số liên quan: chốt chặn statRelations do AI sinh.
+describe('normalizeStatRelations — lọc relation bẩn, gỡ trần trường phụ thuộc', () => {
+  const RAW = {
+    version: '1.0',
+    fields: [
+      {
+        path: '/NV', type: 'object', label: 'NV', defaultValue: {}, constraints: {},
+        children: [
+          { path: '/NV/Cấp', type: 'number', label: 'Cấp', defaultValue: 1, constraints: { min: 1, max: 10 } },
+          { path: '/NV/Năng lượng', type: 'number', label: 'Năng lượng', defaultValue: 10, constraints: { min: 0, max: 100 } },
+          { path: '/NV/Tên', type: 'string', label: 'Tên', defaultValue: '', constraints: {} },
+        ],
+      },
+    ],
+    statRelations: [
+      // hợp lệ: neo số theo khoảng, có basis + landmark dùng được (min "5" dạng chuỗi phải được ép số)
+      {
+        anchorPath: 'NV/Cấp', dependentPath: '/NV/Năng lượng', basis: 'theo mô tả sức mạnh trong ý tưởng',
+        landmarks: [{ anchor: [1, 10], plausibleMin: '5', plausibleMax: 200, note: 'cấp thấp chỉ nội khí mỏng' }],
+      },
+      // trùng cặp path → bỏ
+      {
+        anchorPath: '/NV/Cấp', dependentPath: 'NV/Năng lượng', basis: 'trùng',
+        landmarks: [{ anchor: 1, plausibleMax: 9 }],
+      },
+      // path không tồn tại → bỏ
+      { anchorPath: '/NV/Cấp', dependentPath: '/NV/Ma lực', basis: 'x', landmarks: [{ anchor: 1, plausibleMax: 9 }] },
+      // dependent không phải số → bỏ
+      { anchorPath: '/NV/Cấp', dependentPath: '/NV/Tên', basis: 'x', landmarks: [{ anchor: 1, plausibleMax: 9 }] },
+      // thiếu basis → bỏ (căn cứ là bắt buộc — cảnh báo phải nói dựa vào đâu)
+      { anchorPath: '/NV/Cấp', dependentPath: '/NV/Năng lượng', landmarks: [{ anchor: 1, plausibleMax: 9 }] },
+      // landmark không có plausibleMin/Max nào là số → cả relation bị bỏ (không bịa khoảng)
+      { anchorPath: '/NV/Cấp', dependentPath: '/NV/Năng lượng', basis: 'y', landmarks: [{ anchor: 2 }] },
+    ],
+  };
+  const s = normalizeMVUZODSchema(RAW);
+
+  it('chỉ giữ relation hợp lệ, path được chuẩn hoá, số dạng chuỗi được ép kiểu', () => {
+    expect(s.statRelations).toHaveLength(1);
+    const r = s.statRelations![0];
+    expect(r.anchorPath).toBe('NV/Cấp');
+    expect(r.dependentPath).toBe('NV/Năng lượng');
+    expect(r.landmarks).toEqual([{ anchor: [1, 10], plausibleMin: 5, plausibleMax: 200, note: 'cấp thấp chỉ nội khí mỏng' }]);
+  });
+
+  it('trường PHỤ THUỘC được gỡ max/clamp (giữ min) — cảnh báo mềm thay cho kẹp cứng', () => {
+    const dep = s.fields[0].children!.find(f => f.path === '/NV/Năng lượng')!;
+    expect(dep.constraints.max).toBeUndefined();
+    expect(dep.constraints.clamp).toBeUndefined();
+    expect(dep.constraints.min).toBe(0);
+    // trường NEO không bị đụng — thang cấp 1-10 vẫn nguyên
+    const anchor = s.fields[0].children!.find(f => f.path === '/NV/Cấp')!;
+    expect(anchor.constraints.max).toBe(10);
+  });
+
+  it('không có statRelations (hoặc toàn rác) → key vắng mặt, schema không đổi khác', () => {
+    const clean = normalizeMVUZODSchema({ ...RAW, statRelations: undefined });
+    expect(clean.statRelations).toBeUndefined();
+    const dep = clean.fields[0].children!.find(f => f.path === '/NV/Năng lượng')!;
+    expect(dep.constraints.max).toBe(100); // không relation thì không gỡ trần
+  });
+});

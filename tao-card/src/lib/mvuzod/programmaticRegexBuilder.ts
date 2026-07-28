@@ -9,7 +9,8 @@
 
 import { OPENING_FORM_ANCHOR, STATUS_BAR_ANCHOR } from './regexAnchors';
 import { decideNumericBounds } from './numericSemantics';
-import type { MVUZODSchema, MVUZODField } from '../../types/mvuzod.types';
+import { normalizeFieldPath } from './normalizeSchema';
+import type { MVUZODSchema, MVUZODField, StatRelation } from '../../types/mvuzod.types';
 import type { RegexScript } from '../../types/regex.types';
 import {
   type ThemePreset,
@@ -423,6 +424,11 @@ function buildOpeningForm(
   let fieldCount = 0;
   const sliderInits: string[] = [];
 
+  // (Goal 28/07) Quan hệ mềm giữa chỉ số liên quan: đổi path → id input thật của form.
+  // Trường PHỤ THUỘC phải là ô nhập số TỰ DO (gỡ một phần bug 113) + có chỗ hiện cảnh báo.
+  const relations = compileRelationsForForm(schema, analysis);
+  const depPaths = new Set(relations.map(r => r.depPath));
+
   // ── Page 0: Cover ──
   pages.push(buildCoverPage(gameName || 'Game Setup'));
 
@@ -437,6 +443,7 @@ function buildOpeningForm(
       pages.length,
       section,
       editableLeafs,
+      depPaths,
     );
     pages.push(pageHtml);
     sliderInits.push(...sliders);
@@ -479,8 +486,10 @@ function buildOpeningForm(
     : '';
 
   const submitJS = buildSubmitHandler(analysis, gameName || 'Game', validScenarios);
+  // (Goal 28/07) JS cảnh báo mềm — phải nằm SAU submitJS để bọc tiếp goToPage/selectCard đã bọc.
+  const relationJS = buildRelationJS(relations);
 
-  const fullJS = `${sharedJS}\n${sliderInitJS}\n\n${submitJS}\n\n    // Show first page\n    goToPage(0);`;
+  const fullJS = `${sharedJS}\n${sliderInitJS}\n\n${submitJS}\n${relationJS}\n\n    // Show first page\n    goToPage(0);`;
 
   return { html: bodyHtml, js: fullJS, fieldsRendered: fieldCount };
 }
@@ -499,7 +508,8 @@ function buildFormPage(
   pageIndex: number,
   section: SectionAnalysis,
   fields: FieldAnalysis[],
-
+  /** (Goal 28/07) Path (đã chuẩn hoá) của các trường PHỤ THUỘC trong statRelations. */
+  depPaths: Set<string> = new Set(),
 ): { pageHtml: string; sliders: string[] } {
   const parts: string[] = [];
   const sliders: string[] = [];
@@ -535,8 +545,11 @@ function buildFormPage(
   for (const nf of numbers) {
     // (bugNeedFix/113) Slider `min=0 max=100` cho tiền/ngày là sai từ gốc: người chơi không thể
     // nhập 5000 đồng, và kéo hết thanh cũng chỉ tới 100.
+    // (Goal 28/07) Trường PHỤ THUỘC trong statRelations cũng LUÔN là ô nhập tự do — ràng buộc
+    // là cảnh báo mềm (div -warn bên dưới), không phải trần slider.
     const bounds = decideNumericBounds(nf.field);
-    if (!bounds.bounded) {
+    const isDep = depPaths.has(normalizeFieldPath(nf.field.path));
+    if (!bounds.bounded || isDep) {
       const def0 = typeof nf.field.defaultValue === 'number' ? nf.field.defaultValue : 0;
       parts.push(
         `<div class="stcs-slider-group">` +
@@ -544,7 +557,9 @@ function buildFormPage(
         `<span class="stcs-slider-label">${nf.icon} ${nf.field.label}</span>` +
         `</div>` +
         `<input type="number" class="stcs-input" id="${nf.elementId}-slider" value="${def0}"` +
-        (bounds.min !== undefined ? ` min="${bounds.min}"` : '') + ` step="1">` +
+        (bounds.min !== undefined ? ` min="${bounds.min}"` : '') + ` step="1"` +
+        (isDep ? ` oninput="stcsRelationCheck()"` : '') + `>` +
+        (isDep ? `<div id="${nf.elementId}-slider-warn" style="display:none;color:#f59e0b;font-size:var(--fs-sm);margin-top:6px;line-height:1.5"></div>` : '') +
         `</div>`,
       );
       continue;
@@ -870,6 +885,154 @@ function collectEditableMappings(
   for (const nested of section.nestedSections) {
     collectEditableMappings(nested, result);
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// (Goal 28/07) RÀNG BUỘC MỀM GIỮA CHỈ SỐ LIÊN QUAN
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Bản relation đã đổi path → id input THẬT của form (kèm nhãn hiển thị). Relation nào có
+ * trường không nhập được trên form (readOnly/hidden/không tồn tại) thì bỏ — không có ô để
+ * đọc giá trị thì không cảnh báo được, và cũng không được bịa.
+ */
+interface CompiledRelation {
+  depPath: string;
+  aId: string;
+  aLabel: string;
+  dId: string;
+  dLabel: string;
+  basis: string;
+  lms: Array<{ a: number | [number, number] | string; min?: number; max?: number; note?: string }>;
+}
+
+function compileRelationsForForm(schema: MVUZODSchema, analysis: SchemaAnalysis): CompiledRelation[] {
+  const rels = (schema.statRelations ?? []).filter(r => Array.isArray(r?.landmarks) && r.landmarks.length);
+  if (rels.length === 0) return [];
+
+  // Map path chuẩn hoá → id input + nhãn. Hậu tố id theo ĐÚNG cách buildFormPage render:
+  // có enumValues → lưới thẻ '-cards', còn lại số → '-slider'.
+  const byPath = new Map<string, { inputId: string; label: string }>();
+  const walk = (sections: SectionAnalysis[]) => {
+    for (const s of sections) {
+      for (const fa of s.allLeafFields) {
+        const f = fa.field;
+        if (f.constraints?.readOnly) continue;
+        if (f.constraints?.enumValues?.length) {
+          byPath.set(normalizeFieldPath(f.path), { inputId: `${fa.elementId}-cards`, label: f.label });
+        } else if (f.type === 'number') {
+          byPath.set(normalizeFieldPath(f.path), { inputId: `${fa.elementId}-slider`, label: f.label });
+        }
+      }
+    }
+  };
+  walk(analysis.sections);
+
+  const out: CompiledRelation[] = [];
+  for (const r of rels as StatRelation[]) {
+    const aPath = normalizeFieldPath(r.anchorPath);
+    const dPath = normalizeFieldPath(r.dependentPath);
+    const a = byPath.get(aPath);
+    const d = byPath.get(dPath);
+    if (!a || !d || !r.basis) continue;
+    out.push({
+      depPath: dPath,
+      aId: a.inputId, aLabel: a.label,
+      dId: d.inputId, dLabel: d.label,
+      basis: r.basis,
+      lms: r.landmarks.map(lm => ({
+        a: lm.anchor,
+        ...(lm.plausibleMin !== undefined ? { min: lm.plausibleMin } : {}),
+        ...(lm.plausibleMax !== undefined ? { max: lm.plausibleMax } : {}),
+        ...(lm.note ? { note: lm.note } : {}),
+      })),
+    });
+  }
+  return out;
+}
+
+/**
+ * JS cảnh báo mềm nhúng vào form. Nguyên tắc (đúng lời user):
+ *  • Giá trị neo KHÔNG khớp mốc nào ⇒ im lặng — lore không nói tới thì không bịa.
+ *  • Mốc số khớp CHÍNH XÁC hoặc trong khoảng [lo,hi]; KHÔNG nội suy (nội suy = công thức).
+ *  • Cảnh báo luôn kèm CĂN CỨ (note của mốc / basis của relation) + khoảng thường thấy,
+ *    và nói rõ người chơi được quyền giữ nguyên. KHÔNG BAO GIỜ chặn Xác nhận.
+ */
+function buildRelationJS(relations: CompiledRelation[]): string {
+  if (relations.length === 0) return '';
+  const runtime = relations.map(({ depPath: _d, ...r }) => r);
+  return `
+    // ── (Goal 28/07) Cảnh báo mềm giữa chỉ số liên quan ──
+    var STCS_RELATIONS = ${JSON.stringify(runtime)};
+
+    function stcsFindLandmark(lms, raw) {
+        var num = Number(raw);
+        var isNum = String(raw).trim() !== '' && isFinite(num);
+        for (var i = 0; i < lms.length; i++) {
+            var a = lms[i].a;
+            if (Array.isArray(a)) { if (isNum && num >= a[0] && num <= a[1]) return lms[i]; }
+            else if (typeof a === 'number') { if (isNum && num === a) return lms[i]; }
+            else if (String(raw).trim() === String(a).trim()) return lms[i];
+        }
+        return null;
+    }
+
+    function stcsRelationWarnings() {
+        var data = collectFormData();
+        var out = [];
+        STCS_RELATIONS.forEach(function(r) {
+            var av = data[r.aId], dvRaw = data[r.dId];
+            if (av === undefined || av === '' || dvRaw === undefined || dvRaw === '') return;
+            var dv = Number(dvRaw);
+            if (!isFinite(dv)) return;
+            var lm = stcsFindLandmark(r.lms, av);
+            if (!lm) return;
+            var low = (typeof lm.min === 'number' && dv < lm.min);
+            var high = (typeof lm.max === 'number' && dv > lm.max);
+            if (!low && !high) return;
+            var range = (typeof lm.min === 'number' ? lm.min : '…') + '–' + (typeof lm.max === 'number' ? lm.max : '…');
+            var msg = '⚠ ' + r.dLabel + ' = ' + dv + ' có vẻ ' + (high ? 'cao' : 'thấp') + ' bất thường so với '
+                + r.aLabel + ' = ' + av + ' — ' + (lm.note || r.basis)
+                + ' (khoảng thường thấy: ' + range + '). Bạn vẫn có thể giữ nguyên nếu đó là chủ đích.';
+            out.push({ id: r.dId, msg: msg });
+        });
+        return out;
+    }
+
+    function stcsRelationCheck() {
+        var warns = stcsRelationWarnings();
+        var byId = {};
+        warns.forEach(function(w) { byId[w.id] = (byId[w.id] ? byId[w.id] + '<br>' : '') + w.msg; });
+        STCS_RELATIONS.forEach(function(r) {
+            var el = document.getElementById(r.dId + '-warn');
+            if (!el) return;
+            var m = byId[r.dId];
+            if (m) { el.innerHTML = m; el.style.display = 'block'; }
+            else { el.innerHTML = ''; el.style.display = 'none'; }
+        });
+    }
+
+    // Neo là lưới thẻ (enum) → soát lại ngay khi người chơi đổi lựa chọn.
+    var _stcsRelSelectCard = selectCard;
+    selectCard = function(el, gridId) { _stcsRelSelectCard(el, gridId); stcsRelationCheck(); };
+    // Đổ cảnh báo (nếu có) xuống dưới bảng Tổng kết — người chơi thấy căn cứ lần cuối
+    // trước khi Xác nhận; Xác nhận KHÔNG bị chặn.
+    var _stcsRelGoToPage = goToPage;
+    goToPage = function(n) {
+        _stcsRelGoToPage(n);
+        if (n === totalPages - 2) {
+            var warns = stcsRelationWarnings();
+            var tbl = document.getElementById('stcs-summary-table');
+            if (tbl && warns.length) {
+                tbl.innerHTML += warns.map(function(w) {
+                    return '<tr><td colspan="2" style="color:#f59e0b;line-height:1.5">' + w.msg + '</td></tr>';
+                }).join('');
+            }
+        }
+        stcsRelationCheck();
+    };
+    if (document.addEventListener) document.addEventListener('input', stcsRelationCheck);
+`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

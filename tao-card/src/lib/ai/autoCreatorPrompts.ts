@@ -218,6 +218,16 @@ Yêu cầu định dạng JSON chính xác:
         "constraints": { "min": 0 },
         "description": "Mô tả cho AI"
       }
+    ],
+    "statRelations": [
+      {
+        "anchorPath": "/Nhân vật/Cảnh giới",
+        "dependentPath": "/Nhân vật/Linh lực",
+        "basis": "Căn cứ tổng, trích/diễn đạt lại từ mô tả ý tưởng hoặc lore ở trên",
+        "landmarks": [
+          { "anchor": "Luyện Khí", "plausibleMin": 10, "plausibleMax": 500, "note": "Căn cứ lore của riêng mốc này" }
+        ]
+      }
     ]
   },
   "initVarEntry": "Nội dung cho [initvar] dưới dạng YAML/JSON (nếu được yêu cầu)",
@@ -245,6 +255,25 @@ Có HAI loại biến số, đừng lẫn:
     TUYỆT ĐỐI KHÔNG ghi "max" cũng không ghi "clamp".
 KHÔNG áp bừa 0-100 cho mọi biến số. Kẹp trần 100 lên tiền hay ngày là lỗi nặng: chơi tới ngày 101
 hay kiếm quá 100 đồng là giá trị bị cắt về 100, mất dữ liệu thật của người chơi.
+
+QUY TẮC VỀ "statRelations" (RÀNG BUỘC MỀM GIỮA CHỈ SỐ LIÊN QUAN — đọc kỹ):
+Nhiều chỉ số liên quan logic với nhau: cấp độ/cảnh giới ↔ năng lượng/linh lực, cấp độ ↔ tiền/
+tài sản, cấp độ ↔ năm tu luyện/kinh nghiệm, danh vọng ↔ ảnh hưởng… Người chơi chọn cấp thấp mà
+nhập năng lượng 99999 thì bảng nhập đầu game sẽ NHẮC NHẸ (không chặn) kèm căn cứ. Dữ liệu nhắc
+lấy từ "statRelations" bạn khai ở đây. Luật BẮT BUỘC:
+  • CHỈ tạo relation khi ý tưởng hoặc lore ở trên THẬT SỰ mô tả mối liên hệ đó (vd lore có hệ
+    thống cảnh giới kèm mức sức mạnh). KHÔNG đủ căn cứ ⇒ trả mảng rỗng []. TUYỆT ĐỐI KHÔNG bịa
+    công thức hay ước lượng suông để lấp chỗ trống.
+  • CẤM công thức toán ("max = cấp × 10") và CẤM chia block máy móc đều tăm tắp (1-10 → 10-100,
+    10-20 → 100-500…) — thứ đó biến thế giới thành game phổ thông. "landmarks" phải bám các mốc
+    CÓ THẬT trong lore: tên cảnh giới (anchor là chuỗi đúng giá trị enum), hoặc khoảng cấp mà
+    lore có nhắc (anchor là số hoặc [từ, đến]).
+  • "basis" và "note" là CĂN CỨ hiện nguyên văn cho người chơi đọc — phải nói rõ dựa vào câu
+    mô tả nào (vd "theo mô tả cảnh giới trong World Book, Trúc Cơ đã có thể ngự khí phi hành").
+  • Đây là CẢNH BÁO MỀM: plausibleMin/plausibleMax là khoảng "thường thấy", KHÔNG phải giới hạn.
+    Người chơi được quyền giữ giá trị lệch (nhân vật thiên tài, vật phẩm bị nguyền…).
+  • anchorPath/dependentPath phải trùng "path" của field lá trong schema; trường phụ thuộc là
+    chỉ số tiến triển mở ⇒ khai như BỘ ĐẾM (không "max").
 
 QUY TẮC VỀ "updateRulesEntry" (BẮT BUỘC — đọc kỹ):
 Đây KHÔNG phải đoạn văn xuôi. Viết một CÂY YAML, và phải có mục riêng cho TỪNG BIẾN LÁ trong

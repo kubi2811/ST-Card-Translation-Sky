@@ -38,6 +38,38 @@ export interface MVUZODConstraints {
 export interface MVUZODSchema {
   version: string;       // "1.0"
   fields: MVUZODField[];
+  /**
+   * (Goal 28/07) Quan hệ mềm giữa các chỉ số liên quan (cấp độ ↔ năng lượng, cảnh giới ↔ linh
+   * lực, danh vọng ↔ ảnh hưởng…). AI bước mvuzod SUY từ mô tả ý tưởng/lore của user — KHÔNG
+   * phải công thức của tool. Opening Form dùng để CẢNH BÁO MỀM khi giá trị nhập lệch xa mốc
+   * lore, kèm căn cứ; không bao giờ chặn. Không đủ căn cứ thì mảng rỗng/vắng mặt.
+   */
+  statRelations?: StatRelation[];
+}
+
+// ========== STAT RELATIONS — ràng buộc mềm giữa chỉ số liên quan ==========
+
+export interface StatRelationLandmark {
+  /**
+   * Mốc neo mà khoảng hợp lý áp dụng: giá trị enum ("Luyện Khí"), một con số (10),
+   * hoặc một khoảng [1, 10]. Giá trị neo không khớp mốc nào ⇒ không cảnh báo (không bịa).
+   */
+  anchor: number | [number, number] | string;
+  /** Khoảng "thường thấy" của trường phụ thuộc tại mốc này — KHÔNG phải giới hạn cứng. */
+  plausibleMin?: number;
+  plausibleMax?: number;
+  /** Căn cứ lore của riêng mốc này — hiện nguyên văn trong cảnh báo cho người chơi. */
+  note?: string;
+}
+
+export interface StatRelation {
+  /** JSON pointer của trường neo, vd "/Nhân vật/Cảnh giới" (number hoặc enum). */
+  anchorPath: string;
+  /** JSON pointer của trường phụ thuộc, vd "/Nhân vật/Linh lực" (number, bộ đếm tự do). */
+  dependentPath: string;
+  /** Căn cứ tổng — trích/diễn đạt lại mô tả của user. Hiện trong cảnh báo. */
+  basis: string;
+  landmarks: StatRelationLandmark[];
 }
 
 // ========== JSON PATCH OPERATIONS (RFC 6902 mở rộng) ==========

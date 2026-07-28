@@ -11,7 +11,7 @@
  * Cách chữa đúng: normalize NGAY tại nơi dữ liệu ngoài đi vào (AI trả về, load project cũ) —
  * mọi consumer phía sau được bảo đảm `constraints` luôn là object, children đã đệ quy sạch.
  */
-import type { MVUZODField, MVUZODSchema } from '../../types/mvuzod.types';
+import type { MVUZODField, MVUZODSchema, StatRelation, StatRelationLandmark } from '../../types/mvuzod.types';
 import { stripBogusNumericCaps } from './numericSemantics';
 
 const DEFAULT_BY_TYPE: Record<string, unknown> = {
@@ -110,6 +110,105 @@ export function nestFlatSchema(fields: MVUZODField[]): MVUZODField[] {
   return roots;
 }
 
+/** So sánh path bất kể có "/" đầu hay không: "/A/B" ≡ "A/B". */
+export function normalizeFieldPath(p: unknown): string {
+  return String(p ?? '').split('/').filter(Boolean).join('/');
+}
+
+/** Gom map path-chuẩn-hoá → field lá (đệ quy). */
+function collectLeafByPath(fields: MVUZODField[], out: Map<string, MVUZODField>): void {
+  for (const f of fields ?? []) {
+    if (Array.isArray(f.children) && f.children.length) collectLeafByPath(f.children, out);
+    else out.set(normalizeFieldPath(f.path), f);
+  }
+}
+
+function asFiniteNumber(v: unknown): number | undefined {
+  const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v;
+  return typeof n === 'number' && Number.isFinite(n) ? n : undefined;
+}
+
+/**
+ * (Goal 28/07 — ràng buộc mềm giữa chỉ số liên quan) Chốt chặn tại biên cho `statRelations`
+ * do AI sinh: chỉ giữ relation trỏ đúng 2 field lá CÓ THẬT, có `basis` (căn cứ — sẽ hiện
+ * nguyên văn trong cảnh báo cho người chơi) và còn ít nhất 1 landmark dùng được (có
+ * plausibleMin hoặc plausibleMax là số). Relation hỏng thì BỎ chứ không vá — thiếu căn cứ
+ * mà tự bịa khoảng là đúng cái user cấm.
+ */
+export function normalizeStatRelations(raw: any, fields: MVUZODField[]): StatRelation[] {
+  if (!Array.isArray(raw) || raw.length === 0) return [];
+  const leafByPath = new Map<string, MVUZODField>();
+  collectLeafByPath(fields, leafByPath);
+
+  const seen = new Set<string>();
+  const result: StatRelation[] = [];
+
+  for (const r of raw) {
+    if (!r || typeof r !== 'object') continue;
+    const anchorPath = normalizeFieldPath(r.anchorPath);
+    const dependentPath = normalizeFieldPath(r.dependentPath);
+    const basis = typeof r.basis === 'string' ? r.basis.trim() : '';
+    if (!anchorPath || !dependentPath || anchorPath === dependentPath || !basis) continue;
+
+    const anchorField = leafByPath.get(anchorPath);
+    const depField = leafByPath.get(dependentPath);
+    // Neo phải đọc được thành mốc: số hoặc enum. Phụ thuộc phải là số (khoảng hợp lý là số).
+    if (!anchorField || !depField || depField.type !== 'number') continue;
+    if (anchorField.type !== 'number' && !anchorField.constraints?.enumValues?.length) continue;
+
+    const key = `${anchorPath}→${dependentPath}`;
+    if (seen.has(key)) continue;
+
+    const landmarks: StatRelationLandmark[] = [];
+    for (const lm of Array.isArray(r.landmarks) ? r.landmarks : []) {
+      if (!lm || typeof lm !== 'object') continue;
+      let anchor: StatRelationLandmark['anchor'] | null = null;
+      if (Array.isArray(lm.anchor)) {
+        const lo = asFiniteNumber(lm.anchor[0]);
+        const hi = asFiniteNumber(lm.anchor[1]);
+        if (lo !== undefined && hi !== undefined) anchor = [Math.min(lo, hi), Math.max(lo, hi)];
+      } else if (asFiniteNumber(lm.anchor) !== undefined) {
+        anchor = asFiniteNumber(lm.anchor)!;
+      } else if (typeof lm.anchor === 'string' && lm.anchor.trim()) {
+        anchor = lm.anchor.trim();
+      }
+      const plausibleMin = asFiniteNumber(lm.plausibleMin);
+      const plausibleMax = asFiniteNumber(lm.plausibleMax);
+      if (anchor === null || (plausibleMin === undefined && plausibleMax === undefined)) continue;
+      const entry: StatRelationLandmark = { anchor };
+      if (plausibleMin !== undefined) entry.plausibleMin = plausibleMin;
+      if (plausibleMax !== undefined) entry.plausibleMax = plausibleMax;
+      if (typeof lm.note === 'string' && lm.note.trim()) entry.note = lm.note.trim();
+      landmarks.push(entry);
+    }
+    if (landmarks.length === 0) continue;
+
+    seen.add(key);
+    result.push({ anchorPath, dependentPath, basis, landmarks });
+  }
+  return result;
+}
+
+/**
+ * (Goal 28/07 — gỡ MỘT PHẦN bug 113 theo yêu cầu) Trường PHỤ THUỘC trong relation phải là ô
+ * nhập tự do: bỏ `max`/`clamp` khỏi constraints (giữ `min`). Cảnh báo mềm mới là ràng buộc —
+ * để Zod kẹp thì giá trị user cố ý giữ (nhân vật thiên tài…) bị cắt mất lúc chơi.
+ */
+function freeDependentFields(fields: MVUZODField[], depPaths: Set<string>): MVUZODField[] {
+  return (fields ?? []).map((f) => {
+    const next: MVUZODField = { ...f };
+    if (Array.isArray(f.children) && f.children.length) next.children = freeDependentFields(f.children, depPaths);
+    if (f.type === 'number' && depPaths.has(normalizeFieldPath(f.path))
+        && (f.constraints?.max !== undefined || f.constraints?.clamp)) {
+      const c = { ...(f.constraints ?? {}) };
+      delete c.max;
+      delete c.clamp;
+      next.constraints = c;
+    }
+    return next;
+  });
+}
+
 /** Chấp nhận mọi input (kể cả null/rác) — luôn trả về schema hợp lệ, không ném lỗi. */
 export function normalizeMVUZODSchema(raw: any): MVUZODSchema {
   const s = (raw && typeof raw === 'object') ? raw : {};
@@ -125,5 +224,16 @@ export function normalizeMVUZODSchema(raw: any): MVUZODSchema {
   // tệ, ngày và số lượng vật phẩm. Đây không chỉ là lỗi hiển thị: `max`/`clamp` được Zod dùng để
   // KẸP giá trị, nên người chơi kiếm quá 100 đồng là bị cắt về 100, mất dữ liệu thật.
   // Làm ở đây vì mọi đường ghi schema (AI sinh, wizard, import) đều đi qua hàm này.
-  return stripBogusNumericCaps(base).schema;
+  const clean = stripBogusNumericCaps(base).schema;
+
+  // (Goal 28/07) Ràng buộc mềm giữa chỉ số liên quan: lọc relation AI sinh, rồi thả trần
+  // cứng của các trường phụ thuộc — cảnh báo mềm thay cho kẹp giá trị.
+  const relations = normalizeStatRelations(s.statRelations, clean.fields);
+  if (relations.length > 0) {
+    clean.statRelations = relations;
+    clean.fields = freeDependentFields(clean.fields, new Set(relations.map(r => r.dependentPath)));
+  } else {
+    delete clean.statRelations;
+  }
+  return clean;
 }

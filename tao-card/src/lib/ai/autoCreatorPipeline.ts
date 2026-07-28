@@ -336,6 +336,17 @@ export async function runAutoRepair(): Promise<{ before: number; after: number; 
   let remaining = before;
   const pendingAi = new Set<string>();
 
+  // (bug 140) RÀO CHẮN CHỐNG CẮT GỌT THÔ BẠO. User: "không được gộp/xóa entry quá tay đến mức
+  // từ 50 hay 100 entry rút xuống chỉ còn 5-6... không được lạm dụng việc vá lỗi để cắt gọn Card
+  // một cách thô bạo, đánh mất chiều sâu thế giới đã xây dựng."
+  // Vá lỗi là việc CƠ HỌC (tắt initvar, đóng fence, đổi tên biến sai) — nó KHÔNG có lý do chính
+  // đáng nào để làm bốc hơi lore. Mất quá ngưỡng nghĩa là một phép vá nào đó đang hiểu sai việc
+  // của mình ⇒ HOÀN NGUYÊN lượt đó và báo, thà còn lỗi còn hơn mất nội dung không lấy lại được.
+  const MIN_KEEP_RATIO = 0.8;
+  const countEntries = (c: { data?: { character_book?: { entries?: unknown[] } } }) =>
+    c?.data?.character_book?.entries?.length ?? 0;
+  const entriesBefore = countEntries(useCardStore.getState().card as never);
+
   for (let round = 1; round <= 3; round++) {
     const fresh = useCardStore.getState();
     const schema = ((fresh.card?.data?.extensions as unknown as Record<string, any>)?.mvuzod?.schema ?? null) as MVUZODSchema | null;
@@ -345,6 +356,16 @@ export async function runAutoRepair(): Promise<{ before: number; after: number; 
 
     if (result.fixed.length === 0) {
       if (round === 1) log('warning', '⚠️ Không có lỗi nào tự vá được bằng máy.');
+      break;
+    }
+
+    const nBefore = countEntries(fresh.card as never);
+    const nAfter = countEntries(result.card as never);
+    if (nBefore > 0 && nAfter < Math.ceil(nBefore * MIN_KEEP_RATIO)) {
+      log('error',
+        `🛑 HUỶ lượt vá này: nó làm lorebook tụt từ ${nBefore} xuống ${nAfter} entry ` +
+        `(mất ${nBefore - nAfter}, quá ngưỡng an toàn ${Math.round((1 - MIN_KEEP_RATIO) * 100)}%). ` +
+        'Vá lỗi chỉ được sửa cấu hình/cú pháp, không được xoá nội dung — card giữ nguyên như trước lượt này.');
       break;
     }
 
@@ -367,6 +388,14 @@ export async function runAutoRepair(): Promise<{ before: number; after: number; 
     log('warning', `⚠️ ${pendingAi.size} lỗi cần AI sáng tác nội dung, máy không tự vá được:`);
     for (const n of pendingAi) log('warning', `   • ${n}`);
     log('info', 'Chạy lại bước tương ứng của Auto Creator (Retry) để AI sinh phần còn thiếu.');
+  }
+
+  // (bug 140) Chốt cuối: dù các lượt riêng lẻ đều qua ngưỡng, tổng cộng vẫn phải giữ được lore.
+  const entriesAfter = countEntries(useCardStore.getState().card as never);
+  if (entriesBefore > 0 && entriesAfter < entriesBefore) {
+    const lost = entriesBefore - entriesAfter;
+    log(entriesAfter < Math.ceil(entriesBefore * MIN_KEEP_RATIO) ? 'error' : 'warning',
+      `📉 Lorebook: ${entriesBefore} → ${entriesAfter} entry (mất ${lost}). Kiểm lại xem có entry nào bị bỏ oan không.`);
   }
 
   if (remaining === 0) log('success', `🎉 Đã vá xong toàn bộ ${fixedCount} chỗ — báo cáo sạch, card hoàn thiện.`);
@@ -750,12 +779,38 @@ ${response.text}`;
           store.addLog({ step, level: 'warning', message: `AI review lỗi (bỏ qua): ${e instanceof Error ? e.message : String(e)}` });
         }
       }
+      // ═══ (bug 140) VÁ LỖI LÀ MỘT TIẾN TRÌNH RIÊNG, CHẠY NGAY SAU KIỂM TRA ═══
+      // User: "Nút Vá hết lỗi nên tách thành 1 tiến trình riêng biệt, chạy ngay sau Kiểm tra
+      // tổng thể, với quy tắc: phải sửa dứt điểm toàn bộ lỗi mà Kiểm tra tổng thể đã liệt kê."
+      // Trước đây nó chỉ là một nút phải tự bấm, nên card ra lò vẫn mang nguyên đống lỗi cơ học
+      // trong khi máy thừa sức tự sửa. Nay: kiểm xong mà còn lỗi thì vá luôn, rồi KIỂM LẠI để
+      // con số cuối là con số THẬT sau vá. Không tốn call AI (vá thuần tất định).
+      let finalReport = report;
+      let repairNote = '';
+      if (report.problems > 0) {
+        store.addLog({ step, level: 'info', message: '🔧 Kiểm tra xong — chuyển sang tiến trình VÁ LỖI (tự động, không tốn call AI)…' });
+        try {
+          const rep = await runAutoRepair();
+          finalReport = await buildFinalCheckReport(useCardStore.getState());
+          repairNote = rep.fixedCount > 0
+            ? `\n\n═══ VÁ LỖI ═══\nĐã vá ${rep.fixedCount} chỗ — còn ${finalReport.problems}/${report.problems} vấn đề.`
+            : '\n\n═══ VÁ LỖI ═══\nKhông có lỗi nào máy tự vá được (đều là loại cần AI sáng tác lại nội dung).';
+          for (const line of finalReport.lines.filter(l => l.startsWith('❌'))) {
+            store.addLog({ step, level: 'error', message: `còn lại: ${line}` });
+          }
+        } catch (e) {
+          store.addLog({ step, level: 'warning', message: `Vá lỗi thất bại (card giữ nguyên): ${e instanceof Error ? e.message : String(e)}` });
+        }
+      }
+
       store.setStepPreview(step, {
-        rawOutput: report.lines.join('\n') + (aiVerdict ? `\n\n═══ AI NHẬN XÉT ═══\n${aiVerdict}` : ''),
-        parsedData: { problems: report.problems, lines: report.lines, aiVerdict },
+        rawOutput: finalReport.lines.join('\n') + repairNote + (aiVerdict ? `\n\n═══ AI NHẬN XÉT ═══\n${aiVerdict}` : ''),
+        parsedData: { problems: finalReport.problems, lines: finalReport.lines, aiVerdict },
         tokenEstimate: 0,
       });
-      store.setStepResult(step, report.problems === 0 ? '✅ Card ổn — không thấy vấn đề' : `⚠️ ${report.problems} vấn đề cần xem (chi tiết trong log/preview)`);
+      store.setStepResult(step, finalReport.problems === 0
+        ? (report.problems > 0 ? `✅ Đã vá sạch ${report.problems} vấn đề — card hoàn thiện` : '✅ Card ổn — không thấy vấn đề')
+        : `⚠️ ${finalReport.problems} vấn đề còn lại sau khi vá (chi tiết trong log/preview)`);
       break;
     }
 
@@ -823,6 +878,43 @@ function verifyMvuzodResult(result: unknown, cfg: AutoCreatorConfig['stepConfigs
 }
 
 // ═══ (User 19/07) BÁO CÁO KIỂM TRA TỔNG THỂ toàn card (deterministic, không tốn AI) ═══
+/**
+ * (bug 140) CARD NÀY CÓ ĐỊNH DÙNG MVU KHÔNG?
+ *
+ * User: "card không tạo MVU thì nó cũng kiểm tra về phần MVU rồi nói card đó có lỗi MVU mặc dù
+ * là card normal". Đúng — báo cáo có chặn `if (schema)` cho phần schema, nhưng bộ kiểm hợp nhất
+ * `validateMvuCard` lại chạy VÔ ĐIỀU KIỆN, và nó bắt cả những lỗi kiểu "thiếu script MVU",
+ * "thiếu registerMvuSchema". Card thường không có MVU thì đương nhiên thiếu — báo đỏ là oan,
+ * mà user nhìn card mình toàn lỗi đỏ thì mất niềm tin vào cả bản báo cáo.
+ *
+ * Coi là card MVU khi có BẤT KỲ dấu vết CHỦ ĐÍCH nào: schema mvuzod, entry [initvar], entry dạy
+ * khối <UpdateVariable>, script 酒馆助手 MVU, hay code đọc biến stat_data. Không có dấu nào thì
+ * đây là card thường — mọi phép kiểm MVU đứng ngoài.
+ */
+export function cardUsesMvu(data: { extensions?: unknown; character_book?: { entries?: unknown[] } }): boolean {
+  const ext = data?.extensions as Record<string, any> | undefined;
+  const schema = ext?.mvuzod?.schema;
+  if (schema && Array.isArray(schema.fields) && schema.fields.length > 0) return true;
+
+  const entries = (data?.character_book?.entries ?? []) as Array<{ comment?: string; content?: string }>;
+  for (const e of entries) {
+    const c = String(e?.content ?? '');
+    const name = String(e?.comment ?? '');
+    if (/\[initvar\]/i.test(c) || /initvar/i.test(name)) return true;
+    if (/<UpdateVariable>/i.test(c)) return true;
+    if (/\bstat_data\b|\bgetvar\s*\(/.test(c)) return true;
+  }
+
+  const th = (ext?.tavern_helper?.scripts ?? []) as Array<{ name?: string; content?: string }>;
+  if (th.some(s => String(s?.name ?? '') === 'MVU'
+    || /MagVarUpdate|registerMvuSchema/.test(String(s?.content ?? '')))) return true;
+
+  const rs = (ext?.regex_scripts ?? []) as Array<{ replaceString?: string }>;
+  if (rs.some(s => /\bstat_data\b|getvar\s*\(|data-var\s*=/.test(String(s?.replaceString ?? '')))) return true;
+
+  return false;
+}
+
 export async function buildFinalCheckReport(
   cardStore: ReturnType<typeof useCardStore.getState>,
 ): Promise<{ lines: string[]; problems: number }> {
@@ -832,6 +924,8 @@ export async function buildFinalCheckReport(
   const ext = data.extensions as unknown as Record<string, any>;
   const entries = data.character_book?.entries ?? [];
   const regexScripts: Array<{ findRegex?: string; replaceString?: string; scriptName?: string }> = ext?.regex_scripts ?? [];
+  // (bug 140) Cổng chặn cho TOÀN BỘ nhóm kiểm MVU bên dưới.
+  const usesMvu = cardUsesMvu(data as never);
 
   // 1. Trường cơ bản
   if (!data.name?.trim()) { lines.push('❌ Thiếu tên nhân vật'); problems++; }
@@ -967,8 +1061,11 @@ export async function buildFinalCheckReport(
         lines.push('ℹ️ Initvar không phải JSON (YAML?) — harness đủ vòng bỏ qua (engine MVU vẫn đọc YAML được).');
       }
     }
+  } else if (usesMvu) {
+    lines.push('⚠️ Card có dấu vết MVU (initvar/UpdateVariable/script MVU) nhưng KHÔNG có schema — nên tạo schema ở bước MVUZOD để kiểm chéo được biến.');
+    problems++;
   } else {
-    lines.push('ℹ️ Card không có schema MVU — bỏ qua kiểm MVU');
+    lines.push('ℹ️ Card thường (không dùng MVU) — đã bỏ qua toàn bộ phép kiểm MVU/biến.');
   }
 
   // 3. Regex compile
@@ -1004,20 +1101,24 @@ export async function buildFinalCheckReport(
   // (bugNeedFix/97) Kèm cả script 酒馆助手: thiếu import/registerMvuSchema, script hoặc công tắc
   // nút bị tắt, khoá có dấu cách viết trần trong code Zod — toàn những thứ làm thẻ "trông đủ"
   // nhưng vào SillyTavern là biến đứng im.
-  const unified = validateMvuCard({
-    entries: entries as never,
-    regexScripts,
-    tavernHelperScripts: ext?.tavern_helper?.scripts ?? [],
-  });
-  const NEW_CODES = new Set([
-    'initvar-flat-keys', 'form-write-path',
-    'th-mvu-missing', 'th-mvu-disabled', 'th-schema-no-import', 'th-schema-no-register',
-    'th-schema-bare-key', 'th-schema-disabled',
-  ]);
-  for (const iss of unified.errors) {
-    if (!NEW_CODES.has(iss.code)) continue;
-    lines.push(`❌ ${iss.message}${iss.where ? ` (${iss.where})` : ''}`);
-    problems++;
+  // (bug 140) CHỈ chạy cho card THẬT SỰ dùng MVU. Bộ kiểm này bắt cả "thiếu script MVU" /
+  // "thiếu registerMvuSchema" — card thường không có là chuyện đương nhiên, báo đỏ là oan.
+  if (usesMvu) {
+    const unified = validateMvuCard({
+      entries: entries as never,
+      regexScripts,
+      tavernHelperScripts: ext?.tavern_helper?.scripts ?? [],
+    });
+    const NEW_CODES = new Set([
+      'initvar-flat-keys', 'form-write-path',
+      'th-mvu-missing', 'th-mvu-disabled', 'th-schema-no-import', 'th-schema-no-register',
+      'th-schema-bare-key', 'th-schema-disabled',
+    ]);
+    for (const iss of unified.errors) {
+      if (!NEW_CODES.has(iss.code)) continue;
+      lines.push(`❌ ${iss.message}${iss.where ? ` (${iss.where})` : ''}`);
+      problems++;
+    }
   }
 
   // ─── (bugNeedFix/112) Biến nào KHÔNG có quy tắc cập nhật thì cả ván sẽ đứng im ───
@@ -1042,7 +1143,7 @@ export async function buildFinalCheckReport(
   // được câu hỏi thật: nạp biến khởi tạo lên rồi thì schema / lệnh cập nhật / EJS có ăn khớp
   // với nhau không. Harness cũ có làm một phần nhưng CHỈ khi initvar là JSON — mà thẻ do chính
   // app sinh lại xuất YAML, nên với đúng thẻ của mình phép kiểm sâu nhất luôn bị bỏ qua im lặng.
-  {
+  if (usesMvu) {
     const initEntryForSim = entries.find(en =>
       String(en.content || '').includes('[initvar]') || String(en.comment || '').toLowerCase().includes('initvar'));
     if (initEntryForSim) {

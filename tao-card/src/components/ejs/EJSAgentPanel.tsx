@@ -39,7 +39,7 @@ import {
 import { ACTIVATION_LABEL, findOrphanConditionalEntries, type EjsPlanRow } from '../../lib/ejs/ejsPlanModel';
 import { QUICK_PRESETS } from '../../lib/ejs/ejsQuickPresets';
 import { buildEjsPolicy, isCardReadyForPolicy } from '../../lib/ejs/ejsPolicy';
-import { groupPlanRows } from '../../lib/ejs/ejsPlanGroups';
+import { groupPlanRows, extractEntryRefs } from '../../lib/ejs/ejsPlanGroups';
 import { buildSplitMessages, parseSplitResponse } from '../../lib/ejs/ejsSplit';
 import { scanBrokenRefs, rewriteRefs, fuzzyRepairMapping } from '../../lib/ejs/ejsRefIntegrity';
 import { proposeTestValues, simulateActivation } from '../../lib/ejs/ejsTestMode';
@@ -167,6 +167,8 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
     };
     // (Goal 28/07) Mapping tên cũ → tên mới (tách/đổi tên) — nguồn để vá tham chiếu getwi.
     const refMapping = new Map<string, string[]>();
+    // Phần tách mang mode 'conditional' (tắt sẵn, chờ controller) — phải soát mồ côi kiểu bug 127.
+    const conditionalParts: string[] = [];
     s.setBeforeAfter([]);
 
     try {
@@ -212,6 +214,15 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
           let cur = useCardStore.getState().card.data.character_book?.entries ?? [];
           const newNames: string[] = [];
           for (const part of parts) {
+            // Tên phần không được trùng entry CÓ SẴN trong card — trùng là getwi/activewi trỏ
+            // nhầm (đúng loại xung đột ejsCollision sinh ra để chặn cho khối EJS).
+            const taken = new Set(cur.map(e => String(e.comment || `#${e.id}`).trim().toLowerCase()));
+            let finalName = part.comment, k = 2;
+            while (taken.has(finalName.trim().toLowerCase())) finalName = `${part.comment} (${k++})`;
+            if (finalName !== part.comment) {
+              s.pushProgress(`⚠️ Tên phần "${part.comment}" trùng entry có sẵn — đã đổi thành "${finalName}".`);
+              part.comment = finalName;
+            }
             const newId = nextEntryId(cur);
             const newEntry: LorebookEntry = {
               id: newId,
@@ -227,6 +238,7 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
             createdIds.push(newId);
             cur = [...cur, newEntry];
             newNames.push(part.comment);
+            if (part.mode === 'conditional') conditionalParts.push(part.comment);
           }
           snap(original);
           useCardStore.getState().updateEntry(original.id, { enabled: false, constant: false });
@@ -340,6 +352,20 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
         } else {
           s.pushProgress('🔗 Kiểm tham chiếu getwi/activewi: tất cả đều trỏ đúng entry tồn tại.');
         }
+
+        // Phần tách để "chờ điều kiện" mà không controller nào activewi tới → lore chết im lặng
+        // (đúng mâu thuẫn bug 127). refMapping có thể đã vá tự động (controller cũ bật entry gốc
+        // giờ bật đủ các phần) — nên kiểm SAU khi vá, chỉ báo cái còn thật sự mồ côi.
+        if (conditionalParts.length) {
+          const activatedNames = new Set(blocks.flatMap(b => extractEntryRefs(b.code)));
+          const orphanParts = conditionalParts.filter(n => !activatedNames.has(n.trim().toLowerCase()));
+          if (orphanParts.length) {
+            s.pushProgress(
+              `⚠️ ${orphanParts.length} phần tách đang TẮT chờ điều kiện nhưng chưa khối EJS nào bật: ` +
+              `${orphanParts.join(', ')} — hãy chạy thêm một lượt yêu cầu AI tạo controller bật đúng các entry này, hoặc đổi chúng sang từ khoá.`,
+            );
+          }
+        }
       }
 
       s.setUndo({ createdEntryIds: createdIds, changedEntries: changed, changedContents });
@@ -420,8 +446,9 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
       values[path] = raw === 'true' ? true : raw === 'false' ? false : Number.isFinite(n) && raw.trim() !== '' ? n : raw;
     }
     const cur = useCardStore.getState().card.data.character_book?.entries ?? [];
+    // Chỉ controller đang BẬT mới chạy trong game — entry EJS tắt mà đem mô phỏng là kết quả giả.
     const controllers = cur
-      .filter(e => String(e.content ?? '').includes('<%'))
+      .filter(e => e.enabled !== false && String(e.content ?? '').includes('<%'))
       .map(e => ({ name: String(e.comment || `#${e.id}`), code: String(e.content ?? '') }));
     const report = await simulateActivation(controllers, cur, values, s.testSampleText);
     s.setSimReport(report);

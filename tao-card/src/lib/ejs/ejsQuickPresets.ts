@@ -13,7 +13,7 @@
  */
 import type { LorebookEntry } from '../../types';
 import type { MVUZODSchema } from '../../types/mvuzod.types';
-import { detectActivationMode, detectExistingStatusUi, suggestReclassification, estimateEntryTokens } from './ejsPlanModel';
+import { detectActivationMode, detectExistingStatusUi, suggestReclassification, estimateEntryTokens, isMvuCriticalEntry } from './ejsPlanModel';
 
 export interface PresetCardContext {
   schema: MVUZODSchema | null;
@@ -106,6 +106,8 @@ export const QUICK_PRESETS: QuickPreset[] = [
           '- Entry chỉ liên quan khi hội thoại nhắc tới (nhân vật phụ, địa điểm, vật phẩm) → chuyển sang',
           '  kích hoạt theo từ khoá, đặt keys sát với cách người chơi thật sẽ gọi tên nó.',
           '',
+          'KHÔNG đụng vào entry thuộc bộ máy MVU ([initvar], quy tắc cập nhật biến, danh sách biến,',
+          'khối EJS) — đổi chế độ kích hoạt của chúng là phá hệ biến của card.',
           'Liệt kê TỪNG entry một, nêu rõ lý do vì sao hạ cấp được hoặc vì sao phải giữ.',
         ].join('\n'),
         blockers: [],
@@ -134,6 +136,8 @@ export const QUICK_PRESETS: QuickPreset[] = [
           'Hãy tự chọn những biến nào thật sự đánh dấu tiến trình (cảnh giới, giai đoạn quan hệ, khu vực,',
           'chương truyện…), rồi với mỗi mốc: các entry lore thuộc mốc đó để TẮT sẵn, và controller bật',
           'chúng bằng await activewi(tên entry, true) khi biến đạt điều kiện.',
+          'BẮT BUỘC: mỗi entry bị tắt phải có ĐÚNG một chỗ trong controller bật nó — entry tắt mà không',
+          'ai bật là lore biến mất vĩnh viễn khỏi mọi lượt chat.',
           'Nêu rõ từng entry sẽ bị đổi và mốc tương ứng.',
         ].join('\n'),
         blockers: b,
@@ -163,7 +167,9 @@ export const QUICK_PRESETS: QuickPreset[] = [
           'Rà các entry mô tả nhân vật phụ, địa điểm, vật phẩm, tổ chức trong card này.',
           'Với mỗi entry loại đó: chuyển sang kích hoạt theo từ khoá (bỏ Constant) và đề xuất bộ keys',
           'đầy đủ — gồm tên chính, tên gọi tắt, biệt danh, và cách gọi mà người chơi Việt hay dùng.',
-          'Đừng đặt key quá chung (ví dụ "anh", "cô") vì sẽ kích hoạt bừa.',
+          'Đừng đặt key quá chung (ví dụ "anh", "cô") vì sẽ kích hoạt bừa. Key của hai entry khác nhau',
+          'KHÔNG được trùng hệt hay bao nhau (key "kiếm" của A nằm trong "kiếm khí" của B là nhắc B',
+          'cả hai cùng bật) — máy có bộ rà sẽ báo lại các cặp key chồng chéo.',
           `Có ${cands.length} entry đang thuộc diện cần xem lại.`,
         ].join('\n'),
         blockers: [],
@@ -224,6 +230,41 @@ export const QUICK_PRESETS: QuickPreset[] = [
         ].join('\n'),
         blockers: b,
         notes: [],
+      };
+    },
+  },
+
+  {
+    id: 'split-bloated',
+    title: 'Tách entry gộp',
+    icon: '🪓',
+    effect:
+      'Rà các entry đang nhồi nhiều phần có ĐIỀU KIỆN KÍCH HOẠT KHÁC NHAU (15 sự kiện trong năm chung ' +
+      '1 entry, mọi địa điểm chung 1 entry…) và tách thành entry riêng — mỗi phần kích hoạt đúng thời ' +
+      'điểm của nó. Kế hoạch tách hiện đầy đủ tên từng phần để duyệt trước; tham chiếu getwi được máy tự vá.',
+    build: (ctx) => {
+      // Ứng viên đo tất định: entry dài, nhiều dòng, không thuộc bộ máy MVU.
+      const cands = ctx.entries.filter(e =>
+        !isMvuCriticalEntry(e)
+        && estimateEntryTokens(e) >= 300
+        && String(e.content ?? '').split('\n').filter(l => l.trim()).length >= 5);
+      if (!cands.length) {
+        return { goal: '', blockers: ['Không thấy entry nào đủ dài/nhiều phần để đáng tách — card đang gọn.'], notes: [] };
+      }
+      return {
+        goal: [
+          'Rà các entry đang GỘP nhiều phần có điều kiện kích hoạt khác nhau và đề xuất TÁCH (action split_entry).',
+          `Ứng viên máy đo được (dài ≥ ~300 token, nhiều đoạn): ${cands.slice(0, 8).map(e => `"${e.comment || `#${e.id}`}"`).join(', ')}${cands.length > 8 ? ` … và ${cands.length - 8} entry nữa` : ''}.`,
+          '',
+          'Luật tách:',
+          '- CHỈ tách khi các phần có điều kiện kích hoạt khác nhau và độc lập (mốc thời gian, địa điểm,',
+          '  giai đoạn…). Nội dung luôn đi cùng nhau thì GIỮ CHUNG — không chia vụn.',
+          '- Khai rõ splitInto: tên từng entry con + chế độ kích hoạt + điều kiện của phần đó.',
+          '- Phần chuyển sang kích hoạt theo điều kiện biến thì phải có controller bật nó.',
+          'Entry không đáng tách thì bỏ qua và không cần nêu.',
+        ].join('\n'),
+        blockers: [],
+        notes: [`Máy đo được ${cands.length} entry đủ dài để xem xét — AI sẽ tự quyết cái nào thật sự đáng tách.`],
       };
     },
   },
@@ -355,20 +396,27 @@ export const QUICK_PRESETS: QuickPreset[] = [
         '',
         `1. TIẾT KIỆM TOKEN: rà ${consts.length} entry đang "Luôn bật", giữ lại đúng những entry AI buộc`,
         '   phải biết mọi lượt (quy tắc xưng hô, thiết lập thế giới), còn lại hạ xuống từ khoá hoặc điều kiện.',
+        '   KHÔNG đụng entry thuộc bộ máy MVU ([initvar], quy tắc cập nhật, danh sách biến, khối EJS).',
         '2. TỪ KHOÁ: entry nhân vật phụ / địa điểm / vật phẩm → kích hoạt theo từ khoá, đặt keys sát với',
-        '   cách người chơi thật sự gọi tên.',
+        '   cách người chơi thật sự gọi tên; key của hai entry không được trùng hệt hay bao nhau.',
+        '3. TÁCH ENTRY GỘP: entry nhồi nhiều phần có điều kiện kích hoạt khác nhau (chuỗi sự kiện, danh',
+        '   sách địa điểm…) → tách thành entry riêng (action split_entry, khai rõ splitInto từng phần).',
+        '   Nội dung luôn đi cùng nhau thì giữ chung.',
       ];
       if (hasSchema) {
         parts.push(
-          `3. LORE THEO TIẾN TRÌNH: dùng biến của card (${varList(ctx, 12)}) để mở lore đúng mốc — entry tắt`,
-          '   sẵn, controller bật bằng await activewi(tên, true).',
-          '4. KHỐI BIẾN CHO AI ĐỌC: chèn giá trị biến hiện tại vào prompt để AI không phải đoán chỉ số.',
-          '5. TÍNH CÁCH THEO CHỈ SỐ: chọn một biến làm thang, chia 3-4 mốc, mỗi mốc một giọng điệu.',
+          `4. LORE THEO TIẾN TRÌNH: dùng biến của card (${varList(ctx, 12)}) để mở lore đúng mốc — entry tắt`,
+          '   sẵn, controller bật bằng await activewi(tên, true); mỗi entry tắt phải có đúng chỗ bật nó.',
+          '5. KHỐI BIẾN CHO AI ĐỌC: chèn giá trị biến hiện tại vào prompt để AI không phải đoán chỉ số,',
+          '   ưu tiên DIỄN GIẢI thành văn ngắn thay vì bảng số khô.',
+          '6. TÍNH CÁCH THEO CHỈ SỐ: chọn một biến làm thang, chia 3-4 mốc, mỗi mốc một giọng điệu.',
+          '7. CHĂM SÓC DỮ LIỆU MVU (nếu thấy đáng làm): khối chuẩn hoá giá trị lệch schema (không sửa',
+          '   schema) và/hoặc cảnh báo ngưỡng chỉ số quan trọng.',
         );
       } else {
         parts.push(
-          '3. Card CHƯA có MVUZOD schema nên bỏ qua phần điều khiển theo biến — chỉ làm phần từ khoá',
-          '   và tối ưu Constant. Nêu trong ghi chú rằng nên tạo schema để mở khoá các tính năng còn lại.',
+          '4. Card CHƯA có MVUZOD schema nên bỏ qua phần điều khiển theo biến — chỉ làm phần từ khoá,',
+          '   tách entry và tối ưu Constant. Nêu trong ghi chú rằng nên tạo schema để mở khoá phần còn lại.',
         );
       }
       if (ui.hasStatusUi) {

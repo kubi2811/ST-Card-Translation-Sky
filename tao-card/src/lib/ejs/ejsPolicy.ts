@@ -31,7 +31,12 @@ export function buildEjsPolicy(
   const reclassify = rows.filter(r => r.action === 'reclassify');
   const createEjs = rows.filter(r => r.action === 'create_ejs');
   const character = rows.filter(r => r.target === 'character');
-  const tokensSaved = rows.reduce((s, r) => s + (r.tokensSaved ?? 0), 0);
+  // (Goal 28/07) tokensSaved gộp cả phần tiết kiệm từ TÁCH entry (tokensDelta âm),
+  // không chỉ reclassify — bỏ sót là chính sách báo hiệu quả thấp hơn thực tế.
+  const tokensSaved = rows.reduce(
+    (s, r) => s + (r.tokensSaved ?? (typeof r.tokensDelta === 'number' && r.tokensDelta < 0 ? -r.tokensDelta : 0)),
+    0,
+  );
 
   return {
     appliedAt: now,
@@ -99,6 +104,19 @@ function buildDirective(rows: EjsPlanRow[], goal: string): string {
     parts.push(
       'Mỗi khối một tên entry riêng; biến đọc từ hai đường dẫn khác nhau PHẢI đặt hai tên khác nhau',
       '(mọi khối @@preprocessing chạy chung một context, trùng tên là bật nhầm entry mà không báo lỗi).',
+    );
+  }
+
+  // (Goal 28/07) Bài học từ các dòng TÁCH entry: card sau đừng lặp lại lỗi gộp — đây là
+  // nguyên tắc đáng mang sang nhất, vì nó ngừa từ gốc thay vì phải tách lại sau.
+  const splits = rows.filter(r => r.action === 'split_entry');
+  if (splits.length) {
+    parts.push(
+      '',
+      `KHÔNG GỘP nội dung có điều kiện kích hoạt khác nhau vào một entry (card nguồn phải tách lại ${splits.length} entry):`,
+      ...splits.slice(0, 3).map(r =>
+        `- "${r.name}" phải tách thành ${r.splitInto?.length ?? '?'} phần (${(r.splitInto ?? []).slice(0, 4).map(x => x.criterion).filter(Boolean).join('; ')}).`),
+      'Ngay từ đầu hãy tạo mỗi điều kiện kích hoạt một entry riêng, kèm keys/điều kiện đúng phần đó.',
     );
   }
 

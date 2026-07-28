@@ -11,6 +11,7 @@ import {
   type EjsPlanRow,
 } from '../ejsPlanModel';
 import { parseSplitResponse } from '../ejsSplit';
+import { buildEjsPolicy } from '../ejsPolicy';
 import { validateWorldbookEjs } from '../stptApi';
 
 const mkEntry = (o: Partial<LorebookEntry>): LorebookEntry => ({
@@ -301,5 +302,26 @@ describe('parseSplitResponse — tách phải đủ phần, không rơi dữ ki�
     }), original, row);
     expect(dropped.warnings.some(w => w.includes('KHÔNG thấy'))).toBe(true);
     expect(dropped.warnings.some(w => w.includes('KHÔNG có key'))).toBe(true);
+  });
+});
+
+// ═══ 7. (Rà soát 129+130) Chính sách Auto Creator học được cả bài học TÁCH ═══
+
+describe('buildEjsPolicy — chưng cất split_entry + tính đủ token tiết kiệm', () => {
+  it('dòng tách sinh nguyên tắc "không gộp" và tokensSaved gộp cả tokensDelta âm của tách', () => {
+    const splitRow = mkRow({
+      id: 's1', action: 'split_entry', name: 'Sự kiện trong năm', currentMode: 'constant',
+      splitInto: [
+        { name: 'Lễ hội hoa đăng', mode: 'keyword', criterion: 'tháng 3' },
+        { name: 'Đại hội võ lâm', mode: 'keyword', criterion: 'tháng 7' },
+      ],
+      tokensDelta: -120,
+    });
+    const plan = { scope: '', rows: [splitRow], notes: [], warnings: [], estCalls: 2 };
+    const policy = buildEjsPolicy(plan, new Set(['s1']), 'Card nguồn', 'tách bớt entry gộp', '2026-07-28T00:00:00Z');
+    expect(policy.directive).toContain('KHÔNG GỘP');
+    expect(policy.directive).toContain('Sự kiện trong năm');
+    expect(policy.directive).toContain('tháng 3');
+    expect(policy.summary.tokensSaved).toBe(120);
   });
 });

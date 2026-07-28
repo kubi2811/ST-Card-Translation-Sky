@@ -52,11 +52,13 @@ function runStreamed(cmd: string, cwd: string, res: import('http').ServerRespons
 
 async function runUpdateAndInstall(
   res: import('http').ServerResponse,
-  opts: { mode: 'update' | 'downgrade' },
+  opts: { mode: 'update' | 'downgrade' | 'goto'; ref?: string },
 ) {
   const root = process.cwd();
   const isUpdate = opts.mode === 'update';
-  const label = isUpdate ? 'Cập nhật' : 'Hạ cấp';
+  const label = opts.mode === 'update' ? 'Cập nhật'
+    : opts.mode === 'downgrade' ? 'Hạ cấp'
+    : 'Chuyển phiên bản';
 
   // Mốc TRƯỚC khi đổi mã nguồn — để biết file nào vừa đổi mà chỉ cài đúng chỗ cần.
   let oldHead = '';
@@ -64,13 +66,20 @@ async function runUpdateAndInstall(
     oldHead = execSync('git rev-parse HEAD', { cwd: root }).toString().trim();
   } catch { /* không lấy được thì lát nữa cài hết cho chắc */ }
 
-  res.write(isUpdate
-    ? 'Đang tải bản mới nhất từ GitHub...\n'
-    : 'Đang hạ cấp phiên bản xuống 1 commit (git reset --hard HEAD~1)...\n');
+  // (bugNeedFix/146) Thêm chế độ "goto": nhảy THẲNG tới một phiên bản bất kỳ.
+  // Trước đây muốn lùi 5 bản phải bấm "hạ cấp" 5 lần, mỗi lần cài lại thư viện — vừa lâu
+  // vừa không biết đang ở đâu. Ref đã được kiểm ở tầng endpoint (chỉ nhận hex 7-40 ký tự).
+  res.write(opts.mode === 'goto'
+    ? `Đang chuyển sang phiên bản ${opts.ref}...\n`
+    : isUpdate
+      ? 'Đang tải bản mới nhất từ GitHub...\n'
+      : 'Đang hạ cấp phiên bản xuống 1 commit (git reset --hard HEAD~1)...\n');
 
-  const gitCmd = isUpdate
-    ? 'git fetch origin main && git reset --hard origin/main'
-    : 'git reset --hard HEAD~1';
+  const gitCmd = opts.mode === 'goto'
+    ? `git fetch origin main && git reset --hard ${opts.ref}`
+    : isUpdate
+      ? 'git fetch origin main && git reset --hard origin/main'
+      : 'git reset --hard HEAD~1';
   const gitCode = await runStreamed(gitCmd, root, res);
   if (gitCode !== 0) {
     res.write(isUpdate
@@ -383,6 +392,50 @@ export default defineConfig({
             // Hạ cấp cũng phải cài lại thư viện cho mọi tool con: bản cũ có thể dùng bộ thư viện
             // KHÁC bản mới (thiếu, hoặc thừa mà sai phiên bản) — cùng một cái bẫy với Cập nhật.
             runUpdateAndInstall(res, { mode: 'downgrade' });
+            return;
+          }
+
+          // ═══ (bugNeedFix/146) DANH SÁCH PHIÊN BẢN + LOG ═══
+          // User: "Gộp 2 nút mũi tên lên/xuống thành 1 nút chung vì hạ từng bản rất cực. Khi bấm
+          // vào sẽ hiện danh sách tất cả các phiên bản từ trước tới nay để chọn. Bên cạnh mỗi phiên
+          // bản có thêm nút Log để xem thông tin update, để mọi người xem được log khi cậu Sky bận."
+          if (req.url === '/api/versions' && req.method === 'GET') {
+            res.setHeader('Content-Type', 'application/json; charset=utf-8');
+            res.setHeader('Cache-Control', 'no-cache');
+            const root = process.cwd();
+            try {
+              // fetch trước để thấy cả các bản MỚI HƠN bản đang dùng (không có bước này thì
+              // sau khi hạ cấp sẽ không còn đường nào quay lại bản mới).
+              try { execSync('git fetch origin main --quiet', { cwd: root, timeout: 20000 }); } catch { /* offline vẫn liệt kê được bản cục bộ */ }
+              const head = execSync('git rev-parse HEAD', { cwd: root }).toString().trim();
+              // \x1f ngăn trường, \x1e ngăn bản ghi — an toàn với nội dung commit nhiều dòng.
+              const raw = execSync(
+                'git log origin/main -n 60 --date=format:%d/%m/%Y %H:%M --format=%H\x1f%h\x1f%ad\x1f%an\x1f%s\x1f%b\x1e',
+                { cwd: root, maxBuffer: 8 * 1024 * 1024 },
+              ).toString();
+              const versions = raw.split('\x1e').map(r => r.trim()).filter(Boolean).map(rec => {
+                const [sha, short, date, author, subject, body] = rec.split('\x1f');
+                return { sha, short, date, author, subject, body: (body ?? '').trim(), current: sha === head };
+              });
+              res.end(JSON.stringify({ ok: true, head, versions }));
+            } catch (e) {
+              res.statusCode = 500;
+              res.end(JSON.stringify({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+            }
+            return;
+          }
+
+          if ((req.url ?? '').startsWith('/api/goto') && req.method === 'POST') {
+            res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+            res.setHeader('Cache-Control', 'no-cache');
+            const ref = new URL(req.url ?? '', 'http://x').searchParams.get('ref') ?? '';
+            // Chỉ nhận mã commit dạng hex — chặn mọi thứ có thể biến thành lệnh shell khác.
+            if (!/^[0-9a-f]{7,40}$/i.test(ref)) {
+              res.statusCode = 400;
+              res.end('Mã phiên bản không hợp lệ.\n');
+              return;
+            }
+            runUpdateAndInstall(res, { mode: 'goto', ref });
             return;
           }
 

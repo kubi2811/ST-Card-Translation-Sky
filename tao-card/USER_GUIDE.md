@@ -18,6 +18,7 @@ Tài liệu này sẽ hướng dẫn bạn chi tiết từng bước cách sử 
 8. [📜 Phòng Thiết Kế Mẫu EJS (EJS Studio)](#8-phòng-thiết-kế-mẫu-ejs-ejs-studio)
 9. [🕸 Bộ Thu Thập Wiki (Wiki Collector)](#9-bộ-thu-thập-wiki-wiki-collector)
 10. [📤 Quy Trình Xuất Bản & Khắc Phục Sự Cố](#10-quy-trình-xuất-bản--khắc-phục-sự-cố)
+11. [🆕 Tính Năng Bổ Sung (bản mới)](#11-tính-năng-bổ-sung-bản-mới)
 
 ---
 
@@ -482,3 +483,72 @@ Wiki Collector (WikiPage) là cánh cổng kết nối studio với kho tri th�
 
 ---
 *Chúc bạn có những trải nghiệm thiết kế thẻ tuyệt vời cùng Tavern Card Studio! Nếu gặp bất kỳ khó khăn nào khác, hãy tham khảo tài liệu [ARCHITECTURE.md](file:///e:/tooltaocrd/ARCHITECTURE.md) của dự án để biết thêm chi tiết về cấu trúc mã nguồn.*
+
+---
+
+## 11. 🆕 TÍNH NĂNG BỔ SUNG (bản mới)
+
+> Mục này gom các tính năng thêm sau khi 10 mục trên được viết. Có một bài kiểm tự động
+> canh mục này: thêm tính năng lớn vào tool mà quên ghi vào đây thì bộ test sẽ báo đỏ.
+
+### 11.1 🪄 Đũa thần ý tưởng (ô "Ý tưởng của bạn")
+
+Gõ ý tưởng lộn xộn một mạch rồi bấm biểu tượng đũa thần. Công cụ sẽ:
+
+*   **Sắp xếp lại** ý tưởng thành các phần có tiêu đề (`## Nhân vật chính`, `## Thế giới & bối cảnh`,
+    `## Hệ thống sức mạnh`…) — chỉ đổi cách trình bày, **không thêm bớt ý** của bạn.
+*   **Rút quy tắc** từ chính ý tưởng đó và điền vào ô "Yêu cầu/Quy tắc cho AI".
+
+Có một chốt chặn máy: mọi **tên riêng** và **con số nội dung** trong bản gốc phải còn nguyên trong
+bản sắp xếp. Nếu AI làm rơi, công cụ sẽ nói đích danh cái bị rơi rồi bắt AI làm lại; vẫn rơi thì
+**giữ nguyên văn của bạn** chứ không âm thầm đổi ý. Riêng số thứ tự mục lục ("1.", "2.1") thì không
+tính — chúng là định dạng, và việc của đũa thần đúng là thay chúng bằng tiêu đề.
+
+### 11.2 🔍 Xem trước & Tinh chỉnh (trước khi bấm Tạo Card)
+
+Một wizard 3 bước chạy trước khi pipeline khởi động:
+
+1.  **Schema** — AI quét ý tưởng và đề xuất bộ biến MVU. Bạn sửa trực tiếp từng biến (tên, phạm vi,
+    enum, giá trị mặc định, xoá bớt, viết ràng buộc riêng), hoặc nhờ copilot mini sửa hộ. Có nút
+    reset về bản AI đưa.
+2.  **Giao diện** — công cụ dựng sẵn vài phương án Opening Form + thanh trạng thái **từ chính schema
+    bạn vừa chốt** (không tốn lượt gọi AI nào), xem trước rồi chọn một.
+3.  **Xác nhận** — card tạo ra sẽ dùng **đúng 100%** schema + giao diện đã chốt.
+
+Trạng thái được lưu lại, thoát giữa chừng vào lại vẫn đúng chỗ. Lưu ý: đổi nội dung ý tưởng sẽ làm
+bản đã duyệt hết hiệu lực (vì schema cũ nói về một thế giới khác).
+
+### 11.3 🎨 Nhờ AI tạo giao diện (Bước 2)
+
+Ngoài các mẫu dựng sẵn, bạn có thể tả phong cách mình muốn — tông màu chủ đạo, không khí (u ám /
+tươi sáng / cổ trang / công nghệ), thời đại — và AI sẽ phối bảng màu + chọn font cho vừa thế giới
+của thẻ. Chưa ưng thì tả tiếp để **chỉnh đúng chỗ đó** (AI nhớ bản nó vừa làm, không vẽ lại từ đầu).
+
+AI **chỉ quyết phần thẩm mỹ**; khung HTML của Opening Form và thanh trạng thái vẫn do công cụ dựng
+như các mẫu có sẵn. Nhờ vậy giao diện AI tạo ra không bao giờ làm hỏng đường ghi/đọc biến. Nếu bảng
+màu làm chữ chìm vào nền, công cụ sẽ cảnh báo trước khi bạn chốt.
+
+### 11.4 ⚡ Preset Nhanh trong EJS Studio
+
+Dành cho người chưa biết gì về EJS: mỗi preset là một yêu cầu dựng sẵn, **tự bám vào thẻ của bạn**
+(có schema chưa, biến nào, đã có thanh trạng thái riêng chưa) và nêu rõ công dụng khi đưa vào thẻ.
+Bấm một preset là ô "Bạn muốn EJS làm gì?" được điền sẵn; bạn xem lại rồi bấm Lên kế hoạch.
+
+Có cả preset **áp dụng tất cả tính năng EJS** cho những ai muốn làm một lượt cho cả thẻ. Preset nào
+không dùng được với thẻ hiện tại sẽ bị làm mờ kèm lý do (ví dụ: thẻ chưa có schema biến MVU).
+
+### 11.5 📖 Tạo thẻ từ truyện — nhiều file + học văn phong
+
+Nạp **nhiều file truyện** cùng lúc; công cụ đọc hết rồi rút nhân vật, thế giới, dòng thời gian.
+Có tuỳ chọn **học văn phong tác giả** để thẻ viết ra giữ được giọng của truyện gốc.
+
+### 11.6 🕘 Danh sách phiên bản (nút lịch sử ở đầu trang)
+
+Trước đây có hai nút mũi tên: một để cập nhật, một để hạ **đúng một bản mỗi lần** — muốn về bản của
+tuần trước phải bấm cả chục lần. Nay gộp thành một nút mở **danh sách phiên bản**:
+
+*   Xem toàn bộ các bản gần đây, biết rõ mình **đang ở bản nào** và cách bản mới nhất bao nhiêu bản.
+*   Mỗi dòng có nút **Log** để đọc nội dung bản cập nhật đó ngay tại chỗ.
+*   Bấm một lần để nhảy **thẳng** tới bất kỳ bản nào (lên bản mới hoặc quay về bản cũ).
+
+Dữ liệu của bạn — thẻ, cache, tiến độ dịch — **không bị đụng tới** khi đổi phiên bản.

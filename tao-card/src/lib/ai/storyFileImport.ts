@@ -50,8 +50,9 @@ export function naturalCompare(a: string, b: string): number {
   return 0;
 }
 
-/** Đọc một file văn bản thường (không phải epub). */
+/** Đọc một file văn bản thường (không phải epub). `Blob.text()` là chuẩn; FileReader dự phòng. */
 function readTextFile(file: File): Promise<string> {
+  if (typeof file.text === 'function') return file.text();
   return new Promise((resolve, reject) => {
     const r = new FileReader();
     r.onload = () => resolve(String(r.result ?? ''));

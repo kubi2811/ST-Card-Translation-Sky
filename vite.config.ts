@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 import httpProxy from 'http-proxy';
-import { exec, execSync } from 'child_process';
+import { exec, execSync, execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { parseToolsRoute, isToolsMutating, getToolById, TOOL_SERVERS } from './src/hub/toolCatalog';
@@ -409,8 +409,19 @@ export default defineConfig({
               try { execSync('git fetch origin main --quiet', { cwd: root, timeout: 20000 }); } catch { /* offline vẫn liệt kê được bản cục bộ */ }
               const head = execSync('git rev-parse HEAD', { cwd: root }).toString().trim();
               // \x1f ngăn trường, \x1e ngăn bản ghi — an toàn với nội dung commit nhiều dòng.
-              const raw = execSync(
-                'git log origin/main -n 60 --date=format:%d/%m/%Y %H:%M --format=%H\x1f%h\x1f%ad\x1f%an\x1f%s\x1f%b\x1e',
+              //
+              // Dùng execFileSync (KHÔNG qua shell) thay execSync: `--date=format:%d/%m/%Y %H:%M`
+              // có DẤU CÁCH, nên khi đi qua shell nó bị tách thành hai tham số và git hiểu
+              // "%H:%M" là tên commit → "fatal: invalid object name '%H'". Truyền mảng tham số
+              // thì mỗi phần tử tới git nguyên vẹn, khỏi phải lo trích dẫn, và các ký tự điều
+              // khiển \x1f/\x1e cũng không bị shell đụng vào.
+              const raw = execFileSync(
+                'git',
+                [
+                  'log', 'origin/main', '-n', '60',
+                  '--date=format:%d/%m/%Y %H:%M',
+                  '--format=%H\x1f%h\x1f%ad\x1f%an\x1f%s\x1f%b\x1e',
+                ],
                 { cwd: root, maxBuffer: 8 * 1024 * 1024 },
               ).toString();
               const versions = raw.split('\x1e').map(r => r.trim()).filter(Boolean).map(rec => {

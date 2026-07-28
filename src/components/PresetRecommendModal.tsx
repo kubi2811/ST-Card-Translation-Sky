@@ -23,7 +23,10 @@ export default function PresetRecommendModal() {
   const translationConfig = useStore((s) => s.translationConfig);
   const ui = useUi() as Record<string, string>;
   const applyPreset = usePresetApply();
-  const [dismissed, setDismissed] = useState(false);
+  // (bug 143) Cờ "đã đóng" nằm ở STORE, không phải state cục bộ — xem chú thích ở
+  // store.dismissPresetRecommend. Component này bị unmount mỗi khi mở Regex Manager toàn màn
+  // hình, nên cờ cục bộ luôn về false và popup nhảy ra lại mỗi lần thoát.
+  const dismissPresetRecommend = useStore((s) => s.dismissPresetRecommend);
 
   // (Fix click-through) Popup mount NGAY trong change-handler của file input. Nếu user
   // DOUBLE-CLICK chọn file trong hộp thoại, cú click thứ 2 rơi xuống trang ngay đúng lúc
@@ -38,19 +41,18 @@ export default function PresetRecommendModal() {
   // đánh dấu field 'done' làm bản cũ tưởng "đang dở việc" → tự tắt). Giờ chỉ hiện/tắt theo trigger.
   useEffect(() => {
     if (!presetRecommendSeed) return;
-    setDismissed(false);
     setArmed(false);
     const t = setTimeout(() => setArmed(true), 450);
     return () => clearTimeout(t);
   }, [presetRecommendSeed]);
 
   // Chỉ hiện cho ĐÚNG card mà FileUpload đã trigger (phòng khi card đổi mà chưa import lại).
-  const show = !!presetRecommendCard && presetRecommendCard === cardFileName && !dismissed;
+  const show = !!presetRecommendCard && presetRecommendCard === cardFileName;
   if (!card || !rec || !show || translationConfig.enableModMode) return null;
 
   const presetName = ui[PRESET_LABEL_KEY[rec.preset]];
   const reason = ui[REASON_KEY[rec.reason]];
-  const close = () => setDismissed(true);
+  const close = () => dismissPresetRecommend();
 
   return (
     <div style={{

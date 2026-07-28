@@ -184,6 +184,8 @@ interface AppState {
   presetRecommendCard: string;
   presetRecommendSeed: number;
   triggerPresetRecommend: (cardFileName: string) => void;
+  /** (bug 143) Đóng bảng gợi ý — nhớ ở store nên không hiện lại khi component mount lại. */
+  dismissPresetRecommend: () => void;
   /** (User 2026) Bump mỗi khi 1 lần dịch HOÀN TẤT (doneCount>0) → mở popup hướng dẫn bước tiếp theo
    *  (Sức khoẻ thẻ → Đồng nhất biến MVU → chỉ AI Verify khi lỗi ngữ nghĩa). Ephemeral, không persist. */
   translateGuideSeed: number;
@@ -1014,6 +1016,12 @@ export const useStore = create<AppState>((set) => ({
   presetRecommendSeed: 0,
   triggerPresetRecommend: (cardFileName) =>
     set((s) => ({ presetRecommendCard: cardFileName, presetRecommendSeed: s.presetRecommendSeed + 1 })),
+  // (bug 143) "Mỗi lần thoát Regex Manager về Menu chính lại hiện bảng Gợi ý cấu hình".
+  // Gốc rễ: mở Regex Manager toàn màn hình thì App return SỚM một cây khác, PresetRecommendModal
+  // bị unmount — mà cờ "đã đóng" lại là useState BÊN TRONG chính component đó. Thoát ra là mount
+  // lại từ đầu, cờ về false, popup nhảy ra tiếp. Đóng popup giờ xoá luôn dấu ở STORE (ngoài vòng
+  // đời component) nên đóng một lần là hết, tới lần import card kế tiếp mới hiện lại.
+  dismissPresetRecommend: () => set({ presetRecommendCard: '' }),
   translateGuideSeed: 0,
   triggerTranslateGuide: () => set((s) => ({ translateGuideSeed: s.translateGuideSeed + 1 })),
   sidebarCollapsed: false,

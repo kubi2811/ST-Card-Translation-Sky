@@ -73,6 +73,49 @@ export function AutoCreatorPage() {
   const [showPromptOverride, setShowPromptOverride] = useState<AutoCreatorStep | null>(null);
   const [showMnPromptOverride, setShowMnPromptOverride] = useState<MinhNguyetStep | null>(null);
   const [ideaExpanded, setIdeaExpanded] = useState(false); // ô "Ý tưởng của bạn" phóng to toàn màn hình
+  const [isPolishing, setIsPolishing] = useState(false);   // (bug 137) đũa thần đang chạy
+
+  /**
+   * (bug 137) CÂY ĐŨA THẦN: sắp xếp lại ý tưởng (1-1 về ý) + rút quy tắc.
+   * Chốt chặn máy: mọi TÊN RIÊNG và CON SỐ của bản gốc phải còn nguyên trong bản mới —
+   * rơi cái nào là TỪ CHỐI bản đó, giữ nguyên văn của user và nói rõ vì sao.
+   */
+  const handlePolishIdea = async () => {
+    const toast = useToastStore.getState();
+    if (!activeProfile) { toast.warning(ui.acNeedProfile); return; }
+    const original = store.config.idea;
+    setIsPolishing(true);
+    try {
+      const { callAI } = await import('../lib/ai/client');
+      const { buildIdeaPolishMessages, parseIdeaPolishResponse, verifyIdeaPolish } = await import('../lib/ai/ideaPolish');
+      const res = await callAI({
+        profile: activeProfile,
+        params: { ...settings.generationParams, temperature: 0.2, useJsonResponseFormat: true, stream: false },
+        messages: buildIdeaPolishMessages(original),
+        label: 'Đũa thần ý tưởng',
+      });
+      const { polishedIdea, suggestedRules } = parseIdeaPolishResponse(res.text);
+      const check = verifyIdeaPolish(original, polishedIdea);
+      if (!check.ok) {
+        toast.error(fmt(ui.acPolishDropped, { tokens: check.dropped.slice(0, 4).join(', ') }));
+        return;   // 1-1 vỡ → giữ nguyên văn gốc, không âm thầm đổi ý user
+      }
+      store.setIdea(polishedIdea);
+      if (suggestedRules.length > 0) {
+        const cur = store.config.userRules.trim();
+        const fresh = suggestedRules.filter(r => !cur.includes(r.replace(/^[-•\s]+/, '').slice(0, 40)));
+        if (fresh.length > 0) {
+          store.setUserRules([cur, `--- Quy tắc rút từ ý tưởng (đũa thần) ---`, ...fresh.map(r => r.startsWith('-') ? r : `- ${r}`)]
+            .filter(Boolean).join('\n'));
+        }
+      }
+      toast.success(fmt(ui.acPolishDone, { rules: suggestedRules.length }));
+    } catch (e) {
+      toast.error(`${ui.acPolishFail}: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setIsPolishing(false);
+    }
+  };
   const [repairing, setRepairing] = useState(false); // (việc 82) đang chạy vòng vá lỗi
   const [verifying, setVerifying] = useState(false); // (bugNeedFix/98) đang chạy kiểm + mô phỏng
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -433,15 +476,28 @@ export function AutoCreatorPage() {
           <div className="space-y-2">
             <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center justify-between gap-2">
               <span className="flex items-center gap-2">{ui.acYourIdea}</span>
-              {/* Ô ý tưởng thường rất dài — cho mở rộng ra toàn màn hình để dễ soạn/sửa. */}
-              <button
-                type="button"
-                onClick={() => setIdeaExpanded(true)}
-                title={ui.acIdeaExpandTip}
-                className="flex items-center gap-1 px-2 py-1 rounded-lg border border-border text-[10px] font-normal normal-case tracking-normal text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-              >
-                <Maximize2 className="w-3 h-3" /> {ui.acIdeaExpand}
-              </button>
+              <span className="flex items-center gap-1">
+                {/* (bug 137) Cây đũa thần: AI sắp xếp lại ý tưởng lộn xộn (1-1 về ý, chỉ đổi
+                    trình bày) + tự rút quy tắc điền vào ô "Yêu cầu/Quy tắc cho AI". */}
+                <button
+                  type="button"
+                  onClick={handlePolishIdea}
+                  disabled={isPolishing || store.isRunning || !store.config.idea.trim() || !activeProfile}
+                  title={ui.acPolishTip}
+                  className="flex items-center gap-1 px-2 py-1 rounded-lg border border-purple-500/40 text-[10px] font-normal normal-case tracking-normal text-purple-300 hover:bg-purple-500/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {isPolishing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />} {ui.acPolishBtn}
+                </button>
+                {/* Ô ý tưởng thường rất dài — cho mở rộng ra toàn màn hình để dễ soạn/sửa. */}
+                <button
+                  type="button"
+                  onClick={() => setIdeaExpanded(true)}
+                  title={ui.acIdeaExpandTip}
+                  className="flex items-center gap-1 px-2 py-1 rounded-lg border border-border text-[10px] font-normal normal-case tracking-normal text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                >
+                  <Maximize2 className="w-3 h-3" /> {ui.acIdeaExpand}
+                </button>
+              </span>
             </label>
             <textarea className="w-full h-28 p-3 text-sm rounded-xl border border-border bg-card resize-none focus:outline-none focus:ring-2 focus:ring-primary/50 placeholder:text-muted-foreground/50 disabled:opacity-50" placeholder={ui.acIdeaPh} value={store.config.idea} onChange={(e) => store.setIdea(e.target.value)} disabled={store.isRunning} />
             <p className="text-[10px] text-muted-foreground/70 text-right">{ui.acIdeaChars.replace('{n}', String(store.config.idea.length))}</p>

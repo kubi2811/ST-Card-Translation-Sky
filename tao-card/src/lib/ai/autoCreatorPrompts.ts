@@ -4,6 +4,19 @@
  */
 
 import { MVU_WORKING_CARD_EXAMPLE } from '../mvuzod/mvuReference';
+
+import { POLISHED_IDEA_READING_HINT } from './ideaPolish';
+
+/**
+ * (bug 137) Khối "Ý TƯỞNG" dùng chung cho MỌI prompt của Auto Creator. Ý tưởng đã qua cây đũa
+ * thần có cấu trúc "## Phần" — kèm chỉ dẫn đọc để AI bám đúng phần liên quan thay vì đọc như
+ * văn xuôi (đây là vế "AI cần được huấn luyện để đọc hiểu định dạng đã qua xử lý" user yêu cầu).
+ */
+function ideaBlock(idea: string): string {
+  const structured = /^##\s+/m.test(idea);
+  return `Ý TƯỞNG: "${idea}"${structured ? POLISHED_IDEA_READING_HINT : ''}`;
+}
+
 import type {
   CardKind,
   CardBlueprint,
@@ -85,7 +98,7 @@ VÌ VẬY, MỌI NỘI DUNG BẠN VIẾT PHẢI THEO HƯỚNG NÀY:
 export function buildBasicInfoPrompt(idea: string, config: BasicInfoStepConfig, bp: CardBlueprint | null): string {
   const base = `
 Bạn là chuyên gia tạo character card cho SillyTavern. Hãy tạo thông tin cơ bản cho nhân vật dựa trên ý tưởng sau.
-Ý TƯỞNG: "${idea}"
+${ideaBlock(idea)}
 ${blueprintContext(bp)}
 
 CẤU HÌNH:
@@ -133,7 +146,7 @@ export function buildLorebookBatchPrompt(idea: string, cardContext: string, bp: 
 
   const base = `
 Đây là tiến trình tạo hàng loạt Lorebook tự động cho ý tưởng card sau:
-Ý TƯỞNG: "${idea}"
+${ideaBlock(idea)}
 ${blueprintContext(bp)}
 
 ${topicHints ? `--- CHỦ ĐỀ GỢI Ý TỪ BLUEPRINT ---\n${topicHints}\n` : ''}
@@ -157,7 +170,7 @@ export function buildRegexPrompt(idea: string, cardContext: string, config: Rege
 Bạn là chuyên gia viết Regex Scripts cho SillyTavern. Dựa trên ý tưởng card và ngữ cảnh, hãy tạo ${config.count} regex scripts phù hợp.
 Loại regex được yêu cầu: ${config.types.join(', ')}.
 
-Ý TƯỞNG: "${idea}"
+${ideaBlock(idea)}
 ${blueprintContext(bp)}
 ${schemaBlock}
 NGỮ CẢNH:
@@ -191,7 +204,7 @@ Bạn là chuyên gia về hệ thống biến trạng thái MVUZOD cho SillyTav
 
 ${MVU_WORKING_CARD_EXAMPLE}
 
-Ý TƯỞNG: "${idea}"
+${ideaBlock(idea)}
 ${blueprintContext(bp)}
 
 ${varHints ? `--- BIẾN GỢI Ý TỪ BLUEPRINT ---\n${varHints}\n` : ''}
@@ -323,7 +336,7 @@ ${JSON_FORMAT_REQUIREMENT}
 export function buildSystemPromptPrompt(idea: string, cardContext: string, config: SystemPromptStepConfig, bp: CardBlueprint | null): string {
   const base = `
 Hãy tạo system prompt hướng dẫn AI cách đóng vai nhân vật này. System prompt phải chi tiết, bao gồm quy tắc viết, phong cách, và các lưu ý quan trọng.
-Ý TƯỞNG: "${idea}"
+${ideaBlock(idea)}
 ${blueprintContext(bp)}
 
 NGỮ CẢNH:
@@ -363,7 +376,7 @@ Card này có OPENING FORM: tin nhắn đầu tiên hiển thị giao diện đ�
 vật, chọn bối cảnh, rồi gửi hồ sơ làm tin nhắn mở đầu. Vì vậy first_mes KHÔNG ĐƯỢC là bài văn
 mở màn dài — nó chỉ là lời dẫn NGẮN (2-4 câu) chào mừng vào thế giới và mời điền form bên dưới.
 TUYỆT ĐỐI không viết cảnh truyện, không thoại nhân vật, không mô tả dài dòng.
-Ý TƯỞNG: "${idea}"
+${ideaBlock(idea)}
 ${blueprintContext(bp)}
 
 NGỮ CẢNH:
@@ -381,7 +394,7 @@ ${JSON_FORMAT_REQUIREMENT}
     : `
 Hãy tạo first message mở đầu câu chuyện và ${config.alternateGreetings} alternate greetings.
 First message phải viết chi tiết, sống động, mô tả bối cảnh, hành động và cảm xúc nhân vật.
-Ý TƯỞNG: "${idea}"
+${ideaBlock(idea)}
 ${blueprintContext(bp)}
 
 NGỮ CẢNH:
@@ -404,7 +417,7 @@ export function buildMesExamplePrompt(idea: string, cardContext: string, config:
   const base = `
 Hãy tạo ${config.exampleCount} đoạn hội thoại mẫu (Message Examples) giữa {{user}} và {{char}}.
 Mỗi đoạn phải thể hiện tính cách nhân vật, phong cách viết, và format đối thoại.
-Ý TƯỞNG: "${idea}"
+${ideaBlock(idea)}
 ${blueprintContext(bp)}
 
 NGỮ CẢNH:

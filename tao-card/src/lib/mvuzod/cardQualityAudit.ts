@@ -31,7 +31,9 @@ export interface AuditIssue {
     | 'ejs-enum-mismatch' | 'ejs-enum-coverage' | 'dead-entry' | 'orphan-disabled'
     | 'number-default-string' | 'order-position-clash' | 'varlist-example-content'
     // (bug 148) đo được trên card v3 thật của user:
-    | 'ejs-missing-statdata' | 'ejs-nonascii-var' | 'duplicate-entry-content';
+    | 'ejs-missing-statdata' | 'ejs-nonascii-var' | 'duplicate-entry-content'
+    // (bug 148-2) cấu trúc Object/Array/Record
+    | 'struct-no-child' | 'record-duplicate-key' | 'struct-bad-default';
   message: string;
   where?: string;
   /** Máy sửa được không — quyết định có đưa vào tiến trình Vá lỗi hay phải để AI/user. */
@@ -314,6 +316,72 @@ export function auditCardQuality(input: AuditInput): AuditIssue[] {
         autofixable: false,   // phải sinh lại nội dung — máy không bịa được
       });
     }
+  }
+
+  /* 7b. (bug 148-2) CẤU TRÚC Object / Array / Record — 3 kiểu mới cần kiểm riêng.
+     • array/record KHÔNG khai cấu trúc con ⇒ Zod chỉ dựng được mảng chuỗi / từ điển chuỗi,
+       AI trong game không biết mỗi phần tử gồm những trường gì.
+     • defaultValue sai kiểu (array mà mặc định là object, record mà khai sẵn khoá) ⇒ ngay lượt
+       đầu MVU đã đọc ra thứ khác kiểu.
+     • record KHAI SẴN TÊN KHOÁ trong mặc định — đúng lỗi đặc thù user nêu: tên khoá phải sinh
+       khi chơi, khai sẵn là mặc định đè lên dữ liệu thật. */
+  {
+    const walkStruct = (fs: MVUZODField[] | undefined) => {
+      for (const f of fs ?? []) {
+        const name = leafName(f);
+        const where = String(f.path ?? name);
+        const kids = (f.children ?? []).filter(c => c.path.includes('/_child/'));
+
+        if (f.type === 'array' || f.type === 'record') {
+          if (kids.length === 0) {
+            issues.push({
+              level: 'warning',
+              code: 'struct-no-child',
+              message: `Biến "${name}" kiểu ${f.type} nhưng chưa khai cấu trúc ${f.type === 'array' ? 'một phần tử' : 'một mục'} — schema chỉ dựng được ${f.type === 'array' ? 'mảng chuỗi' : 'từ điển chuỗi'}, AI trong game không biết mỗi ${f.type === 'array' ? 'phần tử' : 'mục'} gồm những trường nào.`,
+              where, autofixable: false,
+            });
+          }
+          const dv = f.defaultValue;
+          if (f.type === 'array' && dv !== undefined && !Array.isArray(dv)) {
+            issues.push({
+              level: 'error', code: 'struct-bad-default',
+              message: `Biến "${name}" kiểu array nhưng giá trị mặc định không phải danh sách — MVU sẽ đọc ra kiểu khác ngay lượt đầu.`,
+              where, autofixable: true,
+            });
+          }
+          if (f.type === 'record') {
+            if (dv !== undefined && (Array.isArray(dv) || typeof dv !== 'object')) {
+              issues.push({
+                level: 'error', code: 'struct-bad-default',
+                message: `Biến "${name}" kiểu record nhưng giá trị mặc định không phải từ điển — phải là {} rỗng.`,
+                where, autofixable: true,
+              });
+            } else if (dv && typeof dv === 'object' && Object.keys(dv as object).length > 0) {
+              issues.push({
+                level: 'warning', code: 'record-duplicate-key',
+                message: `Biến "${name}" kiểu record KHAI SẴN ${Object.keys(dv as object).length} tên khoá trong giá trị mặc định (${Object.keys(dv as object).slice(0, 3).join(', ')}) — tên khoá của record phải sinh ra khi chơi; khai sẵn khiến mỗi lần khởi tạo lại đè lên dữ liệu thật. Để {} rỗng.`,
+                where, autofixable: true,
+              });
+            }
+          }
+          // Trùng TÊN TRƯỜNG CON trong cùng cấu trúc — record/array chỉ giữ được một.
+          const seenKid = new Set<string>();
+          for (const k of kids) {
+            const kn = foldVi(leafName(k));
+            if (seenKid.has(kn)) {
+              issues.push({
+                level: 'error', code: 'record-duplicate-key',
+                message: `Cấu trúc của "${name}" có HAI trường con trùng tên "${leafName(k)}" — chỉ một cái sống sót, dữ liệu trường kia mất im lặng.`,
+                where, autofixable: false,
+              });
+            }
+            seenKid.add(kn);
+          }
+        }
+        walkStruct(f.children);
+      }
+    };
+    walkStruct(input.schema?.fields);
   }
 
   /* 8. (bug 148) TRÙNG NỘI DUNG GIỮA CÁC ENTRY — Claude Web gọi đúng tên: "lỗi tái diễn xuyên

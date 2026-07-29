@@ -516,6 +516,35 @@ export function repairQualityIssues(
     }
   }
 
+  // 3b. (bug 148-2) defaultValue của array/record sai kiểu, hoặc record khai sẵn tên khoá →
+  //     đưa về đúng khuôn ([] / {}). Record khai sẵn khoá là lỗi đặc thù: mỗi lần khởi tạo lại
+  //     đè lên quan hệ/dữ liệu người chơi đã tích luỹ.
+  if (schema) {
+    const ext = out.data.extensions as unknown as Record<string, any>;
+    const schemaInCard = ext?.mvuzod?.schema as MVUZODSchema | undefined;
+    if (schemaInCard) {
+      const walk = (fs: Array<Record<string, any>> | undefined) => {
+        for (const f of fs ?? []) {
+          if (f.type === 'array' && f.defaultValue !== undefined && !Array.isArray(f.defaultValue)) {
+            fixed.push({ id: 'struct-bad-default', description: `Biến "${f.path}" kiểu array: đưa giá trị mặc định về danh sách rỗng [].` });
+            f.defaultValue = [];
+          } else if (f.type === 'record') {
+            const dv = f.defaultValue;
+            if (dv !== undefined && (Array.isArray(dv) || typeof dv !== 'object')) {
+              fixed.push({ id: 'struct-bad-default', description: `Biến "${f.path}" kiểu record: đưa giá trị mặc định về từ điển rỗng {}.` });
+              f.defaultValue = {};
+            } else if (dv && typeof dv === 'object' && Object.keys(dv).length > 0) {
+              fixed.push({ id: 'record-duplicate-key', description: `Biến "${f.path}" kiểu record: bỏ ${Object.keys(dv).length} tên khoá khai sẵn trong mặc định — khoá phải sinh khi chơi, khai sẵn sẽ đè dữ liệu thật mỗi lần khởi tạo.` });
+              f.defaultValue = {};
+            }
+          }
+          walk(f.children as never);
+        }
+      };
+      walk(schemaInCard.fields as never);
+    }
+  }
+
   // 4. Nhiều entry cùng (order, position) → giãn order cho thứ tự xác định. Giữ entry đầu,
   //    các entry sau nhích dần sang số order CHƯA AI DÙNG tại cùng vị trí.
   {

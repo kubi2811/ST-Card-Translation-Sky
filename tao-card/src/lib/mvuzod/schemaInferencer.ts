@@ -1018,7 +1018,19 @@ function fieldToZod(field: MVUZODField, indent: number): string[] {
     lines.push(`${pad}${key}: z.boolean()${pf},`);
 
   } else if (field.type === 'array') {
-    lines.push(`${pad}${key}: z.array(z.string()).prefault([]),`);
+    // (bug 148) Array có CẤU TRÚC PHẦN TỬ: children mang path "/_child/" mô tả một phần tử
+    // (cùng quy ước với record). Trước đây array luôn là z.array(z.string()) nên "Kho Đồ" có
+    // tên+số lượng+mô tả đều bị ép thành một chuỗi — mất cấu trúc ngay từ schema.
+    const childLines: string[] = [];
+    for (const child of field.children ?? []) {
+      if (!child.path.includes('/_child/')) continue;
+      const childName = child.path.split('/').pop() ?? '';
+      childLines.push(`${pad}    ${JSON.stringify(childName)}: ${buildZodType(child)},`);
+    }
+    const itemSchema = childLines.length > 0
+      ? `z.object({\n${childLines.join('\n')}\n${pad}  })`
+      : 'z.string()';
+    lines.push(`${pad}${key}: z.array(${itemSchema}).prefault([]),`);
 
   } else {
     // string

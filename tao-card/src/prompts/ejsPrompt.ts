@@ -182,6 +182,20 @@ _%>
     hiện ra. Đây là lỗi im lặng đã gặp thật trên card người dùng — kiểm lại từng lời gọi.
 16. (bug 148) Tên biến JS đặt bằng ASCII ngắn gọn (_hp, _realm, _vp) — KHÔNG dùng chữ có dấu
     tiếng Việt làm định danh.
+17. (bug 148) BIẾN KIỂU ARRAY / RECORD phải đọc bằng VÒNG LẶP, không thể if/else vì số phần tử
+    không biết trước:
+    • Array (danh sách, tra theo thứ tự) — dùng forEach/for:
+        <%_ var _bag = getvar('stat_data.Người Chơi.Kho Đồ', { defaults: [] }) || [];
+            _bag.forEach(function (it) { _%>
+        - <%= it['Tên'] %> ×<%= it['Số Lượng'] %>
+        <%_ }); _%>
+    • Record (từ điển, tra theo TÊN KHOÁ) — lặp qua từng CẶP khoá-giá trị:
+        <%_ var _rel = getvar('stat_data.Quan Hệ NPC', { defaults: {} }) || {};
+            Object.keys(_rel).forEach(function (name) { var v = _rel[name]; _%>
+        - <%= name %>: hảo cảm <%= v['Hảo Cảm'] %>
+        <%_ }); _%>
+      (Object.entries cũng được; điều quan trọng là lấy được TÊN KHOÁ, không chỉ số thứ tự.)
+    Luôn có "|| []" / "|| {}" phòng biến chưa khởi tạo, và kiểm rỗng trước khi in tiêu đề mục.
 
 ═══ ĐỊNH DẠNG OUTPUT ═══
 

@@ -9,7 +9,7 @@
  * Trạng thái nằm trong config (persist) → thoát giữa chừng, vào lại đúng chỗ.
  */
 import { useCallback, useMemo, useState } from 'react';
-import { X, Wand2, RotateCcw, Trash2, ChevronLeft, ChevronRight, Loader2, Check, Sparkles } from 'lucide-react';
+import { X, Wand2, RotateCcw, ChevronLeft, ChevronRight, Loader2, Check, Sparkles } from 'lucide-react';
 import { useAutoCreatorStore } from '../../store/autoCreatorStore';
 import { useSettingsStore } from '../../store/settingsStore';
 import { useToastStore } from '../../store/toastStore';
@@ -23,6 +23,8 @@ import {
 } from '../../lib/ai/themeDesigner';
 import { normalizeMVUZODSchema } from '../../lib/mvuzod/normalizeSchema';
 import type { MVUZODField, MVUZODSchema } from '../../types/mvuzod.types';
+import { SchemaVarTable, type VarRow } from './SchemaVarTable';
+import { withPreviewData } from '../../lib/ai/schemaPreviewData';
 
 interface Props {
   open: boolean;
@@ -31,55 +33,63 @@ interface Props {
   onStart: () => void;
 }
 
-/** Lá phẳng để hiện bảng chỉnh — normalize dựng lại cây từ path khi lưu. */
-interface FlatVar {
-  path: string;
-  label: string;
-  type: MVUZODField['type'];
-  min?: number;
-  max?: number;
-  enumValues?: string;
-  defaultValue: string;
-  /** Ràng buộc riêng user viết cho biến này (đi vào constraints.checkRules). */
-  rule: string;
-}
+/**
+ * (bug 148) Schema ⇄ hàng bảng. Lá thường phẳng ra hàng; array/record giữ CẤU TRÚC CON
+ * (children có path "/_child/") thành `children` của hàng để bảng con hiện đúng.
+ */
+function schemaToRows(schema: MVUZODSchema): VarRow[] {
+  const toRow = (f: MVUZODField): VarRow => ({
+    path: f.path,
+    label: f.label,
+    type: f.type,
+    min: f.constraints?.min,
+    max: f.constraints?.max,
+    enumValues: f.constraints?.enumValues?.join(', '),
+    defaultValue: f.defaultValue === undefined ? '' : (typeof f.defaultValue === 'object' ? JSON.stringify(f.defaultValue) : String(f.defaultValue)),
+    rule: (f.constraints?.checkRules ?? []).join('\n'),
+    children: (f.children ?? []).filter(c => c.path.includes('/_child/')).map(toRow),
+  });
 
-function schemaToFlat(schema: MVUZODSchema): FlatVar[] {
-  const out: FlatVar[] = [];
+  const out: VarRow[] = [];
   const walk = (fs: MVUZODField[]) => {
     for (const f of fs) {
-      if (f.children?.length) { walk(f.children); continue; }
-      out.push({
-        path: f.path,
-        label: f.label,
-        type: f.type,
-        min: f.constraints?.min,
-        max: f.constraints?.max,
-        enumValues: f.constraints?.enumValues?.join(', '),
-        defaultValue: f.defaultValue === undefined ? '' : String(f.defaultValue),
-        rule: (f.constraints?.checkRules ?? []).join('\n'),
-      });
+      const structural = f.type === 'array' || f.type === 'record';
+      // Nhóm object thuần (children KHÔNG phải _child) chỉ là tầng chứa — đi xuyên qua.
+      if (!structural && f.children?.some(c => !c.path.includes('/_child/'))) { walk(f.children); continue; }
+      out.push(toRow(f));
     }
   };
   walk(schema.fields);
   return out;
 }
 
-function flatToSchema(flat: FlatVar[]): MVUZODSchema {
-  const fields = flat.map((v) => {
+function rowsToSchema(rows: VarRow[]): MVUZODSchema {
+  const toField = (v: VarRow): Record<string, unknown> => {
     const constraints: Record<string, unknown> = {};
-    if (v.min !== undefined && !Number.isNaN(v.min)) constraints.min = v.min;
-    if (v.max !== undefined && !Number.isNaN(v.max)) constraints.max = v.max;
-    const enums = (v.enumValues ?? '').split(',').map(s => s.trim()).filter(Boolean);
-    if (enums.length) constraints.enumValues = enums;
+    if (v.type === 'number') {
+      if (v.min !== undefined && !Number.isNaN(v.min)) constraints.min = v.min;
+      if (v.max !== undefined && !Number.isNaN(v.max)) constraints.max = v.max;
+    }
+    if (v.type === 'string') {
+      const enums = (v.enumValues ?? '').split(',').map(s => s.trim()).filter(Boolean);
+      if (enums.length) constraints.enumValues = enums;
+    }
     if (v.rule.trim()) constraints.checkRules = v.rule.split('\n').map(s => s.trim()).filter(Boolean);
+
     let defaultValue: unknown = v.defaultValue;
     if (v.type === 'number') { const n = Number(v.defaultValue); defaultValue = Number.isFinite(n) ? n : 0; }
-    if (v.type === 'boolean') defaultValue = v.defaultValue === 'true';
-    return { path: v.path, type: v.type, label: v.label, defaultValue, constraints };
-  });
+    else if (v.type === 'boolean') defaultValue = v.defaultValue === 'true';
+    else if (v.type === 'array') { try { defaultValue = JSON.parse(v.defaultValue || '[]'); } catch { defaultValue = []; } }
+    else if (v.type === 'record' || v.type === 'object') { try { defaultValue = JSON.parse(v.defaultValue || '{}'); } catch { defaultValue = {}; } }
+
+    const field: Record<string, unknown> = { path: v.path, type: v.type, label: v.label, defaultValue, constraints };
+    if ((v.type === 'array' || v.type === 'record') && v.children?.length) {
+      field.children = v.children.map(toField);
+    }
+    return field;
+  };
   // normalize dựng cây từ path phẳng (nestFlatSchema) + dọn constraints.
-  return normalizeMVUZODSchema({ version: '1.0', fields });
+  return normalizeMVUZODSchema({ version: '1.0', fields: rows.map(toField) });
 }
 
 export function PreviewTunerModal({ open, onClose, onStart }: Props) {
@@ -94,6 +104,9 @@ export function PreviewTunerModal({ open, onClose, onStart }: Props) {
   const [aiSpec, setAiSpec] = useState<AiThemeSpec | null>(null);
   const [aiWarn, setAiWarn] = useState<string[]>([]);
   const [aiNonce, setAiNonce] = useState(0);   // đổi để buildThemeChoices dựng lại preview
+  // (bug 148-3) Xem trước VỚI BIẾN THẬT của schema đang chỉnh — mặc định BẬT, vì khung rỗng
+  // chẳng nói lên điều gì về schema vừa sửa.
+  const [withData, setWithData] = useState(true);
 
   const activeProfile = settings.getActiveProfile();
   const idea = store.config.idea;
@@ -104,9 +117,9 @@ export function PreviewTunerModal({ open, onClose, onStart }: Props) {
     [idea],
   );
 
-  const flat = useMemo(() => (tuning ? schemaToFlat(tuning.schema) : []), [tuning]);
-  const setFlat = useCallback((next: FlatVar[]) => {
-    const { schema } = validateTunedSchema(flatToSchema(next));
+  const rows = useMemo(() => (tuning ? schemaToRows(tuning.schema) : []), [tuning]);
+  const setRows = useCallback((next: VarRow[]) => {
+    const { schema } = validateTunedSchema(rowsToSchema(next));
     useAutoCreatorStore.getState().setTuning({ schema, confirmed: false });
   }, []);
 
@@ -242,7 +255,7 @@ export function PreviewTunerModal({ open, onClose, onStart }: Props) {
               ) : (
                 <>
                   <div className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground flex-1">{flat.length} biến — sửa trực tiếp từng ô; xoá biến thấy dư; viết ràng buộc riêng ngay tại chỗ.</span>
+                    <span className="text-xs text-muted-foreground flex-1">{rows.length} biến (nhóm cấp cao) — sửa trực tiếp từng ô; xoá biến thấy dư; viết ràng buộc riêng ngay tại chỗ.</span>
                     <button onClick={() => useAutoCreatorStore.getState().setTuning({ schema: JSON.parse(JSON.stringify(tuning!.originalSchema)), confirmed: false })}
                       className="flex items-center gap-1 px-2 py-1 rounded text-[10px] border border-border hover:bg-muted" title="Bỏ mọi chỉnh sửa, quay về bản AI đề xuất">
                       <RotateCcw className="w-3 h-3" /> Reset về bản AI đưa
@@ -253,44 +266,8 @@ export function PreviewTunerModal({ open, onClose, onStart }: Props) {
                     </button>
                   </div>
 
-                  <div className="space-y-1.5">
-                    {flat.map((v, i) => (
-                      <div key={v.path} className="rounded-lg border border-border p-2 grid grid-cols-12 gap-1.5 items-center text-[11px]">
-                        <input className="col-span-3 px-2 py-1 rounded border border-border bg-card" value={v.label}
-                          title={v.path}
-                          onChange={e => {
-                            const next = [...flat];
-                            const name = e.target.value;
-                            const segs = v.path.split('/'); segs[segs.length - 1] = name;
-                            next[i] = { ...v, label: name, path: segs.join('/') };
-                            setFlat(next);
-                          }} />
-                        <select className="col-span-2 px-1 py-1 rounded border border-border bg-card" value={v.type}
-                          onChange={e => { const next = [...flat]; next[i] = { ...v, type: e.target.value as FlatVar['type'] }; setFlat(next); }}>
-                          <option value="number">number</option><option value="string">string</option><option value="boolean">boolean</option>
-                        </select>
-                        {v.type === 'number' ? (
-                          <>
-                            <input className="col-span-1 px-1 py-1 rounded border border-border bg-card" placeholder="min" value={v.min ?? ''}
-                              onChange={e => { const next = [...flat]; next[i] = { ...v, min: e.target.value === '' ? undefined : Number(e.target.value) }; setFlat(next); }} />
-                            <input className="col-span-1 px-1 py-1 rounded border border-border bg-card" placeholder="max" value={v.max ?? ''}
-                              onChange={e => { const next = [...flat]; next[i] = { ...v, max: e.target.value === '' ? undefined : Number(e.target.value) }; setFlat(next); }} />
-                          </>
-                        ) : (
-                          <input className="col-span-2 px-1 py-1 rounded border border-border bg-card" placeholder="enum: A, B, C" value={v.enumValues ?? ''}
-                            onChange={e => { const next = [...flat]; next[i] = { ...v, enumValues: e.target.value }; setFlat(next); }} />
-                        )}
-                        <input className="col-span-2 px-1 py-1 rounded border border-border bg-card" placeholder="mặc định" value={v.defaultValue}
-                          onChange={e => { const next = [...flat]; next[i] = { ...v, defaultValue: e.target.value }; setFlat(next); }} />
-                        <input className={`${v.type === 'number' ? 'col-span-2' : 'col-span-3'} px-1 py-1 rounded border border-border bg-card`} placeholder="ràng buộc riêng cho biến này…" value={v.rule}
-                          onChange={e => { const next = [...flat]; next[i] = { ...v, rule: e.target.value }; setFlat(next); }} />
-                        <button className="col-span-1 justify-self-end p-1 rounded text-red-400 hover:bg-red-500/10" title="Xoá biến này"
-                          onClick={() => setFlat(flat.filter((_, j) => j !== i))}>
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
+                  {/* (bug 148) Bảng 5 cột cố định, ô nhập đổi theo Type, bảng con đệ quy cho Array/Record. */}
+                  <SchemaVarTable rows={rows} onChange={setRows} />
 
                   {/* Copilot mini */}
                   <div className="rounded-lg border border-purple-500/30 bg-purple-500/5 p-2 space-y-1.5">
@@ -314,7 +291,16 @@ export function PreviewTunerModal({ open, onClose, onStart }: Props) {
           {/* ═══ BƯỚC 2 — GIAO DIỆN ═══ */}
           {step === 2 && tuning && (
             <>
-              <p className="text-xs text-muted-foreground">Các phương án dựng TỪ schema bạn vừa chốt (mỗi phương án = Opening Form + Status Bar cùng tông). Chọn 1:</p>
+              <div className="flex items-start gap-2">
+                <p className="text-xs text-muted-foreground flex-1">Các phương án dựng TỪ schema bạn vừa chốt (mỗi phương án = Opening Form + Status Bar cùng tông). Chọn 1:</p>
+                {/* (bug 148-3) Xem trước có ĐỔ BIẾN của schema đang chỉnh vào giao diện — tắt đi
+                    thì thấy khung trơn như trước. */}
+                <label className="flex items-center gap-1.5 text-[10px] text-muted-foreground shrink-0 cursor-pointer"
+                  title="Đổ giá trị mẫu sinh từ chính schema bạn vừa chỉnh vào giao diện, để thấy trước thanh trạng thái/biểu mẫu khi chơi thật">
+                  <input type="checkbox" checked={withData} onChange={e => setWithData(e.target.checked)} />
+                  Xem với biến của schema
+                </label>
+              </div>
 
               {/* ═══ (bugNeedFix/145) NHỜ AI TẠO GIAO DIỆN ═══
                   AI chỉ quyết bảng màu + font; khung HTML vẫn do máy dựng như các mẫu sẵn, nên
@@ -370,7 +356,7 @@ export function PreviewTunerModal({ open, onClose, onStart }: Props) {
                     <div className={`px-2 py-1.5 text-[11px] font-medium flex items-center gap-1.5 ${tuning.themeId === c.themeId ? 'bg-primary/15 text-primary' : 'bg-muted/20'}`}>
                       {tuning.themeId === c.themeId && <Check className="w-3 h-3" />}{c.label}
                     </div>
-                    <iframe title={c.themeId} sandbox="allow-scripts" srcDoc={c.previewHtml}
+                    <iframe title={c.themeId} sandbox="allow-scripts" srcDoc={withData ? withPreviewData(c.previewHtml, tuning.schema) : c.previewHtml}
                       className="w-full h-64 bg-white pointer-events-none" />
                   </button>
                 ))}
@@ -383,7 +369,7 @@ export function PreviewTunerModal({ open, onClose, onStart }: Props) {
             <div className="space-y-3 py-4 text-center">
               <p className="text-sm font-semibold">Chốt lại trước khi tạo card</p>
               <div className="inline-block text-left text-xs rounded-xl border border-border p-4 space-y-1">
-                <div>🧬 Schema: <b>{flat.length} biến</b>{JSON.stringify(tuning.schema) !== JSON.stringify(tuning.originalSchema) ? ' (đã tinh chỉnh)' : ' (bản AI đề xuất, không chỉnh)'}</div>
+                <div>🧬 Schema: <b>{rows.length} nhóm biến</b>{JSON.stringify(tuning.schema) !== JSON.stringify(tuning.originalSchema) ? ' (đã tinh chỉnh)' : ' (bản AI đề xuất, không chỉnh)'}</div>
                 <div>🎨 Giao diện: <b>{themeChoices.find(c => c.themeId === tuning.themeId)?.label ?? 'mặc định (chưa chọn)'}</b></div>
                 <div className="text-muted-foreground pt-1">Card tạo ra sẽ dùng ĐÚNG 100% schema + giao diện trên — bước MVUZOD và Game UI bị khoá theo lựa chọn này.</div>
               </div>

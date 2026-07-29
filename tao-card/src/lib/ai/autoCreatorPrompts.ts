@@ -258,6 +258,24 @@ Yêu cầu định dạng JSON chính xác:
   "varListEntry": "Nội dung hiển thị biến (nếu được yêu cầu)"
 }
 
+QUY TẮC CHỌN KIỂU DỮ LIỆU (bug 148 — BẮT BUỘC phân biệt, KHÔNG gộp hết vào string):
+- "object": nhóm có SỐ LƯỢNG và TÊN trường BIẾT TRƯỚC, cố định (Nhân Vật: Tên/Máu/Cảnh Giới).
+- "array": danh sách mà SỐ PHẦN TỬ THAY ĐỔI khi chơi, tra theo THỨ TỰ (Kho Đồ, kỹ năng đã mở
+  khoá, danh sách NPC đã gặp). Khai cấu trúc MỘT PHẦN TỬ bằng "children", mỗi child có path
+  dạng "<path cha>/_child/<tên trường>". defaultValue là [] (hoặc vài phần tử khai sẵn).
+- "record": SỐ LƯỢNG lẫn TÊN KHOÁ đều KHÔNG biết trước, sinh động khi chơi, nhưng cần TRA NHANH
+  THEO TÊN (Quan Hệ NPC: hảo cảm với từng NPC gặp được). Khai cấu trúc MỘT MỤC bằng "children"
+  cùng quy ước "/_child/". defaultValue là {} — TUYỆT ĐỐI không khai sẵn tên khoá.
+Chọn sai kiểu là hỏng cả ván: nhét danh sách vào một chuỗi thì AI trong game không thêm/sửa
+được từng phần tử, còn dùng array cho thứ cần tra theo tên thì phải duyệt tuần tự mỗi lần.
+Ví dụ ĐÚNG:
+  { "path": "/Người Chơi/Kho Đồ", "type": "array", "label": "Kho Đồ", "defaultValue": [], "constraints": {},
+    "children": [
+      { "path": "/Người Chơi/Kho Đồ/_child/Tên", "type": "string", "label": "Tên", "defaultValue": "", "constraints": {} },
+      { "path": "/Người Chơi/Kho Đồ/_child/Số Lượng", "type": "number", "label": "Số Lượng", "defaultValue": 1, "constraints": { "min": 0 } } ] }
+  { "path": "/Quan Hệ NPC", "type": "record", "label": "Quan Hệ NPC", "defaultValue": {}, "constraints": {},
+    "children": [ { "path": "/Quan Hệ NPC/_child/Hảo Cảm", "type": "number", "label": "Hảo Cảm", "defaultValue": 0, "constraints": { "min": -100, "max": 100 } } ] }
+
 QUY TẮC BẮT BUỘC VỀ SCHEMA:
 - (bug 135) Field "type": "number" thì "defaultValue" PHẢI là SỐ, không phải chuỗi ("100" là sai,
   100 mới đúng) — default kiểu chuỗi làm mọi phép so sánh so theo chữ ("9" > "10").
@@ -338,6 +356,33 @@ Quy tắc cập nhật biến:
         - Dùng op 'delta' trừ khi dùng kỹ năng hoặc chịu sát thương
         - Hồi lại khi nghỉ ngơi hoặc dùng vật phẩm hồi phục
         - Rớt về 0 thì kích hoạt trạng thái kiệt sức, mô tả hệ quả trong truyện
+
+(bug 148) CÁCH KHỞI TẠO + CẬP NHẬT CHO 3 KIỂU CẤU TRÚC — viết đúng, sai là biến đứng im cả ván:
+
+• OBJECT (nhóm cố định) — initvar là nhóm lồng nhau bình thường:
+    Nhân Vật:
+      Tên: "Vô Danh"
+      Máu: 100
+  Cập nhật: op 'replace' trên đường dẫn đầy đủ tới từng trường lá.
+
+• ARRAY (danh sách, số phần tử đổi khi chơi) — initvar là danh sách gạch đầu dòng (rỗng thì
+  để "[]"), mỗi phần tử là một nhóm đúng cấu trúc đã khai:
+    Kho Đồ:
+      - Tên: "Kiếm gỉ"
+        Số Lượng: 1
+  Cập nhật:
+    - THÊM phần tử mới: op 'insert', path KẾT THÚC BẰNG "/-"  →  {"op":"insert","path":"/Người Chơi/Kho Đồ/-","value":{"Tên":"Đan dược","Số Lượng":3}}
+    - SỬA phần tử đã có: op 'replace' trên ĐÚNG CHỈ SỐ của nó →  {"op":"replace","path":"/Người Chơi/Kho Đồ/0/Số Lượng","value":5}
+    - TUYỆT ĐỐI không 'insert' lại một vật đã có trong danh sách — phải 'replace' số lượng của
+      đúng phần tử đó, nếu không kho đồ đầy bản trùng.
+
+• RECORD (từ điển, tên khoá sinh khi chơi) — initvar khởi tạo RỖNG, không khai sẵn tên khoá:
+    Quan Hệ NPC: {}
+  Cập nhật:
+    - Gặp lần ĐẦU (khoá CHƯA có): op 'insert' với path chứa tên khoá cụ thể →  {"op":"insert","path":"/Quan Hệ NPC/Elric","value":{"Hảo Cảm":10}}
+    - Đã có khoá đó: op 'replace' trên chính khoá đó →  {"op":"replace","path":"/Quan Hệ NPC/Elric/Hảo Cảm","value":25}
+    - BẮT BUỘC kiểm khoá đã tồn tại hay chưa trước khi chọn insert/replace. Insert đè lên khoá
+      đã có sẽ xoá sạch dữ liệu quan hệ tích luỹ từ đầu ván.
 ${JSON_FORMAT_REQUIREMENT}
 `;
   return applyOverride(base, config.promptOverride, config.promptMode);

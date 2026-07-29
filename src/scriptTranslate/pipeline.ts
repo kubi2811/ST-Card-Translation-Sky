@@ -190,8 +190,12 @@ export async function runScriptTranslation(
   // Kiểm PARITY ngay tại đây — TRƯỚC bước alternation. Mỗi nhánh `(?:Hán|Việt)` thêm 1 cặp
   // ngoặc HỢP LỆ, kiểm sau sẽ luôn kêu "code lệch cấu trúc" dù mọi thứ đúng ⇒ báo động giả
   // mỗi lần tính năng regex chạy (bắt được khi chạy thật end-to-end với API).
+  // (bug 154) Mỗi khoá đổi sang dạng bracket (`obj.键` → `obj['Tên']`) thêm đúng MỘT cặp [ ].
+  // Không khai ra thì parity kêu "dấu [ THÊM 19" mỗi lần từ điển chạy — báo động giả, mà báo
+  // động giả thì dạy người ta bỏ qua cảnh báo thật.
+  const bracketPairs = tokens.filter((t) => t.fromDictionary && t.isDotNotation && t.translated).length;
   const parityCheck = await callWorker<{ parityOk: boolean; parityDetail?: string }>(
-    'validate', { code: output, original: working },
+    'validate', { code: output, original: working, bracketPairs },
   );
 
   // 5) Regex alternation (giữ Hán + thêm nhánh Việt); thuật ngữ lạ → 1 lô AI bổ sung dict
@@ -230,7 +234,7 @@ export async function runScriptTranslation(
   cb({ stage: 'validate' });
   const v = await callWorker<{ parseOk: boolean; parseError?: string; parityOk: boolean; parityDetail?: string; cjkChars: number }>(
     'validate',
-    { code: output, original: working },
+    { code: output, original: working, bracketPairs },
   );
 
   const translatable = tokens.filter(isTranslatableToken);

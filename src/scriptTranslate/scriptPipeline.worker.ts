@@ -25,6 +25,8 @@ interface Req {
   tokens?: CJKToken[];
   /** (bug 151) Từ điển user đã chốt — dùng để ĐỔI TÊN khoá dữ liệu một cách tất định. */
   dict?: Record<string, string>;
+  /** (bug 154) Số cặp [ ] thêm hợp lệ do bracket-wrap khoá — để parity không báo động giả. */
+  bracketPairs?: number;
 }
 
 interface Res {
@@ -146,7 +148,7 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
         const code = ev.data.code || '';
         const original = ev.data.original || '';
         const parseError = jsParseErrorAny(code);
-        const parity = verifyCodeStructureParity(original, code);
+        const parity = verifyCodeStructureParity(original, code, 0, ev.data.bracketPairs ?? 0);
         reply({
           ok: true,
           result: {

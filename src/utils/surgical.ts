@@ -506,19 +506,46 @@ export function extractCJKTokens(
     // dịch tự do là trượt. Xử: tách theo dấu chấm, mỗi đoạn CHỈ đổi theo từ điển (đúng nguồn
     // mà code accessor cũng dùng), đoạn ngoài từ điển giữ nguyên. Dấu chấm không bao giờ bị
     // đụng nên cấu trúc đường dẫn luôn còn.
-    if (insideStringLiteral && match[0].includes('.')) {
+    // (bug 154) Áp cho CẢ TRONG CHUỖI LẪN TRONG CODE, không chỉ trong chuỗi như bản 151.
+    // User báo: "đã có từ điển cho 世界运转 và cho 天气, nhưng 世界运转.天气 vẫn bị bỏ qua".
+    // Đúng vậy: bộ gom token nuốt cả cụm `世界运转.天气` thành MỘT token (dấu `.` nằm trong bộ
+    // nối), rồi tra từ điển nguyên cụm — không mục nào khớp nên giữ nguyên. Nhánh tách cũ chỉ
+    // chạy khi base nằm trong protectedIds, mà `i.世界运转._开场标识` thì base đứng sau dấu chấm
+    // nên không được bảo vệ ⇒ không tách ⇒ chỗ GHI đổi tên mà chỗ ĐỌC thì không: hỏng âm thầm.
+    if (match[0].includes('.')) {
       const seg = match[0].split('.');
+      // Đoạn được phép mang tiền tố/hậu tố ASCII (`_开场标识`) nhưng phải CÓ chữ Hán và KHÔNG có
+      // khoảng trắng — đủ hẹp để văn xuôi kiểu "3.5 mét" hay "1. Mục lục" không lọt vào.
+      const segRe = /^[\w$]*[一-鿿㐀-䶿぀-ヿ가-힯][\w$一-鿿㐀-䶿぀-ヿ가-힯]*$/;
       const looksLikePath =
-        seg.length >= 2 && seg.length <= 4 &&
-        seg.every((p) => p.length >= 1 && p.length <= 10 && /^[一-鿿㐀-䶿぀-ヿ가-힯]+$/.test(p));
+        seg.length >= 2 && seg.length <= 5 &&
+        seg.every((p) => p.length >= 1 && p.length <= 14 && segRe.test(p) && !/^[0-9]/.test(p));
       if (looksLikePath) {
         let pos = mStart;
-        for (const p of seg) {
-          const hit = mvuDictionary?.[p];
+        for (let si = 0; si < seg.length; si++) {
+          const p = seg[si];
+          // Tra từ điển theo phần Hán THUẦN (bỏ tiền tố ASCII) — từ điển user nhập tên biến Hán,
+          // không ai nhập kèm gạch dưới. Tiền tố được reinsert ghép lại vào trong nháy/bracket.
+          const core = p.replace(/^[\w$]+/, '');
+          const hit = mvuDictionary?.[core] ?? mvuDictionary?.[p];
+          const coreStart = pos + (p.length - core.length);
+          // Đoạn 0 chỉ là thuộc tính khi chính nó đứng sau dấu chấm; các đoạn sau thì luôn là.
+          const asProp = si > 0 || _inPropPos;
+          // ĐOẠN 0 PHẢI TÔN TRỌNG LỚP BẢO VỆ ĐỊNH DANH. `配置.调试` với `const 配置` khai ở trên
+          // thì `配置` là BIẾN THẬT, không phải khoá — đổi tên nó là SyntaxError không cứu nổi
+          // (không có cách bọc nháy/bracket nào cho một khai báo trần). Chỉ tha khi user đã đưa
+          // vào từ điển VÀ nó đang ở thế thuộc tính (lúc đó bọc bracket được).
+          if (si === 0 && !insideStringLiteral && protectedIds.has(p) && !(hit && _inPropPos)) {
+            pos += p.length + 1;
+            continue;
+          }
+          // Trong chuỗi thì KHÔNG bọc bracket (bọc là chèn nháy vào giữa chuỗi ⇒ vỡ).
+          const dot = asProp && !insideStringLiteral;
           tokens.push({
-            id: id++, text: p, start: pos, end: pos + p.length,
-            // isIdentifier để AI KHÔNG đụng vào — chỉ từ điển được đổi, giữ lockstep với code.
-            isIdentifier: true, isDotNotation: false, isObjectKey: false,
+            id: id++, text: core, start: coreStart, end: coreStart + core.length,
+            // isIdentifier ⇒ AI không đụng tới; chỉ từ điển đổi được, nhờ đó chuỗi đường dẫn và
+            // code accessor luôn đổi cùng nhau hoặc cùng đứng yên.
+            isIdentifier: true, isDotNotation: dot, isObjectKey: false,
             isCssClass: false, isHtmlAttr: false,
             ...(hit ? { translated: hit, fromDictionary: true } : {}),
           });
@@ -582,8 +609,14 @@ export function extractCJKTokens(
     // 1. JS Object Key
     // Must be preceded by {, ,, or newline/spaces, optionally followed by a quote.
     // (object-key thật dạng {'中文': …} có nháy bao sẵn → alreadyQuoted ở reinsert lo, không cần wrap)
+    //
+    // (bug 154) Soi trên _beforeId — tức là ĐÃ BÓC đuôi ASCII của định danh. Bug 151 vá đúng ca
+    // này ở đường dot-notation (`n._预产天数`) nhưng bỏ quên đường object-key, dù nó có y hệt
+    // điểm mù: với `{_开场标识: …}` thì ký tự ngay trước cụm Hán là `_` chứ không phải `{`, nên
+    // mẫu dưới đây trượt → coi là văn xuôi → dịch ra cụm CÓ DẤU CÁCH mà KHÔNG bọc nháy →
+    // SyntaxError. Trong khi `当前日期` sát ngay `{` thì thoát. Chênh nhau đúng một ký tự `_`.
     const isObjectKey = !insideStringLiteral &&
-                        /(?:[{,]\s*|\n\s*|^['"\s]*)['"]?$/.test(contextBefore) &&
+                        /(?:[{,]\s*|\n\s*|^['"\s]*)['"]?$/.test(_beforeId) &&
                         /^['"]?\s*:/.test(contextAfter) &&
                         !/^['"]?\s*:\/\//.test(contextAfter);
 
@@ -765,7 +798,14 @@ export function reinsertTranslations(original: string, tokens: CJKToken[]): stri
       } else if (token.isObjectKey && (finalTranslation.includes(' ') || /[À-ỹ]/.test(finalTranslation))) {
         // JS Object Key: wrap in quotes
         if (!alreadyQuoted) {
-          finalTranslation = `'${finalTranslation}'`;
+          // (bug 154) Nháy phải ÔM CẢ tiền tố ASCII: `_开场标识` → `'_Định danh khởi đầu'`.
+          // Bọc mỗi phần Hán sẽ ra `_'Định danh khởi đầu'` — vẫn vỡ, mà còn khó nhìn ra hơn.
+          // Và tên khoá phải khớp ĐÚNG với chỗ đọc `['_Định danh khởi đầu']` do nhánh
+          // dot-notation ở trên sinh ra, không thì đọc/ghi lệch ô, hỏng âm thầm.
+          const kb = original.slice(0, replaceStart);
+          const keyPrefix = /[\w$]*$/.exec(kb)?.[0] ?? '';
+          if (keyPrefix) replaceStart -= keyPrefix.length;
+          finalTranslation = `'${keyPrefix}${finalTranslation}'`;
         }
       } else if (token.isCssClass) {
         // CSS Class & jQuery Selector: replace spaces with dots to act as multiple classes matching the HTML
@@ -929,6 +969,14 @@ export function verifyCodeStructureParity(
   original: string,
   translated: string,
   tolerance = 0,
+  /**
+   * (bug 154) Số cặp `[ ]` được thêm CÓ CHỦ ĐÍCH do đổi khoá sang dạng bracket
+   * (`obj.键` → `obj['Tên Việt']`). Mỗi lần đổi thêm đúng một `[` và một `]` — cân bằng, hợp lệ.
+   * Không trừ ra thì bộ kiểm đếm thô sẽ kêu "dấu [ THÊM 19" mỗi lần từ điển hoạt động, đúng
+   * cảnh user thấy: cấu trúc ✅ ngoặc không lệch, mà vẫn ⚠️ báo thêm ngoặc.
+   * Báo động giả kiểu này nguy hiểm ở chỗ nó dạy người ta bỏ qua cảnh báo thật.
+   */
+  expectedBracketPairs = 0,
 ): { ok: boolean; reason?: string; maxDiff: number } {
   // Đếm 1 lớp ngoặc gồm biến thể ASCII + fullwidth + CJP tương ĐƯƠNG (để KHÔNG báo nhầm khi comment
   // tiếng Trung đổi （→( , 【→[ , 〔→[ … sang ASCII lúc dịch — chúng cùng lớp nên tổng giữ nguyên).
@@ -952,7 +1000,10 @@ export function verifyCodeStructureParity(
   for (const c of checks) {
     const o = countClass(original, c.chars);
     const t = countClass(translated, c.chars);
-    const diff = Math.abs(t - o);
+    // Với [ và ] thì trừ đi phần thêm hợp lệ do bracket-wrap; chỉ trừ khi bản dịch NHIỀU HƠN
+    // (bớt ngoặc thì vẫn là bất thường, không có lý do gì tha).
+    const allowance = (c.name === '[' || c.name === ']') && t > o ? expectedBracketPairs : 0;
+    const diff = Math.max(0, Math.abs(t - o) - allowance);
     if (!worst || diff > worst.diff) worst = { name: c.name, o, t, diff };
   }
   const maxDiff = worst ? worst.diff : 0;

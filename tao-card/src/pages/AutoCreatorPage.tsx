@@ -8,6 +8,7 @@ import {
   type LucideIcon
 } from 'lucide-react';
 import { useAutoCreatorStore } from '../store/autoCreatorStore';
+import { useCardStore } from '../store/cardStore';
 import { useSettingsStore } from '../store/settingsStore';
 import { useToastStore } from '../store/toastStore';
 import { runAutoCreatorPipeline, retrySingleStep, skipStep, applyStepPreview, runAutoRepair, runFullVerifyCycle } from '../lib/ai/autoCreatorPipeline';
@@ -67,6 +68,13 @@ const MN_UI: Record<string, { label: string; desc: string }> = {
 
 export function AutoCreatorPage() {
   const store = useAutoCreatorStore();
+  // (bug 155-2) Cấu hình Auto Creator phải theo TỪNG CARD. Trước đây chỉ có MỘT bản dùng chung
+  // nên mở card khác vẫn thấy ý tưởng / quy tắc / schema của card trước — rồi vô tình tạo card
+  // mới bằng dữ liệu card cũ. Gắn theo project đang mở; đổi card là tự cất bản cũ, lấy bản mới.
+  const currentProjectId = useCardStore(s => s.currentProjectId);
+  useEffect(() => {
+    useAutoCreatorStore.getState().bindProject(currentProjectId);
+  }, [currentProjectId]);
   const settings = useSettingsStore();
   const activeProfile = settings.getActiveProfile();
   const isMinhNguyet = store.config.pipelineMethod === 'minh_nguyet';

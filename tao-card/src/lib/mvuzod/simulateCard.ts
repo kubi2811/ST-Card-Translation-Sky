@@ -227,9 +227,20 @@ export function schemaLeafPaths(schema: MVUZODSchema): Array<{ path: string; val
       const name = String(f.path || '').split('/').filter(Boolean).pop() ?? '';
       if (!name) continue;
       const p = prefix ? `${prefix}.${name}` : name;
-      if (Array.isArray(f.children) && f.children.length) walk(f.children, p);
-      // `record` là túi khoá động (NPC theo tên…) — không đòi initvar phải liệt kê sẵn.
-      else if (f.type !== 'record') out.push({ path: p, value: f.defaultValue, type: f.type });
+      // (bug 155) array/record: children "_child" là KHAI CẤU TRÚC một phần tử, KHÔNG phải biến
+      // có thật lúc khởi tạo. `Kho Đồ: []` rỗng thì đương nhiên chưa có `Kho Đồ.Tên` — phần tử
+      // chỉ sinh ra khi chơi. Trước bug 148-2 hai kiểu này không có children nên rơi vào nhánh
+      // dưới và được miễn; thêm `_child` vào là bộ kiểm đi xuyên rồi đòi cho bằng được ⇒ báo oan
+      // "4 biến schema KHÔNG có trong initvar", mà lại là loại "Vá lỗi" không sửa nổi vì chẳng
+      // có gì để sửa. Nay chính THÙNG CHỨA là lá: thiếu `Kho Đồ` mới là lỗi thật, và sửa được.
+      // `record` là túi khoá động (NPC theo tên…) — không đòi initvar liệt kê sẵn, kể cả chính
+      // cái túi. `array` thì NGƯỢC LẠI: phải khai `Kho Đồ: []`, vì EJS `forEach` trên `undefined`
+      // là crash và lệnh insert `/-` cần mảng tồn tại sẵn.
+      const kids = (f.children ?? []).filter(c => !String(c.path || '').includes('/_child/'));
+      if (f.type === 'record') continue;
+      if (f.type === 'array') out.push({ path: p, value: f.defaultValue, type: f.type });
+      else if (kids.length) walk(kids, p);
+      else out.push({ path: p, value: f.defaultValue, type: f.type });
     }
   };
   walk(schema.fields ?? [], '');

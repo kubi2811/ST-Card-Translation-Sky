@@ -91,6 +91,68 @@ export function repairInitvarEnabled(entries: LorebookEntry[]): { entries: Loreb
  *
  * Vá: xoá các dòng đó. Lời dặn vốn thuộc về TÊN entry, không phải nội dung.
  */
+/**
+ * (bug 155) THIẾU BIẾN CẤP CAO NHẤT TRONG [initvar] → tự thêm với giá trị mặc định.
+ *
+ * User: "ở tiến trình Vá lỗi cũng nên cho AI xử lý các vấn đề cần phải xử lý tay… từ giờ chỉ
+ * cần AI sửa là được". Ca họ gặp còn dễ hơn thế: `sim-missing-in-initvar` được simulateCard
+ * SINH RA nhưng KHÔNG NƠI NÀO vá — nên báo cáo luôn kết thúc bằng "không có lỗi nào tự vá được
+ * bằng máy", dù thiếu một dòng `Kho Đồ: []` thì máy thừa sức tự điền.
+ *
+ * Chỉ xử lý biến CẤP CAO NHẤT và chỉ THÊM VÀO CUỐI: initvar mang cặp `[giá trị, "mô tả"]` của
+ * MVU, dựng lại cả cây là nguy cơ xoá sạch phần mô tả người dùng đã viết. Biến lồng sâu thiếu
+ * thì vẫn để AI xử lý — thà vá ít mà chắc.
+ */
+export function repairMissingInitvarLeaves(
+  entries: LorebookEntry[],
+  schema: MVUZODSchema | null,
+): { entries: LorebookEntry[]; fixed: RepairAction[] } {
+  const fixed: RepairAction[] = [];
+  if (!schema?.fields?.length) return { entries, fixed };
+
+  const out = entries.map(e => {
+    const isInit = String(e.content || '').includes('[initvar]')
+      || String(e.comment || '').toLowerCase().includes('initvar');
+    if (!isInit) return e;
+    const raw = String(e.content || '');
+
+    // Khoá cấp cao nhất đã khai = dòng KHÔNG thụt đầu dòng, dạng `Tên:`.
+    const have = new Set<string>();
+    for (const line of raw.split(/\r?\n/)) {
+      const m = /^([^\s#<][^:]*):/.exec(line);
+      if (m) have.add(m[1].trim());
+    }
+
+    const add: string[] = [];
+    for (const f of schema.fields) {
+      const name = String(f.path || '').split('/').filter(Boolean).pop() ?? '';
+      if (!name || have.has(name)) continue;
+      // record là túi khoá động — hợp đồng sẵn có là KHÔNG đòi khai; đừng tự ý thêm.
+      if (f.type === 'record') continue;
+      const val = f.type === 'array' ? '[]'
+        : f.type === 'object' ? null            // nhóm lồng: để AI dựng, máy không đoán cây con
+        : f.type === 'number' ? String(Number(f.defaultValue ?? 0) || 0)
+        : f.type === 'boolean' ? String(f.defaultValue === true)
+        : '""';
+      if (val === null) continue;
+      add.push(`${name}: ${val}`);
+    }
+    if (!add.length) return e;
+
+    fixed.push({
+      id: 'sim-missing-in-initvar',
+      description: `Thêm ${add.length} biến schema còn thiếu vào [initvar]: ${add.map(a => a.split(':')[0]).join(', ')}`,
+    });
+    // Chèn TRƯỚC thẻ đóng nếu có, không thì nối vào cuối — luôn nằm trong cây biến.
+    const close = raw.lastIndexOf('</initvar>');
+    return close >= 0
+      ? { ...e, content: `${raw.slice(0, close).replace(/\s*$/, '')}\n${add.join('\n')}\n${raw.slice(close)}` }
+      : { ...e, content: `${raw.replace(/\s*$/, '')}\n${add.join('\n')}\n` };
+  });
+
+  return { entries: out, fixed };
+}
+
 export function repairInitvarPreamble(entries: LorebookEntry[]): { entries: LorebookEntry[]; fixed: RepairAction[] } {
   const fixed: RepairAction[] = [];
   const out = entries.map(e => {
@@ -619,6 +681,13 @@ export function autoRepairCard(
     if (preRes.fixed.length > 0 && out.data.character_book) {
       out.data.character_book.entries = preRes.entries;
       fixed.push(...preRes.fixed);
+    }
+    // (bug 155) Biến schema thiếu hẳn trong [initvar] → tự điền. Trước đây simulateCard báo lỗi
+    // này mà KHÔNG ai vá, nên báo cáo luôn kết thúc bằng "không có lỗi nào tự vá được bằng máy".
+    const missRes = repairMissingInitvarLeaves(out.data.character_book?.entries ?? [], schema);
+    if (missRes.fixed.length > 0 && out.data.character_book) {
+      out.data.character_book.entries = missRes.entries;
+      fixed.push(...missRes.fixed);
     }
   }
 

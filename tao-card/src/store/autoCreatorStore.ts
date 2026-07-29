@@ -71,6 +71,11 @@ interface AutoCreatorState {
   /** (bug 141) Cập nhật trạng thái "Xem trước & Tinh chỉnh" (persist theo config). */
   setTuning: (patch: Partial<CardTuning> | CardTuning | undefined) => void;
   clearTuning: () => void;
+  /** (bug 155-2) Ngăn cấu hình riêng cho từng card. */
+  configByProject: Record<string, AutoCreatorConfig>;
+  boundProjectId: string | null;
+  /** Chuyển sang card khác: cất bản cũ, lấy bản của card mới (chưa có → mặc định sạch). */
+  bindProject: (projectId: string | null) => void;
   updateMnStepConfig: <K extends keyof AutoCreatorConfig['mnStepConfigs']>(
     step: K,
     patch: Partial<AutoCreatorConfig['mnStepConfigs'][K]>
@@ -152,8 +157,11 @@ const emptyMnPreviews = (): Record<MinhNguyetStep, StepPreview | null> => ({
   npc_creation: null, character_overview: null, opening: null
 });
 
-export const useAutoCreatorStore = create<AutoCreatorState>()(persist((set, get) => ({
-  config: {
+/**
+ * (bug 155-2) Cấu hình MẶC ĐỊNH — tách ra hằng số để dựng lại khi chuyển sang card khác.
+ * User: "Mỗi Card chỉ lưu dữ liệu của riêng mình, không giữ lại dữ liệu từ Card trước."
+ */
+const defaultConfig = (): AutoCreatorConfig => ({
     idea: '',
     userRules: '',
     cardKind: 'character',
@@ -192,7 +200,32 @@ export const useAutoCreatorStore = create<AutoCreatorState>()(persist((set, get)
       character_overview: { promptMode: 'default' },
       opening: { alternateGreetings: 2, promptMode: 'default' },
     },
-  },
+});
+
+export const useAutoCreatorStore = create<AutoCreatorState>()(persist((set, get) => ({
+  config: defaultConfig(),
+  configByProject: {},
+  boundProjectId: null,
+
+  /**
+   * (bug 155-2) Gắn cấu hình vào ĐÚNG card đang mở.
+   *
+   * Trước đây `config` là MỘT bản dùng chung cho mọi card, persist dưới một khoá duy nhất —
+   * nên mở card khác vẫn thấy ý tưởng, quy tắc và schema của card trước, rồi vô tình tạo card
+   * mới bằng dữ liệu của card cũ. Nay cất bản đang dùng vào ngăn của card cũ rồi lấy ra ngăn
+   * của card mới (chưa có thì dựng mặc định sạch).
+   */
+  bindProject: (projectId) => set((s) => {
+    if (s.boundProjectId === projectId) return {};
+    const saved = s.boundProjectId
+      ? { ...s.configByProject, [s.boundProjectId]: s.config }
+      : s.configByProject;
+    return {
+      configByProject: saved,
+      boundProjectId: projectId,
+      config: (projectId && saved[projectId]) ? saved[projectId] : defaultConfig(),
+    };
+  }),
 
   isRunning: false,
   abort: null,
@@ -414,5 +447,7 @@ export const useAutoCreatorStore = create<AutoCreatorState>()(persist((set, get)
   name: 'tcs.autocreator.v1',
   // (#43 — "giữ input khi đổi tab") Chỉ persist CONFIG (ý tưởng, quy tắc, bước đã chọn,
   // config từng bước) — trạng thái chạy/log/preview là phù du, không lưu.
-  partialize: (s) => ({ config: s.config }),
+  // (bug 155-2) Persist CẢ ngăn theo card + card đang gắn, không thì đóng app mở lại là mất
+  // hết dữ liệu riêng của từng card.
+  partialize: (s) => ({ config: s.config, configByProject: s.configByProject, boundProjectId: s.boundProjectId }),
 }));

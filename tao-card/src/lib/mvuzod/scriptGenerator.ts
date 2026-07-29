@@ -224,24 +224,18 @@ function fieldsToYAML(fields: MVUZODField[], indent: number): string {
   for (const field of fields) {
     const name = getFieldName(field);
 
-    if (field.children?.length && (field.type === 'object' || field.type === 'record')) {
-      if (field.type === 'record') {
-        // Record types default to empty or sample entry
-        lines.push(`${p}${name}:`);
-        if (field.children.length > 0) {
-          lines.push(`${p}  样例条目:`);
-          for (const child of field.children) {
-            const childName = getFieldName(child);
-            const val = formatYAMLValue(child.defaultValue ?? getDefaultForType(child.type));
-            lines.push(`${p}    ${childName}: ${val}`);
-          }
-        }
-      } else {
-        lines.push(`${p}${name}:`);
-        lines.push(fieldsToYAML(field.children, indent + 1));
-      }
-    } else if (field.type === 'record') {
+    // (bug 155) `record` LUÔN khởi tạo rỗng `{}`, kể cả khi có children.
+    // Children "_child" là KHAI CẤU TRÚC một mục, không phải dữ liệu có sẵn. Nhánh cũ đẻ ra một
+    // khoá mẫu tên `样例条目` — hai cái sai cùng lúc: chữ Hán nằm trong thẻ tiếng Việt, và một
+    // tên khoá giả được khai sẵn thì MỖI LẦN khởi tạo lại nó lại đè lên dữ liệu thật của người
+    // chơi. Trước bug 148-2 record không có children nên nhánh này gần như không chạy; thêm
+    // `_child` vào là nó bắt đầu chạy cho mọi record.
+    const realKids = (field.children ?? []).filter(c => !String(c.path || '').includes('/_child/'));
+    if (field.type === 'record') {
       lines.push(`${p}${name}: {}`);
+    } else if (realKids.length && field.type === 'object') {
+      lines.push(`${p}${name}:`);
+      lines.push(fieldsToYAML(realKids, indent + 1));
     } else if (field.type === 'array') {
       const arr = field.defaultValue;
       if (Array.isArray(arr) && arr.length > 0) {

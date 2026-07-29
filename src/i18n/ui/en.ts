@@ -12,6 +12,7 @@ const ui = {
   hubReportBug: 'Report a bug',
 
   // Rail (thanh chuyển 5 công cụ)
+  railIntro: 'About',
   railTranslate: 'Translate Card',
   railCardCreator: 'Create Card',
   railPreset: 'Create Preset',

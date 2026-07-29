@@ -1,5 +1,4 @@
 import { useEffect, useState, lazy, Suspense } from 'react';
-import UpdateButton from './components/UpdateButton';
 import ProxyConfig from './components/ProxyConfig';
 import FileUpload from './components/FileUpload';
 import TranslateConfig from './components/TranslateConfig';
@@ -173,10 +172,8 @@ export default function App() {
               {t.appSubtitle}
             </div>
           </div>
-          {/* Locale switcher */}
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <UpdateButton />
-          </div>
+          {/* (bug 148-1) Nút "Chọn phiên bản" ĐÃ CHUYỂN sang app "Giới thiệu" — mọi thao tác
+              đổi phiên bản nay nằm một chỗ, không rải rác ở từng app nữa. */}
         </div>
 
         {/* Sidebar sections */}

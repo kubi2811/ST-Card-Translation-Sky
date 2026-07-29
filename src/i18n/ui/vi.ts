@@ -14,6 +14,7 @@ const ui: UiKeys = {
   hubReportBug: 'Báo lỗi',
 
   // Rail (thanh chuyển 5 công cụ) — nguyên văn từ flows.ts
+  railIntro: 'Giới thiệu',
   railTranslate: 'Dịch Card',
   railCardCreator: 'Tạo Card',
   railPreset: 'Tạo Preset',

@@ -10,6 +10,7 @@ const ui: UiKeys = {
   hubReportBug: '报告错误',
 
   // Rail (5 个工具)
+  railIntro: '关于',
   railTranslate: '翻译卡',
   railCardCreator: '创建卡',
   railPreset: '创建预设',

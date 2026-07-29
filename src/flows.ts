@@ -36,6 +36,17 @@ export interface FlowDef {
 
 export const FLOWS: FlowDef[] = [
   {
+    // (bug 148-1) App "Giới thiệu" — ĐẶT ĐẦU danh sách cho nổi bật. Gộp "Chọn phiên bản"
+    // (trước ở Dịch Card) và "Hướng dẫn sử dụng" (trước ở Tạo Card) về một chỗ duy nhất.
+    id: 'intro',
+    label: 'Giới thiệu',
+    labelKey: 'railIntro',
+    emoji: '✨',
+    kind: 'native',
+    loader: () => import('./intro/IntroFlow'),
+    color: '#eab308',
+  },
+  {
     id: 'translate',
     label: 'Dịch Card',
     labelKey: 'railTranslate',

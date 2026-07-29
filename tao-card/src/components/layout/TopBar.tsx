@@ -6,8 +6,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   Menu, Upload, Download, Undo2, Moon, Sun, ChevronDown,
-  FileJson, BookOpen, FileText, AlertCircle, Check, Image, Plus, Folder, Shield, LayoutGrid, Eraser, ArrowUp, ArrowDown,
-  HelpCircle
+  FileJson, BookOpen, FileText, AlertCircle, Check, Image, Plus, Folder, Shield, LayoutGrid, Eraser,
 } from 'lucide-react';
 import { useCardStore } from '../../store/cardStore';
 import { useToastStore } from '../../store/toastStore';
@@ -18,7 +17,6 @@ import { cn } from '../../lib/utils';
 import { ExportWizard } from '../export/ExportWizard';
 import { ValidationDashboard } from '../common/ValidationDashboard';
 import { TemplateGallery } from '../templates/TemplateGallery';
-import { UserGuideModal } from '../common/UserGuideModal';
 import { db } from '../../lib/db/db';
 import { t as ui, fmt } from '../../i18n';
 
@@ -43,30 +41,8 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
   const [showExportWizard, setShowExportWizard] = useState(false);
   const [showValidation, setShowValidation] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
-  const [showUserGuide, setShowUserGuide] = useState(false);
 
-  // App Updater
-  const [isUpdating, setIsUpdating] = useState(false);
-
-  const handleAppUpdate = async (type: 'upgrade' | 'downgrade') => {
-    if (!confirm(type === 'upgrade' ? ui.tbConfirmPull : ui.tbConfirmReset)) return;
-    
-    setIsUpdating(true);
-    try {
-      const res = await fetch(`/api/app/${type}`, { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
-        useToastStore.getState().success(ui.tbUpdateOk + data.message);
-        window.location.reload();
-      } else {
-        useToastStore.getState().error(ui.tbUpdateErr + data.error);
-      }
-    } catch (err) {
-      useToastStore.getState().error(ui.tbNoServer + (err instanceof Error ? err.message : String(err)));
-    } finally {
-      setIsUpdating(false);
-    }
-  };
+  // (bug 148-1) Bộ cập nhật/hạ phiên bản ĐÃ CHUYỂN sang app "Giới thiệu" của hub.
 
   // Export dropdown
   const [showExport, setShowExport] = useState(false);
@@ -437,25 +413,9 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
       </button>
 
       {/* App Updater */}
-      <div className="flex items-center gap-1 border-l border-border pl-2 ml-1">
-        <button onClick={() => handleAppUpdate('upgrade')} disabled={isUpdating}
-          className="p-1.5 rounded-md hover:bg-accent transition-colors text-muted-foreground hover:text-emerald-500 disabled:opacity-50"
-          aria-label="Update (GitHub)" title={ui.tbUpdateTitle}>
-          <ArrowUp className="w-4 h-4" />
-        </button>
-        <button onClick={() => handleAppUpdate('downgrade')} disabled={isUpdating}
-          className="p-1.5 rounded-md hover:bg-accent transition-colors text-muted-foreground hover:text-rose-500 disabled:opacity-50"
-          aria-label="Downgrade (GitHub)" title={ui.tbDowngradeTitle}>
-          <ArrowDown className="w-4 h-4" />
-        </button>
-      </div>
-
-      {/* Hướng dẫn sử dụng */}
-      <button onClick={() => setShowUserGuide(true)}
-        className="p-1.5 rounded-md hover:bg-accent transition-colors text-muted-foreground hover:text-primary"
-        aria-label="User Guide" title={ui.tbGuideTitle}>
-        <HelpCircle className="w-4 h-4" />
-      </button>
+      {/* (bug 148-1) ĐÃ GỠ: 2 nút mũi tên lên/xuống (đổi phiên bản) và nút Hướng dẫn sử dụng.
+          Cả hai nay nằm ở app "Giới thiệu" của hub — "không còn thao tác đổi version rải rác ở
+          app khác nữa", và tài liệu cũng về một chỗ duy nhất. */}
 
       {/* Theme toggle */}
       <button onClick={toggleTheme}
@@ -473,8 +433,6 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
       {/* Template Gallery Modal */}
       <TemplateGallery open={showTemplates} onClose={() => setShowTemplates(false)} />
 
-      {/* User Guide Modal */}
-      <UserGuideModal open={showUserGuide} onClose={() => setShowUserGuide(false)} />
     </header>
   );
 }

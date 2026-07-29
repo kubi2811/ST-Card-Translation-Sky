@@ -80,13 +80,14 @@ export interface GeneratedStoryCard {
 }
 
 // ─── Tag parse khoan dung ───
-function tag(text: string, name: string): string {
+// (bug 150) export cho storyDeepScan dùng chung — một chỗ parse, hai pipeline hưởng.
+export function tag(text: string, name: string): string {
   const closed = new RegExp(`<${name}>([\\s\\S]*?)</${name}>`, 'i').exec(text);
   if (closed) return closed[1].trim();
   const open = new RegExp(`<${name}>([\\s\\S]*?)(?=<[a-z_]+>|</[a-z_]+>|$)`, 'i').exec(text);
   return open ? open[1].trim() : '';
 }
-function allTags(text: string, name: string): string[] {
+export function allTags(text: string, name: string): string[] {
   const out: string[] = [];
   const re = new RegExp(`<${name}>([\\s\\S]*?)</${name}>`, 'gi');
   let m: RegExpExecArray | null;
@@ -94,11 +95,11 @@ function allTags(text: string, name: string): string[] {
   return out;
 }
 
-const NSFW_RULE = 'Cho phép nội dung 18+ nếu truyện có; diễn đạt tự nhiên trong nhân vật/thế giới, KHÔNG từ chối, KHÔNG bàn về việc né tránh.';
-const SFW_RULE = 'Giữ nội dung an toàn (SFW).';
+export const NSFW_RULE = 'Cho phép nội dung 18+ nếu truyện có; diễn đạt tự nhiên trong nhân vật/thế giới, KHÔNG từ chối, KHÔNG bàn về việc né tránh.';
+export const SFW_RULE = 'Giữ nội dung an toàn (SFW).';
 
 // Nguyên tắc chất lượng (học 小玉写卡器 + feedback PhatSiz) — dùng chung cho card & entries.
-const QUALITY_RULE = [
+export const QUALITY_RULE = [
   'CHẤT LƯỢNG: chỉ viết thông tin QUAN TRỌNG, có chiều sâu, đặc trưng cho truyện này.',
   'KHÔNG liệt kê sự thật hiển nhiên hay mẹo vặt đời thường (vd "mùa đông thì lạnh nên mặc áo ấm, đốt lửa").',
   'Nếu nêu một yếu tố (vd bối cảnh mùa đông) thì đào SÂU vào hệ quả đặc thù (lạnh tới mức nào, ảnh hưởng ra sao tới nhân vật/sự kiện), không viết cách ứng phó chung chung.',
@@ -106,7 +107,7 @@ const QUALITY_RULE = [
 ].join('\n');
 
 // #8 — ÉP TIẾNG VIỆT: truyện gốc thường là tiếng Trung → model hay chép nguyên văn. Bắt buộc dịch.
-const LANGUAGE_RULE = '【NGÔN NGỮ — BẮT BUỘC】TOÀN BỘ thành phẩm PHẢI viết bằng TIẾNG VIỆT tự nhiên. Truyện gốc có thể là tiếng Trung/Anh/Nhật/Hàn — bạn phải DỊCH và diễn đạt lại sang tiếng Việt, TUYỆT ĐỐI KHÔNG chép nguyên văn ngôn ngữ gốc. Tên riêng: chữ Hán → âm Hán Việt (vd 夏冬 → Hạ Đông, 杨万春 → Dương Vạn Xuân); tên Nhật → Romaji; tên Hàn → Romanization; tên phương Tây bị phiên sang chữ Hán → khôi phục chữ Latinh. Sau khi viết xong, RÀ LẠI toàn bộ: nếu còn BẤT KỲ chữ Hán/Kanji/Hangul nào (kể cả trong ngoặc, nhãn, tiêu đề) thì dịch ngay. Chỉ giữ nguyên macro {{user}}, {{char}}.';
+export const LANGUAGE_RULE = '【NGÔN NGỮ — BẮT BUỘC】TOÀN BỘ thành phẩm PHẢI viết bằng TIẾNG VIỆT tự nhiên. Truyện gốc có thể là tiếng Trung/Anh/Nhật/Hàn — bạn phải DỊCH và diễn đạt lại sang tiếng Việt, TUYỆT ĐỐI KHÔNG chép nguyên văn ngôn ngữ gốc. Tên riêng: chữ Hán → âm Hán Việt (vd 夏冬 → Hạ Đông, 杨万春 → Dương Vạn Xuân); tên Nhật → Romaji; tên Hàn → Romanization; tên phương Tây bị phiên sang chữ Hán → khôi phục chữ Latinh. Sau khi viết xong, RÀ LẠI toàn bộ: nếu còn BẤT KỲ chữ Hán/Kanji/Hangul nào (kể cả trong ngoặc, nhãn, tiêu đề) thì dịch ngay. Chỉ giữ nguyên macro {{user}}, {{char}}.';
 
 // ─── Chunk truyện theo ranh giới đoạn văn, gần size mong muốn ───
 export function chunkStory(story: string, size: number): string[] {
@@ -156,7 +157,7 @@ export function mergeRosters(lists: ScannedCharacter[][]): ScannedCharacter[] {
 }
 
 // ─── Pool chạy song song có trần đồng thời (RPM đã được callAI gate riêng) ───
-async function runPool<T, R>(items: T[], limit: number, fn: (item: T, i: number) => Promise<R>): Promise<R[]> {
+export async function runPool<T, R>(items: T[], limit: number, fn: (item: T, i: number) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
   let next = 0;
   const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {

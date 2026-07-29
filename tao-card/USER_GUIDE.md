@@ -537,10 +537,40 @@ Bấm một preset là ô "Bạn muốn EJS làm gì?" được điền sẵn; b
 Có cả preset **áp dụng tất cả tính năng EJS** cho những ai muốn làm một lượt cho cả thẻ. Preset nào
 không dùng được với thẻ hiện tại sẽ bị làm mờ kèm lý do (ví dụ: thẻ chưa có schema biến MVU).
 
-### 11.5 📖 Tạo thẻ từ truyện — nhiều file + học văn phong
+### 11.5 📖 Tạo thẻ từ truyện — 🔬 Quét truyện bằng AI (pipeline nghiên cứu sâu)
 
-Nạp **nhiều file truyện** cùng lúc; công cụ đọc hết rồi rút nhân vật, thế giới, dòng thời gian.
-Có tuỳ chọn **học văn phong tác giả** để thẻ viết ra giữ được giọng của truyện gốc.
+Nạp **nhiều file truyện** cùng lúc (.txt / .md / .epub, tự xếp theo tên chương) hoặc dán thẳng vào ô.
+Trang có hai chế độ:
+
+*   **🔬 Quét truyện bằng AI (mặc định):** AI **đọc và nghiên cứu toàn bộ tác phẩm** theo nhiều
+    lượt thay vì chỉ quét một lần — truyện dài được tự chia thành nhiều đoạn (batch), chạy song song:
+    1.  **Đọc lần 1** — cấu trúc truyện, chương/hồi, bối cảnh, thực thể, nhận diện nhân vật chính.
+    2.  **Đọc lần 2** — lập danh sách nhân vật đầy đủ + phân vai chính/phụ.
+    3.  **Đọc lần 3** — phân tích chi tiết TỪNG nhân vật; thông tin rải rác ở nhiều chương được
+        gom về một hồ sơ (ngoại hình, tính cách, năng lực, cách xưng hô, quan hệ, phát triển tâm lý).
+    4.  **Đọc lần 4** — thu thập toàn bộ thiết lập thế giới: hệ thống sức mạnh, cơ chế, luật lệ,
+        địa danh, phe phái, vật phẩm, lịch sử, văn hoá, tiền tệ, thuật ngữ riêng…
+    5.  **Đọc lần 5** — dựng **dòng thời gian chi tiết**; truyện không ghi ngày cụ thể thì dùng mốc
+        tương đối ("Ngày 1", "Sau sự kiện X"), tuyệt đối không bịa.
+    6.  **Học văn phong tác giả** — phân tích nhịp kể, câu chữ, hội thoại, sắc thái… thành
+        **Style Profile** (entry thường trú) để AI viết tiếp gần giọng nguyên tác.
+    7.  **Đọc đối chiếu** — AI cầm bộ nhớ nghiên cứu đọc lại truyện để bổ sung phần thiếu và soát
+        mâu thuẫn giữa các chương; **lặp nhiều vòng đến khi không còn thông tin mới** (số vòng tối
+        đa chỉnh được).
+    8.  **Tổng hợp** — tạo **Character Card** cho nhân vật chính (hoặc nhân vật bạn chỉ định) +
+        **Lorebook đầy đủ**: mỗi chủ đề một entry riêng (Thế giới quan, Meta, Hệ thống, Luật lệ,
+        Nhân vật, Phe phái, Địa danh, Timeline, Văn phong…), tự gắn keys/alias để liên kết nhau,
+        và tự xếp đúng nhóm chuẩn worldbook (constant/depth/order).
+    9.  **Kiểm tra trùng lặp & nhất quán** — khử entry trùng rồi chạy một lượt soát mâu thuẫn.
+
+    Trong lúc chạy bạn thấy rõ **từng giai đoạn, số đoạn đã quét, số lượt gọi AI, số dữ kiện, số
+    entry**; có thể **⏸ Tạm dừng / ▶ Tiếp tục** bất kỳ lúc nào — tiến trình tự lưu, F5 không mất.
+    Dữ liệu truyện không nói rõ được đánh dấu "chưa xác định" thay vì bịa; nhân vật chính của truyện
+    **không bao giờ bị nhầm thành {{user}}** — chỉ khi bạn chủ động điền ô "Nhân vật thành {{user}}"
+    thì người đó mới được thay bằng người chơi.
+
+*   **⚡ Quét nhanh (cũ):** flow một lượt như trước — quét roster, tick nhân vật, sinh thẻ — cho
+    truyện ngắn hoặc khi cần thẻ gấp. Có tuỳ chọn **học văn phong tác giả** để thẻ giữ giọng gốc.
 
 ### 11.6 🕘 Danh sách phiên bản (nút lịch sử ở đầu trang)
 

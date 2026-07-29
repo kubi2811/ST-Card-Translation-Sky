@@ -357,6 +357,57 @@ const CAT_SET: WorldCat[] = ['worldview', 'system', 'mechanic', 'rule', 'locatio
 const NO_FABRICATE = 'CHỐNG BỊA — LỆNH TUYỆT ĐỐI: chỉ ghi thông tin CÓ TRONG truyện; suy luận hợp lý phải đánh dấu "(suy luận)"; thông tin truyện không nói rõ thì GHI VÀO <unk> thay vì tự chế.';
 const NO_USER_MIX = 'TUYỆT ĐỐI KHÔNG nhầm nhân vật chính của truyện với {{user}} hay bất kỳ placeholder SillyTavern nào. Trong giai đoạn PHÂN TÍCH, không dùng {{user}}/{{char}} — dùng đúng TÊN nhân vật trong truyện.';
 
+/**
+ * (bug 158) KHUNG NHIỆM VỤ — dán vào MỌI prompt tổng hợp.
+ *
+ * Bằng chứng user gửi: chạy đủ 9 giai đoạn, 179 lượt AI, gom được 1.831 dữ kiện — rồi ra
+ * ĐÚNG 0 entry, kèm 59 dòng "❓ Chưa xác định". Mà đọc nội dung mấy dòng đó thì chúng là entry
+ * hoàn chỉnh: "Chưa xác định: Wright: Lão già say khướt làm chủ quán rượu 'Chó Săn', người giữ
+ * vai trò chỉ điểm…". Tức là AI hiểu module này là công cụ SOI LỖ HỔNG cốt truyện, nên thay vì
+ * chép lại tri thức thì nó đi liệt kê những gì truyện chưa nói.
+ *
+ * User nói rõ: "AI phải ưu tiên nguyên tắc GHI LẠI TẤT CẢ NHỮNG GÌ TRUYỆN ĐÃ XÁC NHẬN thay vì
+ * đi tìm những gì truyện chưa giải thích". Bí ẩn chưa tiết lộ CHÍNH NÓ là lore đáng ghi, không
+ * phải lý do để bỏ entry.
+ */
+export const MISSION_RULE = [
+  'NHIỆM VỤ: chuyển tác phẩm thành CƠ SỞ TRI THỨC để nhập vai. Bạn là người CHÉP SỬ, không phải người soi lỗi.',
+  'Đây KHÔNG phải công cụ review / kiểm tra tính hợp lý / tìm lỗ hổng cốt truyện. TUYỆT ĐỐI không trả về danh sách "chưa xác định", "thiếu dữ kiện", "cần làm rõ" thay cho entry.',
+  'Truyện cố tình giữ bí mật hoặc chưa giải thích ⇒ VẪN TẠO ENTRY, ghi đúng theo nguyên tác rằng đây là điều chưa được tiết lộ tại thời điểm đó. Bí ẩn là LORE, không phải lý do bỏ qua.',
+  'Có nhiều lời kể khác nhau về cùng một việc ⇒ ghi ĐỦ các góc nhìn kèm nguồn, không tự phán xử khi truyện chưa xác nhận.',
+  'Mọi thực thể có tên và có ít nhất một dữ kiện đều ĐÁNG một entry: nhân vật, địa điểm, tổ chức, gia tộc, chủng tộc, vật phẩm, kỹ năng, cảnh giới, tiền tệ, luật lệ, phong tục, tôn giáo, truyền thuyết, thuật ngữ, sự kiện, mốc thời gian.',
+  'Không bịa thông tin truyện không có — nhưng "không bịa" KHÔNG có nghĩa là "không viết". Có bao nhiêu dữ kiện thì viết bấy nhiêu.',
+].join('\n');
+
+/**
+ * (bug 158) CHỐT CHẶN CUỐI: gom được dữ kiện mà không ra entry nào là HỎNG, không phải "xong".
+ *
+ * Lần chạy trong bằng chứng user kết thúc với `1.831 dữ kiện · 0 entry` mà MỌI giai đoạn vẫn
+ * xanh, kết quả chỉ ghi "Thêm 0 entry vào Lorebook". Không chỗ nào nói cho họ biết là hỏng, nên
+ * họ tưởng truyện thiếu dữ liệu — trong khi dữ liệu thừa thãi, chỉ khâu tổng hợp trượt.
+ * Tách ra hàm thuần để test được: đây là thứ quyết định user có biết mình đang cầm kết quả hỏng
+ * hay không.
+ */
+export function buildYieldWarnings(
+  keptCount: number,
+  factCount: number,
+  emptyJobs: string[],
+): string[] {
+  if (keptCount === 0 && factCount > 0) {
+    return [
+      `❌ Đã gom ${factCount} dữ kiện nhưng KHÔNG tạo được entry nào — đây là lỗi, không phải "truyện thiếu dữ liệu". `
+      + (emptyJobs.length
+        ? `Các lượt tổng hợp trắng tay: ${emptyJobs.slice(0, 8).join(' · ')}${emptyJobs.length > 8 ? ' …' : ''}. `
+        : '')
+      + 'Hãy bấm Chạy lại từ đầu; nếu vẫn vậy thì đổi model — model đang dùng không giữ được định dạng <entries><entry>.',
+    ];
+  }
+  if (emptyJobs.length) {
+    return [`⚠️ ${emptyJobs.length} lượt tổng hợp không ra entry nào: ${emptyJobs.slice(0, 6).join(' · ')}${emptyJobs.length > 6 ? ' …' : ''}`];
+  }
+  return [];
+}
+
 export async function runDeepScan(
   story: string,
   profile: ProxyProfile,
@@ -690,7 +741,11 @@ CHỈ xuất đúng khối (không có gì mới thì xuất <none/>):
 
   // ─── synthesize: bộ nhớ → entries + card ───
 
-  interface SynthJob { label: string; run: () => Promise<void>; }
+  // (bug 158) `kind` để biết job nào PHẢI ra entry — job thẻ nhân vật thì không, nên không
+  // được đem ra bắt lỗi "0 entry".
+  interface SynthJob { label: string; kind: 'entries' | 'card'; run: () => Promise<void>; }
+  /** Job đáng lẽ phải ra entry mà trắng tay — nêu đích danh trong báo cáo. */
+  const emptySynthJobs: string[] = [];
 
   const ENTRY_CATS: EntryCat[] = ['meta', 'worldview', 'system', 'mechanic', 'rule', 'character', 'faction', 'location', 'item', 'history', 'culture', 'term', 'timeline', 'style', 'other'];
   const parseEntries = (text: string, fallbackCat: EntryCat): DeepEntry[] =>
@@ -723,6 +778,7 @@ CHỈ xuất đúng khối (không có gì mới thì xuất <none/>):
 
     // 1) Thế giới quan + Meta (chuẩn Bước 1 của quy trình worldbook user cung cấp).
     jobs.push({
+      kind: 'entries',
       label: 'Entry Thế giới quan + Meta',
       run: async () => {
         const wvFacts = m.worldFacts.filter((f) => f.cat === 'worldview' || f.cat === 'history');
@@ -730,6 +786,7 @@ CHỈ xuất đúng khối (không có gì mới thì xuất <none/>):
           `Từ hồ sơ nghiên cứu, tạo ĐÚNG 2 entry nền tảng cho lorebook SillyTavern: THẾ GIỚI QUAN và META_SETUP.
 Entry 1 (cat=worldview, title="Thế Giới Quan"): nội dung bọc <Worldview>: **Khái niệm vũ trụ**, **Bối cảnh thời đại**, **Luật lệ tự nhiên cốt lõi** — chỉ vĩ mô, CẤM liệt kê nhân vật/hệ thống/khu vực chi tiết.
 Entry 2 (cat=meta, title="META_SETUP"): nội dung bọc <Meta>: quy tắc biến số <user> là THỰC THỂ VÔ ĐỊNH tồn tại song song với nhân vật chính "${m.mainCharacter}" của truyện — <user> KHÔNG PHẢI ${m.mainCharacter}; cấm AI tự phác hoạ ngoại hình/tính cách cho <user>.
+${MISSION_RULE}
 ${QUALITY_RULE}
 ${FORMAT_RULE}
 ${LANGUAGE_RULE}
@@ -750,6 +807,7 @@ CHỈ xuất đúng khối:
     for (let b = 0; b < withFacts.length; b += CHAR_BATCH) {
       const batch = withFacts.slice(b, b + CHAR_BATCH);
       jobs.push({
+        kind: 'entries',
         label: `Entry nhân vật: ${batch.map((c) => c.name).join(', ')}`,
         run: async () => {
           const dossiers = batch.map((c) =>
@@ -759,6 +817,7 @@ CHỈ xuất đúng khối:
 Nội dung bọc <Character>, gồm: **Tên** + bí danh/danh hiệu; chủng tộc/thế lực; thân thế/vị trí; tuổi/giới tính; **Ngoại hình** (chỉ ĐẶC ĐIỂM nhận diện — không mỹ từ sáo rỗng); **Tính cách** + mục tiêu/động cơ; **Năng lực** (điểm mạnh/yếu, mô tả hiệu ứng bề ngoài); **Cách xưng hô & giọng điệu** (từ ngữ đặc trưng, ví dụ ngắn); thói quen/sở thích; **Quan hệ** với các nhân vật khác (nêu đích danh); **Phát triển qua các giai đoạn truyện** (biến cố quan trọng + thay đổi tâm lý, theo trình tự).
 Thông tin rải rác ở nhiều chương ĐÃ được gom sẵn trong hồ sơ — tổng hợp thành bức tranh HOÀN CHỈNH, mâu thuẫn thì ghi cả hai kèm "(mâu thuẫn giữa các chương)".
 ${NO_USER_MIX}
+${MISSION_RULE}
 ${QUALITY_RULE}
 ${KEY_RULE}
 ${FORMAT_RULE}
@@ -788,6 +847,7 @@ CHỈ xuất đúng khối:
       for (let b = 0; b < list.length; b += TOPIC_BATCH) {
         const batch = list.slice(b, b + TOPIC_BATCH);
         jobs.push({
+          kind: 'entries',
           label: `Entry thế giới [${cat}] (${batch.length} chủ đề)`,
           run: async () => {
             const entryCat: EntryCat = cat === 'history' ? 'history' : cat === 'term' ? 'term' : cat === 'culture' ? 'culture'
@@ -796,7 +856,8 @@ CHỈ xuất đúng khối:
             const tagName = catTagName[entryCat] ?? 'Term';
             const text = await ai(`Tổng hợp entry thế giới [${cat}]`,
               `Từ dữ kiện đã gom, viết entry lorebook cho TỪNG CHỦ ĐỀ dưới đây (cat=${entryCat}). Mỗi chủ đề MỘT entry riêng — không gộp nhiều chủ đề vào một entry.
-Nội dung bọc <${tagName}>: tổng hợp MỌI dữ kiện của chủ đề thành mô tả có cấu trúc (bản chất cốt lõi; cấu trúc/cấp bậc nếu có; quan hệ với chủ đề/nhân vật khác — nêu đích danh để liên kết). Chủ đề quá ít dữ kiện (1 dòng lặt vặt) thì BỎ QUA thay vì viết entry vụn.
+Nội dung bọc <${tagName}>: tổng hợp MỌI dữ kiện của chủ đề thành mô tả có cấu trúc (bản chất cốt lõi; cấu trúc/cấp bậc nếu có; quan hệ với chủ đề/nhân vật khác — nêu đích danh để liên kết). Chủ đề chỉ có 1 dòng lặt vặt thì GỘP vào entry cùng loại gần nhất — không bỏ mất dữ kiện.
+${MISSION_RULE}
 ${QUALITY_RULE}
 ${KEY_RULE}
 ${FORMAT_RULE}
@@ -821,12 +882,14 @@ CHỈ xuất đúng khối:
       for (let b = 0; b < m.timeline.length; b += EV_BATCH) evChunks.push(m.timeline.slice(b, b + EV_BATCH));
       evChunks.forEach((evs, bi) => {
         jobs.push({
+          kind: 'entries',
           label: `Entry timeline (phần ${bi + 1}/${evChunks.length})`,
           run: async () => {
             const text = await ai(`Tổng hợp timeline (${bi + 1}/${evChunks.length})`,
               `Từ nhật ký sự kiện đã gom, viết entry DÒNG THỜI GIAN (cat=timeline, title="Dòng Thời Gian${evChunks.length > 1 ? ` — Phần ${bi + 1}` : ''}").
 Nội dung bọc <Timeline>; ${bi === 0 ? 'MỞ ĐẦU bằng nguyên văn: "[CẢNH BÁO HỆ THỐNG - HIỆU ỨNG CÁNH BƯỚM]: Dòng thời gian gốc dưới đây CHỈ MANG TÍNH CHẤT THAM KHẢO. Khi biến số <user> chính thức giáng lâm và có bất kỳ hành động tương tác nào, Timeline gốc này sẽ ngay lập tức bị phá vỡ. Mọi sự kiện tương lai sẽ rẽ nhánh, bóp méo và thay đổi hoàn toàn dựa trên quỹ đạo hành động của <user>, vô hiệu hóa định mệnh đã được sắp đặt sẵn của thế giới này."; sau đó ' : ''}mỗi sự kiện dạng "- **[Mốc thời gian]** — <Event>ai làm gì, ở đâu, gặp ai, hậu quả</Event>" theo ĐÚNG trình tự.
 Mốc thời gian: giữ nguyên mốc truyện ghi; mốc tương đối ("Ngày 1", "Sau sự kiện X") phải NHẤT QUÁN; "?" thì suy mốc tương đối từ ngữ cảnh, KHÔNG bịa ngày cụ thể.
+${MISSION_RULE}
 ${QUALITY_RULE}
 ${FORMAT_RULE}
 ${LANGUAGE_RULE}
@@ -844,11 +907,13 @@ CHỈ xuất đúng khối:
     // 5) Style Profile — (bug 150) "Học văn phong" thành sản phẩm THẬT: entry constant.
     if (opts.learnStyle !== false && m.styleNotes.length > 0) {
       jobs.push({
+        kind: 'entries',
         label: 'Entry Style Profile (văn phong tác giả)',
         run: async () => {
           const text = await ai('Tổng hợp Style Profile',
             `Từ các ghi chú phân tích văn phong (mẫu đầu/giữa/cuối truyện), viết STYLE PROFILE hoàn chỉnh (cat=style, title="Văn Phong Tác Giả").
 Nội dung: 10–18 gạch đầu dòng CHỈ DẪN để một AI khác viết tiếp GẦN GIỌNG nguyên tác — cấu trúc câu, nhịp kể, tốc độ, cách miêu tả, cách dựng hội thoại, từ ngữ đặc trưng, sắc thái cảm xúc, mức hài hước/nghiêm túc, cách đẩy cao trào, cách tả nội tâm, cách xây dựng nhân vật. Mỗi ý kèm ví dụ ngắn.
+${MISSION_RULE}
 ${QUALITY_RULE}
 ${LANGUAGE_RULE}
 CHỈ xuất đúng khối:
@@ -861,12 +926,49 @@ CHỈ xuất đúng khối:
       });
     }
 
+    // 5b) (bug 158) BÍ ẨN → ENTRY, không phải sọt rác.
+    // Trong bằng chứng user, 59 dòng nằm dưới nhãn "❓ Chưa xác định" hoá ra là entry hoàn chỉnh
+    // ("Wright: Lão già say khướt làm chủ quán rượu 'Chó Săn', người giữ vai trò chỉ điểm…").
+    // Chúng bị chôn ở đó thay vì thành lore. User nói thẳng: truyện giữ bí mật thì cứ ghi nhận
+    // đó là bí mật rồi VẪN tạo entry. Nên đây là nguồn tư liệu, không phải danh sách từ chối.
+    if (m.unknowns.length > 0) {
+      const UNK_BATCH = 25;
+      for (let b = 0; b < m.unknowns.length; b += UNK_BATCH) {
+        const batch = m.unknowns.slice(b, b + UNK_BATCH);
+        jobs.push({
+          kind: 'entries',
+          label: `Entry bí ẩn & thông tin chưa tiết lộ (${batch.length} mục)`,
+          run: async () => {
+            const text = await ai('Tổng hợp entry bí ẩn / chưa tiết lộ',
+              `Dưới đây là những ghi chép mà lượt đọc trước xếp vào diện "chưa xác định". Phần lớn THỰC RA là tri thức dùng được — hoặc là một thực thể đã có đủ mô tả, hoặc là một bí ẩn mà chính truyện cố ý chưa tiết lộ.
+Nhiệm vụ: biến chúng thành entry lorebook.
+- Ghi chép đã đủ tả một thực thể (nhân vật, nơi chốn, tổ chức, vật phẩm, thuật ngữ…) ⇒ tạo entry ĐÚNG loại đó, viết như tri thức bình thường.
+- Là bí ẩn/điều truyện chưa giải thích ⇒ vẫn tạo entry (cat=term), nêu rõ đây là điều CHƯA ĐƯỢC TIẾT LỘ tính đến thời điểm đó, kèm mọi manh mối truyện đã đưa. Đây là lore hợp lệ, người nhập vai cần biết là "chưa ai biết".
+- Chỉ BỎ những dòng thuần kỹ thuật (lỗi định dạng, ghi chú của công cụ) — không bỏ vì "thiếu dữ kiện".
+${MISSION_RULE}
+${QUALITY_RULE}
+${KEY_RULE}
+${FORMAT_RULE}
+${LANGUAGE_RULE}
+${nsfwRule}
+CHỈ xuất đúng khối:
+<entries>
+<entry><cat>character|location|faction|item|term|rule|other</cat><title>Tên</title><keys>…</keys><content><Term>…</Term></content></entry>
+</entries>`,
+              batch.map((u) => `- ${u}`).join('\n'));
+            synthEntries.push(...parseEntries(text, 'term'));
+          },
+        });
+      }
+    }
+
     // 6) Character Card(s).
     if (opts.makeCard !== false) {
       const wanted = (opts.cardCharacters?.length ? opts.cardCharacters : [m.mainCharacter]).filter(Boolean);
       const uName = opts.userReplaceName?.trim();
       for (const name of wanted) {
         jobs.push({
+          kind: 'card',
           label: `Character Card: ${name}`,
           run: async () => {
             try {
@@ -881,7 +983,8 @@ CHỈ xuất đúng khối:
               const system = `Bạn là chuyên gia viết THẺ NHÂN VẬT SillyTavern chất lượng cao từ HỒ SƠ NGHIÊN CỨU tác phẩm.
 Viết thẻ HOÀN CHỈNH cho nhân vật "${name}".
 - ${userRule}
-${opts.extraNotes?.trim() ? `- Yêu cầu thêm: ${opts.extraNotes.trim()}\n` : ''}${QUALITY_RULE}
+${opts.extraNotes?.trim() ? `- Yêu cầu thêm: ${opts.extraNotes.trim()}\n` : ''}${MISSION_RULE}
+${QUALITY_RULE}
 ${LANGUAGE_RULE}
 ${opts.nsfw ? NSFW_RULE : SFW_RULE}
 CHỈ xuất đúng khối, mọi tag đóng, ngoài tag không viết gì:
@@ -934,10 +1037,24 @@ CHỈ xuất đúng khối, mọi tag đóng, ngoài tag không viết gì:
     p.total = jobs.length;
     p.done = 0;
     emit();
+    // (bug 158) Job KHÔNG ra entry nào thì KHÔNG phải thành công.
+    // Bản cũ cứ `p.done++` bất kể job có sinh gì hay không, nên 54 job trả 0 entry vẫn hiện
+    // "54/54 ✅" rồi kết thúc bằng "Thêm 0 entry vào Lorebook" — hỏng mà không ai biết hỏng ở đâu.
+    // Chạy lại MỘT lần (lấy mẫu khác thường là ra), vẫn trắng thì ghi tên job vào báo cáo.
     await runPool(jobs, Math.min(conc, jobs.length), async (job) => {
       checkAbort();
       log(job.label);
+      const before = synthEntries.length;
       await job.run();
+      if (job.kind === 'entries' && synthEntries.length === before) {
+        log(`↻ ${job.label} — không ra entry nào, thử lại`);
+        checkAbort();
+        await job.run();
+        if (synthEntries.length === before) {
+          emptySynthJobs.push(job.label);
+          log(`⚠️ ${job.label} — vẫn không ra entry sau khi thử lại`);
+        }
+      }
       p.done++;
       st.stats.entries = synthEntries.length;
       emit();
@@ -991,6 +1108,13 @@ CHỈ xuất: <issues><issue>…</issue>…</issues> hoặc <none/>`,
       report.push(`(bỏ qua lượt soát nhất quán: ${e instanceof Error ? e.message : String(e)})`);
     }
     p.done = 2;
+
+    // (bug 158) CHỐT CHẶN CUỐI: có dữ kiện mà không ra entry nào là HỎNG, không phải "xong".
+    // Lần chạy user gửi kết thúc với 1.831 dữ kiện · 0 entry mà mọi giai đoạn vẫn xanh — không
+    // có chỗ nào nói cho họ biết là hỏng. Nói thẳng ra, kèm tên job trắng tay để lần sau còn dò.
+    const factCount = m.characters.reduce((n, c) => n + c.facts.length, 0)
+      + m.worldFacts.length + m.timeline.length;
+    report.unshift(...buildYieldWarnings(kept.length, factCount, emptySynthJobs));
 
     st.result = { entries: kept, cards: synthCards, report };
     st.stats.entries = kept.length;

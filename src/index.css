@@ -1124,3 +1124,28 @@ input[type="range"]::-webkit-slider-thumb {
   50%      { box-shadow: 0 0 15px rgba(0,229,255,0.75), inset 0 0 9px rgba(0,229,255,0.3); }
 }
 .hub-update-glow { animation: hubUpdateGlow 2.6s ease-in-out infinite; }
+
+/* ─── (bug 157) Bảng "Hướng dẫn sử dụng" trong app Giới thiệu ───
+   Nội dung do renderGuide() sinh từ USER_GUIDE.md. Tô bằng CSS variable của hub — không dùng
+   lại bộ style của Tạo Card vì bên đó là Tailwind, bê sang là chữ đen trên nền đen. */
+.intro-guide { font-size: 0.78rem; line-height: 1.75; color: var(--text-secondary, #c9c9d4); }
+.intro-guide .ig-h1 { font-size: 1rem; font-weight: 800; margin: 4px 0 8px; color: var(--text-primary); }
+.intro-guide .ig-h2 { font-size: 0.9rem; font-weight: 700; margin: 18px 0 6px; padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-subtle, #2a2a3e); color: var(--text-primary); }
+.intro-guide .ig-h3 { font-size: 0.82rem; font-weight: 700; margin: 12px 0 4px; color: var(--text-primary); }
+.intro-guide .ig-p { margin: 6px 0; }
+.intro-guide .ig-ul, .intro-guide .ig-ol { margin: 6px 0; padding-left: 20px; }
+.intro-guide .ig-ul li, .intro-guide .ig-ol li { margin: 3px 0; }
+.intro-guide .ig-hr { border: none; border-top: 1px solid var(--border-subtle, #2a2a3e); margin: 14px 0; }
+.intro-guide .ig-quote { margin: 8px 0; padding: 8px 12px; border-left: 3px solid var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-radius: 0 8px 8px 0; }
+.intro-guide .ig-code { font-family: monospace; font-size: 0.92em; padding: 1px 5px; border-radius: 4px;
+  background: var(--bg-tertiary, #22222e); color: var(--accent-primary); }
+.intro-guide .ig-pre { font-family: monospace; font-size: 0.72rem; padding: 10px; border-radius: 8px;
+  background: var(--bg-primary, #0f0f16); overflow-x: auto; margin: 8px 0; }
+/* Bảng phải cuộn ngang trong khung của nó, không đẩy cả trang giãn ra. */
+.intro-guide .ig-tablewrap { overflow-x: auto; margin: 8px 0; }
+.intro-guide .ig-table { border-collapse: collapse; width: 100%; font-size: 0.74rem; }
+.intro-guide .ig-table th, .intro-guide .ig-table td {
+  border: 1px solid var(--border-subtle, #2a2a3e); padding: 5px 8px; text-align: left; vertical-align: top; }
+.intro-guide .ig-table th { background: var(--bg-tertiary, #22222e); color: var(--text-primary); font-weight: 700; }

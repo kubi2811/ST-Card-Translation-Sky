@@ -16,6 +16,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { History, BookOpen, Loader2, Check, ArrowUpCircle, ChevronDown, ChevronUp, Sparkles } from 'lucide-react';
 import { APP_VERSION } from '../version';
 import { FLOWS } from '../flows';
+// (bug 157) Tài liệu THẬT nằm trong USER_GUIDE.md ở gốc repo — sửa tài liệu không phải sửa code,
+// và mỗi lần thêm tính năng/sửa lỗi thì cập nhật đúng một file.
+import guideMd from '../../USER_GUIDE.md?raw';
+import { renderGuide, extractHeadings, filterGuide } from './guideMarkdown';
 import {
   APP_TAGS, classifyCommitApps, countByApp, filterByApp, stripConventionalPrefix,
   type AppId,
@@ -72,7 +76,14 @@ function VersionPanel() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [app, setApp] = useState<AppId | null>(null);
-  const [openLog, setOpenLog] = useState<string | null>(null);
+  // (bug 157) Mở NHIỀU log cùng lúc — trước đây là một sha duy nhất nên mở bản này là bản kia
+  // tự đóng, không đối chiếu hai phiên bản cạnh nhau được.
+  const [openLogs, setOpenLogs] = useState<Set<string>>(() => new Set());
+  const toggleLog = (sha: string) => setOpenLogs((prev) => {
+    const next = new Set(prev);
+    if (next.has(sha)) next.delete(sha); else next.add(sha);
+    return next;
+  });
   const [busySha, setBusySha] = useState<string | null>(null);
   const [result, setResult] = useState('');
 
@@ -142,8 +153,8 @@ function VersionPanel() {
                 ))}
                 <span style={{ fontSize: '0.78rem', flex: 1, minWidth: 200 }}>{stripConventionalPrefix(row.subject)}</span>
                 <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontFamily: 'monospace' }}>{row.short} · {row.date}</span>
-                <button onClick={() => setOpenLog(openLog === row.sha ? null : row.sha)}
-                  style={chipBtn}>{openLog === row.sha ? <ChevronUp size={11} /> : <ChevronDown size={11} />} Log</button>
+                <button onClick={() => toggleLog(row.sha)}
+                  style={chipBtn}>{openLogs.has(row.sha) ? <ChevronUp size={11} /> : <ChevronDown size={11} />} Log</button>
                 {!row.current && (
                   <button onClick={() => switchTo(row)} disabled={busySha !== null}
                     style={{ ...chipBtn, color: 'var(--accent-primary)', borderColor: 'var(--accent-primary)' }}>
@@ -151,7 +162,7 @@ function VersionPanel() {
                   </button>
                 )}
               </div>
-              {openLog === row.sha && (
+              {openLogs.has(row.sha) && (
                 <pre style={{
                   marginTop: 6, fontSize: '0.68rem', whiteSpace: 'pre-wrap', maxHeight: 260, overflow: 'auto',
                   background: 'var(--bg-primary,#0f0f16)', padding: 8, borderRadius: 6, color: 'var(--text-muted)',
@@ -187,20 +198,13 @@ function FilterChip({ active, onClick, label }: { active: boolean; onClick: () =
 
 /* ═══════════════════ TAB 2 — HƯỚNG DẪN (chuyển từ Tạo Card) ═══════════════════ */
 
-/** Mỗi app một mục — nguồn là chính FLOWS nên thêm app mới là hướng dẫn tự có mục mới. */
-const APP_GUIDE: Record<string, string> = {
-  'translate': 'Nạp thẻ (.png/.json) → chọn phạm vi dịch → Bắt đầu. Tiến trình tự lưu ra file nên F5 hay đóng tab không mất. Tab "Regex" dịch riêng phần giao diện của thẻ; nút "Áp bản dịch vào thẻ" mới ghi vào thẻ thật.',
-  'script-translate': 'Dán/nạp script TavernHelper để dịch phần chữ mà không đụng vào code. Có soi từng đoạn và dịch lại đoạn lỗi.',
-  'preset-translate': 'Dịch preset SillyTavern: prompt và regex được dịch đồng bộ nhãn với nhau, tránh regex trỏ vào tên đã dịch khác.',
-  'card-creator': 'Tạo thẻ từ ý tưởng. Gõ ý tưởng → bấm 🪄 Đũa thần cho AI sắp xếp lại → "Xem trước & Tinh chỉnh" để duyệt schema biến và chọn giao diện → Bắt đầu tạo. Trong thẻ còn có Lorebook, MVUZOD, EJS Studio, Wiki Collector và Tạo thẻ từ truyện.',
-  'preset': 'Tạo preset mới bằng hội thoại. Nạp vài preset mẫu vào thư viện rồi bảo AI "gộp A với B", "sửa preset này cho dịch thuật".',
-  'mod-card': 'Chỉnh sửa thẻ có sẵn theo yêu cầu bằng lời, xem trước thay đổi trước khi áp.',
-  'crawler': 'Cào dữ liệu web/wiki thành nguồn cho lorebook.',
-  'novalcard': 'Trích thẻ từ truyện/tiểu thuyết (.txt/.epub).',
-};
 
 function GuidePanel() {
   const [commits, setCommits] = useState<VersionRow[]>([]);
+  const [q, setQ] = useState('');
+  // Mục lục dựng từ TOÀN BỘ tài liệu (không theo bộ lọc) để tìm xong vẫn nhảy về chỗ khác được.
+  const headings = useMemo(() => extractHeadings(guideMd), []);
+  const guideHtml = useMemo(() => renderGuide(filterGuide(guideMd, q)), [q]);
   useEffect(() => {
     void (async () => {
       try {
@@ -213,29 +217,37 @@ function GuidePanel() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* (bug 157) BẢNG HƯỚNG DẪN CHI TIẾT — trước đây mỗi app chỉ một dòng, không đủ để làm theo.
+          Nội dung lấy từ USER_GUIDE.md ở gốc repo: mục lục bên trái, ô tìm kiếm lọc theo MỤC
+          (một dòng lẻ tách khỏi tiêu đề của nó thì đọc không hiểu gì). */}
       <section>
-        <h2 style={sectionH}>Bắt đầu nhanh</h2>
-        <ol style={{ fontSize: '0.78rem', lineHeight: 1.7, paddingLeft: 18, margin: 0, color: 'var(--text-secondary,#c9c9d4)' }}>
-          <li>Vào <b>Cài đặt</b> của app đang dùng, thêm API key (một key dùng chung cho mọi app).</li>
-          <li>Chọn app ở thanh bên trái theo việc cần làm — xem mô tả từng app bên dưới.</li>
-          <li>Đổi phiên bản hoặc xem log cập nhật ở tab <b>Chọn phiên bản</b> ngay tại app này.</li>
-        </ol>
-      </section>
-
-      <section>
-        <h2 style={sectionH}>Các app trong bộ</h2>
-        <div style={{ display: 'grid', gap: 6 }}>
-          {FLOWS.map(f => (
-            <div key={f.id} style={{ border: '1px solid var(--border-subtle,#2a2a3e)', borderRadius: 10, padding: '8px 10px' }}>
-              <div style={{ fontSize: '0.8rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span>{f.emoji}</span>{f.label}
-              </div>
-              <div style={{ fontSize: '0.73rem', color: 'var(--text-muted)', marginTop: 2, lineHeight: 1.6 }}>
-                {APP_GUIDE[f.id] ?? 'Đang cập nhật mô tả cho app này.'}
-              </div>
-            </div>
-          ))}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+          <h2 style={{ ...sectionH, margin: 0 }}>Hướng dẫn sử dụng</h2>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Tìm trong hướng dẫn…"
+            style={{
+              marginLeft: 'auto', fontSize: '0.72rem', padding: '4px 10px', borderRadius: 8, minWidth: 200,
+              border: '1px solid var(--border-subtle,#2a2a3e)', background: 'transparent', color: 'inherit',
+            }} />
         </div>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+          <nav style={{ width: 210, flexShrink: 0, position: 'sticky', top: 0, maxHeight: '70vh', overflow: 'auto' }}>
+            {headings.map(h => (
+              <button key={h.id} onClick={() => document.getElementById(`guide-${h.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                style={{
+                  display: 'block', width: '100%', textAlign: 'left', cursor: 'pointer', background: 'transparent',
+                  border: 'none', color: h.level === 1 ? 'var(--text-primary)' : 'var(--text-muted)',
+                  fontSize: h.level === 1 ? '0.74rem' : '0.7rem', fontWeight: h.level === 1 ? 700 : 400,
+                  padding: `2px 4px 2px ${(h.level - 1) * 10 + 4}px`, lineHeight: 1.5,
+                }}>{h.text}</button>
+            ))}
+          </nav>
+          <div style={{ flex: 1, minWidth: 0, maxHeight: '70vh', overflow: 'auto' }}
+            className="intro-guide"
+            dangerouslySetInnerHTML={{ __html: guideHtml }} />
+        </div>
+        {q.trim() && !guideHtml && (
+          <p style={{ fontSize: '0.76rem', color: 'var(--text-muted)' }}>Không có mục nào khớp “{q}”.</p>
+        )}
       </section>
 
       {/* (bug 146) Tài liệu TỰ CẬP NHẬT: phần này dựng thẳng từ commit thật của repo. */}

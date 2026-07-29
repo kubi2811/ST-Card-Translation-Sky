@@ -10,13 +10,15 @@
  *   number  → 2 ô Min/Max        · ô nhập số
  *   string  → ô liệt kê enum      · dropdown theo enum (nếu có) hoặc ô nhập chữ
  *   boolean → ẩn cột 3            · dropdown true/false
- *   object  → ẩn cột 3            · (nhóm — không có giá trị riêng)
+ *   object  → ẩn cột 3            · (nhóm) kèm BẢNG CON liệt kê các biến BÊN TRONG nhóm
  *   array   → ẩn cột 3            · [] rỗng, kèm BẢNG CON định nghĩa cấu trúc 1 phần tử
  *   record  → ẩn cột 3            · {} rỗng, kèm BẢNG CON định nghĩa cấu trúc 1 mục
  * Bảng con dùng LẠI CHÍNH component này (đệ quy) nên trường con cũng có đủ 5 cột.
  *
- * Trường con được lưu thành children với path chứa "/_child/" — đúng quy ước schemaInferencer
- * đã dùng cho record, nay dùng chung cho cả array.
+ * (bug 149b) Bảng con của `object` mang Ý NGHĨA KHÁC hai loại kia, nên quy ước path cũng khác:
+ *   array/record → "/_child/…"  : KHAI BÁO cấu trúc một phần tử, không phải biến có thật;
+ *   object       → "cha/con"    : biến thật, có địa chỉ riêng để đọc/ghi.
+ * Dùng nhầm quy ước là biến vừa thêm vào nhóm biến mất lúc ghi ngược về schema.
  */
 import { Trash2, Plus, CornerDownRight } from 'lucide-react';
 import type { MVUZODField } from '../../types/mvuzod.types';
@@ -50,8 +52,19 @@ export const TYPE_OPTIONS: Array<{ value: VarType; label: string; hint: string }
 
 /** Type nào KHÔNG có cột "Phạm vi" ở hàng cha. */
 export const HIDES_RANGE = new Set<VarType>(['boolean', 'object', 'array', 'record']);
-/** Type nào có BẢNG CON định nghĩa cấu trúc. */
-export const HAS_SUBTABLE = new Set<VarType>(['array', 'record']);
+/**
+ * Type nào có BẢNG CON.
+ * (bug 149b) `object` được thêm vào: nhóm cha trước đây bị "đi xuyên qua" nên bảng chỉ còn lá
+ * phẳng, user phải tự đoán biến nào thuộc nhóm nào — trong khi đúng cây đó lại hiện rõ ràng ở
+ * bước tạo card. Ý nghĩa bảng con KHÁC nhau theo type nên nhãn cũng phải khác (xem SUBTABLE_HINT).
+ */
+export const HAS_SUBTABLE = new Set<VarType>(['array', 'record', 'object']);
+
+const SUBTABLE_HINT: Partial<Record<VarType, string>> = {
+  array: 'Cấu trúc MỘT PHẦN TỬ của danh sách (số phần tử thay đổi khi chơi):',
+  record: 'Cấu trúc MỘT MỤC (áp cho mọi tên khoá sẽ phát sinh khi chơi):',
+  object: 'Các biến nằm trong nhóm này:',
+};
 
 /** Nhãn cột — dùng chung cho bảng chính và bảng con. */
 const COLS = ['Tên biến', 'Kiểu dữ liệu', 'Phạm vi / Giá trị hợp lệ', 'Giá trị mặc định', 'Ghi chú / quy tắc riêng'];
@@ -88,14 +101,14 @@ export function SchemaVarTable({ rows, onChange, nested = false }: Props) {
     else if (type === 'boolean' && !['true', 'false'].includes(r.defaultValue)) p.defaultValue = 'false';
     else if (type === 'number' && !Number.isFinite(Number(r.defaultValue))) p.defaultValue = '0';
     if (HAS_SUBTABLE.has(type) && !(r.children?.length)) {
-      p.children = [makeChild(r.path, type === 'array' ? 'Tên' : 'Mức độ')];
+      p.children = [makeChild(r.path, type === 'array' ? 'Tên' : type === 'object' ? 'Trường 1' : 'Mức độ', type)];
     }
     patch(i, p);
   };
 
   const addChild = (i: number) => {
     const r = rows[i];
-    patch(i, { children: [...(r.children ?? []), makeChild(r.path, `Trường ${(r.children?.length ?? 0) + 1}`)] });
+    patch(i, { children: [...(r.children ?? []), makeChild(r.path, `Trường ${(r.children?.length ?? 0) + 1}`, r.type)] });
   };
 
   return (
@@ -180,15 +193,11 @@ export function SchemaVarTable({ rows, onChange, nested = false }: Props) {
             {/* ── BẢNG CON (array/record) — đệ quy chính bảng này ── */}
             {HAS_SUBTABLE.has(v.type) && (
               <div className="ml-3 pl-2 border-l-2 border-primary/30 space-y-1">
-                <div className="text-[10px] text-primary/80">
-                  {v.type === 'array'
-                    ? 'Cấu trúc MỘT PHẦN TỬ của danh sách (số phần tử thay đổi khi chơi):'
-                    : 'Cấu trúc MỘT MỤC (áp cho mọi tên khoá sẽ phát sinh khi chơi):'}
-                </div>
+                <div className="text-[10px] text-primary/80">{SUBTABLE_HINT[v.type]}</div>
                 <SchemaVarTable nested rows={v.children ?? []} onChange={c => patch(i, { children: c })} />
                 <button onClick={() => addChild(i)}
                   className="text-[10px] px-2 py-0.5 rounded border border-border hover:bg-muted flex items-center gap-1">
-                  <Plus className="w-3 h-3" /> Thêm trường con
+                  <Plus className="w-3 h-3" /> {v.type === 'object' ? 'Thêm biến vào nhóm' : 'Thêm trường con'}
                 </button>
               </div>
             )}
@@ -202,10 +211,15 @@ export function SchemaVarTable({ rows, onChange, nested = false }: Props) {
   );
 }
 
-/** Dựng một trường con mới cho array/record — path theo quy ước "/_child/". */
-export function makeChild(parentPath: string, name: string): VarRow {
+/**
+ * Dựng một trường con mới.
+ * array/record → path mang "/_child/" vì đó là KHAI BÁO CẤU TRÚC một phần tử, không phải một
+ * biến có thật. object → path thẳng, vì trường trong nhóm là biến thật, có địa chỉ riêng.
+ * (bug 149b) Dùng nhầm quy ước ở đây thì biến vừa thêm vào nhóm sẽ biến mất lúc ghi về schema.
+ */
+export function makeChild(parentPath: string, name: string, parentType: VarType = 'record'): VarRow {
   return {
-    path: `${parentPath}/_child/${name}`,
+    path: parentType === 'object' ? `${parentPath}/${name}` : `${parentPath}/_child/${name}`,
     label: name,
     type: 'string',
     defaultValue: '',

@@ -37,33 +37,39 @@ interface Props {
  * (bug 148) Schema ⇄ hàng bảng. Lá thường phẳng ra hàng; array/record giữ CẤU TRÚC CON
  * (children có path "/_child/") thành `children` của hàng để bảng con hiện đúng.
  */
-function schemaToRows(schema: MVUZODSchema): VarRow[] {
-  const toRow = (f: MVUZODField): VarRow => ({
-    path: f.path,
-    label: f.label,
-    type: f.type,
-    min: f.constraints?.min,
-    max: f.constraints?.max,
-    enumValues: f.constraints?.enumValues?.join(', '),
-    defaultValue: f.defaultValue === undefined ? '' : (typeof f.defaultValue === 'object' ? JSON.stringify(f.defaultValue) : String(f.defaultValue)),
-    rule: (f.constraints?.checkRules ?? []).join('\n'),
-    children: (f.children ?? []).filter(c => c.path.includes('/_child/')).map(toRow),
-  });
+/** Nhóm chứa trường con thật (không phải cấu trúc phần tử của array/record). */
+const isGroupField = (f: MVUZODField) => (f.children ?? []).some(c => !c.path.includes('/_child/'));
 
-  const out: VarRow[] = [];
-  const walk = (fs: MVUZODField[]) => {
-    for (const f of fs) {
-      const structural = f.type === 'array' || f.type === 'record';
-      // Nhóm object thuần (children KHÔNG phải _child) chỉ là tầng chứa — đi xuyên qua.
-      if (!structural && f.children?.some(c => !c.path.includes('/_child/'))) { walk(f.children); continue; }
-      out.push(toRow(f));
-    }
+/**
+ * (bug 149b) GIỮ NGUYÊN CÂY LỒNG CẤP.
+ *
+ * Bản cũ "đi xuyên qua" nhóm object nên bảng chỉ còn lá phẳng — user phải tự đoán biến nào
+ * thuộc nhóm nào, trong khi đúng cấu trúc đó lại hiện rõ ràng ở cây lúc tạo card. Nay nhóm
+ * thành HÀNG CHA có bảng con, khớp với thứ user vẫn thấy ở bước sau.
+ */
+export function schemaToRows(schema: MVUZODSchema): VarRow[] {
+  const toRow = (f: MVUZODField): VarRow => {
+    const kids = f.children ?? [];
+    // Nhóm → mọi trường con. array/record → chỉ phần khai cấu trúc một phần tử ("/_child/").
+    const childRows = isGroupField(f)
+      ? kids.filter(c => !c.path.includes('/_child/')).map(toRow)
+      : kids.filter(c => c.path.includes('/_child/')).map(toRow);
+    return {
+      path: f.path,
+      label: f.label,
+      type: f.type,
+      min: f.constraints?.min,
+      max: f.constraints?.max,
+      enumValues: f.constraints?.enumValues?.join(', '),
+      defaultValue: f.defaultValue === undefined ? '' : (typeof f.defaultValue === 'object' ? JSON.stringify(f.defaultValue) : String(f.defaultValue)),
+      rule: (f.constraints?.checkRules ?? []).join('\n'),
+      children: childRows,
+    };
   };
-  walk(schema.fields);
-  return out;
+  return schema.fields.map(toRow);
 }
 
-function rowsToSchema(rows: VarRow[]): MVUZODSchema {
+export function rowsToSchema(rows: VarRow[]): MVUZODSchema {
   const toField = (v: VarRow): Record<string, unknown> => {
     const constraints: Record<string, unknown> = {};
     if (v.type === 'number') {
@@ -83,9 +89,9 @@ function rowsToSchema(rows: VarRow[]): MVUZODSchema {
     else if (v.type === 'record' || v.type === 'object') { try { defaultValue = JSON.parse(v.defaultValue || '{}'); } catch { defaultValue = {}; } }
 
     const field: Record<string, unknown> = { path: v.path, type: v.type, label: v.label, defaultValue, constraints };
-    if ((v.type === 'array' || v.type === 'record') && v.children?.length) {
-      field.children = v.children.map(toField);
-    }
+    // (bug 149b) Nhóm object cũng mang children — trước chỉ giữ children cho array/record nên
+    // mọi trường bên trong nhóm bị vứt ngay khi bảng ghi ngược về schema.
+    if (v.children?.length) field.children = v.children.map(toField);
     return field;
   };
   // normalize dựng cây từ path phẳng (nestFlatSchema) + dọn constraints.

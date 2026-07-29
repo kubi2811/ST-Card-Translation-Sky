@@ -7,6 +7,7 @@ import { fmt } from '../i18n';
 import { aiVerifyCard, aiVerifyCardStreaming, aiRegexScan, aiRegexFixAll, quickVerify, extractSystemReferences, verifyFields, applyAutoFix, aiFixIssues, aiFixSingleIssue } from '../utils/aiVerify';
 import type { VerifyIssue, VerifyResult, FieldIssue, AIFixReport, StreamingVerifyProgress, RegexScanProgress, RegexFixResult } from '../utils/aiVerify';
 import { crossCheckHtmlVsInitvar, validateFindRegexVsNarrative } from '../utils/mvuValidator';
+import { checkSchemaVsUpdateFormat, type SchemaFormatSyncResult } from '../utils/mvuSchemaFormatSync';
 import type { CrossCheckResult, FindRegexValidationResult } from '../utils/mvuValidator';
 import { ShieldCheck, AlertTriangle, AlertCircle, Info, Loader2, Zap, Eye, ChevronDown, ChevronUp, Wrench, FileWarning, Code2, Braces, Hash, Type, ArrowLeftRight, CheckCircle2, Pencil, Save, Bot, XCircle, Link2, Diff, GitCompare, Fingerprint, Regex, Check, X, Copy } from 'lucide-react';
 
@@ -75,6 +76,8 @@ export default function VerifyPanel() {
   const [aiFixingIssueId, setAiFixingIssueId] = useState<string | null>(null);
   const aiFixAbortRef = useRef<AbortController | null>(null);
   const [crossCheckResult, setCrossCheckResult] = useState<CrossCheckResult | null>(null);
+  // (bug 156) Schema zod ↔ hướng dẫn định dạng biến — lệch nhau thì không lỗi nào báo.
+  const [schemaFmtResult, setSchemaFmtResult] = useState<SchemaFormatSyncResult | null>(null);
   const [findRegexResult, setFindRegexResult] = useState<FindRegexValidationResult | null>(null);
   // Streaming verify state
   const [streamingProgress, setStreamingProgress] = useState<StreamingVerifyProgress | null>(null);
@@ -123,6 +126,20 @@ export default function VerifyPanel() {
       } else {
         setCrossCheckResult(null);
       }
+
+      // ─── (bug 156) Cross-check: schema zod ↔ hướng dẫn định dạng biến ───
+      // Hai nơi cùng nói về một bộ biến, dịch xong rất dễ đổi tên một bên mà quên bên kia.
+      // Lệch thì KHÔNG có lỗi nào báo, nhưng AI hoặc ghi vào đường không tồn tại (chỉ số đứng
+      // im), hoặc không biết biến đó tồn tại nên không bao giờ cập nhật.
+      const zodText = fields
+        .filter(f => f.translated && /registerMvuSchema|z\s*\.\s*object/.test(f.translated))
+        .map(f => f.translated).join('\n');
+      const guideText = fields
+        .filter(f => f.translated && /valid_paths|JSONPatch/i.test(f.translated))
+        .map(f => f.translated).join('\n');
+      const sf = checkSchemaVsUpdateFormat(zodText, guideText);
+      setSchemaFmtResult(sf.skipped ? null : sf);
+      if (!sf.skipped && !sf.ok) addLog('warning', `Schema ↔ định dạng biến: ${sf.summary}`);
 
       // ─── Cross-check: findRegex ↔ Narrative ───
       const findRegexFields = fields
@@ -912,6 +929,29 @@ export default function VerifyPanel() {
       )}
 
       {/* ═══ Cross-check Results: HTML ↔ Initvar ═══ */}
+      {/* (bug 156) Schema zod ↔ hướng dẫn định dạng biến. Chỉ hiện khi card THẬT SỰ có cả hai
+          (skipped → null), để card thường không phải nhìn một ô trống vô nghĩa. */}
+      {schemaFmtResult && (
+        <div style={{ marginTop: '10px', padding: '10px 12px', borderRadius: 'var(--radius-md)',
+          border: `1px solid ${schemaFmtResult.ok ? 'rgba(76,175,80,0.2)' : 'rgba(255,82,82,0.2)'}`,
+          background: schemaFmtResult.ok ? 'rgba(76,175,80,0.03)' : 'rgba(255,82,82,0.03)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+            <Link2 size={14} color={schemaFmtResult.ok ? 'var(--accent-success)' : 'var(--accent-danger)'} />
+            <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+              {ui.vpSchemaFormatSync}
+            </span>
+          </div>
+          <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+            {schemaFmtResult.summary}
+          </div>
+          {!schemaFmtResult.ok && (
+            <div style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)', marginTop: 4 }}>
+              {ui.vpSchemaFormatHint}
+            </div>
+          )}
+        </div>
+      )}
+
       {crossCheckResult && (
         <div style={{ marginTop: '10px', padding: '10px 12px', borderRadius: 'var(--radius-md)',
           border: `1px solid ${crossCheckResult.valid ? 'rgba(76,175,80,0.2)' : 'rgba(255,82,82,0.2)'}`,

@@ -866,6 +866,8 @@ const ui: UiKeys = {
   vpAiFixAllBtn: '🤖 AI 全部修复（3 轮）',
   vpAiFixReport: '🤖 AI 修复报告（{rounds} 轮）：',
   vpViewRejections: '查看被拒绝的原因',
+  vpSchemaFormatSync: 'Schema ↔ 变量更新格式',
+  vpSchemaFormatHint: '两边必须使用同一套变量名。不一致时不会报任何错，但 AI 要么写入不存在的路径（数值不动），要么根本不知道该变量存在（永远停在初始值）。',
   vpHtmlInitvarSync: 'HTML ↔ Initvar 同步',
   vpIn: '位于',
   vpDidYouMean: '你是不是想写',

@@ -882,6 +882,8 @@ const ui: UiKeys = {
   vpAiFixAllBtn: '🤖 AI Fix All (3 Rounds)',
   vpAiFixReport: '🤖 AI Fix Report ({rounds} rounds):',
   vpViewRejections: 'View rejection reasons',
+  vpSchemaFormatSync: 'Schema ↔ Hướng dẫn định dạng biến',
+  vpSchemaFormatHint: 'Hai bên phải gọi biến bằng CÙNG một tên. Lệch nhau thì không có lỗi nào báo, nhưng AI hoặc ghi vào đường không tồn tại (chỉ số đứng im), hoặc không biết biến đó tồn tại nên không bao giờ cập nhật.',
   vpHtmlInitvarSync: 'HTML ↔ Initvar Sync',
   vpIn: 'in',
   vpDidYouMean: 'Did you mean',

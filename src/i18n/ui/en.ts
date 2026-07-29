@@ -871,6 +871,8 @@ const ui = {
   vpAiFixAllBtn: '🤖 AI Fix All (3 Rounds)',
   vpAiFixReport: '🤖 AI Fix Report ({rounds} rounds):',
   vpViewRejections: 'View rejection reasons',
+  vpSchemaFormatSync: 'Schema ↔ Variable update format',
+  vpSchemaFormatHint: 'Both sides must name variables identically. A mismatch raises no error, yet the AI will either write to a path that does not exist (stats never move) or never learn the variable exists (it stays frozen at its initial value).',
   vpHtmlInitvarSync: 'HTML ↔ Initvar Sync',
   vpIn: 'in',
   vpDidYouMean: 'Did you mean',

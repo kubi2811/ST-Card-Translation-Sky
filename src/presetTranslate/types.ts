@@ -68,6 +68,8 @@ export interface PresetTranslateReport {
   regexManual: string[];
   /** (việc 118) Số findRegex được đồng bộ NHÃN với prompt đã dịch (选项一： → Lựa chọn 1:). */
   regexLabelSynced?: number;
+  /** (bug 153) Số đơn vị bị dịch LẠI vì lần trước còn sót chữ Hán giữa chừng. */
+  residualRetried?: number;
   /** (việc 118) Số replaceString (HTML làm đẹp) của regex script được dịch. */
   regexHtmlTranslated?: number;
   scriptsTranslated: number;

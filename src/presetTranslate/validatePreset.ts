@@ -3,7 +3,7 @@
 // per-prompt + prompt_order + macro parity từng content + subtree KHÔNG ĐỤNG deep-equal.
 import type { STPreset, PresetPromptEntry } from '../types/card';
 import { validateMacroParity } from './macroGuard';
-import { getPresetExtras } from './inventory';
+import { getPresetExtras, topProseKeys } from './inventory';
 
 /** Field per-prompt TUYỆT ĐỐI không được đổi khi dịch (chỉ name/content được dịch). */
 export const FROZEN_PROMPT_FIELDS: Array<keyof PresetPromptEntry> = [
@@ -57,12 +57,18 @@ export function validatePreset(
   }
 
   // ─── Subtree KHÔNG ĐỤNG phải deep-equal: mask các field được phép dịch rồi so cả cây ───
+  // (bug 153) Danh sách trường cấp cao nhất được phép dịch phải lấy từ bản GỐC: sau khi dịch
+  // xong chúng hết chữ Hán nên topProseKeys(translated) sẽ trả rỗng, mask hai bên lệch nhau và
+  // hàng rào này báo động giả — chặn oan đúng cái file vừa dịch đúng.
+  const proseKeys = topProseKeys(original);
   const mask = (p: STPreset): unknown => {
     const clone = JSON.parse(JSON.stringify(p)) as STPreset;
     for (const pr of clone.prompts || []) { pr.name = ''; pr.content = ''; }
     const { regexScripts, helperScripts } = getPresetExtras(clone);
     for (const r of regexScripts) { r.scriptName = ''; r.findRegex = ''; }
     for (const h of helperScripts) { h.name = ''; h.content = ''; }
+    const top = clone as unknown as Record<string, unknown>;
+    for (const k of proseKeys) if (typeof top[k] === 'string') top[k] = '';
     return clone;
   };
   if (JSON.stringify(mask(original)) !== JSON.stringify(mask(translated))) {

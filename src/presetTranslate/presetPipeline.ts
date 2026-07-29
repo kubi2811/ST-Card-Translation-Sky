@@ -25,7 +25,7 @@ import type { ScriptPipelineDeps, ScriptRunControl } from '../scriptTranslate/ty
 import { applyPresetDict } from './consistencyPass';
 import { transformRegex, decideRegex } from './regexScriptPass';
 import { buildLabelMap, applyLabelMapToRegex, applyLabelMapToText } from './presetLabelSync';
-import { getPresetExtras } from './inventory';
+import { getPresetExtras, topProseKeys } from './inventory';
 import { validatePreset } from './validatePreset';
 import type {
   PresetDict, PresetProgress, PresetTranslateOptions, PresetTranslateReport, PresetTranslateResult,
@@ -39,8 +39,30 @@ export interface PresetUnit {
   apply: (text: string) => void;
 }
 
+/**
+ * (bug 153) Bản dịch có bị BỎ DỞ GIỮA CHỪNG không?
+ *
+ * Ngưỡng đặt theo TỶ LỆ chứ không theo số tuyệt đối. Tên riêng và tên thẻ được giữ nguyên có
+ * chủ đích luôn để lại vài ký tự Hán hợp lệ — bắt theo số tuyệt đối thì những mục đó bị dịch
+ * lại mãi không dừng, mỗi vòng lại tốn tiền mà kết quả y hệt. Đơn vị quá ngắn cũng bỏ qua vì
+ * ở đó một cái tên riêng đã chiếm phần lớn ký tự Hán.
+ */
+export function hasResidualCjk(original: string, translated: string): boolean {
+  const before = countCjk(original);
+  if (before < 12) return false;
+  return countCjk(translated) / before >= 0.15;
+}
+
 export function collectUnits(preset: STPreset): PresetUnit[] {
   const units: PresetUnit[] = [];
+
+  // (bug 153) Trường prompt nằm THẲNG ở cấp cao nhất (new_chat_prompt, assistant_prefill…) —
+  // xem topProseKeys trong inventory.ts để biết vì sao nhận theo hình dạng chứ không theo tên.
+  const top = preset as unknown as Record<string, unknown>;
+  for (const key of topProseKeys(preset)) {
+    units.push({ id: `top:${key}`, original: top[key] as string, apply: (t) => { top[key] = t; } });
+  }
+
   for (const p of preset.prompts || []) {
     if (countCjk(p.name || '') > 0) {
       units.push({ id: `name:${p.identifier}`, original: p.name, apply: (t) => { p.name = t; } });
@@ -68,6 +90,8 @@ function buildUnitPrompt(
   dict: PresetDict,
   deps: ScriptPipelineDeps,
   nsfw: boolean,
+  /** (bug 153) Vòng vá lại: lần trước AI để sót chữ Hán — nói thẳng ra thay vì hỏi lại y hệt. */
+  retry = false,
 ): { system: string; user: string } {
   const joined = batch.map((b) => b.original).join('\n');
   const names = filterGlossaryForText(dict.names, joined);
@@ -87,7 +111,11 @@ ${buildProperNounRules(deps.nameStyle, deps.fandomMode, deps.fandomName)}
 2. Preserve markdown structure (#/##/###, lists, tables), XML-ish tags, code fences, and line breaks.
 3. Do not add, drop, merge or reorder items.
 4. Output format: for EVERY input item echo its marker line <<<ID>>> then the translation. No commentary, no markdown fences around the whole answer.
-${tagBlock}${nameBlock}${nsfwBlock}`;
+${tagBlock}${nameBlock}${nsfwBlock}${
+    retry
+      ? '\n[RETRY — the previous attempt left Chinese text behind]\nTranslate EVERY Chinese sentence, heading, list item and table cell. Long items must be translated to the very end — do not stop partway and do not summarise. The only Chinese allowed in your output is inside {{macros}}, XML-ish tag NAMES, and proper nouns listed above.\n'
+      : ''
+  }`;
 
   const user = batch.map((b, i) => `<<<${i}>>>\n${b.original}`).join('\n');
   return { system, user };
@@ -137,12 +165,41 @@ export async function runPresetTranslation(
   setExtraProviders(deps.providers);
   resetProviderPool();
   const concurrency = Math.max(1, computePoolConcurrency(deps.proxy));
-  const pending = units.filter((u) => !u.translated).map((u) => ({ original: u.original, unit: u }));
-  const batches = smartPackFields(pending, 10, 5000, 3000);
+  // (bug 153) GỘP ĐƠN VỊ TRÙNG NỘI DUNG — gửi AI đúng MỘT lần cho mỗi chuỗi gốc.
+  // Preset thật có regex nằm ở hai nơi (regex_scripts + SPreset.RegexBinding), nên cùng một
+  // scriptName xuất hiện hai lần. Dịch riêng từng bản thì vừa tốn gấp đôi token vừa có nguy cơ
+  // AI trả hai bản khác nhau — đúng cái "chưa hoàn toàn đồng bộ" mà user báo. Gộp lại thì hai
+  // bản sao BUỘC phải giống nhau, không còn trông chờ vào việc AI ngoan.
+  const byOriginal = new Map<string, PresetUnit[]>();
+  for (const u of units.filter((x) => !x.translated)) {
+    const g = byOriginal.get(u.original);
+    if (g) g.push(u); else byOriginal.set(u.original, [u]);
+  }
+  const pending = [...byOriginal.values()].map((g) => ({ original: g[0].original, unit: g[0] }));
+  /** Sau khi lô xong: chép bản dịch của đại diện sang mọi bản sao cùng nội dung. */
+  const mirrorToDuplicates = () => {
+    for (const g of byOriginal.values()) {
+      if (g.length < 2 || !g[0].translated) continue;
+      for (let i = 1; i < g.length; i++) g[i].translated = g[0].translated;
+    }
+  };
+  let batches = smartPackFields(pending, 10, 5000, 3000);
   let done = 0;
   let unitsFailed = 0;
+  let residualRetried = 0;
   cb({ stage: 'translate', done: 0, total: batches.length });
 
+  // ═══ (bug 153) VÒNG QUÉT LẠI CHỮ HÁN SÓT ═══
+  // Dịch Card có cơ chế này từ bug 80, Dịch Preset thì chưa: mỗi đơn vị chỉ được dịch ĐÚNG MỘT
+  // LẦN, AI bỏ sót giữa một prompt dài thì không gì bắt lại. Preset của user còn 1.274 ký tự
+  // Hán trong `prompts`, dồn vào đúng hai mục dài nhất — dấu hiệu kinh điển của dịch nửa chừng.
+  //
+  // Ngưỡng đặt theo TỶ LỆ chứ không theo số tuyệt đối: tên riêng và tên thẻ giữ nguyên có chủ
+  // đích luôn để lại vài ký tự Hán hợp lệ, gặp cái đó mà dịch lại thì lặp vô hạn. Chỉ coi là
+  // sót khi phần Hán còn lại chiếm ≥15% bản gốc.
+  const residualUnits = () => units.filter((u) => u.translated && hasResidualCjk(u.original, u.translated));
+
+  for (let round = 0; ; round++) {
   await runWorkerPool({
     total: batches.length,
     concurrency,
@@ -153,11 +210,11 @@ export async function runPresetTranslation(
     },
     runOne: async (i) => {
       const { batch, preferSecondary } = batches[i];
-      const { system, user } = buildUnitPrompt(batch, dict, deps, opts.nsfw);
+      const { system, user } = buildUnitPrompt(batch, dict, deps, opts.nsfw, round > 0);
       try {
         const resp = await callProviderHedged(deps.proxy, system, user, {
           signal: ctl.signal,
-          meta: { label: `preset-batch-${i + 1}`, charCount: user.length, preferSecondary },
+          meta: { label: `preset-batch-${round}-${i + 1}`, charCount: user.length, preferSecondary },
         });
         const map = parseUnitResponse(resp, batch.length);
         batch.forEach((b, j) => {
@@ -170,11 +227,27 @@ export async function runPresetTranslation(
     },
     onSettled: () => {
       done++;
+      mirrorToDuplicates();   // (bug 153) bản sao bám sát bản chính ngay, kể cả khi resume giữa chừng
       cb({ stage: 'translate', done, total: batches.length });
       ctl.onUnitsUpdated?.(units);
     },
   });
   if (ctl.signal.aborted) throw new Error('Cancelled');
+  mirrorToDuplicates();
+
+    // Tối đa 2 vòng vá thêm. Đơn vị nào sót thì XOÁ bản dịch cũ rồi dịch lại nguyên văn gốc —
+    // vá chắp vá lên bản dở dang dễ đẻ ra câu nửa Việt nửa Trung hơn là dịch lại từ đầu.
+    if (round >= 2) break;
+    const stuck = residualUnits();
+    if (stuck.length === 0) break;
+    residualRetried += stuck.length;
+    for (const u of stuck) u.translated = undefined;
+    const retryPending = stuck.map((u) => ({ original: u.original, unit: u }));
+    batches = smartPackFields(retryPending, 6, 4000, 2500);   // lô nhỏ hơn: bớt cớ để AI cắt bớt
+    done = 0;
+    cb({ stage: 'translate', done: 0, total: batches.length, note: `retry-${round + 1}` });
+  }
+
   unitsFailed = units.filter((u) => !u.translated).length;
 
   // 4) Áp bản dịch vào preset + consistencyPass đè toàn bộ (tag + var, nghiền phi-nhất-quán của AI)
@@ -223,7 +296,13 @@ export async function runPresetTranslation(
     // 5b. Tag/var theo từ điển như cũ.
     const fr = r.findRegex || '';
     const decision = decideRegex(fr, dict);
-    if (decision === 'manual') { regexManual.push(r.scriptName || fr.slice(0, 40)); continue; }
+    if (decision === 'manual') {
+      // (bug 153) Bản sao cùng nội dung sẽ ra cùng quyết định — chỉ ghi tên MỘT lần vào danh
+      // sách cần xem tay, kẻo user thấy mỗi regex hiện hai dòng.
+      const label = r.scriptName || fr.slice(0, 40);
+      if (!regexManual.includes(label)) regexManual.push(label);
+      continue;
+    }
     if (decision === 'none') continue;
     const res = transformRegex(fr, dict);
     if (res.changed) { r.findRegex = res.findRegex; regexChanged++; }
@@ -339,6 +418,7 @@ export async function runPresetTranslation(
     regexReverted,
     regexManual,
     regexLabelSynced,
+    residualRetried,
     regexHtmlTranslated,
     scriptsTranslated,
     unitsTotal: units.length,

@@ -60,9 +60,12 @@ function callWorker<T>(op: string, payload: Record<string, unknown>): Promise<T>
 export interface WorkerStats { chars: number; cjkChars: number; lines: number; looksMinified: boolean }
 export const scanStats = (code: string): Promise<WorkerStats> => callWorker('stats', { code });
 export const beautifyInWorker = (code: string): Promise<string> => callWorker('beautify', { code });
-export const extractInWorker = async (code: string): Promise<{ tokens: CJKToken[]; parseFailed: boolean }> => {
+export const extractInWorker = async (
+  code: string,
+  dict?: Record<string, string>,
+): Promise<{ tokens: CJKToken[]; parseFailed: boolean }> => {
   const pz = await callWorker<{ zones: unknown[]; parseFailed: boolean }>('protectZones', { code });
-  const tokens = await callWorker<CJKToken[]>('extract', { code, zones: pz.zones });
+  const tokens = await callWorker<CJKToken[]>('extract', { code, zones: pz.zones, dict });
   return { tokens, parseFailed: pz.parseFailed };
 };
 
@@ -102,8 +105,16 @@ export async function runScriptTranslation(
   const cjkCharsIn = preValidate.cjkChars;
 
   // 2) Extract token CJK (kèm zone bảo vệ: regex literal + sourcemap)
+  // (bug 151) Từ điển đi cùng ngay từ đây: khoá dữ liệu MVU (`t.人际网络`, `{身份:…}`) nằm
+  // ngoài mọi đường dịch qua AI, chỉ từ điển mới đổi được — và phải đổi, vì card đã dịch biến
+  // thì script đọc khoá Hán sẽ ra `undefined` mà không báo lỗi gì.
   cb({ stage: 'extract' });
-  const { tokens } = await extractInWorker(working);
+  const glossaryDict: Record<string, string> = {};
+  for (const g of deps.glossary) {
+    const s = g.source.trim(), t = g.target.trim();
+    if (s && t && s !== t) glossaryDict[s] = t;
+  }
+  const { tokens } = await extractInWorker(working, glossaryDict);
   throwIfAborted(ctl.signal);
 
   // Resume: áp bản dịch đã lưu từ lần chạy trước. Hai dây an toàn chống áp nhầm:
@@ -224,6 +235,13 @@ export async function runScriptTranslation(
 
   const translatable = tokens.filter(isTranslatableToken);
   const residual = translatable.filter((t) => !t.translated);
+  // (bug 151) Token giữ nguyên = khoá dữ liệu chưa có trong Từ Điển. Trước đây chỉ đếm số
+  // lượng nên user thấy "0/82 chưa dịch" mà file vẫn còn 247 chữ Hán — hai con số đếm hai tập
+  // khác nhau, trông như tool nói dối. Nay nói rõ: còn bao nhiêu chữ Hán, nằm ở tên nào.
+  const preserved = tokens.filter((t) => !isTranslatableToken(t) && !t.translated);
+  const preservedCjkChars = preserved.reduce((s, t) => s + (t.text.match(/[一-鿿㐀-䶿぀-ヿ가-힯]/g)?.length ?? 0), 0);
+  const preservedSamples = [...new Set(preserved.map((t) => t.text))].slice(0, 12);
+  const dictRenamed = tokens.filter((t) => t.fromDictionary).length;
   const report: ScriptTranslateReport = {
     parseOkBefore: preValidate.parseOk,
     parseOk: v.parseOk,
@@ -234,6 +252,9 @@ export async function runScriptTranslation(
     residualSamples: residual.slice(0, 20).map((t) => t.text),
     preservedTokens: tokens.length - translatable.length,
     tokenTotal: translatable.length,
+    dictRenamed,
+    preservedCjkChars,
+    preservedSamples,
     cjkCharsIn,
     cjkCharsOut: v.cjkChars,
     regexChanged,

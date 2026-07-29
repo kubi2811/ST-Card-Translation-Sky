@@ -20,6 +20,10 @@ export interface CJKToken {
   isObjectKey?: boolean;
   isCssClass?: boolean;
   isHtmlAttr?: boolean;
+  /** (bug 151) Khoá dữ liệu/định danh được ĐỔI TÊN theo từ điển user đã chốt — không hỏi AI.
+   *  Chỉ bật khi chính user đưa tên đó vào từ điển, nên đây là quyết định của user chứ không
+   *  phải tool tự ý; reinsert vẫn bọc bracket/nháy nên cú pháp luôn hợp lệ. */
+  fromDictionary?: boolean;
 }
 
 /**
@@ -488,11 +492,53 @@ export function extractCJKTokens(
     // (bọc nháy) hay dot-notation (đổi bracket). Token trùng tên đã thu thập (kể cả khi chữ Hán
     // dính liền chữ Latin thành một từ như AP上限) và KHÔNG nằm trong chuỗi → giữ nguyên chữ Hán.
     // Trong chuỗi thì vẫn dịch bình thường ('stat_data.配置' đi theo chuẩn SPACE của từ điển MVU).
+    // (bug 151) Bóc đuôi ASCII của định danh ra trước — dùng chung cho cả lớp bảo vệ bên dưới
+    // lẫn bộ dò dot-notation, để `n._预产天数` và `n.状态` được soi bằng cùng một thước.
+    const _idPrefix = /[\w$]*$/.exec(contextBefore)?.[0] ?? '';
+    const _beforeId = _idPrefix ? contextBefore.slice(0, contextBefore.length - _idPrefix.length) : contextBefore;
+    /** Đang ở thế THUỘC TÍNH (sau dấu chấm) — reinsert bọc bracket được nên đổi tên vẫn hợp lệ. */
+    const _inPropPos = /[\w$\])}'"一-鿿㐀-䶿]\??\.$/.test(_beforeId) && !/[0-9]\??\.$/.test(_beforeId);
+
+    // ═══ (bug 151) ĐƯỜNG DẪN DỮ LIỆU NẰM TRONG CHUỖI: '军事.各营' ═══
+    // `_.get(t,'军事.各营')` là chuỗi nên không đi qua nhánh bảo vệ nào, bị coi là văn xuôi và
+    // AI dịch NGUYÊN CỤM → 'Quân sự.Các doanh' (bằng chứng user, 5 chỗ). Cụm này vẫn parse
+    // được nên không có lỗi nào báo, nhưng nó phải khớp TỪNG ĐOẠN với khoá mà code truy cập —
+    // dịch tự do là trượt. Xử: tách theo dấu chấm, mỗi đoạn CHỈ đổi theo từ điển (đúng nguồn
+    // mà code accessor cũng dùng), đoạn ngoài từ điển giữ nguyên. Dấu chấm không bao giờ bị
+    // đụng nên cấu trúc đường dẫn luôn còn.
+    if (insideStringLiteral && match[0].includes('.')) {
+      const seg = match[0].split('.');
+      const looksLikePath =
+        seg.length >= 2 && seg.length <= 4 &&
+        seg.every((p) => p.length >= 1 && p.length <= 10 && /^[一-鿿㐀-䶿぀-ヿ가-힯]+$/.test(p));
+      if (looksLikePath) {
+        let pos = mStart;
+        for (const p of seg) {
+          const hit = mvuDictionary?.[p];
+          tokens.push({
+            id: id++, text: p, start: pos, end: pos + p.length,
+            // isIdentifier để AI KHÔNG đụng vào — chỉ từ điển được đổi, giữ lockstep với code.
+            isIdentifier: true, isDotNotation: false, isObjectKey: false,
+            isCssClass: false, isHtmlAttr: false,
+            ...(hit ? { translated: hit, fromDictionary: true } : {}),
+          });
+          pos += p.length + 1;
+        }
+        continue;
+      }
+    }
+
     if (!insideStringLiteral && protectedIds.size > 0) {
       let wStart = mStart, wEnd = mEnd;
       while (wStart > 0 && /[\w$]/.test(text[wStart - 1])) wStart--;
       while (wEnd < text.length && /[\w$]/.test(text[wEnd])) wEnd++;
-      if (protectedIds.has(match[0]) || protectedIds.has(text.slice(wStart, wEnd))) continue;
+      // (bug 151) TỪ ĐIỂN USER THẮNG LỚP BẢO VỆ — nhưng CHỈ ở thế thuộc tính.
+      // Lý do phải phân biệt: cùng một cái tên có thể vừa là khai báo trần (`const 配置` —
+      // đổi là SyntaxError, không có cách bọc nào cứu được) vừa là thuộc tính (`t.配置` —
+      // bọc `t['…']` là xong). Nếu bỏ qua cả hai thì tên trong chuỗi `_.get(t,'配置.x')` vẫn
+      // bị đổi trong khi code đọc thì không → đọc trúng ô rỗng, hỏng âm thầm.
+      const _dictHit = mvuDictionary?.[match[0].trim()];
+      if ((protectedIds.has(match[0]) || protectedIds.has(text.slice(wStart, wEnd))) && !(_dictHit && _inPropPos)) continue;
 
       // ═══ CỤM TRUY CẬP THUỘC TÍNH VỚI BASE CHỮ HÁN: 配置.调试验证 ═══
       // Dấu `.` ASCII nằm trong bộ JOINER (để câu văn "3.5米" không bị băm), nên cả cụm
@@ -510,11 +556,20 @@ export function extractCJKTokens(
           let pos = mStart;
           for (let pi = 0; pi < parts.length; pi++) {
             const part = parts[pi];
-            if (pi > 0 && /[一-鿿㐀-䶿぀-ヿ가-힯]/.test(part) && !protectedIds.has(part)) {
+            const dictPart = mvuDictionary?.[part];
+            // (bug 151) BASE CŨNG PHẢI ĐỔI THEO TỪ ĐIỂN. Trước đây base luôn bị bỏ qua vì nằm
+            // trong protectedIds, nên `t.人际网络` lẻ thì đổi mà `t.人际网络.下属与幕僚` thì không
+            // → code tạo object ở `t['Tên Mới']` rồi ghi dữ liệu vào `t.人际网络` — hai ô khác
+            // nhau, chạy không lỗi, dữ liệu mất hút. Đổi nửa vời tệ hơn không đổi.
+            // pi>0 luôn là thuộc tính; pi===0 chỉ tính khi chính base cũng đứng sau dấu chấm.
+            const propPos = pi > 0 || _inPropPos;
+            const isCjkPart = /[一-鿿㐀-䶿぀-ヿ가-힯]/.test(part);
+            if (isCjkPart && ((pi > 0 && !protectedIds.has(part)) || (dictPart && propPos))) {
               tokens.push({
                 id: id++, text: part, start: pos, end: pos + part.length,
                 isIdentifier: true, isDotNotation: true,
                 isObjectKey: false, isCssClass: false, isHtmlAttr: false,
+                ...(dictPart ? { translated: dictPart, fromDictionary: true } : {}),
               });
             }
             pos += part.length + 1;   // +1 cho dấu chấm phân cách
@@ -536,7 +591,13 @@ export function extractCJKTokens(
     // JS dot notation usually follows a variable name (alphanumeric, _, $, or closing bracket/quote, optionally with ?. for optional chaining)
     // Also includes CJK ranges (\u4e00-\u9fff, \u3400-\u4dbf) because in source Chinese code, CJK identifiers appear before ?.
     // e.g. wd.时势?.标题 — the char before ?. is 势 (CJK), which must be matched
-    let isJsDotNotation = /[a-zA-Z0-9_$\])}'"\u4e00-\u9fff\u3400-\u4dbf]\s*\??\s*\.\s*$/.test(contextBefore);
+    // (bug 151) TI\u1ec0N T\u1ed0 ASCII GI\u1eeeA D\u1ea4U CH\u1ea4M V\u00c0 CH\u1eee H\u00c1N: `n._\u9884\u4ea7\u5929\u6570`.
+    // M\u1eabu d\u01b0\u1edbi \u0111\u00e2y soi k\u00fd t\u1ef1 NGAY TR\u01af\u1edaC c\u1ee5m H\u00e1n, n\u00ean `n.\u72b6\u6001` kh\u1edbp c\u00f2n `n._\u9884\u4ea7\u5929\u6570` th\u00ec
+    // kh\u00f4ng (\u0111\u1ee9ng tr\u01b0\u1edbc \u9884 l\u00e0 `_`, kh\u00f4ng ph\u1ea3i `.`) \u2192 b\u1ecb coi l\u00e0 v\u0103n xu\u00f4i \u2192 d\u1ecbch ra c\u1ee5m C\u00d3 D\u1ea4U
+    // C\u00c1CH \u2192 `n._S\u1ed1 ng\u00e0y d\u1ef1 sinh` = SyntaxError, c\u1ea3 script ch\u1ebft (b\u1eb1ng ch\u1ee9ng bug/151, c\u1ed9t 3641).
+    // X\u1eed: soi tr\u00ean _beforeId (\u0111\u00e3 b\u00f3c \u0111u\u00f4i ASCII \u1edf tr\u00ean). Ti\u1ec1n t\u1ed1 r\u1ed7ng th\u00ec _beforeId ===
+    // contextBefore n\u00ean \u0111\u01b0\u1eddng c\u0169 gi\u1eef nguy\u00ean h\u00e0nh vi, kh\u00f4ng h\u1ed3i quy.
+    let isJsDotNotation = /[a-zA-Z0-9_$\])}'"\u4e00-\u9fff\u3400-\u4dbf]\s*\??\s*\.\s*$/.test(_beforeId);
 
     // Exclude dot notation detection inside comments (HTML/CSS/JS)
     // e.g. <!-- 1. 身份档案 --> or /* 1. 世界时局 */ — the "1." is NOT real dot notation
@@ -553,7 +614,9 @@ export function extractCJKTokens(
     //   (c) đang Ở TRONG string literal (đếm nháy '/" chưa đóng từ đầu dòng) — bọc ['…'] trong chuỗi luôn vỡ
     let isProseContext = insideStringLiteral;   // (c) — trong chuỗi thì bracket-wrap luôn vỡ
     if (isJsDotNotation && !isProseContext) {
-      const dm = contextBefore.match(/([a-zA-Z0-9_$\])}'"一-鿿㐀-䶿])\s*\??\s*\.(\s*)$/);
+      // Soi trên _beforeId (đã bóc tiền tố ASCII) để khớp với bộ dò ở trên — nếu vẫn soi
+      // contextBefore thì `n._预产天数` không match, dm = null, và lưới prose mất tác dụng.
+      const dm = _beforeId.match(/([a-zA-Z0-9_$\])}'"一-鿿㐀-䶿])\s*\??\s*\.(\s*)$/);
       if (dm && (/[0-9]/.test(dm[1]) || dm[2].length > 0)) isProseContext = true;   // (a) + (b)
     }
     if (isProseContext) isJsDotNotation = false;
@@ -567,7 +630,13 @@ export function extractCJKTokens(
 
     const isIdentifier = isObjectKey || isJsDotNotation || isCssClass || isHtmlAttr;
 
-    const isMvuVariable = mvuDictionary && mvuDictionary[match[0].trim()];
+    // (bug 151) KHOÁ DỮ LIỆU CÓ TRONG TỪ ĐIỂN → ĐỔI TÊN NGAY, KHÔNG QUA AI.
+    // Trước đây giá trị này được tính ra rồi vứt đi, nên khoá MVU (`t.人际网络`, `{身份:…}`)
+    // luôn nằm ngoài mọi đường dịch — bật hay tắt Từ Điển đều y hệt nhau, đúng như user thấy.
+    // Hệ quả nặng: card đã đổi biến sang tiếng Việt thì script đọc khoá Hán ra `undefined` —
+    // chạy trơn tru mà dữ liệu rỗng, không lỗi nào báo. Đổi theo từ điển là quyết định của
+    // user (họ tự nhập vào đó); tên không có trong từ điển vẫn giữ nguyên như cũ.
+    const isMvuVariable = mvuDictionary?.[match[0].trim()];
 
     tokens.push({
       id: id++,
@@ -578,7 +647,8 @@ export function extractCJKTokens(
       isDotNotation: isJsDotNotation,
       isObjectKey,
       isCssClass,
-      isHtmlAttr
+      isHtmlAttr,
+      ...(isMvuVariable ? { translated: isMvuVariable, fromDictionary: true } : {}),
     });
   }
   return tokens;
@@ -677,14 +747,18 @@ export function reinsertTranslations(original: string, tokens: CJKToken[]): stri
           const dotIndex = original.lastIndexOf('.', replaceStart);
           if (dotIndex !== -1 && !original.substring(dotIndex + 1, replaceStart).includes('\n')) {
             const isOptionalChain = dotIndex > 0 && original.charAt(dotIndex - 1) === '?';
+            // (bug 151) Giữ TIỀN TỐ ASCII của định danh: `n._预产天数` → `n['_Bản dịch']`.
+            // Bỏ quên `_` thì khoá đọc/ghi lệch nhau, script chạy nhưng dữ liệu rơi vào ô khác —
+            // hỏng âm thầm, tệ hơn vỡ cú pháp vì không có lỗi nào báo.
+            const asciiPrefix = original.slice(dotIndex + 1, replaceStart);
             if (isOptionalChain) {
               // For optional chain obj?.prop, eat the "." and replace with ".['prop']" to get obj?.['prop']
               replaceStart = dotIndex;
-              finalTranslation = `.['${finalTranslation}']`;
+              finalTranslation = `.['${asciiPrefix}${finalTranslation}']`;
             } else {
               // For normal dot notation obj.prop, replace ".prop" with "['prop']" to get obj['prop']
               replaceStart = dotIndex;
-              finalTranslation = `['${finalTranslation}']`;
+              finalTranslation = `['${asciiPrefix}${finalTranslation}']`;
             }
           }
         }
@@ -734,6 +808,25 @@ export function reinsertTranslations(original: string, tokens: CJKToken[]): stri
         }
         if ((ca === "'" || ca === '"') && finalTranslation.charAt(finalTranslation.length - 1) === ca) {
           finalTranslation = finalTranslation.slice(0, -1);
+        }
+      }
+
+      // ═══ (bug 151) LƯỚI CHẶN CUỐI: KHÔNG BAO GIỜ ĐẺ ĐỊNH DANH CÓ DẤU CÁCH ═══
+      // Mọi nhánh trên đều có thể sai sót ở một mẫu chưa lường tới; nhưng hậu quả thì luôn
+      // giống nhau và luôn chí mạng: `obj.Hai Từ` không phải cú pháp JS hợp lệ, script chết
+      // hoàn toàn. Chốt chặn này soi ĐÚNG vị trí sắp ghi: nếu đang ở thế truy cập thuộc tính
+      // mà bản dịch có dấu cách và chưa được bọc bracket/nháy thì THÀ GIỮ NGUYÊN chữ Hán —
+      // code Trung vẫn chạy, còn hơn xuất ra file không parse nổi.
+      // Chỉ chặn khi ĐÚNG là truy cập thuộc tính trần: dấu chấm DÍNH LIỀN định danh, ký tự
+      // trước dấu chấm không phải chữ số, và không đang ở trong chuỗi. Ba điều kiện này loại
+      // hết văn xuôi đánh số ('1. Thế cục' — chấm có khoảng trắng theo sau, lại nằm trong
+      // chuỗi) vốn được phép thay chữ thuần tuý.
+      if (/\s/.test(finalTranslation) && !/^[['"`.]/.test(finalTranslation)) {
+        const head = result.slice(0, replaceStart);
+        const bare = head.slice(0, head.length - (/[\w$]*$/.exec(head)?.[0].length ?? 0));
+        const lineHead = head.slice(head.lastIndexOf('\n') + 1);
+        if (/[\w$\])}'"一-鿿㐀-䶿]\??\.$/.test(bare) && !/[0-9]\??\.$/.test(bare) && !isInsideStringAtEnd(lineHead)) {
+          continue;
         }
       }
 

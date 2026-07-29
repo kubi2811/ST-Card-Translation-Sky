@@ -444,7 +444,18 @@ export default function ScriptTranslateFlow() {
                 </details>
               )}
             </li>
-            <li>🔒 {fmt(ui.scrTrRepPreserved, { n: report.preservedTokens })}</li>
+            {/* (bug 151) Nói RÕ chữ Hán còn lại nằm ở đâu, kèm cách đổi. Trước đây dòng này chỉ
+                đếm token nên "0/82 chưa dịch" đứng cạnh "còn 247 ký tự Trung" trông như mâu thuẫn. */}
+            <li>🔒 {fmt(ui.scrTrRepPreserved, { n: report.preservedTokens, cjk: report.preservedCjkChars })}
+              {report.preservedSamples.length > 0 && (
+                <div style={{ fontSize: '0.76rem', opacity: 0.75, marginTop: 2 }}>
+                  {fmt(ui.scrTrRepPreservedHint, { names: report.preservedSamples.join(', ') })}
+                </div>
+              )}
+            </li>
+            {report.dictRenamed > 0 && (
+              <li>📖 {fmt(ui.scrTrRepDictRenamed, { n: report.dictRenamed })}</li>
+            )}
             <li>🧩 {fmt(ui.scrTrRepRegex, { changed: report.regexChanged, reverted: report.regexReverted })}</li>
             <li>🈶 {fmt(ui.scrTrRepCjk, { in: report.cjkCharsIn.toLocaleString(), out: report.cjkCharsOut.toLocaleString() })}</li>
             <li>⏱️ {fmt(ui.scrTrRepTime, { s: Math.round(report.durationMs / 1000) })} · {Math.round(report.bytesIn / 1024)}KB → {Math.round(report.bytesOut / 1024)}KB</li>

@@ -44,3 +44,7 @@ tsconfig.tsbuildinfo
 apiKey/
 cardTest/
 bugNeedFix/
+
+# Bang chung bug do user gui (anh, card that, script that) — chi nam tren may local,
+# khong day len remote: dung luong lon va co the chua noi dung rieng tu cua nguoi bao bug.
+bug/

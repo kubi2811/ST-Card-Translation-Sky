@@ -23,6 +23,8 @@ interface Req {
   original?: string;
   zones?: Zone[];
   tokens?: CJKToken[];
+  /** (bug 151) Từ điển user đã chốt — dùng để ĐỔI TÊN khoá dữ liệu một cách tất định. */
+  dict?: Record<string, string>;
 }
 
 interface Res {
@@ -125,7 +127,14 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
         return;
       }
       case 'extract': {
-        const tokens = extractCJKTokens(ev.data.code || '', (ev.data.zones || []) as never, 'preserve');
+        // (bug 151) Tham số 4 trước đây bỏ trống → Dịch Script KHÔNG BAO GIỜ thấy từ điển,
+        // nên "có hay không có Từ Điển đều bỏ sót" y như nhau. Nay truyền vào đầy đủ.
+        const tokens = extractCJKTokens(
+          ev.data.code || '',
+          (ev.data.zones || []) as never,
+          'preserve',
+          ev.data.dict,
+        );
         reply({ ok: true, result: tokens });
         return;
       }

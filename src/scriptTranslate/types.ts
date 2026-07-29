@@ -46,6 +46,13 @@ export interface ScriptTranslateReport {
   /** Token bị BỎ QUA CÓ CHỦ ĐÍCH (object key / dot-notation / CSS class — giữ nguyên là ĐÚNG) */
   preservedTokens: number;
   tokenTotal: number;
+  /** (bug 151) Khoá dữ liệu được ĐỔI TÊN theo từ điển user (tất định, không qua AI). */
+  dictRenamed: number;
+  /** (bug 151) Số ký tự Hán nằm TRONG các token giữ nguyên — để "0/82 chưa dịch" thôi mâu
+   *  thuẫn với "còn 247 ký tự Trung": hai con số đếm hai tập khác nhau, phải nói rõ ra. */
+  preservedCjkChars: number;
+  /** (bug 151) Vài tên khoá tiêu biểu đang giữ nguyên — user thêm vào Từ Điển là đổi được. */
+  preservedSamples: string[];
   cjkCharsIn: number;
   cjkCharsOut: number;
   regexChanged: number;

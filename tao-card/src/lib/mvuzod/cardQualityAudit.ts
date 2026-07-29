@@ -23,12 +23,15 @@
 
 import type { MVUZODSchema, MVUZODField } from '../../types/mvuzod.types';
 import type { LorebookEntry } from '../../types';
+import { FactIndex } from '../wikiImport/factIndex';
 
 export interface AuditIssue {
   level: 'error' | 'warning';
   code:
     | 'ejs-enum-mismatch' | 'ejs-enum-coverage' | 'dead-entry' | 'orphan-disabled'
-    | 'number-default-string' | 'order-position-clash' | 'varlist-example-content';
+    | 'number-default-string' | 'order-position-clash' | 'varlist-example-content'
+    // (bug 148) đo được trên card v3 thật của user:
+    | 'ejs-missing-statdata' | 'ejs-nonascii-var' | 'duplicate-entry-content';
   message: string;
   where?: string;
   /** Máy sửa được không — quyết định có đưa vào tiến trình Vá lỗi hay phải để AI/user. */
@@ -183,6 +186,50 @@ export function auditCardQuality(input: AuditInput): AuditIssue[] {
     }
   }
 
+  /* 1b. (bug 148) getvar QUÊN TIỀN TỐ `stat_data.` — lỗi IM LẶNG nguy hiểm nhất nhóm này.
+     Đo trên card v3 thật của user: entry "[EJS] Inject Bối Cảnh Hệ Thống" có 6 lời gọi thiếu
+     tiền tố, trong khi 2 entry EJS còn lại CÙNG CARD viết đúng. Thiếu tiền tố thì getvar không
+     tìm thấy biến, LUÔN trả giá trị mặc định — cơ chế vẫn chạy, không lỗi đỏ, chỉ là mọi lượt
+     chat đều nhận cùng một thông tin sai (Ngày 1, Máu 100…) bất kể người chơi đang ở đâu.
+     Máy sửa được: biến có thật trong schema thì chỉ việc thêm tiền tố. */
+  for (const e of ejsEntries) {
+    const code = String(e.content ?? '');
+    const where = String(e.comment || `#${e.id}`);
+    const leafNames = new Set(leaves.map(f => foldVi(leafName(f))));
+    const bad: string[] = [];
+    for (const m of code.matchAll(/\bgetvar\s*\(\s*(['"`])([^'"`]+)\1/g)) {
+      const path = m[2];
+      if (/^stat_data\b/.test(path)) continue;
+      // Chỉ tính là LỖI khi đoạn cuối path trùng một biến CÓ THẬT trong schema — nếu không,
+      // đó có thể là biến chat/global hợp lệ (getvar cũng đọc được kho biến khác).
+      const tail = path.split('.').filter(Boolean).pop() ?? '';
+      if (leaves.length === 0 || leafNames.has(foldVi(tail))) bad.push(path);
+    }
+    for (const path of [...new Set(bad)]) {
+      issues.push({
+        level: 'error',
+        code: 'ejs-missing-statdata',
+        message: `EJS đọc biến "${path}" nhưng THIẾU tiền tố "stat_data." — getvar sẽ không tìm thấy biến và luôn trả giá trị mặc định, nên khối này báo cùng một thông tin sai ở mọi lượt chat (không hề có lỗi đỏ). Sửa thành "stat_data.${path}".`,
+        where,
+        autofixable: true,
+      });
+    }
+
+    /* 1c. (bug 148) Tên biến JS có DẤU TIẾNG VIỆT (`_nhân_vật_vp_hiện_tại`) — engine JS hiện đại
+       chấp nhận, nhưng lệch hẳn quy ước ASCII của phần còn lại và dễ vỡ khi qua tầng xử lý
+       chuỗi/minify. Cảnh báo, máy đổi được sang ASCII. */
+    for (const m of code.matchAll(/\b(?:var|let|const)\s+([A-Za-z_$À-ỹ][\w$À-ỹ]*)/g)) {
+      if (!/[^\x00-\x7F]/.test(m[1])) continue;
+      issues.push({
+        level: 'warning',
+        code: 'ejs-nonascii-var',
+        message: `Tên biến "${m[1]}" có dấu tiếng Việt — lệch quy ước ASCII của các khối EJS khác và dễ vỡ khi đi qua tầng xử lý chuỗi. Nên đổi sang tên ASCII ngắn gọn.`,
+        where,
+        autofixable: true,
+      });
+    }
+  }
+
   /* 3+4. Entry KHÔNG CÓ ĐƯỜNG NÀO KÍCH HOẠT — lore nằm chết trong file.
      Card 2 có đúng 3 entry Lễ Hội như vậy. [initvar] được miễn: tắt là ĐÚNG chuẩn MVU. */
   for (const e of entries) {
@@ -266,6 +313,46 @@ export function auditCardQuality(input: AuditInput): AuditIssue[] {
         where: name,
         autofixable: false,   // phải sinh lại nội dung — máy không bịa được
       });
+    }
+  }
+
+  /* 8. (bug 148) TRÙNG NỘI DUNG GIỮA CÁC ENTRY — Claude Web gọi đúng tên: "lỗi tái diễn xuyên
+     suốt các bản card, đáng đưa vào feedback như một vấn đề mang tính hệ thống của Auto
+     Creator, không phải lỗi riêng lẻ từng card". Đo trên card v3: entry 8 và 15 cùng mô tả cơ
+     chế VP/Shard Collapse và CHIA CHUNG từ khoá ⇒ mỗi lần nhắc VP là gửi 2 bản gần giống nhau.
+     Hai điều kiện phải CÙNG đúng mới báo (một mình mỗi cái đều dễ báo oan):
+       • nội dung gần nhau về nghĩa (FactIndex — bắt cả khi diễn đạt khác);
+       • có ÍT NHẤT một từ khoá dùng chung ⇒ chắc chắn kích hoạt đồng thời, tốn token thật.  */
+  {
+    const idx = new FactIndex();
+    const list = entries
+      .filter(e => String(e.content ?? '').trim().length >= 120)   // entry ngắn không đáng gộp
+      .map(e => ({
+        e,
+        name: String(e.comment || `#${e.id}`),
+        keys: new Set((e.keys ?? []).map(k => foldVi(String(k))).filter(k => k.length >= 2)),
+      }));
+    const reported = new Set<string>();
+    for (const { e, name } of list) {
+      const text = `${name}\n${String(e.content ?? '')}`;
+      const hit = idx.isDuplicate(text, 0.45);
+      if (hit.dup && hit.with) {
+        const other = list.find(x => x.name === hit.with);
+        const me = list.find(x => x.name === name)!;
+        const shared = other ? [...me.keys].filter(k => other.keys.has(k)) : [];
+        const pair = [name, hit.with].sort().join(' ⇄ ');
+        if (shared.length > 0 && !reported.has(pair)) {
+          reported.add(pair);
+          issues.push({
+            level: 'warning',
+            code: 'duplicate-entry-content',
+            message: `Entry "${name}" và "${hit.with}" nói gần như cùng một nội dung (${Math.round((hit.score ?? 0) * 100)}% giống) VÀ dùng chung từ khoá "${shared.slice(0, 3).join('", "')}" — mỗi lần nhắc tới là cả hai cùng bật, gửi hai bản mô tả trùng nhau cho AI. Nên gộp làm một, hoặc tách từ khoá cho rõ phạm vi.`,
+            where: name,
+            autofixable: false,   // gộp nội dung cần đọc hiểu — máy không được tự ý xoá lore
+          });
+        }
+      }
+      idx.add(name, text);
     }
   }
 

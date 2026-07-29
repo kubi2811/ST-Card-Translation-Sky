@@ -176,6 +176,12 @@ _%>
     Khi phân nhánh theo enum, phủ ĐỦ mọi giá trị hoặc chốt bằng else cho phần còn lại.
 14. (bug 135) Entry nào bạn để TẮT thì PHẢI có đường bật lại (activewi trong controller hoặc
     getwi đọc nội dung). Tắt + không key + không ai gọi tên = lore chết trong file.
+15. (bug 148) MỌI getvar đọc biến MVU PHẢI có tiền tố "stat_data." — getvar('stat_data.Nhân
+    Vật.Máu') mới đúng; getvar('Nhân Vật.Máu') KHÔNG tìm thấy biến và luôn trả giá trị mặc
+    định, khiến khối của bạn báo cùng một thông tin sai ở mọi lượt chat mà chẳng có lỗi nào
+    hiện ra. Đây là lỗi im lặng đã gặp thật trên card người dùng — kiểm lại từng lời gọi.
+16. (bug 148) Tên biến JS đặt bằng ASCII ngắn gọn (_hp, _realm, _vp) — KHÔNG dùng chữ có dấu
+    tiếng Việt làm định danh.
 
 ═══ ĐỊNH DẠNG OUTPUT ═══
 

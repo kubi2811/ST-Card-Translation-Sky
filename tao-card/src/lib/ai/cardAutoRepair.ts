@@ -437,6 +437,49 @@ export function repairQualityIssues(
     if (next !== code) e.content = next;
   }
 
+  // 1b. (bug 148) getvar thiếu tiền tố `stat_data.` → thêm vào. Đây là lỗi im lặng: khối vẫn
+  //     chạy, chỉ là luôn trả giá trị mặc định nên mọi lượt chat nhận cùng một thông tin sai.
+  //     Chỉ sửa đúng những path mà audit đã xác nhận trỏ tới biến CÓ THẬT trong schema.
+  {
+    const missing = issues.filter(i => i.code === 'ejs-missing-statdata');
+    for (const iss of missing) {
+      const e = entries.find(x => String(x.comment || `#${x.id}`) === iss.where);
+      if (!e) continue;
+      const path = /"([^"]+)"/.exec(iss.message)?.[1];
+      if (!path) continue;
+      const esc = path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const before = String(e.content ?? '');
+      const after = before.replace(
+        new RegExp(`(getvar\\s*\\(\\s*)(['"\`])${esc}\\2`, 'g'),
+        (_m, head: string, q: string) => `${head}${q}stat_data.${path}${q}`,
+      );
+      if (after !== before) {
+        e.content = after;
+        fixed.push({
+          id: 'ejs-missing-statdata',
+          description: `EJS "${e.comment}": thêm tiền tố thiếu — getvar('${path}') → getvar('stat_data.${path}'), khối này trước đây luôn đọc ra giá trị mặc định.`,
+        });
+      }
+    }
+  }
+
+  // 1c. (bug 148) Tên biến JS có dấu tiếng Việt → chuyển sang ASCII (bỏ dấu), đổi ĐỒNG BỘ mọi
+  //     chỗ dùng trong CÙNG khối. Không đụng chuỗi/đường dẫn biến MVU (chỉ đổi định danh JS).
+  for (const iss of issues.filter(i => i.code === 'ejs-nonascii-var')) {
+    const e = entries.find(x => String(x.comment || `#${x.id}`) === iss.where);
+    if (!e) continue;
+    const name = /"([^"]+)"/.exec(iss.message)?.[1];
+    if (!name) continue;
+    const ascii = '_' + foldVi(name).replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '') || '_v';
+    if (ascii === name) continue;
+    const before = String(e.content ?? '');
+    const after = before.replace(new RegExp(`(?<![\\w$])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w$])`, 'g'), ascii);
+    if (after !== before) {
+      e.content = after;
+      fixed.push({ id: 'ejs-nonascii-var', description: `EJS "${e.comment}": đổi tên biến "${name}" → "${ascii}" cho đúng quy ước ASCII.` });
+    }
+  }
+
   // 2. Entry CHẾT (tắt + không key + không constant + không EJS bật) → CỨU bằng cách đặt
   //    từ khoá từ chính tên entry và bật lại. Không xoá gì cả.
   for (const iss of issues.filter(i => i.code === 'dead-entry')) {

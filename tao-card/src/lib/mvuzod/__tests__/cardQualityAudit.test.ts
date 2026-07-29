@@ -211,6 +211,114 @@ describe('(bug 135) repairQualityIssues — vá được thì vá, không xoá n
   });
 });
 
+/* ═══ (bug 148) Ba lớp lỗi đo được trên card v3 thật của user ═══ */
+
+describe('(bug 148) getvar thiếu tiền tố stat_data — lỗi im lặng', () => {
+  it('biến CÓ THẬT trong schema mà quên tiền tố → lỗi, gợi ý đúng đường dẫn', () => {
+    const issues = auditCardQuality({
+      schema: SCHEMA,
+      entries: [mkEntry({
+        comment: '[EJS] Inject Bối Cảnh',
+        content: `@@preprocessing\n<%_ var vp = getvar('Người Chơi.VP', { defaults: 100 }); _%>`,
+      })],
+    });
+    const miss = issues.filter(i => i.code === 'ejs-missing-statdata');
+    expect(miss).toHaveLength(1);
+    expect(miss[0].level).toBe('error');
+    expect(miss[0].message).toContain('stat_data.Người Chơi.VP');
+    expect(miss[0].autofixable).toBe(true);
+  });
+
+  it('viết ĐÚNG tiền tố → không báo; biến KHÔNG thuộc schema (biến chat) cũng không báo oan', () => {
+    const ok = auditCardQuality({
+      schema: SCHEMA,
+      entries: [mkEntry({ comment: 'A', content: `@@preprocessing\n<%_ var vp = getvar('stat_data.Người Chơi.VP'); _%>` })],
+    });
+    expect(ok.filter(i => i.code === 'ejs-missing-statdata')).toEqual([]);
+
+    const chatVar = auditCardQuality({
+      schema: SCHEMA,
+      entries: [mkEntry({ comment: 'B', content: `@@preprocessing\n<%_ var x = getvar('my_chat_flag'); _%>` })],
+    });
+    expect(chatVar.filter(i => i.code === 'ejs-missing-statdata')).toEqual([]);
+  });
+
+  it('vá tự động: thêm tiền tố vào đúng lời gọi, audit lại sạch', () => {
+    const card = {
+      spec: 'chara_card_v3', spec_version: '3.0',
+      data: {
+        name: 'T',
+        character_book: { name: 'wb', entries: [mkEntry({
+          comment: 'EJS', content: `@@preprocessing\n<%_ var vp = getvar('Người Chơi.VP', { defaults: 100 }); _%>`,
+        })] },
+        extensions: { mvuzod: { schema: SCHEMA } },
+      },
+    } as unknown as CharacterCardV3;
+    const r = repairQualityIssues(card, SCHEMA);
+    expect(r.fixed.some(f => f.id === 'ejs-missing-statdata')).toBe(true);
+    const content = String(r.card.data.character_book!.entries[0].content);
+    expect(content).toContain(`getvar('stat_data.Người Chơi.VP'`);
+    expect(auditCardQuality({ entries: r.card.data.character_book!.entries as never, schema: SCHEMA })
+      .filter(i => i.code === 'ejs-missing-statdata')).toEqual([]);
+  });
+});
+
+describe('(bug 148) tên biến JS có dấu tiếng Việt', () => {
+  it('báo cảnh báo và vá được sang ASCII, đổi đồng bộ mọi chỗ dùng', () => {
+    const content = `@@preprocessing\n<%_ var _nhân_vật_vp = 5;\nif (_nhân_vật_vp > 3) { } _%>`;
+    const issues = auditCardQuality({ entries: [mkEntry({ comment: 'EJS', content })] });
+    expect(issues.filter(i => i.code === 'ejs-nonascii-var')).toHaveLength(1);
+
+    const card = {
+      spec: 'chara_card_v3', spec_version: '3.0',
+      data: { name: 'T', character_book: { name: 'wb', entries: [mkEntry({ comment: 'EJS', content })] }, extensions: {} },
+    } as unknown as CharacterCardV3;
+    const r = repairQualityIssues(card, null);
+    const out = String(r.card.data.character_book!.entries[0].content);
+    expect(out).not.toContain('_nhân_vật_vp');
+    expect(out).toContain('_nhan_vat_vp');
+    expect((out.match(/_nhan_vat_vp/g) ?? []).length).toBe(2);   // cả khai báo lẫn chỗ dùng
+  });
+});
+
+describe('(bug 148) trùng nội dung entry + trùng từ khoá', () => {
+  const VP_A = 'Veil Point (VP) là năng lượng để dùng năng lực Shard. Dùng quá nhiều VP dẫn tới Shard Collapse, nhân vật kiệt sức và mất kiểm soát năng lực trong nhiều giờ liền.';
+  const VP_B = 'VP tức Veil Point chính là nguồn năng lượng cho năng lực Shard. Tiêu hao VP quá mức sẽ gây Shard Collapse khiến nhân vật kiệt sức, mất kiểm soát năng lực suốt nhiều giờ.';
+
+  it('nội dung gần nhau VÀ chung từ khoá → cảnh báo gộp (ca entry 8/15 card thật)', () => {
+    const issues = auditCardQuality({
+      entries: [
+        mkEntry({ id: 1, comment: 'Cơ chế VP', content: VP_A, keys: ['VP', 'Veil Point'] }),
+        mkEntry({ id: 2, comment: 'Shard Collapse', content: VP_B, keys: ['VP', 'Shard Collapse'] }),
+      ],
+    });
+    const dup = issues.filter(i => i.code === 'duplicate-entry-content');
+    expect(dup).toHaveLength(1);
+    expect(dup[0].message).toContain('vp');
+    expect(dup[0].autofixable, 'gộp lore phải do người quyết, máy không tự xoá').toBe(false);
+  });
+
+  it('nội dung giống nhưng KHÔNG chung từ khoá → không báo (không bật cùng lúc, không tốn token)', () => {
+    const issues = auditCardQuality({
+      entries: [
+        mkEntry({ id: 1, comment: 'A', content: VP_A, keys: ['alpha'] }),
+        mkEntry({ id: 2, comment: 'B', content: VP_B, keys: ['beta'] }),
+      ],
+    });
+    expect(issues.filter(i => i.code === 'duplicate-entry-content')).toEqual([]);
+  });
+
+  it('hai entry khác hẳn nội dung dù chung từ khoá → không báo', () => {
+    const issues = auditCardQuality({
+      entries: [
+        mkEntry({ id: 1, comment: 'Địa lý', content: 'Thành Vọng Nguyệt nằm bên bờ sông Lam, nổi tiếng với chợ đêm và những lò rèn cổ truyền lâu đời nhất vùng.', keys: ['thành'] }),
+        mkEntry({ id: 2, comment: 'Ẩm thực', content: 'Món bánh cuốn Vọng Nguyệt làm từ gạo nếp nương, ăn kèm nước chấm pha từ mắm cá suối và ớt rừng thơm nồng.', keys: ['thành'] }),
+      ],
+    });
+    expect(issues.filter(i => i.code === 'duplicate-entry-content')).toEqual([]);
+  });
+});
+
 /* ─── Đối chiếu trên CARD THẬT của user (bug/135) — file nằm ngoài git ─── */
 const BUG_DIR = path.resolve(process.cwd(), '..', 'bug', '135');
 const hasCards = fs.existsSync(path.join(BUG_DIR, 'Card 1.json'));
@@ -237,6 +345,49 @@ describe.skipIf(!hasCards)('(bug 135) chạy trên 2 card thật user gửi', ()
     const dead = issues.filter(i => i.code === 'dead-entry');
     expect(dead.length).toBeGreaterThanOrEqual(3);
     expect(dead.some(i => /Lễ Hội/i.test(i.where ?? ''))).toBe(true);
+  });
+
+  // (bug 148) Card v3 — bản "hoàn thiện" dùng Preset Nhanh áp dụng tất cả.
+  const V3 = path.resolve(process.cwd(), '..', 'bug', '148', 'Hệ_Thống_Quản_Trò_Eldran_v3.json');
+  const hasV3 = fs.existsSync(V3);
+
+  it.skipIf(!hasV3)('card v3: bắt đúng 6 lời gọi getvar thiếu stat_data ở entry Inject Bối Cảnh', () => {
+    const raw = JSON.parse(fs.readFileSync(V3, 'utf-8'));
+    const data = raw.data ?? raw;
+    const issues = auditCardQuality({
+      entries: (data.character_book?.entries ?? []) as LorebookEntry[],
+      schema: (data.extensions?.mvuzod?.schema ?? null) as MVUZODSchema | null,
+    });
+    const miss = issues.filter(i => i.code === 'ejs-missing-statdata');
+    expect(miss.length).toBeGreaterThanOrEqual(6);
+    expect(miss.every(i => /Bối Cảnh/i.test(i.where ?? ''))).toBe(true);
+    expect(miss.some(i => i.message.includes('stat_data.Thế Giới.Ngày'))).toBe(true);
+    // Hai entry EJS còn lại viết ĐÚNG — không được báo oan.
+    expect(miss.some(i => /Cảnh Báo Sinh Tồn|Bộ điều khiển/i.test(i.where ?? ''))).toBe(false);
+  });
+
+  it.skipIf(!hasV3)('card v3: bắt tên biến có dấu ở entry Cảnh Báo Sinh Tồn', () => {
+    const raw = JSON.parse(fs.readFileSync(V3, 'utf-8'));
+    const data = raw.data ?? raw;
+    const issues = auditCardQuality({
+      entries: (data.character_book?.entries ?? []) as LorebookEntry[],
+      schema: (data.extensions?.mvuzod?.schema ?? null) as MVUZODSchema | null,
+    });
+    const nonAscii = issues.filter(i => i.code === 'ejs-nonascii-var');
+    expect(nonAscii.length).toBeGreaterThan(0);
+    expect(nonAscii.some(i => i.message.includes('_nhân_vật_vp_hiện_tại'))).toBe(true);
+  });
+
+  it.skipIf(!hasV3)('card v3: VÁ xong thì các lỗi tự động biến mất, số entry KHÔNG đổi', () => {
+    const raw = JSON.parse(fs.readFileSync(V3, 'utf-8'));
+    const card = (raw.data ? raw : { data: raw }) as CharacterCardV3;
+    const schema = (card.data.extensions as never as { mvuzod?: { schema?: MVUZODSchema } })?.mvuzod?.schema ?? null;
+    const before = card.data.character_book!.entries.length;
+    const r = repairQualityIssues(card, schema);
+    const after = auditCardQuality({ entries: r.card.data.character_book!.entries as never, schema });
+    expect(after.filter(i => i.code === 'ejs-missing-statdata')).toEqual([]);
+    expect(after.filter(i => i.code === 'ejs-nonascii-var')).toEqual([]);
+    expect(r.card.data.character_book!.entries).toHaveLength(before);   // không xoá lore
   });
 
   it('không báo bừa: mọi lỗi đều trỏ vào entry/biến CÓ THẬT trong card', () => {

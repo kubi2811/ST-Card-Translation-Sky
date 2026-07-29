@@ -7,7 +7,7 @@ import type { CharacterCardV3 } from '../../types/card.types';
 import type { LorebookEntry } from '../../types/lorebook.types';
 import type { AIGeneratedEntry } from '../../types/aiAgent.types';
 import { DEFAULT_ENTRY_EXT } from '../../types/lorebook.types';
-import { getPreset, type EntryCategory, type CardType } from '../worldbook/worldbookConfig';
+import { getPreset, lockedFieldsOf, type EntryCategory, type CardType, type LockableField } from '../worldbook/worldbookConfig';
 
 export function createEmptyCard(): CharacterCardV3 {
   const now = new Date().toISOString();
@@ -63,6 +63,36 @@ export interface MaterializeConfig {
   scanDepth?: number | null;
   /** (bug 72) Entry hệ thống như [initvar] phải TẮT — MVU đọc nó làm template, không phải lore. */
   enabled?: boolean;
+  /** Keys hiểu như regex hay chuỗi thường. Mặc định true (giữ hành vi cũ). */
+  useRegex?: boolean;
+  /**
+   * (lõi lorebook) CƠ HỌC DO CALLER TỰ QUYẾT — bỏ qua preset và bỏ qua cả AI.
+   *
+   * Dành cho đường sinh entry có TAXONOMY RIÊNG. Ví dụ `storyDeepScan` phân loại theo chuẩn
+   * worldbook của user (Group 1-5: meta/worldview/timeline/character/faction/location, order
+   * 900/800/200/150/100) — khác hẳn taxonomy của worldbookConfig vốn xoay quanh thẻ đơn/nhiều
+   * nhân vật. Ép hai bên dùng chung một bảng phân loại là phá mất cái đúng của cả hai.
+   *
+   * Tách như vậy để: PHẦN PHÂN LOẠI được phép khác nhau, còn PHẦN ỐNG NƯỚC (chống đệ quy, cờ
+   * disable đi cùng enabled, DEFAULT_ENTRY_EXT, display_index, đồng bộ position số ↔ chuỗi) thì
+   * dùng chung — sửa một chỗ là mọi đường sinh entry được hưởng.
+   */
+  placement?: {
+    constant: boolean;
+    selective: boolean;
+    position: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+    depth: number;
+    role: 0 | 1 | 2 | null;
+    insertion_order: number;
+    scan_depth?: number | null;
+    /**
+     * Chuỗi `position` của định dạng V3. Với entry @depth (position số = 4) thì cả
+     * 'before_char' lẫn 'after_char' đều không diễn tả đúng — ST đọc `extensions.position`,
+     * chuỗi này chỉ là đường lui cho bộ đọc cũ. Cho caller tự chọn thay vì suy ngầm, vì suy
+     * ngầm sẽ lặng lẽ đổi hành vi của những đường sinh entry đã chạy đúng từ trước.
+     */
+    positionName?: LorebookEntry['position'];
+  };
 }
 
 export function materializeEntry(
@@ -75,17 +105,39 @@ export function materializeEntry(
     ? getPreset(config.category, config.cardType ?? 'single')
     : undefined;
 
-  // Priority: AI per-entry > config default > preset > fallback
-  const posExt = ai.position ?? config.defaultPosition ?? preset?.defaults.position ?? 0;
-  const constant = ai.constant ?? preset?.defaults.constant ?? false;
-  const selective = ai.selective ?? preset?.defaults.selective ?? true;
-  const depth = ai.depth ?? config.defaultDepth ?? preset?.defaults.depth ?? 4;
-  const role = ai.role !== undefined ? ai.role : (config.defaultRole ?? preset?.defaults.role ?? null);
-  const scanDepth = ai.scan_depth ?? config.scanDepth ?? preset?.defaults.scan_depth ?? 2;
-  const insertionOrder = ai.insertion_order
-    ?? config.insertionOrderStart
-    ?? preset?.defaults.insertion_order
-    ?? 100;
+  // ═══ THỨ TỰ ƯU TIÊN ═══
+  //   trường BỊ KHOÁ:  người dùng > preset            (BỎ QUA giá trị AI)
+  //   trường tự do:    AI > người dùng > preset > mặc định
+  //
+  // Trước đây AI thắng tất, kể cả `constant`/`selective` — mà đó là thứ phụ thuộc CẤU TRÚC THẺ
+  // (thẻ đơn thường trú, thẻ nhiều nhân vật kích hoạt theo từ khoá), thứ AI không thể biết vì nó
+  // chỉ nhìn thấy nội dung MỘT entry. Prompt vẫn ghi "CẤU HÌNH BẮT BUỘC: constant=true…" rồi tin
+  // AI làm đúng — nhờ vả chứ không phải ép. Nay ép thật; xem lockedFieldsOf() để biết vì sao.
+  // Người dùng vẫn đè được qua config: khoá này chỉ chặn AI, không chặn user.
+  const locked = new Set(config.category ? lockedFieldsOf(config.category) : []);
+  const pick = <T>(field: LockableField, aiVal: T | undefined, cfgVal: T | undefined, presetVal: T | undefined, fallback: T): T =>
+    (locked.has(field)
+      ? (cfgVal ?? presetVal ?? fallback)
+      : (aiVal ?? cfgVal ?? presetVal ?? fallback));
+
+  // `placement` là quyết định TƯỜNG MINH của caller (taxonomy riêng) → thắng cả preset lẫn AI.
+  const pl = config.placement;
+  const posExt = pl ? pl.position : pick('position', ai.position, config.defaultPosition, preset?.defaults.position, 0);
+  const constant = pl ? pl.constant : pick('constant', ai.constant, undefined, preset?.defaults.constant, false);
+  const selective = pl ? pl.selective : pick('selective', ai.selective, undefined, preset?.defaults.selective, true);
+  const depth = pl ? pl.depth : pick('depth', ai.depth, config.defaultDepth, preset?.defaults.depth, 4);
+  // role dùng `!== undefined` vì null LÀ giá trị hợp lệ (không gán role) — `??` sẽ nuốt mất null.
+  const role = pl
+    ? pl.role
+    : locked.has('role')
+      ? (config.defaultRole !== undefined ? config.defaultRole : (preset?.defaults.role ?? null))
+      : (ai.role !== undefined ? ai.role : (config.defaultRole ?? preset?.defaults.role ?? null));
+  const scanDepth = pl
+    ? (pl.scan_depth ?? null)
+    : (ai.scan_depth ?? config.scanDepth ?? preset?.defaults.scan_depth ?? 2);
+  const insertionOrder = pl
+    ? pl.insertion_order
+    : (ai.insertion_order ?? config.insertionOrderStart ?? preset?.defaults.insertion_order ?? 100);
 
   return {
     id,
@@ -100,8 +152,8 @@ export function materializeEntry(
     // SillyTavern đọc cờ `disable` (ngược nghĩa `enabled`) — trước đây không nơi nào ghi ra
     // nên entry tắt vẫn xuất ra file ở trạng thái bật.
     disable: !(config.enabled ?? true),
-    position: posExt === 0 ? 'before_char' : 'after_char',
-    use_regex: true,
+    position: pl?.positionName ?? (posExt === 0 ? 'before_char' : 'after_char'),
+    use_regex: config.useRegex ?? true,
     extensions: {
       ...DEFAULT_ENTRY_EXT,
       position: posExt,

@@ -27,7 +27,9 @@
  * lệch → bắt đầu lại. Không bịa: dữ liệu không rõ phải đánh dấu vào `unknowns`.
  */
 import type { ProxyProfile, GenerationParams } from '../../types';
-import { DEFAULT_ENTRY_EXT, type LorebookEntry } from '../../types/lorebook.types';
+import { type LorebookEntry } from '../../types/lorebook.types';
+import type { AIGeneratedEntry } from '../../types/aiAgent.types';
+import { materializeEntry } from '../converters/cardDefaults';
 import { callAI, computePoolConcurrency } from './client';
 import { hasCjk, scanCjkResidue, buildCjkRetryHint } from './cjkResidue';
 import { applyUserPersonaSwap } from './userPersonaSwap';
@@ -305,33 +307,43 @@ export function entryPlacement(cat: EntryCat): EntryPlacement {
   }
 }
 
+/**
+ * (lõi lorebook) Đi qua `materializeEntry` — CỔNG RA CHUNG của mọi đường sinh entry.
+ *
+ * Trước đây hàm này tự dựng LorebookEntry từ đầu. Kết quả vẫn đúng, nhưng nó là BẢN CHÉP của
+ * phần ống nước: cứ ai sửa `materializeEntry` (thêm cờ ST mới, đổi cách đồng bộ disable/enabled,
+ * bổ sung mặc định) thì "Tạo thẻ từ truyện" không được hưởng, và lệch dần một cách âm thầm.
+ *
+ * Điều KHÔNG gộp: bảng phân loại. `EntryCat` ở đây bám chuẩn worldbook của user (Group 1-5,
+ * order 900/800/200/150/100) — khác hẳn taxonomy của worldbookConfig vốn xoay quanh thẻ đơn /
+ * nhiều nhân vật. Ép hai bên dùng chung một bảng phân loại là phá mất cái đúng của cả hai.
+ * Nên `entryPlacement` vẫn ở đây và được truyền xuống qua `config.placement`.
+ */
 export function toLorebookEntry(e: DeepEntry, id: number): LorebookEntry {
   const p = entryPlacement(e.cat);
   const constant = e.constant || p.constant;
-  return {
-    id,
-    keys: constant ? [] : (e.keys.length ? e.keys : [e.title]),
-    secondary_keys: [],
-    comment: e.title,
-    content: e.content,
-    constant,
-    selective: !constant,
-    insertion_order: p.order,
-    enabled: true,
-    disable: false,
-    position: p.position,
-    use_regex: false,
-    extensions: {
-      ...DEFAULT_ENTRY_EXT,
-      display_index: id,
-      position: p.extPosition,
-      depth: p.depth,
-      role: p.role,
-      // Chuẩn worldbook: chống đệ quy 100% entry để không sập bộ nhớ ST.
-      prevent_recursion: true,
-      exclude_recursion: true,
+  return materializeEntry(
+    {
+      comment: e.title,
+      content: e.content,
+      keys: constant ? [] : (e.keys.length ? e.keys : [e.title]),
+      secondary_keys: [],
+    } as AIGeneratedEntry,
+    {
+      useRegex: false,
+      placement: {
+        constant,
+        selective: !constant,
+        position: p.extPosition,
+        depth: p.depth,
+        role: p.role,
+        insertion_order: p.order,
+        scan_depth: null,
+        positionName: p.position,   // giu ĐUNG chuoi cu (@depth -> before_char)
+      },
     },
-  };
+    id,
+  );
 }
 
 // ═════════════════════════════════ Engine ════════════════════════════════════

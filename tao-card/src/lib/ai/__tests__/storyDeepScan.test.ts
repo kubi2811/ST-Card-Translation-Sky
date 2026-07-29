@@ -142,6 +142,18 @@ describe('entryPlacement / toLorebookEntry — đúng chuẩn worldbook (chinh l
     expect(entryPlacement('faction')).toMatchObject({ constant: false, extPosition: 0, order: 150 });
     expect(entryPlacement('location')).toMatchObject({ constant: false, extPosition: 0, order: 100 });
   });
+  // (lõi lorebook) toLorebookEntry nay đi qua materializeEntry để dùng chung phần ống nước.
+  // Chuỗi `position` của V3 là chỗ dễ lệch nhất khi nối: suy ngầm từ position số sẽ biến entry
+  // @depth thành 'after_char'. Khoá lại để lần sau ai nối tiếp cũng không đổi ngầm.
+  it('giữ ĐÚNG chuỗi position cũ sau khi dùng chung materializeEntry', () => {
+    const meta: DeepEntry = { cat: 'meta', title: 'Hệ Thống', keys: [], content: '<Meta>…</Meta>', constant: true };
+    const e = toLorebookEntry(meta, 1);
+    expect(e.extensions.position, '@depth').toBe(4);
+    expect(e.position, 'chuỗi V3 phải giữ before_char như trước').toBe('before_char');
+    expect(e.use_regex, 'keys là chuỗi thường, không phải regex').toBe(false);
+    expect(e.extensions.display_index).toBe(1);
+  });
+
   it('toLorebookEntry: entry constant KHÔNG cần key; entry thường lấy keys (fallback = title); luôn chống đệ quy', () => {
     const constant: DeepEntry = { cat: 'worldview', title: 'Thế Giới Quan', keys: [], content: '<Worldview>…</Worldview>', constant: true };
     const ce = toLorebookEntry(constant, 1);

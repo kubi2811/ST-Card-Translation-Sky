@@ -402,6 +402,42 @@ export function getPreset(
     : MULTI_CARD_PRESETS[category];
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// TRƯỜNG BỊ KHOÁ — AI KHÔNG ĐƯỢC ĐÈ LÊN PRESET
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Trường cơ học có thể khoá lại, không cho AI tự quyết. */
+export type LockableField = 'constant' | 'selective' | 'position' | 'depth' | 'role';
+
+/**
+ * Vì sao phải khoá `constant`/`selective` cho MỌI category:
+ *
+ * Chiến lược kích hoạt là thứ khác nhau giữa THẺ ĐƠN và THẺ NHIỀU NHÂN VẬT — xem
+ * `character_detail`: thẻ đơn `constant: true` (quy luật thép), thẻ nhiều `constant: false`.
+ * Giá trị đúng phụ thuộc vào CẤU TRÚC THẺ, thứ mà hệ preset biết còn AI thì không: AI chỉ
+ * nhìn thấy nội dung một entry, không biết thẻ này có mấy nhân vật cốt lõi.
+ *
+ * Mà trước đây `materializeEntry` cho AI thắng preset (`ai.constant ?? preset...`). Prompt thì
+ * viết "CẤU HÌNH BẮT BUỘC: constant=true, selective=false" rồi TIN AI làm đúng — nhờ vả chứ
+ * không phải ép. Khoá lại chỉ là làm cho hành vi khớp với ý định vốn đã tuyên bố sẵn.
+ *
+ * Người dùng thì VẪN được quyền đè (config.defaultPosition/Depth/Role) — khoá này chỉ chặn AI.
+ */
+const DEFAULT_LOCKED: LockableField[] = ['constant', 'selective'];
+
+/** Khoá thêm cho category mà cơ học CHÍNH LÀ định nghĩa của nó. */
+const EXTRA_LOCKED: Partial<Record<EntryCategory, LockableField[]>> = {
+  // D0 = "@depth 0, role system". AI đổi depth/role thì nó không còn là D0 nữa,
+  // chỉ còn cái tên — hỏng âm thầm, vì entry vẫn hợp lệ và vẫn nạp được.
+  secondary_explanation: ['position', 'depth', 'role'],
+};
+
+/** Trường mà AI KHÔNG được đè lên preset, theo category. */
+export function lockedFieldsOf(category: EntryCategory): LockableField[] {
+  if (category === 'custom') return [];   // custom = user tự cầm lái hoàn toàn
+  return [...DEFAULT_LOCKED, ...(EXTRA_LOCKED[category] ?? [])];
+}
+
 /**
  * Mô tả chiến lược kích hoạt dạng label ngắn gọn.
  */

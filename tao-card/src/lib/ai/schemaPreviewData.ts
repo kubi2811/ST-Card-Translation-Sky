@@ -91,6 +91,20 @@ export function buildSampleStatData(schema: MVUZODSchema | null | undefined): Re
 }
 
 /**
+ * (bug 149) Gỡ rào markdown trước khi nhét vào iframe.
+ *
+ * `previewHtml` CỐ Ý mang ```html vì đó là quy ước output của regex SillyTavern — đúng cho thẻ
+ * xuất ra, nhưng nhét thẳng vào iframe thì trình duyệt vẽ luôn mấy ký tự đó thành chữ nổi trên
+ * đầu khung (đúng ảnh user gửi). GameFrontendPreview đã tự gỡ tại chỗ, PreviewTunerModal thì
+ * không — nên gom về MỘT hàm dùng chung, thêm khung xem trước mới cũng không sót lần nữa.
+ */
+export function toIframeHtml(previewHtml: string): string {
+  return String(previewHtml || '')
+    .replace(/^\s*```(?:html)?\r?\n/i, '')
+    .replace(/\r?\n?```\s*$/, '');
+}
+
+/**
  * Chèn MVU GIẢ + dữ liệu mẫu vào HTML preview.
  * Đặt NGAY SAU <head> để chạy trước mọi script của giao diện: `waitGlobalInitialized` trả về
  * ngay, `getAllVariables()` có dữ liệu, nên `populateData()` vẽ đúng số của schema đang chỉnh.

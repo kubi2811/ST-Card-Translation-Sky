@@ -9,7 +9,7 @@
  * Trạng thái nằm trong config (persist) → thoát giữa chừng, vào lại đúng chỗ.
  */
 import { useCallback, useMemo, useState } from 'react';
-import { X, Wand2, RotateCcw, ChevronLeft, ChevronRight, Loader2, Check, Sparkles } from 'lucide-react';
+import { X, Wand2, RotateCcw, ChevronLeft, ChevronRight, Loader2, Check, Sparkles, Maximize2, Minimize2 } from 'lucide-react';
 import { useAutoCreatorStore } from '../../store/autoCreatorStore';
 import { useSettingsStore } from '../../store/settingsStore';
 import { useToastStore } from '../../store/toastStore';
@@ -24,7 +24,7 @@ import {
 import { normalizeMVUZODSchema } from '../../lib/mvuzod/normalizeSchema';
 import type { MVUZODField, MVUZODSchema } from '../../types/mvuzod.types';
 import { SchemaVarTable, type VarRow } from './SchemaVarTable';
-import { withPreviewData } from '../../lib/ai/schemaPreviewData';
+import { withPreviewData, toIframeHtml } from '../../lib/ai/schemaPreviewData';
 
 interface Props {
   open: boolean;
@@ -107,6 +107,8 @@ export function PreviewTunerModal({ open, onClose, onStart }: Props) {
   // (bug 148-3) Xem trước VỚI BIẾN THẬT của schema đang chỉnh — mặc định BẬT, vì khung rỗng
   // chẳng nói lên điều gì về schema vừa sửa.
   const [withData, setWithData] = useState(true);
+  // (bug 149) Khung 64px cao chỉ đủ thấy phần đầu — user muốn 'mở rộng thanh ra' để xem hết chữ bên trong.
+  const [bigPreview, setBigPreview] = useState(false);
 
   const activeProfile = settings.getActiveProfile();
   const idea = store.config.idea;
@@ -300,7 +302,18 @@ export function PreviewTunerModal({ open, onClose, onStart }: Props) {
                   <input type="checkbox" checked={withData} onChange={e => setWithData(e.target.checked)} />
                   Xem với biến của schema
                 </label>
+                {/* (bug 149) Khung nhỏ chỉ đủ thấy phần đầu; mở rộng để đọc hết chữ bên trong
+                    và bấm thử đúng các nút mà card thật sẽ có. */}
+                <button type="button" onClick={() => setBigPreview(v => !v)}
+                  title={bigPreview ? 'Thu lại 3 cột để so sánh nhanh' : 'Phóng to từng mẫu để đọc hết nội dung và bấm thử'}
+                  className="flex items-center gap-1 text-[10px] text-muted-foreground shrink-0 rounded-md border border-border px-1.5 py-1 hover:bg-muted/40">
+                  {bigPreview ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
+                  {bigPreview ? 'Thu lại' : 'Mở rộng'}
+                </button>
               </div>
+              <p className="text-[10px] text-muted-foreground -mt-1">
+                Giao diện dưới đây bấm/kéo được như trong SillyTavern — thử luôn các nút trước khi chốt.
+              </p>
 
               {/* ═══ (bugNeedFix/145) NHỜ AI TẠO GIAO DIỆN ═══
                   AI chỉ quyết bảng màu + font; khung HTML vẫn do máy dựng như các mẫu sẵn, nên
@@ -348,17 +361,25 @@ export function PreviewTunerModal({ open, onClose, onStart }: Props) {
                   </div>
                 )}
               </div>
-              <div className="grid md:grid-cols-3 gap-2">
+              <div className={bigPreview ? 'grid grid-cols-1 gap-2' : 'grid md:grid-cols-3 gap-2'}>
+                {/* (bug 149) Trước đây cả thẻ là MỘT nút và iframe bị `pointer-events-none`, nên
+                    giao diện bên trong chết cứng: không bấm, không kéo, không mở rộng được — chỉ
+                    còn là ảnh chụp. Nay tách đôi: THANH TIÊU ĐỀ là nút chọn mẫu, còn iframe sống
+                    bình thường để bạn thử đúng những nút mà card thật sẽ có. */}
                 {themeChoices.map(c => (
-                  <button key={c.themeId}
-                    onClick={() => useAutoCreatorStore.getState().setTuning({ themeId: c.themeId, confirmed: false })}
-                    className={`rounded-xl border-2 overflow-hidden text-left transition-colors ${tuning.themeId === c.themeId ? 'border-primary' : 'border-border hover:border-primary/40'}`}>
-                    <div className={`px-2 py-1.5 text-[11px] font-medium flex items-center gap-1.5 ${tuning.themeId === c.themeId ? 'bg-primary/15 text-primary' : 'bg-muted/20'}`}>
-                      {tuning.themeId === c.themeId && <Check className="w-3 h-3" />}{c.label}
-                    </div>
-                    <iframe title={c.themeId} sandbox="allow-scripts" srcDoc={withData ? withPreviewData(c.previewHtml, tuning.schema) : c.previewHtml}
-                      className="w-full h-64 bg-white pointer-events-none" />
-                  </button>
+                  <div key={c.themeId}
+                    className={`rounded-xl border-2 overflow-hidden transition-colors ${tuning.themeId === c.themeId ? 'border-primary' : 'border-border hover:border-primary/40'}`}>
+                    <button type="button"
+                      onClick={() => useAutoCreatorStore.getState().setTuning({ themeId: c.themeId, confirmed: false })}
+                      className={`w-full px-2 py-1.5 text-[11px] font-medium flex items-center gap-1.5 text-left ${tuning.themeId === c.themeId ? 'bg-primary/15 text-primary' : 'bg-muted/20 hover:bg-muted/40'}`}>
+                      {tuning.themeId === c.themeId ? <Check className="w-3 h-3 shrink-0" /> : <span className="w-3 h-3 shrink-0 rounded-full border border-current opacity-40" />}
+                      <span className="truncate">{c.label}</span>
+                      <span className="ml-auto opacity-60">{tuning.themeId === c.themeId ? 'đang chọn' : 'chọn'}</span>
+                    </button>
+                    <iframe title={c.themeId} sandbox="allow-scripts"
+                      srcDoc={withData ? withPreviewData(toIframeHtml(c.previewHtml), tuning.schema) : toIframeHtml(c.previewHtml)}
+                      className={`w-full bg-white ${bigPreview ? 'h-[70vh]' : 'h-72'}`} />
+                  </div>
                 ))}
               </div>
             </>

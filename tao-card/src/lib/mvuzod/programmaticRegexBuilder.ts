@@ -96,6 +96,12 @@ interface SectionAnalysis {
   nestedSections: SectionAnalysis[];
   /** All flat leaf fields (for counting) */
   allLeafFields: FieldAnalysis[];
+  /**
+   * (bug 149) Section này CHÍNH NÓ là một biến lá (schema phẳng: "Ngày", "Khung Giờ" nằm thẳng
+   * ở cấp cao nhất, không nằm trong nhóm nào). analyzeSection chỉ phân loại CON, nên với schema
+   * phẳng mọi mảng trên đều rỗng và trường lá cấp cao nhất trở nên vô hình với mọi phép tìm.
+   */
+  selfLeaf?: FieldAnalysis;
 }
 
 interface SchemaAnalysis {
@@ -196,6 +202,19 @@ function analyzeSection(
     }
   }
 
+  // (bug 149) Schema PHẲNG: trường lá nằm thẳng ở cấp cao nhất cũng thành một "section", nhưng
+  // vòng lặp trên chỉ phân loại CON nên mọi mảng ở đây rỗng. Ghi lại chính nó làm lá để các
+  // phép tìm (vd trường thời gian cho dòng phụ header) còn thấy được nó.
+  if (children.length === 0 && field.type !== 'object') {
+    section.selfLeaf = {
+      field,
+      keyPath: parentKeyPath,
+      elementId: sectionIdPrefix,
+      icon,
+      maxValue: getMaxValue(field),
+    };
+  }
+
   return section;
 }
 
@@ -212,18 +231,20 @@ function buildStatusBar(
   const bindings: string[] = [];
 
   // ── Header ──
+  // (bug 149) "Loading..." là CHỖ TRỐNG chờ trường thời gian/nơi chốn ghi đè. Không tìm thấy
+  // trường nào thì chẳng có gì ghi đè, và chữ đó nằm lì mãi — trong khung xem trước lẫn trong
+  // CARD THẬT. Nên phải tìm trường TRƯỚC rồi mới dựng header: có thì để chỗ trống, không có
+  // thì bỏ hẳn dòng phụ đi. Thà thiếu một dòng còn hơn khoe chữ "Loading..." vĩnh viễn.
   const title = gameName || 'Game Status';
+  const headerFields = findHeaderFields(analysis);
   htmlParts.push(
     `<div class="stcs-header">` +
     `<div class="stcs-header-title">${title}</div>` +
-    `<div class="stcs-header-subtitle">` +
-    `<span id="stcs-header-info">Loading...</span>` +
-    `</div>` +
+    (headerFields.length
+      ? `<div class="stcs-header-subtitle"><span id="stcs-header-info">…</span></div>`
+      : '') +
     `</div>`,
   );
-
-  // Try to find a "time" or "location" field for header subtitle
-  const headerFields = findHeaderFields(analysis);
   for (const hf of headerFields) {
     bindings.push(generateFieldBindingJS(hf.keyPath, 'stcs-header-info', 'string'));
   }
@@ -1203,17 +1224,35 @@ function buildFullSetResult(
 // HELPERS
 // ═══════════════════════════════════════════════════════════════════════════
 
+/**
+ * (bug 149) Tìm 1-2 trường để hiện ở dòng phụ dưới tiêu đề (thời gian / nơi chốn).
+ *
+ * Hai lỗ khiến chữ "Loading..." nằm lì trên thanh trạng thái — KHÔNG chỉ trong khung xem trước
+ * mà cả trong card thật:
+ *   1. chỉ quét stringFields + enumFields, bỏ qua NUMBER. Mà "Ngày", "Tháng", "Năm", "Lượt"
+ *      hầu như luôn là số — đúng schema trong ảnh user gửi ("Ngày (SC)" kiểu Number).
+ *   2. bộ từ khoá thiếu những chữ hay dùng nhất trong tiếng Việt: giờ, buổi, mùa, năm, nơi,
+ *      địa điểm, bản đồ. "Khung Giờ" của user không khớp chữ nào trong bảng cũ.
+ */
 function findHeaderFields(analysis: SchemaAnalysis): FieldAnalysis[] {
+  const RE = /thời|time|ngày|tháng|năm|mùa|giờ|buổi|lượt|turn|date|khu vực|vị trí|nơi|địa điểm|bản đồ|map|location|place|地点|时间|日期/;
   const result: FieldAnalysis[] = [];
-  for (const section of analysis.sections) {
-    for (const f of [...section.stringFields, ...section.enumFields]) {
-      const lower = f.field.label.toLowerCase();
-      if (/thời|time|ngày|tháng|khu vực|vị trí|location|地点|时间/.test(lower)) {
-        result.push(f);
-        if (result.length >= 2) return result;
+  // Quét cả section LỒNG NHAU: "Trạng thái thế giới › Khu vực hiện tại" nằm ở tầng hai, quét
+  // mỗi tầng một thì đúng trường cần tìm lại là trường bị bỏ qua.
+  const walk = (sections: SectionAnalysis[]) => {
+    for (const s of sections) {
+      // selfLeaf đứng đầu: với schema PHẲNG thì đó là nơi duy nhất trường lá tồn tại.
+      const cands = [...(s.selfLeaf ? [s.selfLeaf] : []), ...s.stringFields, ...s.enumFields, ...s.numericFields];
+      for (const f of cands) {
+        if (result.length >= 2) return;
+        if (RE.test(f.field.label.toLowerCase())) result.push(f);
       }
+      if (result.length >= 2) return;
+      walk(s.nestedSections);
+      if (result.length >= 2) return;
     }
-  }
+  };
+  walk(analysis.sections);
   return result;
 }
 

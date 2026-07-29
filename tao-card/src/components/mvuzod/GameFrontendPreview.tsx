@@ -18,6 +18,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { MVUZODSchema } from '../../types/mvuzod.types';
 import type { RegexScript, ChatMessage } from '../../types';
 import { useCardStore } from '../../store/cardStore';
+import { toIframeHtml } from '../../lib/ai/schemaPreviewData';
 import { useSettingsStore } from '../../store/settingsStore';
 import { callAI } from '../../lib/ai/client';
 import { GAME_REGEX_SYSTEM_PROMPT, buildGameRegexUserPrompt } from '../../prompts/gameRegexPrompt';
@@ -114,7 +115,9 @@ export function GameFrontendPreview({ schema }: GameFrontendPreviewProps) {
   // Cảnh báo: <script> trong game HTML vỡ cú pháp JS (autoFixGameHtml chỉ sửa cấu trúc, không kiểm JS).
   const scriptWarn = useMemo(() => {
     if (!previewHtml) return null;
-    const html = previewHtml.replace(/^```html\n/, '').replace(/```$/, '');
+    // (bug 149) Dùng CHUNG hàm gỡ rào với PreviewTunerModal — bản cũ ở đây chỉ khớp đúng
+    // "```html\n" nên rào có khoảng trắng đầu dòng hoặc CRLF là lọt.
+    const html = toIframeHtml(previewHtml);
     const r = checkHtmlScripts(html);
     return r.broken > 0 ? r : null;
   }, [previewHtml]);

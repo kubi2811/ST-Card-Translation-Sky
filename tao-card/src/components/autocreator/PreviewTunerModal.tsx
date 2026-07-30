@@ -25,6 +25,7 @@ import { normalizeMVUZODSchema } from '../../lib/mvuzod/normalizeSchema';
 import type { MVUZODField, MVUZODSchema } from '../../types/mvuzod.types';
 import { SchemaVarTable, type VarRow } from './SchemaVarTable';
 import { withPreviewData, toIframeHtml } from '../../lib/ai/schemaPreviewData';
+import { SCHEMA_COPILOT_SYSTEM, buildSchemaCopilotUser } from '../../lib/ai/schemaCopilotPrompt';
 
 interface Props {
   open: boolean;
@@ -228,8 +229,12 @@ export function PreviewTunerModal({ open, onClose, onStart }: Props) {
         profile: activeProfile,
         params: { ...settings.generationParams, temperature: 0.2, useJsonResponseFormat: true, stream: false },
         messages: [
-          { role: 'system', content: 'Bạn là trợ lý chỉnh schema MVU. Nhận schema JSON hiện tại + yêu cầu của user, trả về DUY NHẤT JSON {"schema": {...}} — schema ĐẦY ĐỦ sau khi sửa. Chỉ sửa đúng phần user yêu cầu, giữ nguyên phần còn lại (path/type/constraints/defaultValue). Không thêm lời giải thích.' },
-          { role: 'user', content: `SCHEMA HIỆN TẠI:\n${JSON.stringify(t.schema, null, 1)}\n\nYÊU CẦU: ${copilotAsk.trim()}` },
+          // (bug 159-5) Prompt cũ chỉ MỘT câu, và câu đó tự chặn chính nó: "Chỉ sửa đúng phần
+          // user yêu cầu" ⇒ AI hiểu là chỉ được SỬA, không được THÊM biến. Nó cũng không dạy hình
+          // dạng field / 6 kiểu / quy ước "_child", nên gặp yêu cầu tả bằng lời ("làm cho tôi biến
+          // Thời gian 0:00–23:59") thì AI không biết dựng bằng gì.
+          { role: 'system', content: SCHEMA_COPILOT_SYSTEM },
+          { role: 'user', content: buildSchemaCopilotUser(JSON.stringify(t.schema, null, 1), copilotAsk) },
         ],
         label: 'Copilot schema',
       });

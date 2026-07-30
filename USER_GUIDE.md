@@ -59,6 +59,17 @@ version rải rác ở app khác đã bị gỡ.
 Dịch thẻ nhân vật (`.png` / `.json`) sang tiếng Việt mà **không phá cấu trúc** — biến MVU, regex,
 script và EJS đều được giữ đúng.
 
+### Bố cục màn hình
+
+Cột trái đi theo **thứ tự việc phải làm**, và bước nào xong thì tự thu lại thành một dòng:
+**1 Thiết lập** (có API key rồi là thu gọn, chỉ còn tên model) → **2 Nạp dữ liệu** → **3 Cấu hình
+dịch** (chưa có thẻ thì đóng). Các công cụ nâng cao (Regex Manager, Trợ Lý AI, So Sánh Card, EJS
+Creator) gom trong nhóm **Công cụ khác**, đóng sẵn — bấm vào mới mở.
+
+Cột phải: **Xem trước thẻ** và **Tiến trình dịch** luôn hiện; bốn phần còn lại là **tab ngang** —
+*Trường dịch · Kiểm tra · Xuất thẻ · Từ điển*. Mỗi tab chỉ tải khi bạn bấm vào, nên máy đỡ nặng.
+Các nút "tới bước xuất thẻ / tới bước kiểm tra" tự chuyển sang đúng tab trước khi cuộn.
+
 ### Các bước dịch một thẻ
 
 1. **Nạp thẻ** → app tách thẻ thành từng trường để dịch riêng.

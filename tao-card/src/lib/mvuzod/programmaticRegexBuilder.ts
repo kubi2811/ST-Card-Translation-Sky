@@ -128,11 +128,17 @@ function analyzeSchema(schema: MVUZODSchema): SchemaAnalysis {
   const sections: SectionAnalysis[] = [];
   let globalFieldCount = 0;
   const editableFields: FieldAnalysis[] = [];
+  // (bug 159-6) BỘ SINH ID CHỐNG TRÙNG — dùng chung cho cả lần dựng.
+  // sanitizeId() bỏ mọi ký tự lạ rồi CẮT 30 ký tự, nên rất dễ ra hai id giống nhau:
+  // "Máu (HP)" và "Máu HP" đều thành "máu-hp"; hai tên dài chung 30 ký tự đầu cũng vậy.
+  // ID trùng thì getElementById trả về phần tử ĐẦU TIÊN ⇒ Opening Form ghi/đọc sai trường,
+  // đúng cảnh "thêm biến mới thì phát sinh lỗi nhỏ" mà user báo. Trùng thì nối -2, -3…
+  const mint = makeIdMinter();
 
   for (const field of schema.fields) {
     if (field.constraints?.hidden) continue;
     // keyPath phải theo TÊN BIẾN (path), không theo nhãn hiển thị — xem varNameOf.
-    const section = analyzeSection(field, [varNameOf(field)], `stcs-${sanitizeId(field.label)}`);
+    const section = analyzeSection(field, [varNameOf(field)], mint(`stcs-${sanitizeId(field.label)}`), mint);
     sections.push(section);
     globalFieldCount += section.allLeafFields.length;
     editableFields.push(
@@ -147,6 +153,7 @@ function analyzeSection(
   field: MVUZODField,
   parentKeyPath: string[],
   sectionIdPrefix: string,
+  mint: (base: string) => string = (b) => b,
 ): SectionAnalysis {
   const icon = guessFieldIcon(field.label);
   const section: SectionAnalysis = {
@@ -168,7 +175,7 @@ function analyzeSection(
     if (child.constraints?.hidden) continue;
 
     const childKeyPath = [...parentKeyPath, varNameOf(child)];
-    const childElementId = `${sectionIdPrefix}-${sanitizeId(child.label)}`;
+    const childElementId = mint(`${sectionIdPrefix}-${sanitizeId(child.label)}`);
 
     const fa: FieldAnalysis = {
       field: child,
@@ -180,7 +187,7 @@ function analyzeSection(
 
     if (child.type === 'object' && child.children?.length) {
       // Nested section
-      const nested = analyzeSection(child, childKeyPath, childElementId);
+      const nested = analyzeSection(child, childKeyPath, childElementId, mint);
       section.nestedSections.push(nested);
       section.allLeafFields.push(...nested.allLeafFields);
     } else if (child.type === 'record') {
@@ -1267,6 +1274,21 @@ function getMaxValue(field: MVUZODField): number | undefined {
 }
 
 /** Sanitize a label string into a safe DOM ID fragment */
+/**
+ * (bug 159-6) Sinh id DUY NHẤT trong một lần dựng. Trùng thì nối hậu tố -2, -3…
+ * Tên rỗng sau khi lọc (vd nhãn toàn ký tự lạ) thì đặt tên thay thế, không để id rỗng —
+ * id rỗng làm mọi getElementById('') trả về null và cả form chết lặng.
+ */
+function makeIdMinter(): (base: string) => string {
+  const used = new Map<string, number>();
+  return (raw: string) => {
+    const base = raw.replace(/-+$/, '') || 'stcs-field';
+    const n = (used.get(base) ?? 0) + 1;
+    used.set(base, n);
+    return n === 1 ? base : `${base}-${n}`;
+  };
+}
+
 function sanitizeId(label: string): string {
   return label
     .toLowerCase()

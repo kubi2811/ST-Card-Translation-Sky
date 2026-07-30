@@ -21,6 +21,7 @@
 import { applyMvuCommands, parseMvuCommands, runFormCycle, readMvuVar } from './mvuHarness';
 import { normalizeMVUZODSchema } from './normalizeSchema';
 import type { MVUZODSchema, MVUZODField } from '../../types/mvuzod.types';
+import { checkHtmlScripts } from '../scriptSafety';
 
 export interface SimIssue {
   level: 'error' | 'warning' | 'info';
@@ -409,6 +410,31 @@ export function simulateCard(input: SimulateInput): SimulateResult {
       stats.ejsRefsMissing += missing.length;
       issues.push({ level: 'error', code: 'sim-reader-missing-var',
         message: `"${src.name}" đọc ${missing.length} biến không có trong stat_data mô phỏng — chỗ đó sẽ hiện rỗng/undefined: ${missing.slice(0, 5).join(' · ')}` });
+    }
+
+    /* ─── (bug 159-6/7) <script> của giao diện có PARSE ĐƯỢC không, và có ID TRÙNG không ───
+     * User: "Opening Form preview trong Regex Lab thì chạy, đưa vào SillyTavern thì bấm nút
+     * không được", và chỉ xảy ra sau khi tự thêm biến mới vào schema.
+     *
+     * Hai lỗ hổng đứng sau chuyện đó:
+     *   • `checkHtmlScripts` CHỈ được gọi trong panel preview, KHÔNG chạy trong pipeline hay
+     *     bước kiểm tra tổng thể — nên giao diện vỡ JS vẫn vào thẻ mà không ai cảnh báo. Vỡ JS
+     *     thì mọi hàm gắn vào onclick không tồn tại ⇒ bấm nút chẳng có gì xảy ra, đúng triệu
+     *     chứng, mà lại không có lỗi đỏ nào.
+     *   • ID trùng: sanitizeId cắt 30 ký tự và bỏ ký tự lạ, nên "Máu (HP)" với "Máu HP" ra cùng
+     *     một id. getElementById lấy phần tử ĐẦU TIÊN ⇒ form đọc/ghi sai trường. Thêm biến mới
+     *     là lúc dễ đụng nhất — khớp đúng mục 6.
+     * Đặt phép kiểm ở đây vì đây là chỗ DUY NHẤT đã có sẵn nội dung giao diện lúc kiểm tổng thể. */
+    const scr = checkHtmlScripts(src.content);
+    if (scr.broken > 0) {
+      issues.push({ level: 'error', code: 'sim-ui-script-broken',
+        message: `"${src.name}" có ${scr.broken}/${scr.total} khối <script> VỠ CÚ PHÁP JS — trong SillyTavern sẽ không hàm nào chạy, bấm nút không phản ứng (preview có thể vẫn trông ổn).` });
+    }
+    const ids = [...src.content.matchAll(/\bid\s*=\s*["']([^"']+)["']/g)].map(m => m[1]);
+    const dupIds = [...new Set(ids.filter((v, i) => ids.indexOf(v) !== i))];
+    if (dupIds.length) {
+      issues.push({ level: 'error', code: 'sim-ui-duplicate-id',
+        message: `"${src.name}" có ${dupIds.length} id HTML bị TRÙNG — getElementById chỉ thấy phần tử đầu tiên nên form đọc/ghi sai ô: ${dupIds.slice(0, 5).join(' · ')}` });
     }
   }
 

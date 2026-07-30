@@ -167,6 +167,20 @@ _%>
 7. Dùng <%_ _%> (whitespace slurp) để tránh xuống dòng thừa
 8. Logic phức tạp nên chia nhỏ thành nhiều entries
 9. getwi() là async — BẮT BUỘC dùng await: await getwi('comment') hoặc await getwi(null, 'comment')
+10. DEFAULT PHẢI KHỚP GIÁ TRỊ KHỞI TẠO THẬT trong [initvar]. Ngữ cảnh có sẵn khối
+    "GIÁ TRỊ KHỞI TẠO THẬT" — tra đúng biến rồi chép y nguyên vào defaults. Đặt sai một chữ là
+    mọi phép so sánh chạy sai NGAY TỪ LƯỢT ĐẦU: ví dụ có thật, biến Phả Hệ khởi tạo là
+    'Chưa thức tỉnh' nhưng code ghi defaults 'Chưa rõ', thế là phép so sánh khác-với-'Chưa rõ'
+    luôn đúng và entry bị bật sai suốt ván chơi. Biến kiểu số thì defaults viết SỐ TRẦN (100),
+    không phải chuỗi '100'.
+11. CẤM so khớp bằng MỘT HAI KÝ TỰ. Không bao giờ viết rank.includes('a') / includes('s') /
+    includes('f') để đại diện cho hạng A/S/F — bất kỳ giá trị nào tình cờ chứa ký tự đó cũng
+    khớp. Ví dụ có thật: "Chưa bề".toLowerCase() CHỨA chữ 'a' (trong "Chưa"), nên nhân vật mới
+    tinh bị xếp nhầm thành Cao thủ ngay lượt đầu. Phải so bằng === với đúng chuỗi trong enum,
+    hoặc includes() với CỤM TỪ ĐẦY ĐỦ ('hạng a', 'tông sư').
+12. Một biến thì MỘT bộ điều khiển. Nếu nhiều việc cùng đọc một chỉ số (nắn giá trị, cảnh báo
+    yếu, cảnh báo nguy kịch) thì gộp vào một entry dùng if / else if theo ngưỡng, đọc biến đúng
+    một lần — đừng tạo ba entry cùng đọc lại một biến mỗi lượt.
 10. Card nhiều entries (>50): ưu tiên dùng getwi() load nội dung thay vì kích hoạt từng entry
 11. Entries được getwi() load PHẢI ở trạng thái DISABLED trong worldbook
 12. matchChatMessages() dùng để phát hiện keyword context trong chat gần nhất

@@ -33,6 +33,7 @@ import {
   type ActivationMode, type EjsPlanRow, type EjsRichPlan, type PlanAction, type PlanTarget, type SplitPart,
 } from './ejsPlanModel';
 import { findCollisions, autopatchCollisions, findActivationOverlaps, scanKeywordOverlap, type EjsBlock } from './ejsCollision';
+import { checkEjsSemantics, readInitVarTruth } from './ejsSemanticGuard';
 
 // ═══ Kiểu dữ liệu ═════════════════════════════════════════════════════════
 
@@ -148,6 +149,28 @@ export function buildContextBlock(ctx: EjsAgentContext): string {
       `(Bạn hãy soát lại danh sách này, giữ/sửa/bổ sung theo hiểu biết về nội dung card.)`,
       ...top.map(s => `- "${s.name}" | đang ${ACTIVATION_LABEL[s.currentMode]} → đề xuất ${ACTIVATION_LABEL[s.suggested]} | ~${s.tokensSaved} token/lượt | ${s.reason}`),
       suggestions.length > top.length ? `… và ${suggestions.length - top.length} entry nữa cùng dạng` : '',
+    );
+  }
+
+  // ═══ (bugNeedFix/168 mục 4) GIÁ TRỊ KHỞI TẠO THẬT ═══
+  // Gốc sâu nhất của lỗi "defaults lệch": AI CHƯA BAO GIỜ được cho xem [initvar], nên nó đoán
+  // giá trị mặc định từ trí nhớ. Card Eldran v3 lộ rõ: cùng biến Phả Hệ, một entry đoán trúng
+  // ("Chưa thức tỉnh"), entry khác đoán trượt ("Chưa rõ"); rồi lại đem chính giá trị của Phả Hệ
+  // làm default cho Cảnh Giới (thật ra là "Chưa bề"). Đưa bảng sự thật vào ngữ cảnh thì AI viết
+  // đúng NGAY TỪ ĐẦU — rẻ hơn nhiều so với để bộ kiểm bắt rồi chạy vòng tự sửa.
+  const truth = readInitVarTruth(ctx.entries);
+  const truthKeys = Object.keys(truth);
+  if (truthKeys.length) {
+    parts.push(
+      ``,
+      `═══ GIÁ TRỊ KHỞI TẠO THẬT (đọc từ entry [initvar] — ĐÂY LÀ SỰ THẬT DUY NHẤT) ═══`,
+      `Mọi getvar(..., { defaults: X }) bạn viết PHẢI dùng ĐÚNG giá trị dưới đây cho biến đó.`,
+      `Sai một chữ là mọi phép so sánh chạy sai ngay từ lượt chơi đầu tiên.`,
+      ...truthKeys.slice(0, 80).map(k => {
+        const v = truth[k];
+        return `- ${k} = ${typeof v === 'string' ? `'${v}'` : String(v)}`;
+      }),
+      truthKeys.length > 80 ? `… và ${truthKeys.length - 80} biến nữa` : '',
     );
   }
 
@@ -469,6 +492,28 @@ export function createEjsDomain(ctx: EjsAgentContext): GoalAgentDomain<EjsDraft>
       // (Goal 28/07) Hai khối cùng BẬT một entry — có thể cố ý nên chỉ CẢNH BÁO, không chặn.
       for (const c of findActivationOverlaps(blocks)) {
         issues.push({ level: 'warning', code: c.code, message: c.message, where: c.where });
+      }
+
+      // ═══ (bugNeedFix/168 mục 4) KIỂM NGỮ NGHĨA — đối chiếu code với DỮ LIỆU THẬT của thẻ ═══
+      // Mọi phép kiểm ở trên chỉ soi cú pháp và API: code parse được không, gọi hàm có thật
+      // không, biến có trong schema không. Chúng KHÔNG biết code chạy ra kết quả đúng hay sai.
+      // Card Eldran v3 là bằng chứng: entry 43 hợp lệ hoàn hảo nhưng xếp nhân vật mới thành
+      // "Cao thủ" vì `"chưa bề".includes('a')`; entry 41 lấy defaults 'Chưa rõ' trong khi
+      // [initvar] ghi "Chưa thức tỉnh" nên điều kiện luôn đúng. Chỉ đối chiếu với [initvar] và
+      // enum thật mới bắt được. Mức 'error' để lọt vào vòng TỰ SỬA, không chỉ báo suông —
+      // message đã kèm sẵn câu sửa nên AI biết phải làm gì.
+      const semanticIssues = checkEjsSemantics({
+        blocks: items.map(d => ({ name: d.entryComment, code: d.code })),
+        entries: ctx.entries,
+        schema: ctx.schema ?? null,
+      });
+      for (const si of semanticIssues) {
+        issues.push({
+          level: si.level,
+          code: `ejs-semantic-${si.kind}`,
+          message: `${si.message} → ${si.fix}`,
+          where: si.entry ?? si.path,
+        });
       }
 
       return issues;

@@ -8,7 +8,7 @@
  * Bước 3: xác nhận — pipeline sẽ áp ĐÚNG 100% schema + theme đã chốt (khoá ở bước mvuzod/game_ui).
  * Trạng thái nằm trong config (persist) → thoát giữa chừng, vào lại đúng chỗ.
  */
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { X, Wand2, RotateCcw, ChevronLeft, ChevronRight, Loader2, Check, Sparkles, Maximize2, Minimize2 } from 'lucide-react';
 import { useAutoCreatorStore } from '../../store/autoCreatorStore';
 import { useSettingsStore } from '../../store/settingsStore';
@@ -125,11 +125,30 @@ export function PreviewTunerModal({ open, onClose, onStart }: Props) {
     [idea],
   );
 
-  const rows = useMemo(() => (tuning ? schemaToRows(tuning.schema) : []), [tuning]);
-  const setRows = useCallback((next: VarRow[]) => {
-    const { schema } = validateTunedSchema(rowsToSchema(next));
-    useAutoCreatorStore.getState().setTuning({ schema, confirmed: false });
-  }, []);
+  const [draftRows, setDraftRows] = useState<VarRow[] | null>(null);
+  const derivedRows = useMemo(() => (tuning ? schemaToRows(tuning.schema) : []), [tuning]);
+  // Đang gõ thì bản nháp là nguồn sự thật; ngừng gõ, nháp được ghi về store rồi xoá.
+  const rows = draftRows ?? derivedRows;
+
+  /**
+   * (bug 159-1) BẢN NHÁP CỤC BỘ — không chuẩn hoá cả cây schema sau mỗi ký tự.
+   *
+   * Bản cũ mỗi lần gõ là chạy `rowsToSchema → normalizeMVUZODSchema → setTuning`. Hai hệ quả:
+   *   • normalizeSchema thấy `label` rỗng thì SUY LẠI từ path (dòng 41 của nó) — nên xoá trắng
+   *     ô tên là tên tự nhảy về, không xoá nổi để gõ tên mới;
+   *   • chuẩn hoá lại toàn bộ cây cho mỗi ký tự, thừa và dễ nghiền dữ liệu đang gõ dở.
+   * Nay bảng giữ bản nháp, chỉ ghi về store khi người dùng NGỪNG GÕ (400ms).
+   */
+  const setRows = useCallback((next: VarRow[]) => setDraftRows(next), []);
+  useEffect(() => {
+    if (!draftRows) return;
+    const t = setTimeout(() => {
+      const { schema } = validateTunedSchema(rowsToSchema(draftRows));
+      useAutoCreatorStore.getState().setTuning({ schema, confirmed: false });
+      setDraftRows(null);   // xong thì trả quyền cho schema trong store
+    }, 400);
+    return () => clearTimeout(t);
+  }, [draftRows]);
 
   // Bước 2 dựng thuần máy — đổi schema là preview tự đổi.
   // (bugNeedFix/145) aiNonce nằm trong deps để khi AI sinh xong theme mới thì danh sách phương

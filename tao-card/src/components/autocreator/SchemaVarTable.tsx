@@ -20,7 +20,7 @@
  *   object       → "cha/con"    : biến thật, có địa chỉ riêng để đọc/ghi.
  * Dùng nhầm quy ước là biến vừa thêm vào nhóm biến mất lúc ghi ngược về schema.
  */
-import { Trash2, Plus, CornerDownRight } from 'lucide-react';
+import { Trash2, Plus, CornerDownRight, ChevronUp, ChevronDown } from 'lucide-react';
 import type { MVUZODField } from '../../types/mvuzod.types';
 
 export type VarType = MVUZODField['type'];
@@ -106,6 +106,22 @@ export function SchemaVarTable({ rows, onChange, nested = false }: Props) {
     patch(i, p);
   };
 
+  /**
+   * (bug 159-2) SẮP XẾP LẠI THỨ TỰ.
+   * Dùng nút lên/xuống chứ không kéo-thả HTML5: bảng này lồng nhau nhiều cấp và có bảng con,
+   * kéo-thả qua biên giữa các cấp sẽ sinh ra một mớ ca nhập nhằng ("thả vào giữa hai cấp" nghĩa
+   * là gì?) mà chẳng ai dùng tới. Nút lên/xuống thì rõ nghĩa, dùng được bằng bàn phím, và cho ra
+   * ĐÚNG cái user cần: đổi thứ tự trong CÙNG một cấp — thứ tự này quyết định insertion_order và
+   * thứ tự hiển thị của giao diện sinh ra.
+   */
+  const move = (i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    if (j < 0 || j >= rows.length) return;
+    const next = [...rows];
+    [next[i], next[j]] = [next[j], next[i]];
+    onChange(next);
+  };
+
   const addChild = (i: number) => {
     const r = rows[i];
     patch(i, { children: [...(r.children ?? []), makeChild(r.path, `Trường ${(r.children?.length ?? 0) + 1}`, r.type)] });
@@ -125,7 +141,13 @@ export function SchemaVarTable({ rows, onChange, nested = false }: Props) {
       {rows.map((v, i) => {
         const enums = (v.enumValues ?? '').split(',').map(s => s.trim()).filter(Boolean);
         return (
-          <div key={`${v.path}#${i}`} className={`rounded-lg border border-border ${nested ? 'p-1.5 bg-muted/10' : 'p-2'} space-y-1.5`}>
+          // (bug 159-1) KEY PHẢI ỔN ĐỊNH KHI ĐỔI TÊN.
+          // Bản cũ dùng `${v.path}#${i}` — mà rename() đổi path ngay khi gõ MỘT ký tự, nên key
+          // đổi theo, React tháo phần tử cũ dựng phần tử mới, ô input mất focus. Đúng cảnh user
+          // báo: gõ một chữ là phải click lại. Các cột khác không đụng path nên không bị.
+          // Dùng chỉ số trong cấp hiện tại: input ở đây là controlled (value lấy từ props) nên
+          // key theo vị trí là an toàn, và nó cũng chính là thứ cần cho việc sắp xếp lại.
+          <div key={i} className={`rounded-lg border border-border ${nested ? 'p-1.5 bg-muted/10' : 'p-2'} space-y-1.5`}>
             <div className="grid grid-cols-12 gap-1.5 items-center text-[11px]">
               {/* 1 — Tên biến */}
               <div className="col-span-3 flex items-center gap-1">
@@ -183,6 +205,14 @@ export function SchemaVarTable({ rows, onChange, nested = false }: Props) {
               <div className="col-span-3 flex items-center gap-1">
                 <input className="flex-1 min-w-0 px-1 py-1 rounded border border-border bg-card" placeholder="quy tắc riêng cho biến này…"
                   value={v.rule} onChange={e => patch(i, { rule: e.target.value })} />
+                <button className="p-0.5 rounded hover:bg-muted shrink-0 disabled:opacity-25" title="Đưa lên trên"
+                  disabled={i === 0} onClick={() => move(i, -1)}>
+                  <ChevronUp className="w-3.5 h-3.5" />
+                </button>
+                <button className="p-0.5 rounded hover:bg-muted shrink-0 disabled:opacity-25" title="Đưa xuống dưới"
+                  disabled={i === rows.length - 1} onClick={() => move(i, 1)}>
+                  <ChevronDown className="w-3.5 h-3.5" />
+                </button>
                 <button className="p-1 rounded text-red-400 hover:bg-red-500/10 shrink-0" title="Xoá biến này"
                   onClick={() => onChange(rows.filter((_, j) => j !== i))}>
                   <Trash2 className="w-3.5 h-3.5" />

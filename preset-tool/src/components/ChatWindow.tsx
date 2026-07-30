@@ -7,6 +7,11 @@ import {
   loadPresetLibrary, savePresetLibrary, upsertPreset, buildPresetLibraryContext,
   type ImportedPreset,
 } from '../utils/presetLibrary';
+// (bugNeedFix/169) Học từ chính các preset hoàn thiện user đã nhập vào DANH SÁCH DỰ ÁN.
+import {
+  buildExemplarContext, compareToExemplars, profileProject, isExemplar,
+  buildSupplementRequest, buildCloneRequest, FEATURE_LABEL,
+} from '../utils/presetExemplars';
 import { PromptBlock, RegexScript, ChatMessage } from '../types';
 import { Send, RefreshCw, Sparkles, Plus, Calendar, Code, Paperclip, X, FileJson } from 'lucide-react';
 import { t, fmt } from '../i18n';
@@ -47,9 +52,10 @@ interface ChatWindowProps {
 }
 
 export const ChatWindow: React.FC<ChatWindowProps> = ({ onOpenSettings }) => {
-  const { 
-    chatHistory, 
-    addChatMessage, 
+  const {
+    chatHistory,
+    addChatMessage,
+    projects,
     activeProjectId,
     activeProject,
     settings, 
@@ -67,6 +73,20 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ onOpenSettings }) => {
   const abortRef = useRef<AbortController | null>(null); // nút Dừng: hủy call AI đang chạy
   const [streamingText, setStreamingText] = useState('');
   const [attachedFile, setAttachedFile] = useState<{ name: string; content: string; summary: string } | null>(null);
+  // (bugNeedFix/169) Preset MẪU = các dự án KHÁC đã đủ đầy đặn để dạy được điều gì đó.
+  // Tự nhận, không bắt user đánh dấu: dự án nháp 2-3 khối bị loại bởi isExemplar, vì lấy nháp
+  // làm mẫu còn tệ hơn không có mẫu.
+  const exemplars = React.useMemo(
+    () => projects.filter(p => p.id !== activeProjectId && isExemplar(profileProject(p))),
+    [projects, activeProjectId],
+  );
+  const gap = React.useMemo(
+    () => compareToExemplars(activeProject, exemplars),
+    [activeProject, exemplars],
+  );
+  const [showGap, setShowGap] = useState(false);
+  const [cloneTheme, setCloneTheme] = useState('');
+
   // (bug 139) Thư viện preset mẫu — nạp một lần, MỌI lượt chat sau tự có ngữ cảnh.
   const [presetLib, setPresetLib] = useState<ImportedPreset[]>(() => loadPresetLibrary());
   const updateLib = (next: ImportedPreset[]) => { setPresetLib(next); savePresetLibrary(next); };
@@ -178,7 +198,13 @@ ${textToSend}`;
       // (bug 139) Thư viện preset nạp sẵn đi kèm MỌI lượt chat: preset được nhắc tên/ghim gửi
       // nguyên văn, còn lại gửi tóm tắt (cache) — user chỉ cần nói "sửa preset A", "gộp A với B".
       const libContext = buildPresetLibraryContext(presetLib, userText);
-      const projectContext = buildProjectContext(activeProject, actionLog) + (libContext ? `\n\n${libContext}` : '');
+      // (bugNeedFix/169) Các preset HOÀN THIỆN user đã nhập (Ako, Tawa…) nằm ở danh sách DỰ ÁN,
+      // không thuộc thư viện kéo-thả ở trên — trước đây AI không hề nhìn thấy chúng, nên bảo
+      // "tạo preset đầy đủ như Ako" là nó viết theo trí nhớ chung chung. Nay đi kèm mọi lượt chat.
+      const exContext = buildExemplarContext(exemplars, userText, gap);
+      const projectContext = buildProjectContext(activeProject, actionLog)
+        + (exContext ? `\n\n${exContext}` : '')
+        + (libContext ? `\n\n${libContext}` : '');
       const refs = resolveReferences(userText, activeProject, actionLog);
       const referencedContext = buildReferencedContext(refs);
 
@@ -409,6 +435,80 @@ ${textToSend}`;
 
         <div ref={chatEndRef} />
       </div>
+
+      {/* (bugNeedFix/169) HỌC TỪ PRESET MẪU ĐÃ NHẬP.
+          User: "bổ sung cho AI có thể nhìn ví dụ từ những preset hoàn thiện đã nhập… nếu chưa
+          đủ thì vẫn có thể gọi bổ sung hoặc tạo mới dựa trên những preset đã nhập."
+          Ako/Tawa nằm ở danh sách DỰ ÁN nên trước đây nằm ngoài tầm nhìn của AI hoàn toàn.
+          Nay: (1) chúng đi kèm mọi lượt chat, (2) có thước đo "đã đầy đủ chưa" so với chính
+          chúng, (3) hai nút nhờ dựng sẵn từ kết quả đo. */}
+      {exemplars.length > 0 && (
+        <div className="px-4 py-1.5 border-t border-theme-border">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <button
+              onClick={() => setShowGap(v => !v)}
+              className="text-[10px] px-2 py-0.5 rounded border border-theme-border hover:bg-white/5 flex items-center gap-1"
+              title={`AI đang lấy ${exemplars.length} preset này làm chuẩn về độ đầy đủ. Bấm để xem preset hiện tại còn thiếu gì so với chúng.`}
+            >
+              🎓 Học từ mẫu ({exemplars.length})
+              {gap.missingGroups.length > 0 && (
+                <span className="text-amber-300">· thiếu {gap.missingGroups.length} nhóm</span>
+              )}
+            </button>
+            {exemplars.map(p => (
+              <span key={p.id}
+                className="text-[10px] px-1.5 py-0.5 rounded-full border border-theme-border text-theme-muted"
+                title={`Nhắc tên "${p.name}" trong câu hỏi để AI đọc nguyên văn các khối của nó.`}
+              >📘 {p.name}</span>
+            ))}
+          </div>
+
+          {showGap && (
+            <div className="mt-1.5 rounded-lg border border-theme-border bg-black/20 p-2 space-y-1.5">
+              <p className="text-[10px] leading-relaxed text-gray-300">{gap.verdict}</p>
+
+              {(gap.missingGroups.length > 0 || gap.thinGroups.length > 0) && (
+                <div className="flex flex-wrap gap-1">
+                  {gap.missingGroups.map(g => (
+                    <span key={g} className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300"
+                      title="Đa số preset mẫu đều có nhóm này, preset của bạn chưa có khối nào.">
+                      thiếu: {FEATURE_LABEL[g]}
+                    </span>
+                  ))}
+                  {gap.thinGroups.map(g => (
+                    <span key={g} className="text-[9px] px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300"
+                      title="Có rồi nhưng ít khối hơn hẳn so với preset mẫu.">
+                      mỏng: {FEATURE_LABEL[g]}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                <button
+                  disabled={isSending}
+                  onClick={() => { setShowGap(false); void handleSend(buildSupplementRequest(gap)); }}
+                  className="text-[10px] px-2 py-1 rounded bg-emerald-600/80 hover:bg-emerald-600 text-white disabled:opacity-50"
+                  title="Nhờ AI viết thêm đúng những khối còn thiếu, GIỮ NGUYÊN các khối bạn đã có."
+                >✚ Gọi bổ sung phần còn thiếu</button>
+
+                <input
+                  value={cloneTheme}
+                  onChange={e => setCloneTheme(e.target.value)}
+                  placeholder="chủ đề preset mới (để trống = dùng chung)"
+                  className="text-[10px] px-2 py-1 rounded bg-theme-panel border border-theme-border flex-1 min-w-[140px] placeholder:text-theme-muted"
+                />
+                <button
+                  disabled={isSending}
+                  onClick={() => { setShowGap(false); void handleSend(buildCloneRequest(gap.exemplarNames, cloneTheme)); }}
+                  className="text-[10px] px-2 py-1 rounded border border-theme-border hover:bg-white/5 disabled:opacity-50"
+                  title="Tạo preset MỚI hoàn chỉnh, lấy độ đầy đủ của các preset mẫu làm chuẩn. Nội dung viết mới, không chép câu chữ của mẫu."
+                >✨ Tạo mới theo chuẩn mẫu</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Attached file indicator */}
       {/* (bug 139) Thư viện preset mẫu — nạp nhiều file .json/.txt/.yaml, MỌI lượt chat sau

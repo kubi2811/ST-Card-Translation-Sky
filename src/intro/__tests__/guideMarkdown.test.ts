@@ -77,16 +77,12 @@ describe('(bug 157) mục lục + tìm kiếm', () => {
 describe('(bug 157) USER_GUIDE.md thật', () => {
   const MD = readFileSync(resolve(__dirname, '../../../USER_GUIDE.md'), 'utf-8');
 
-  it('có mục cho MỌI app trong bộ', () => {
-    for (const app of ['Dịch Card', 'Dịch Script', 'Dịch Preset', 'Tạo Card', 'Tạo Preset', 'Mod Card', 'Web Crawler', 'Trích Card']) {
-      expect(MD, `thiếu mục hướng dẫn cho ${app}`).toContain(app);
-    }
-  });
-
-  it('đủ dày để làm theo được, không phải một dòng mỗi app', () => {
-    expect(extractHeadings(MD).length, 'quá ít mục').toBeGreaterThan(10);
-    expect(MD.length).toBeGreaterThan(4000);
-  });
+  // Phần "tài liệu có phủ hết app/tính năng không" đã chuyển sang userGuideCoverage.test.ts và
+  // siết chặt hơn: danh sách app lấy thẳng từ FLOWS (không chép tay, nên thêm app mới là đỏ), đòi
+  // TIÊU ĐỀ chứ không chỉ "có nhắc tên", cộng danh sách từ khoá tính năng. Hai test cũ ở đây đã bị
+  // thay hẳn — để lại thì thành hai nơi canh cùng một việc ở hai mức khắt khe khác nhau, sửa nhầm
+  // chỗ là tưởng đã siết mà thực ra chưa.
+  // Ở lại đây chỉ những gì thuộc về BỘ RENDER, vì đó là thứ file này kiểm.
 
   it('id tiêu đề không trùng nhau (mục lục nhảy đúng chỗ)', () => {
     const ids = extractHeadings(MD).map(h => h.id);

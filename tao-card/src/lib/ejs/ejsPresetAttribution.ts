@@ -55,14 +55,20 @@ export function inferPresetFromRow(row: EjsPlanRow): string | null {
 export function attributePlanRows(rows: EjsPlanRow[], activePresetIds: string[]): EjsPlanRow[] {
   const ids = activePresetIds.filter(Boolean);
 
-  // Đường 1: chạy đúng MỘT preset lẻ → mọi dòng đều của nó, không cần suy luận.
-  if (ids.length === 1 && ids[0] !== 'full-suite') {
-    const presetTitle = titleOf(ids[0]);
-    return rows.map((r) => ({ ...r, presetId: ids[0], presetTitle }));
-  }
-
-  // Đường 2: gói tổng (hoặc nhiều preset cùng lúc) → suy từ loại thay đổi, không chắc thì để trống.
   return rows.map((r) => {
+    // Đường 0 (bug 168 mục 2) — AI TỰ KHAI, ưu tiên tuyệt đối.
+    // Prompt đã dạy AI đọc dấu [preset: mã] ở đầu mỗi mục và khai lại theo từng dòng, và
+    // parseRichPlan chỉ nhận mã CÓ THẬT trong yêu cầu. Lời khai đó đáng tin hơn mọi suy luận
+    // phía client, nên tới đây thì giữ nguyên — trước đây nhánh dưới ghi đè undefined lên nó,
+    // đúng là lý do phần lớn dòng về lại trắng nhãn.
+    if (r.presetId) return { ...r, presetTitle: r.presetTitle || titleOf(r.presetId) };
+
+    // Đường 1: chạy đúng MỘT preset lẻ → mọi dòng còn lại đều của nó, không cần suy luận.
+    if (ids.length === 1 && ids[0] !== 'full-suite') {
+      return { ...r, presetId: ids[0], presetTitle: titleOf(ids[0]) };
+    }
+
+    // Đường 2: gói tổng (hoặc nhiều preset cùng lúc) → suy từ loại thay đổi, không chắc thì để trống.
     const guess = inferPresetFromRow(r);
     if (!guess) return { ...r, presetId: undefined, presetTitle: undefined };
     // Chọn nhiều preset lẻ mà loại thay đổi lại không thuộc preset nào đã chọn thì đừng gán —

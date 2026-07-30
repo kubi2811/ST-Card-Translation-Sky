@@ -749,6 +749,21 @@ function buildFullSuite(ctx: PresetCardContext): QuickPresetResult {
     parts.push(`━━ ${i + 1}. ${p.title.toUpperCase()} [preset: ${p.id}] ━━`, r.goal, '');
   });
 
+  // (bug 168 mục 3) KHAI LUÔN PHẦN BỎ, NGAY TRONG YÊU CẦU.
+  // Trước đây preset bị chặn biến mất hẳn khỏi goal: lời giải thích chỉ nằm trong notes của
+  // preset, còn bảng kế hoạch thì không hề biết là đã từng có 19 mục. Cộng lại thành đúng thứ
+  // user đếm được — "chỉ thấy 13/19" mà không chỗ nào nói 6 cái kia đi đâu.
+  // Nay dấu [preset-skip: mã] nằm ngay trong yêu cầu, nên bộ đối chiếu tính đủ 19 và mọi mục
+  // vắng mặt đều có sẵn lý do — máy đọc được, user cũng đọc được.
+  if (skipped.length) {
+    parts.push(
+      '━━ CÁC MỤC KHÔNG ÁP CHO CARD NÀY (đã xét, không phải bỏ sót) ━━',
+      ...skipped.map(s => `[preset-skip: ${s.id}] ${s.title} — bỏ vì ${s.reason}`),
+      'Không cần làm các mục trên. Liệt kê ở đây để bạn biết chúng ĐÃ được xét.',
+      '',
+    );
+  }
+
   // (bug 162 mục 3.2) Bao phủ TOÀN BỘ entry, trừ đúng bộ máy MVU.
   parts.push(
     '━━ PHẠM VI RÀ SOÁT (bắt buộc) ━━',

@@ -8,11 +8,24 @@
  * khi user rời tab, React vứt state, kế hoạch bay mất — mà lên kế hoạch là một call AI thật,
  * mất là mất tiền. Nay state nằm ở store ngoài vòng đời component; panel chỉ đọc/ghi.
  *
- * Cố ý KHÔNG persist xuống localStorage: kế hoạch gắn chặt với card đang mở, khôi phục lại ở
- * phiên sau mà card đã khác thì mọi tên entry trong bảng đều trỏ vào hư không — nguy hiểm hơn
- * là mất. Sống trong phiên là đủ đúng với điều user cần.
+ * ─── (bugNeedFix/168 mục 1) NAY CÓ PERSIST, THEO TỪNG CARD ───
+ * User: "Bảng kế hoạch bị mất khi F5… mỗi Card chỉ lưu dữ liệu của riêng mình, kể cả sau khi F5
+ * — không được mất, không được lẫn sang Card khác."
+ *
+ * Lý lẽ cũ ở trên (không persist vì kế hoạch trỏ vào entry của card khác) chỉ đúng khi CHỈ CÓ
+ * MỘT ngăn dùng chung. Giải đúng là ngăn riêng theo card — y hệt bug 155 đã làm cho Auto Creator:
+ * `planByProject[projectId]`. Mỗi card lấy đúng ngăn của mình, không đụng ngăn card khác, nên
+ * vừa sống qua F5 vừa không thể lẫn.
+ *
+ * Khoá là projectId (uuid), KHÔNG phải tên card: mọi card mới đều tên "New Character", khoá theo
+ * tên là ba card mới dùng chung một ngăn.
+ *
+ * Hai thứ cố ý KHÔNG lưu: nhật ký chạy (drafts/progress/beforeAfter) và thông tin hoàn tác
+ * (undo). Undo trỏ vào id entry của phiên trước; khôi phục nó sau F5 là mời user bấm hoàn tác
+ * lên những entry có thể đã khác — hỏng hơn là không có.
  */
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type { EjsRichPlan } from '../lib/ejs/ejsPlanModel';
 import type { EjsDraft } from '../lib/ejs/ejsAgent';
 import type { SimulationReport } from '../lib/ejs/ejsTestMode';
@@ -45,6 +58,19 @@ export interface BeforeAfterItem {
   after: string;
 }
 
+/**
+ * Phần kế hoạch ĐÁNG GIỮ QUA F5 của một card.
+ * Chỉ gồm thứ tốn tiền hoặc tốn công gõ: yêu cầu, bảng kế hoạch (một call AI thật), và các
+ * quyết định duyệt/từ chối user đã bấm tay. Nhật ký chạy và undo cố ý bỏ ngoài.
+ */
+export interface PersistedPlan {
+  goal: string;
+  plan: EjsRichPlan | null;
+  decisions: Record<string, RowDecision>;
+  /** 'review' hoặc 'idle' — hai pha chạy dở không bao giờ được khôi phục (xem rehydrate). */
+  phase: EjsPhase;
+}
+
 interface EjsStudioState {
   goal: string;
   phase: EjsPhase;
@@ -63,6 +89,11 @@ interface EjsStudioState {
   runSummary: { writes: number; blockedReasons: string[] } | null;
   /** Card mà kế hoạch này thuộc về — đổi card thì kế hoạch cũ vô nghĩa. */
   cardKey: string;
+  /**
+   * (bug 168 mục 1) Ngăn riêng của TỪNG card: projectId → phần đáng giữ của kế hoạch.
+   * Đây là thứ được persist; `plan`/`goal`/`decisions` ở trên chỉ là bản đang mở.
+   */
+  planByProject: Record<string, PersistedPlan>;
 
   /** (Goal 28/07) Trước/sau từng đối tượng đã đổi trong lượt chạy. */
   beforeAfter: BeforeAfterItem[];
@@ -75,7 +106,7 @@ interface EjsStudioState {
 
   setGoal: (v: string) => void;
   setPhase: (p: EjsPhase) => void;
-  setPlan: (p: EjsRichPlan | null, cardKey: string) => void;
+  setPlan: (p: EjsRichPlan | null, cardKey: string | null) => void;
   setDecision: (rowId: string, d: RowDecision) => void;
   setAllDecisions: (d: RowDecision) => void;
   /** (Goal 28/07) Từ chối/đồng ý CẢ NHÓM — chỉ đụng đúng các row trong nhóm, không lan. */
@@ -95,8 +126,12 @@ interface EjsStudioState {
   reset: () => void;
   /** Bỏ kết quả chạy nhưng GIỮ kế hoạch, để user chạy lại sau khi sửa lựa chọn. */
   resetRunOnly: () => void;
-  /** Đổi card → kế hoạch cũ trỏ vào entry của card khác, phải bỏ. */
-  ensureCard: (cardKey: string) => void;
+  /**
+   * Gắn studio vào ĐÚNG card đang mở: cất bảng kế hoạch của card cũ vào ngăn của nó, rồi lấy
+   * ngăn của card mới ra (chưa có thì trống). Truyền null (lúc app còn đang khởi động, chưa
+   * biết card nào) thì KHÔNG làm gì — không thì mọi lần bootstrap là một lần xoá kế hoạch.
+   */
+  ensureCard: (projectId: string | null) => void;
 
   acceptedIds: () => Set<string>;
 }
@@ -117,16 +152,27 @@ const EMPTY = {
   simReport: null as SimulationReport | null,
 };
 
-export const useEjsStudioStore = create<EjsStudioState>((set, get) => ({
+/** Rút phần đáng giữ từ state hiện tại. */
+const snapshot = (s: EjsStudioState): PersistedPlan => ({
+  goal: s.goal,
+  plan: s.plan,
+  decisions: s.decisions,
+  // Kế hoạch đã lên xong thì để user về đúng chỗ đang duyệt; còn lại coi như chưa bắt đầu.
+  phase: s.plan ? 'review' : 'idle',
+});
+
+export const useEjsStudioStore = create<EjsStudioState>()(persist((set, get) => ({
   ...EMPTY,
   cardKey: '',
+  planByProject: {},
 
   setGoal: (v) => set({ goal: v }),
   setPhase: (p) => set({ phase: p }),
 
-  setPlan: (p, cardKey) => set({
+  setPlan: (p, cardKey) => set(s => ({
     plan: p,
-    cardKey,
+    // cardKey null nghĩa là chưa biết card nào (chưa lưu project) — giữ khoá cũ, đừng xoá.
+    cardKey: cardKey || s.cardKey,
     // Kế hoạch mới → mọi dòng bắt đầu ở trạng thái ĐỒNG Ý; user chỉ cần bấm những dòng muốn bỏ.
     decisions: {},
     drafts: [],
@@ -136,7 +182,7 @@ export const useEjsStudioStore = create<EjsStudioState>((set, get) => ({
     beforeAfter: [],
     testValues: {},
     simReport: null,
-  }),
+  })),
 
   setDecision: (rowId, d) => set(s => ({ decisions: { ...s.decisions, [rowId]: d } })),
 
@@ -165,17 +211,37 @@ export const useEjsStudioStore = create<EjsStudioState>((set, get) => ({
   setUndo: (u) => set({ undo: u }),
   setRunSummary: (r) => set({ runSummary: r }),
 
-  reset: () => set({ ...EMPTY }),
+  // "Làm lại từ đầu" phải xoá cả NGĂN ĐÃ LƯU của card này — không thì F5 xong kế hoạch vừa
+  // xoá lại hiện ra, đúng kiểu bug khó chịu nhất.
+  reset: () => set(s => {
+    const next = { ...s.planByProject };
+    if (s.cardKey) delete next[s.cardKey];
+    return { ...EMPTY, planByProject: next };
+  }),
 
   resetRunOnly: () => set({
     drafts: [], progress: [], undo: null, error: null, phase: 'review',
     beforeAfter: [], simReport: null,
   }),
 
-  ensureCard: (cardKey) => {
-    if (get().cardKey && get().cardKey !== cardKey) set({ ...EMPTY, cardKey });
-    else if (!get().cardKey) set({ cardKey });
-  },
+  ensureCard: (projectId) => set(s => {
+    // Chưa biết card nào (app đang khởi động) ⇒ giữ nguyên, tuyệt đối không xoá.
+    if (!projectId) return {};
+    if (s.cardKey === projectId) return {};
+
+    // Cất bảng của card cũ vào ngăn của nó trước khi rời đi.
+    const saved = s.cardKey && (s.plan || s.goal.trim())
+      ? { ...s.planByProject, [s.cardKey]: snapshot(s) }
+      : s.planByProject;
+
+    const mine = saved[projectId];
+    return {
+      ...EMPTY,
+      planByProject: saved,
+      cardKey: projectId,
+      ...(mine ? { goal: mine.goal, plan: mine.plan, decisions: mine.decisions, phase: mine.phase } : {}),
+    };
+  }),
 
   acceptedIds: () => {
     const { plan, decisions } = get();
@@ -184,5 +250,26 @@ export const useEjsStudioStore = create<EjsStudioState>((set, get) => ({
       if (decisions[r.id] !== 'rejected') out.add(r.id);   // mặc định nhận
     }
     return out;
+  },
+}), {
+  name: 'tcs.ejsstudio.v1',
+  // Chỉ giữ thứ tốn tiền/tốn công: bảng kế hoạch + yêu cầu + quyết định, theo TỪNG card.
+  // Nhật ký chạy, bản nháp, undo, kết quả mô phỏng đều là phù du — lưu chúng chỉ tạo ảo giác
+  // rằng lượt chạy trước vẫn còn nguyên trong khi thẻ có thể đã đổi.
+  partialize: (s) => ({
+    planByProject: s.planByProject,
+    cardKey: s.cardKey,
+    goal: s.goal,
+    plan: s.plan,
+    decisions: s.decisions,
+    phase: s.phase,
+  }),
+  onRehydrateStorage: () => (s) => {
+    // F5 GIỮA LÚC ĐANG CHẠY: không còn call nào bay nữa, nhưng pha vẫn là 'planning'/'running'
+    // ⇒ nút bị khoá vĩnh viễn, user tưởng treo. Hạ về đúng chỗ dùng được.
+    if (!s) return;
+    if (s.phase === 'planning' || s.phase === 'running') {
+      s.phase = s.plan ? 'review' : 'idle';
+    }
   },
 }));

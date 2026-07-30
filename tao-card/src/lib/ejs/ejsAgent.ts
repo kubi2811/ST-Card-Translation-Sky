@@ -34,6 +34,8 @@ import {
 } from './ejsPlanModel';
 import { findCollisions, autopatchCollisions, findActivationOverlaps, scanKeywordOverlap, type EjsBlock } from './ejsCollision';
 import { checkEjsSemantics, readInitVarTruth } from './ejsSemanticGuard';
+import { extractRequestedPresets, buildPresetCoverage } from './ejsPresetCoverage';
+import { QUICK_PRESETS } from './ejsQuickPresets';
 
 // ═══ Kiểu dữ liệu ═════════════════════════════════════════════════════════
 
@@ -217,6 +219,15 @@ ${STPT_API_PROMPT_BLOCK}
    "splitInto": từng entry con + chế độ + điều kiện kích hoạt của nó. KHÔNG tách nội dung
    luôn đi cùng nhau. Việc tách chỉ được thực hiện sau khi user duyệt dòng này — tham chiếu
    getwi tới entry gốc sẽ được máy tự vá theo các entry mới.
+10. NHÃN PRESET — BẮT BUỘC KHAI, KHÔNG ĐƯỢC BỎ TRỐNG. Yêu cầu do "Preset nhanh" dựng sẽ có
+   dấu [preset: mã] ở đầu mỗi mục (vd "━━ 3. TÁCH ENTRY GỘP [preset: split-bloated] ━━").
+   Mỗi dòng bạn sinh ra PHẢI khai "presetId" đúng mã của mục đã đẻ ra nó. Dòng do bạn tự nghĩ
+   thêm, không thuộc mục nào, thì để "presetId": null — KHÔNG được đoán bừa.
+11. PHỦ ĐỦ MỌI MỤC. Mỗi dấu [preset: mã] trong yêu cầu phải cho ra ÍT NHẤT MỘT dòng mang mã đó.
+   Nếu card không có gì để làm cho một mục (vd đòi tách entry gộp nhưng card không có entry nào
+   bị gộp), thì KHÔNG được im lặng bỏ qua: thêm một câu vào "notes" theo đúng khuôn
+   "[preset: mã] bỏ vì <lý do cụ thể dựa trên card>". Thiếu dòng mà không có câu giải thích là
+   kế hoạch hỏng — máy sẽ báo đỏ cho user.
 
 Trả về DUY NHẤT JSON:
 {
@@ -226,6 +237,7 @@ Trả về DUY NHẤT JSON:
       "id": "r1",
       "action": "create_ejs" | "reclassify" | "edit_content" | "edit_character" | "split_entry",
       "target": "lorebook" | "character",
+      "presetId": "mã trong dấu [preset: …] của mục đã đẻ ra dòng này, hoặc null nếu dòng tự nghĩ thêm",
       "name": "TÊN CHÍNH XÁC của entry/trường",
       "proposedMode": "constant" | "keyword" | "conditional" | "disabled" | null,
       "proposal": "một câu: sẽ làm gì với dòng này",
@@ -240,14 +252,17 @@ Trả về DUY NHẤT JSON:
   "notes": ["lưu ý cho user nếu có"]
 }
 Dòng chỉ đổi chế độ kích hoạt (action "reclassify") thì "requirement" để chuỗi rỗng.
-"splitInto" CHỈ dùng cho action "split_entry" (≥ 2 phần); action khác bỏ key này.`;
+"splitInto" CHỈ dùng cho action "split_entry" (≥ 2 phần); action khác bỏ key này.
+"notes" là nơi ghi các câu "[preset: mã] bỏ vì …" của nguyên tắc 11.`;
 
 // ═══ Kế hoạch chi tiết ════════════════════════════════════════════════════
+
+const presetTitleOf = (id: string): string => QUICK_PRESETS.find(p => p.id === id)?.title ?? id;
 
 const ACTIONS: PlanAction[] = ['create_ejs', 'reclassify', 'edit_content', 'edit_character', 'split_entry'];
 const MODES: ActivationMode[] = ['constant', 'keyword', 'conditional', 'disabled'];
 
-function parseRichPlan(raw: string, ctx: EjsAgentContext): EjsRichPlan {
+function parseRichPlan(raw: string, ctx: EjsAgentContext, goal = ''): EjsRichPlan {
   const p = JSON.parse(extractJson(raw)) as {
     scope?: string;
     rows?: Array<Record<string, unknown>>;
@@ -257,6 +272,9 @@ function parseRichPlan(raw: string, ctx: EjsAgentContext): EjsRichPlan {
   const byName = new Map<string, LorebookEntry>();
   for (const e of ctx.entries) byName.set(String(e.comment || `#${e.id}`).trim().toLowerCase(), e);
   const warnings: string[] = [];
+  // (bug 168 mục 2+3) Những preset mà YÊU CẦU đã đặt hàng — dùng để (a) chỉ nhận mã có thật,
+  // (b) cuối hàm đối chiếu xem kế hoạch có bỏ sót mục nào không.
+  const requestedPresets = extractRequestedPresets(goal);
 
   const rows: EjsPlanRow[] = (p.rows ?? [])
     .filter(r => r && String(r.name ?? '').trim())
@@ -280,9 +298,16 @@ function parseRichPlan(raw: string, ctx: EjsAgentContext): EjsRichPlan {
             }))
         : undefined;
 
+      // (bug 168 mục 2) Nhãn preset: ưu tiên lời AI KHAI (nó biết mục nào đẻ ra dòng nào),
+      // và chỉ nhận mã có thật trong yêu cầu — AI bịa mã thì bỏ, để bước suy luận lo tiếp.
+      const claimed = String(r.presetId ?? '').trim().toLowerCase();
+      const presetId = claimed && requestedPresets.includes(claimed) ? claimed : undefined;
+
       const row: EjsPlanRow = {
         id: String(r.id || `r${i + 1}`),
         action, target, name,
+        presetId,
+        presetTitle: presetId ? presetTitleOf(presetId) : undefined,
         currentMode,
         proposedMode: proposed,
         proposal: String(r.proposal ?? '').trim() || '(AI không mô tả)',
@@ -354,13 +379,22 @@ function parseRichPlan(raw: string, ctx: EjsAgentContext): EjsRichPlan {
   // sạch thì thôi (không nặn lỗi để có cái vá).
   warnings.push(...scanKeywordOverlap(ctx.entries));
 
+  const notes = Array.isArray(p.notes) ? p.notes.filter(Boolean).map(String) : [];
+
+  // (bug 168 mục 3) ĐỐI CHIẾU PHỦ PRESET. Trước đây không có bước này: gói tổng đặt hàng 19 mục,
+  // AI trả về bao nhiêu thì lấy bấy nhiêu, thiếu 6 mục vẫn hiện "kế hoạch xong" — đúng cảnh user
+  // gặp. Giờ mọi mục vắng mặt đều phải có chữ giải thích, không thì báo đỏ.
+  const presetCoverage = buildPresetCoverage(goal, rows, notes);
+  warnings.push(...presetCoverage.warnings);
+
   const codeRows = rows.filter(r => r.action !== 'split_entry' && r.requirement).length;
   const splitRows = rows.filter(r => r.action === 'split_entry').length;
   return {
     scope: p.scope || '(AI không mô tả phạm vi)',
     rows,
-    notes: Array.isArray(p.notes) ? p.notes.filter(Boolean).map(String) : [],
+    notes,
     warnings,
+    presetCoverage,
     estCalls: 1 + codeRows + splitRows,
   };
 }
@@ -381,7 +415,7 @@ export async function planEjsRich(
     { temperature: 0.4, label: 'EJS Plan' },
   );
   if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-  return parseRichPlan(raw, ctx);
+  return parseRichPlan(raw, ctx, goal);
 }
 
 /**

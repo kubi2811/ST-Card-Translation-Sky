@@ -21,6 +21,8 @@
  *   Auto Creator vốn để hầu hết entry ở Constant, tức nhồi vào mọi lượt chat.
  */
 import type { LorebookEntry } from '../../types';
+// Chỉ lấy KIỂU (bị xoá lúc biên dịch) nên không tạo vòng import lúc chạy.
+import type { PresetCoverageReport } from './ejsPresetCoverage';
 
 /** Chế độ kích hoạt của một entry — vừa là hiện trạng, vừa là đề xuất. */
 export type ActivationMode =
@@ -105,6 +107,11 @@ export interface EjsRichPlan {
   notes: string[];
   /** Cảnh báo máy tự phát hiện (card đã có thanh trạng thái, thiếu schema…). */
   warnings: string[];
+  /**
+   * (bug 168 mục 3) Đối chiếu "yêu cầu đặt hàng bao nhiêu preset" ↔ "kế hoạch phủ được mấy".
+   * null khi yêu cầu do user tự gõ, không có dấu [preset: …] nào.
+   */
+  presetCoverage?: PresetCoverageReport | null;
   estCalls: number;
 }
 

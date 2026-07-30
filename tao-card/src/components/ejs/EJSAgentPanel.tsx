@@ -40,6 +40,7 @@ import {
 } from '../../lib/ejs/ejsPlanModel';
 import { QUICK_PRESETS, PRESET_GROUP_LABEL, type PresetGroup } from '../../lib/ejs/ejsQuickPresets';
 import { attributePlanRows } from '../../lib/ejs/ejsPresetAttribution';
+import { presetLabelFor } from '../../lib/ejs/ejsPresetCoverage';
 
 /** Thứ tự nhóm preset hiện trên màn — đi từ việc hay dùng nhất tới việc nâng cao. */
 const PRESET_GROUP_ORDER: PresetGroup[] = ['all', 'condition', 'mvu', 'ui', 'bigdata', 'dynamic', 'orchestrate'];
@@ -86,14 +87,18 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
   const [activePresetIds, setActivePresetIds] = useState<string[]>([]);
   const activePresetIdsRef = useRef<string[]>([]);
   useEffect(() => { activePresetIdsRef.current = activePresetIds; }, [activePresetIds]);
+  /** Nguyên văn yêu cầu do preset vừa bấm đổ ra — để biết user có sửa tay hay không. */
+  const presetGoalRef = useRef<string>('');
   const togglePreset = (id: string) => setExpandedPresets((prev) => {
     const n = new Set(prev);
     if (n.has(id)) n.delete(id); else n.add(id);
     return n;
   });
 
-  // Đổi card → kế hoạch cũ trỏ vào entry của card khác nên phải bỏ (xem ejsStudioStore).
-  const cardKey = card.data.name || '(chưa đặt tên)';
+  // (bug 168 mục 1) Mỗi card một ngăn kế hoạch riêng, sống qua F5 (xem ejsStudioStore).
+  // Khoá là projectId chứ KHÔNG phải tên card: card mới nào cũng tên "New Character", khoá theo
+  // tên là mấy card mới dùng chung một ngăn — đúng thứ user cấm ("không được lẫn sang Card khác").
+  const cardKey = useCardStore(s => s.currentProjectId);
   const ensureCard = st.ensureCard;
   useEffect(() => { ensureCard(cardKey); }, [cardKey, ensureCard]);
 
@@ -668,7 +673,11 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
                             // (bug 162 mục 3.1) Nhớ luôn preset vừa chọn — bấm preset chỉ đổ ra
                             // chuỗi goal nên danh tính preset rơi mất ngay ở bước đầu, khiến bảng
                             // kế hoạch không biết dòng nào của preset nào.
-                            onClick={() => { st.setGoal(built.goal); setActivePresetIds([preset.id]); }}
+                            onClick={() => {
+                              st.setGoal(built.goal);
+                              setActivePresetIds([preset.id]);
+                              presetGoalRef.current = built.goal;
+                            }}
                             title={blocked ? built.blockers.join('\n') : preset.effect}
                             className={`flex-1 min-w-0 text-left ${blocked ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
                           >
@@ -710,7 +719,13 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
 
         <textarea
           value={st.goal}
-          onChange={e => st.setGoal(e.target.value)}
+          onChange={e => {
+            st.setGoal(e.target.value);
+            // (bug 168 mục 2) User sửa tay yêu cầu ⇒ nó không còn là yêu cầu của preset đã bấm
+            // nữa, nên phải QUÊN preset đó đi. Trước đây nhãn cứ bám mãi preset bấm gần nhất,
+            // nên một yêu cầu tự gõ vẫn hiện nhãn của preset cũ — nhãn sai theo đúng nghĩa đen.
+            if (e.target.value !== presetGoalRef.current) setActivePresetIds([]);
+          }}
           disabled={busy}
           rows={4}
           placeholder={'Ví dụ: "Làm bộ điều khiển bật/tắt entry theo Cảnh Giới của người chơi — Luyện Khí thì chỉ hiện entry cơ bản, Kim Đan trở lên mở thêm bí cảnh."'}
@@ -806,6 +821,42 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
             </div>
           ))}
 
+          {/* (bug 168 mục 3) BẢNG PHỦ PRESET — trả lời đúng câu user hỏi: "gói tổng có 19 mục,
+              sao kết quả chỉ thấy 13?". Trước đây không có chỗ nào đối chiếu, nên thiếu bao
+              nhiêu cũng im. Nay mọi mục đều có mặt kèm trạng thái, không mục nào biến mất
+              không lời giải thích. */}
+          {st.plan.presetCoverage && st.plan.presetCoverage.rows.length > 0 && (() => {
+            const cov = st.plan.presetCoverage!;
+            return (
+              <details className="rounded-lg border border-border bg-background/40" open={cov.missing > 0}>
+                <summary className="cursor-pointer select-none px-2.5 py-1.5 text-[11px] flex items-center gap-1.5">
+                  <span className={cov.missing > 0 ? 'text-amber-400' : 'text-emerald-400'}>
+                    {cov.missing > 0 ? '⚠️' : '✅'}
+                  </span>
+                  <span className="font-medium">
+                    Phủ Preset Nhanh: {cov.covered}/{cov.requested} mục có việc
+                  </span>
+                  <span className="text-muted-foreground">
+                    ({cov.rows.length} mục đã xét{cov.missing > 0 ? `, ${cov.missing} mục thiếu` : ''})
+                  </span>
+                </summary>
+                <div className="px-2.5 pb-2 space-y-1">
+                  {cov.rows.map(pr => (
+                    <div key={pr.presetId} className="flex gap-1.5 text-[10px] leading-snug">
+                      <span className="shrink-0 w-3">
+                        {pr.status === 'covered' ? '✅' : pr.status === 'skipped-explained' ? '⏭️' : '❌'}
+                      </span>
+                      <span className="shrink-0 font-medium min-w-[9rem]">{pr.title}</span>
+                      <span className={pr.status === 'missing' ? 'text-amber-400/90' : 'text-muted-foreground'}>
+                        {pr.note}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            );
+          })()}
+
           <div className="space-y-2">
             {/* (Goal 28/07) Mục được GOM NHÓM theo liên quan (chung biến / getwi tới nhau /
                 cùng chuỗi if-else). Từ chối cả nhóm chỉ đụng nhóm đó; trong nhóm vẫn duyệt
@@ -831,16 +882,28 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
                             </span>
                           )}
                           <span className="text-xs font-medium truncate">{r.name}</span>
-                          {/* (bug 162 mục 3.1) Dòng này do PRESET NÀO sinh ra. Trước đây bảng chỉ có
-                              mũi tên chế độ và nhãn Tách/Tạo mới, nên user phải tự đoán qua icon
-                              hoặc nội dung lý do. Không suy được chắc chắn thì KHÔNG hiện nhãn —
-                              nhãn sai còn tệ hơn không có nhãn. */}
-                          {r.presetTitle && (
-                            <span
-                              title={`Thay đổi này đến từ Preset Nhanh: ${r.presetTitle} (${r.presetId})`}
-                              className="px-1.5 py-0.5 rounded text-[9px] bg-sky-500/15 text-sky-300 shrink-0"
-                            >⚡ {r.presetTitle}</span>
-                          )}
+                          {/* (bug 162 mục 3.1 → bug 168 mục 2) Dòng này do PRESET NÀO sinh ra.
+                              Bản trước để TRỐNG khi không suy được, với lý lẽ "nhãn sai tệ hơn
+                              không nhãn". User bác đúng: tool phải chắc chắn, không mơ hồ — im
+                              lặng cũng là một câu trả lời mơ hồ. Nay AI tự khai preset của từng
+                              dòng (nguyên tắc 10 trong PLAN_SYSTEM), nên phần lớn dòng có nhãn
+                              thật; dòng nào vẫn không xác định được thì nói thẳng LÝ DO, chứ
+                              không để trống nữa. */}
+                          {(() => {
+                            const lb = presetLabelFor(r, st.plan?.presetCoverage?.requested ?? 0);
+                            return (
+                              <span
+                                title={lb.unknown
+                                  ? 'AI không khai preset cho dòng này và loại thay đổi của nó cũng không thuộc riêng preset nào — nên không gán nhãn. Dòng vẫn chạy bình thường.'
+                                  : `Thay đổi này đến từ Preset Nhanh: ${lb.text} (${r.presetId})`}
+                                className={`px-1.5 py-0.5 rounded text-[9px] shrink-0 ${
+                                  lb.unknown
+                                    ? 'bg-muted text-muted-foreground border border-border/60'
+                                    : 'bg-sky-500/15 text-sky-300'
+                                }`}
+                              >{lb.unknown ? '❔' : '⚡'} {lb.text}</span>
+                            );
+                          })()}
                           {typeof r.tokensDelta === 'number' && r.tokensDelta !== 0 && (
                             <span className={`px-1.5 py-0.5 rounded text-[9px] ${
                               r.tokensDelta < 0 ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300'

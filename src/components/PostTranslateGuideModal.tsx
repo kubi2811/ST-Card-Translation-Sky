@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useStore } from '../store';
 import { useUi } from '../i18n/useLocale';
 import { CheckCircle2, X } from 'lucide-react';
+import { jumpToAnchor } from './ui/panelNav';
 
 const HIDE_KEY = 'st_posttranslate_guide_hidden';
 
@@ -37,17 +38,12 @@ export default function PostTranslateGuideModal() {
   };
 
   // Cuộn tới panel đích + nháy sáng viền để user thấy ngay nút cần bấm nằm đâu.
+  // (bug 165) Chuyển sang jumpToAnchor: sau đại tu, VerifyPanel/ExportPanel nằm trong TAB nên panel
+  // không active KHÔNG có trong DOM — `getElementById` trả null và lệnh nhảy im lặng không làm gì.
+  // jumpToAnchor bật đúng tab trước rồi mới cuộn (và chờ cả trường hợp chunk lazy chưa về).
   const jumpTo = (id: string) => {
     close();
-    requestAnimationFrame(() => {
-      const el = document.getElementById(id);
-      if (!el) return;
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      el.style.transition = 'box-shadow 0.3s ease';
-      el.style.boxShadow = '0 0 0 3px var(--accent-primary)';
-      el.style.borderRadius = 'var(--radius-md)';
-      setTimeout(() => { el.style.boxShadow = ''; }, 1800);
-    });
+    jumpToAnchor(id);
   };
 
   const steps: Array<{

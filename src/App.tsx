@@ -6,12 +6,20 @@ import CardPreview from './components/CardPreview';
 import TranslationProgress from './components/TranslationProgress';
 import { useStore, flushProgressBeacon } from './store';
 import { useT, useUi } from './i18n/useLocale';
-import { Languages, X, Globe } from 'lucide-react';
+import { Languages, X, Globe, Settings2, Upload, Wrench, FileText, ShieldCheck, Download, BookText } from 'lucide-react';
 import PresetImportPanel from './components/PresetImportPanel';
 import PresetRecommendModal from './components/PresetRecommendModal';
 import PostTranslateGuideModal from './components/PostTranslateGuideModal';
 import GlossaryVizPanel from './components/GlossaryVizPanel';
 import { APP_VERSION, APP_VERSION_NOTE } from './version';
+// (bug 165) Ba component dùng chung — NGUỒN DUY NHẤT cho style khối co giãn / tab / nút công cụ.
+import CollapsibleSection from './components/ui/CollapsibleSection';
+import TabGroup from './components/ui/TabGroup';
+import ToolButton from './components/ui/ToolButton';
+import { onPanelRequest } from './components/ui/panelNav';
+
+/** (bug 165) Tab của cột nội dung chính. */
+type MainTabId = 'fields' | 'verify' | 'export' | 'glossary';
 
 // Lazy-load heavy components — only loaded after card is imported.
 // (User 2026) MỖI import() = 1 request HTTP tới CÙNG ORIGIN với call AI (/api-proxy/…). Trình duyệt
@@ -70,6 +78,22 @@ export default function App() {
   const [showPresetViewer, setShowPresetViewer] = useState(false);
   const [showCompare, setShowCompare] = useState(false);
 
+  // ═══ (bug 165) ĐẠI TU LỚP TRÌNH BÀY ═══
+  // Chỉ đổi CHỖ MOUNT và cách nhóm, không đổi state/logic/lazy — xem ghi chú ở panelNav.ts và
+  // components/ui/*. Ba thứ phải giữ nguyên bằng mọi giá: warmupLazyChunks, từng <Suspense> quanh
+  // panel lazy, và hai điểm neo #verify-panel-anchor / #export-panel-anchor.
+  const [mainTab, setMainTab] = useState<MainTabId>('fields');
+  // Tóm tắt để CollapsibleSection thu gọn được khi đã xong việc (đỡ chiếm chỗ vĩnh viễn).
+  const apiReady = useStore((s) => !!(s.proxy.apiKey || (s.proxy.apiKeys && s.proxy.apiKeys.length > 0)));
+  const proxyModel = useStore((s) => s.proxy.model);
+
+  // Tín hiệu "nhảy tới panel" → bật đúng tab TRƯỚC khi cuộn. Không có bước này thì panel đang ẩn
+  // không tồn tại trong DOM và lệnh nhảy im lặng thất bại (xem panelNav.ts).
+  useEffect(() => onPanelRequest((anchorId) => {
+    if (anchorId === 'verify-panel-anchor') setMainTab('verify');
+    else if (anchorId === 'export-panel-anchor') setMainTab('export');
+  }), []);
+
   // (User 2026) Nạp trước chunk các panel nặng NGAY khi app rảnh — trước khi user bấm Dịch. Sau đó
   // mở Regex Manager / Trợ Lý AI / EJS Creator lúc đang dịch là tức thì, không phải chờ 1 khe kết nối
   // trống giữa hàng chục call LLM (bug "quay quài" của user).
@@ -89,9 +113,14 @@ export default function App() {
 
   // "Nhảy tới trường" trỏ vào trường REGEX → mở panel Regex (panel tự chọn đúng script + xoá tín hiệu).
   useEffect(() => {
-    if (jumpToFieldPath && jumpToFieldPath.includes('regex_scripts[')) {
+    if (!jumpToFieldPath) return;
+    if (jumpToFieldPath.includes('regex_scripts[')) {
       setShowRegexManager(true);
+      return;
     }
+    // (bug 165) Trường thường do FieldEditor tự xử — nhưng nay nó nằm trong tab, không active thì
+    // KHÔNG mount nên không nhận được tín hiệu. Bật tab trước, rồi nó nhận như cũ.
+    setMainTab('fields');
   }, [jumpToFieldPath]);
 
   if (showRegexManager) {
@@ -176,103 +205,66 @@ export default function App() {
               đổi phiên bản nay nằm một chỗ, không rải rác ở từng app nữa. */}
         </div>
 
-        {/* Sidebar sections */}
-        <ProxyConfig />
+        {/* ═══ (bug 165) SIDEBAR THEO GIAI ĐOẠN, KHÔNG PHẢI THEO COMPONENT ═══
+            Trước đây 5 panel lớn xếp chồng liên tục (ProxyConfig 746 + FileUpload 386 +
+            PresetImportPanel 342 + TranslateConfig 1520 dòng) rồi 3 nút full-width ba màu khác nhau —
+            phải cuộn rất dài mới tới phần cấu hình dịch, và mọi thứ có cùng trọng số thị giác.
+            Nay gom theo đúng thứ tự việc phải làm, và bước ĐÃ XONG thì tự thu lại thành một dòng.
+            KHÔNG sửa gì bên trong các panel con — chỉ bọc lại. */}
+        <CollapsibleSection
+          step={1}
+          title={ui.grpSetup}
+          icon={<Settings2 size={13} />}
+          // Đã có key thì coi như xong bước này → thu gọn, nhường chỗ cho bước sau.
+          defaultOpen={!apiReady}
+          summary={apiReady ? `✓ ${proxyModel || ui.grpSetupDone}` : undefined}
+        >
+          <ProxyConfig />
+        </CollapsibleSection>
 
-        {/* So Sánh Card — đặt NGAY TRÊN "Character Card", luôn hiện (không cần nạp card) */}
-        <div style={{ padding: '0 20px', marginBottom: '6px' }}>
-          <button
-            onClick={() => setShowCompare(true)}
-            style={{
-              width: '100%', padding: '10px',
-              background: 'var(--bg-elevated)', border: '1px solid var(--border-default)',
-              borderRadius: 'var(--radius-md)', color: '#38bdf8', fontWeight: 600, cursor: 'pointer',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', transition: 'all 0.2s',
-            }}
-            onMouseOver={e => e.currentTarget.style.borderColor = '#38bdf8'}
-            onMouseOut={e => e.currentTarget.style.borderColor = 'var(--border-default)'}
-          >
-            {ui.appCompareCards}
-          </button>
-        </div>
+        <CollapsibleSection step={2} title={ui.grpLoad} icon={<Upload size={13} />} defaultOpen>
+          <FileUpload />
+          <PresetImportPanel onOpenPromptViewer={() => setShowPresetViewer(true)} />
+        </CollapsibleSection>
 
-        <FileUpload />
-        <PresetImportPanel onOpenPromptViewer={() => setShowPresetViewer(true)} />
-        <TranslateConfig />
+        <CollapsibleSection
+          step={3}
+          title={ui.grpTranslate}
+          icon={<Languages size={13} />}
+          // Chưa có card thì cấu hình dịch chưa dùng được — đóng lại cho bớt tường chữ.
+          defaultOpen={hasCard}
+          summary={!hasCard ? ui.grpTranslateNeedCard : undefined}
+        >
+          <TranslateConfig />
+        </CollapsibleSection>
 
-        {/* Nút mở EJS Creator Modal */}
-        {hasCard && (
-          <div style={{ padding: '0 20px', marginTop: '10px', marginBottom: '10px' }}>
-            <button
-              onClick={() => setShowEjsCreator(true)}
-              style={{
-                width: '100%',
-                padding: '10px',
-                background: 'var(--bg-elevated)',
-                border: '1px solid var(--border-default)',
-                borderRadius: 'var(--radius-md)',
-                color: 'var(--accent-primary)',
-                fontWeight: 600,
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '8px',
-                transition: 'all 0.2s'
-              }}
-              onMouseOver={e => e.currentTarget.style.borderColor = 'var(--accent-primary)'}
-              onMouseOut={e => e.currentTarget.style.borderColor = 'var(--border-default)'}
-            >
-              <Globe size={16} /> EJS Creator / Lorebook
-            </button>
-            <button
-              onClick={() => setShowRegexManager(true)}
-              style={{
-                width: '100%',
-                padding: '10px',
-                marginTop: '6px',
-                background: 'var(--bg-elevated)',
-                border: '1px solid var(--border-default)',
-                borderRadius: 'var(--radius-md)',
-                color: '#f97316',
-                fontWeight: 600,
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '8px',
-                transition: 'all 0.2s'
-              }}
-              onMouseOver={e => e.currentTarget.style.borderColor = '#f97316'}
-              onMouseOut={e => e.currentTarget.style.borderColor = 'var(--border-default)'}
-            >
-              {ui.appRegexManager}
-            </button>
-            <button
-              onClick={() => setShowAiCompanion(true)}
-              style={{
-                width: '100%',
-                padding: '10px',
-                marginTop: '6px',
-                background: 'var(--bg-elevated)',
-                border: '1px solid var(--border-default)',
-                borderRadius: 'var(--radius-md)',
-                color: '#a855f7',
-                fontWeight: 600,
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '8px',
-                transition: 'all 0.2s'
-              }}
-              onMouseOver={e => e.currentTarget.style.borderColor = '#a855f7'}
-              onMouseOut={e => e.currentTarget.style.borderColor = 'var(--border-default)'}
-            >
-              {ui.appAiCompanion}
-            </button>
+        {/* Công cụ nâng cao: gom MỘT chỗ, đóng mặc định — trước đây 3-4 nút full-width ba màu nằm
+            chen giữa luồng chính, trông quan trọng ngang các bước bắt buộc. */}
+        <CollapsibleSection
+          title={ui.grpTools}
+          icon={<Wrench size={13} />}
+          defaultOpen={false}
+          accent="var(--accent-secondary)"
+          summary={ui.grpToolsHint}
+        >
+          <div style={{ padding: '4px 20px 10px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+            {/* So Sánh Card không cần card đã nạp — giữ nguyên như cũ. */}
+            <ToolButton label={ui.appCompareCards} accent="#38bdf8" onClick={() => setShowCompare(true)} />
+            <ToolButton
+              label="EJS Creator / Lorebook" icon={<Globe size={13} />}
+              onClick={() => setShowEjsCreator(true)} disabled={!hasCard} title={!hasCard ? t.noCardTitle : undefined}
+            />
+            <ToolButton
+              label={ui.appRegexManager} accent="#f97316"
+              onClick={() => setShowRegexManager(true)} disabled={!hasCard} title={!hasCard ? t.noCardTitle : undefined}
+            />
+            <ToolButton
+              label={ui.appAiCompanion} accent="#a855f7"
+              onClick={() => setShowAiCompanion(true)} disabled={!hasCard} title={!hasCard ? t.noCardTitle : undefined}
+            />
           </div>
-        )}
+        </CollapsibleSection>
+
       </aside>
 
       {/* ─── Main Content ─── */}
@@ -328,23 +320,61 @@ export default function App() {
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: 'none' /* (feedback) khung keo het canh phai, khong du khoang trong */ }}>
+            {/* ═══ (bug 165) NỘI DUNG MẶC ĐỊNH: xem thẻ + tiến trình dịch ═══
+                Đây là hai thứ người dùng cần thấy NGAY và liên tục trong lúc dịch. Phần còn lại
+                (~4300 dòng UI) chuyển vào tab bên dưới, chỉ dựng khi được chọn. */}
             <CardPreview />
             <TranslationProgress />
-            <GlossaryVizPanel />
-            <Suspense fallback={<LazyFallback />}>
-              <FieldEditor />
-            </Suspense>
-            <div id="verify-panel-anchor">
-              <Suspense fallback={<LazyFallback />}>
-                <VerifyPanel />
-              </Suspense>
-            </div>
-            <div id="export-panel-anchor">
-              <Suspense fallback={<LazyFallback />}>
-                <ExportPanel />
-              </Suspense>
-            </div>
 
+            <TabGroup
+              activeId={mainTab}
+              onChange={(id) => setMainTab(id as MainTabId)}
+              tabs={[
+                {
+                  id: 'fields',
+                  label: ui.tabFields,
+                  icon: <FileText size={13} />,
+                  // Mỗi panel vẫn tự bọc <Suspense> như trước — chỉ đổi CHỖ mount, không đổi cách
+                  // import động, và warmupLazyChunks vẫn nạp trước chunk như cũ.
+                  render: () => (
+                    <Suspense fallback={<LazyFallback />}>
+                      <FieldEditor />
+                    </Suspense>
+                  ),
+                },
+                {
+                  id: 'verify',
+                  label: ui.tabVerify,
+                  icon: <ShieldCheck size={13} />,
+                  // Giữ NGUYÊN id neo: PostTranslateGuideModal nhảy tới đây bằng đúng id này.
+                  render: () => (
+                    <div id="verify-panel-anchor">
+                      <Suspense fallback={<LazyFallback />}>
+                        <VerifyPanel />
+                      </Suspense>
+                    </div>
+                  ),
+                },
+                {
+                  id: 'export',
+                  label: ui.tabExport,
+                  icon: <Download size={13} />,
+                  render: () => (
+                    <div id="export-panel-anchor">
+                      <Suspense fallback={<LazyFallback />}>
+                        <ExportPanel />
+                      </Suspense>
+                    </div>
+                  ),
+                },
+                {
+                  id: 'glossary',
+                  label: ui.tabGlossary,
+                  icon: <BookText size={13} />,
+                  render: () => <GlossaryVizPanel />,
+                },
+              ]}
+            />
           </div>
         )}
 

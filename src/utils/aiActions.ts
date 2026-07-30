@@ -13,6 +13,7 @@ export type ActionType =
   | 'DELETE_ENTRY'
   | 'CREATE_TAVERN_HELPER'
   | 'VIEW_FULL_REGEX'
+  | 'VIEW_FULL_ENTRY'
   | 'RUN_SCRIPT';
 
 /**
@@ -154,6 +155,8 @@ export function executeAction(
         return executeCreateTavernHelper(action.params, card);
       case 'VIEW_FULL_REGEX':
         return executeViewFullRegex(action.params, card);
+      case 'VIEW_FULL_ENTRY':
+        return executeViewFullEntry(action.params, card);
       case 'RUN_SCRIPT':
         return executeRunScript(action.params);
       default:
@@ -295,6 +298,57 @@ function executeCreateTavernHelper(params: Record<string, any>, card: CharacterC
 }
 
 /** VIEW_FULL_REGEX — Return full replaceString content for AI to analyze */
+/**
+ * (bug 166-2) ĐỌC TRỌN MỘT ENTRY LOREBOOK.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * User: "trợ lý chỉ đọc/quét được bản tóm tắt/đoạn đầu của các entry".
+ * Đúng, và đây là lý do: ngữ cảnh gửi cho trợ lý cắt content entry ở 500 ký tự rồi ghi
+ * "... (truncated)" — HẾT. Regex thì được 4000 ký tự VÀ có đường thoát VIEW_FULL_REGEX để đọc trọn;
+ * còn entry lorebook thì không có đường nào. Trợ lý muốn đọc cũng không có cách, nên nó trả lời dựa
+ * trên đoạn đầu — nhìn từ ngoài đúng như "chỉ đọc được bản tóm tắt".
+ * Nay có action đối xứng: chỉ ĐỌC, không sửa gì, nên an toàn để tự chạy rồi nạp lại cho AI.
+ */
+function executeViewFullEntry(params: Record<string, any>, card: CharacterCard): ActionResult {
+  const entries = card.data?.character_book?.entries || [];
+  let idx = typeof params.entryIndex === 'number' ? params.entryIndex : undefined;
+
+  // Cho tìm theo TÊN nữa: AI hay nhắc entry bằng comment thay vì số thứ tự, và bắt nó phải đếm
+  // đúng index chỉ để đọc là chỗ dễ sai vô ích.
+  if (idx === undefined && typeof params.name === 'string' && params.name.trim()) {
+    const want = params.name.trim().toLowerCase();
+    const found = entries.findIndex((e: any) => String(e.comment ?? '').trim().toLowerCase() === want);
+    if (found >= 0) idx = found;
+    else {
+      const loose = entries.findIndex((e: any) => String(e.comment ?? '').toLowerCase().includes(want));
+      if (loose >= 0) idx = loose;
+    }
+  }
+  if (idx === undefined) {
+    return { success: false, message: 'VIEW_FULL_ENTRY cần entryIndex (hoặc name khớp comment của entry)' };
+  }
+  if (idx < 0 || idx >= entries.length) {
+    return { success: false, message: `Entry index ${idx} không hợp lệ (card có ${entries.length} entry)` };
+  }
+
+  const e: any = entries[idx];
+  const content = String(e.content ?? '');
+  const fullContent = [
+    `=== LOREBOOK ENTRY #${idx}: "${e.comment || '(không tên)'}" ===`,
+    `keys: ${JSON.stringify(e.keys ?? [])}`,
+    `keysecondary: ${JSON.stringify(e.keysecondary ?? [])}`,
+    `enabled: ${e.enabled !== false} · constant: ${!!e.constant} · selective: ${!!e.selective}`,
+    `position: ${e.position} · depth: ${e.depth} · insertion_order: ${e.insertion_order ?? e.order}`,
+    `--- content (FULL, ${content.length} ký tự) ---`,
+    content || '(trống)',
+  ].join('\n');
+
+  return {
+    success: true,
+    message: `Đã lấy full nội dung entry[${idx}] (${content.length} ký tự)`,
+    viewContent: fullContent,
+  };
+}
+
 function executeViewFullRegex(params: Record<string, any>, card: CharacterCard): ActionResult {
   const { scriptIndex } = params;
   if (scriptIndex === undefined) {
@@ -401,6 +455,14 @@ export function describeAction(action: AiAction): {
     case 'VIEW_FULL_REGEX':
       return {
         title: `Xem full Regex #${action.params.scriptIndex}`,
+        type: 'view',
+        color: '#3b82f6',
+        icon: '👁',
+        details: [],
+      };
+    case 'VIEW_FULL_ENTRY':
+      return {
+        title: `Xem full Entry ${action.params.entryIndex !== undefined ? `#${action.params.entryIndex}` : `"${action.params.name ?? ''}"`}`,
         type: 'view',
         color: '#3b82f6',
         icon: '👁',

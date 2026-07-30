@@ -23,7 +23,7 @@ export interface AgentDef {
 // bản DỊCH, nên vừa không hiện ra vừa bị ghi đè lúc xuất thẻ. Xem chú thích ở utils/aiActions.ts.
 // VIEW_FULL_REGEX (chỉ đọc) được giữ.
 const ALL_ACTIONS = [
-  'CREATE_ENTRY', 'EDIT_ENTRY', 'DELETE_ENTRY', 'CREATE_TAVERN_HELPER', 'VIEW_FULL_REGEX', 'RUN_SCRIPT',
+  'CREATE_ENTRY', 'EDIT_ENTRY', 'DELETE_ENTRY', 'CREATE_TAVERN_HELPER', 'VIEW_FULL_REGEX', 'VIEW_FULL_ENTRY', 'RUN_SCRIPT',
 ] as const;
 
 export const AGENT_DEFS: Record<AgentId, AgentDef> = {
@@ -31,19 +31,19 @@ export const AGENT_DEFS: Record<AgentId, AgentDef> = {
     id: 'translator',
     label: 'Translator',
     personaPrompt: '[SUB-AGENT: TRANSLATOR] Lượt này tập trung DỊCH THUẬT/VIỆT HOÁ: bám nguyên tắc bảo toàn biến hệ thống + glossary; chỉ đề xuất action sửa entry/lorebook khi user yêu cầu áp bản dịch.',
-    allowedActions: ['EDIT_ENTRY', 'CREATE_ENTRY', 'VIEW_FULL_REGEX'],
+    allowedActions: ['EDIT_ENTRY', 'CREATE_ENTRY', 'VIEW_FULL_REGEX', 'VIEW_FULL_ENTRY'],
   },
   codefixer: {
     id: 'codefixer',
     label: 'CodeFixer',
     personaPrompt: '[SUB-AGENT: CODEFIXER] Lượt này tập trung SỬA CODE/REGEX/SCRIPT: chẩn đoán lỗi trước, giải thích ngắn, sửa TRIỆT ĐỂ giữ nguyên cấu trúc; code trả về phải qua được parse (không SyntaxError). Với REGEX: KHÔNG có action ghi thẳng vào thẻ — đưa code đã sửa trong code block và chỉ người dùng dán vào tab "Regex".',
-    allowedActions: ['CREATE_TAVERN_HELPER', 'VIEW_FULL_REGEX', 'RUN_SCRIPT'],
+    allowedActions: ['CREATE_TAVERN_HELPER', 'VIEW_FULL_REGEX', 'VIEW_FULL_ENTRY', 'RUN_SCRIPT'],
   },
   lorearchitect: {
     id: 'lorearchitect',
     label: 'LoreArchitect',
     personaPrompt: '[SUB-AGENT: LORE ARCHITECT] Lượt này tập trung XÂY LOREBOOK/CỐT TRUYỆN: brainstorm 2-3 hướng, entry mới phải bám schema/biến MVU hiện có của card, keys chọn từ khoá thực sự xuất hiện trong hội thoại.',
-    allowedActions: ['CREATE_ENTRY', 'EDIT_ENTRY', 'DELETE_ENTRY', 'VIEW_FULL_REGEX'],
+    allowedActions: ['CREATE_ENTRY', 'EDIT_ENTRY', 'DELETE_ENTRY', 'VIEW_FULL_REGEX', 'VIEW_FULL_ENTRY'],
   },
   general: {
     id: 'general',

@@ -2088,6 +2088,95 @@ export function normalizeStrayCurlyQuotes(original: string, translation: string)
     .replace(/[‘’‛′＇]/g, "'");
 }
 
+/**
+ * (bug 166-1) CHÈN LẠI DẤU CÁCH QUANH THUẬT NGỮ LATIN GIỮ NGUYÊN.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Bằng chứng user: "…tiến hành cập nhật.SFW và WAR…" và "…hiện tạiNSFWchi tiết…".
+ * Nguyên nhân: tiếng Trung không dùng dấu cách nên nguyên bản viết liền (`当前NSFW细节`,
+ * `更新。SFW`). AI dịch các cụm Hán quanh nó sang tiếng Việt nhưng giữ nguyên thuật ngữ Latin, và
+ * không tự thêm dấu cách — trong tiếng Việt thì đó là lỗi chính tả, đọc rất khó.
+ *
+ * Đây là ca KHÁC bug 160 dù triệu chứng giống: Dịch Script ghép bản dịch lại bằng
+ * reinsertTranslations nên lưới auto-space nằm ở đó; còn Dịch Card gửi CẢ field cho AI rồi nhận về
+ * nguyên khối, không có khâu ghép nào để mà chèn. Nên cần pass hậu kiểm riêng ở đây.
+ *
+ * ĐỂ KHÔNG SỬA OAN — chỉ vá ranh giới mà NGUYÊN BẢN là CJK↔Latin:
+ *   • `当前NSFW` → nguyên bản có CJK sát bên trái NSFW ⇒ bản dịch dính thì chèn cách.
+ *   • `getVar` trong `调用getVar方法` → bên trong getVar vốn là Latin↔Latin ⇒ KHÔNG đụng.
+ * Nhờ vậy camelCase (getVar, TavernHelper, iPhone) và số+đơn vị (10px) an toàn tuyệt đối — đó mới
+ * là những chỗ mà tách ra sẽ làm hỏng thật.
+ */
+export function restoreTermSpacing(original: string, translation: string): string {
+  if (!original || !translation) return translation;
+  // Không có CJK trong nguyên bản thì không có ranh giới CJK↔Latin nào để vá.
+  if (!/[　-〿぀-ヿ㐀-䶿一-鿿＀-￯]/.test(original)) return translation;
+
+  const CJK = '\\u3000-\\u303f\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uff00-\\uffef';
+  const isCjk = new RegExp(`[${CJK}]`);
+  // Thuật ngữ = cụm chữ/số Latin. Cho phép . _ - ở GIỮA (v1.2, drop-shadow) nhưng không ở hai đầu.
+  const TERM = /[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*/g;
+
+  const needLeft = new Set<string>();
+  const needRight = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = TERM.exec(original)) !== null) {
+    const term = m[0];
+    // Placeholder của khâu mask (__CODE_BLOCK_0__, __URL_1__): chèn dấu cách vào là unmask hết
+    // khớp, mất luôn cả khối code. Nhận diện bằng dấu gạch dưới sát hai bên.
+    if (original[m.index - 1] === '_' || original[m.index + term.length] === '_') continue;
+    if (isCjk.test(original[m.index - 1] ?? '')) needLeft.add(term);
+    if (isCjk.test(original[m.index + term.length] ?? '')) needRight.add(term);
+  }
+  if (!needLeft.size && !needRight.size) return translation;
+
+  // Vì sao phải tìm theo CHUỖI CON chứ không so khớp nguyên cụm ASCII: khi bị dính chữ, thuật ngữ
+  // hợp với chữ Việt bên cạnh thành một cụm ASCII LỚN HƠN — `hiện tạiNSFWchi tiết` cho ra cụm
+  // `iNSFWchi`, không phải `NSFW`. So khớp nguyên cụm sẽ trượt hết, không vá được gì.
+  // Dài trước ngắn sau, và đánh dấu vùng đã dùng: nếu card có cả `WAR` và `WARNING` thì `WARNING`
+  // được xét trước, khỏi bị `WAR` xẻ đôi.
+  const terms = [...new Set([...needLeft, ...needRight])].sort((a, b) => b.length - a.length);
+  const edits: Array<{ at: number; text: string }> = [];
+  const taken: Array<[number, number]> = [];
+  const overlaps = (s: number, e: number) => taken.some(([a, b]) => s < b && e > a);
+
+  for (const term of terms) {
+    let from = 0;
+    for (;;) {
+      const start = translation.indexOf(term, from);
+      if (start === -1) break;
+      from = start + term.length;
+      const end = start + term.length;
+      if (overlaps(start, end)) continue;
+      if (translation[start - 1] === '_' || translation[end] === '_') continue;  // placeholder
+
+      // CHỐT CHỐNG TÁCH OAN: lấy trọn cụm ASCII bao quanh; nếu cụm đó có mặt NGUYÊN VĂN trong
+      // nguyên bản thì nó là một từ Latin thật (getVarphương không có trong nguyên bản, nhưng
+      // `TavernHelper` thì có) — không được đụng vào bên trong.
+      let rs = start; while (rs > 0 && /[A-Za-z0-9]/.test(translation[rs - 1])) rs--;
+      let re = end; while (re < translation.length && /[A-Za-z0-9]/.test(translation[re])) re++;
+      const run = translation.slice(rs, re);
+      if (run !== term && original.includes(run)) continue;
+
+      const prev = translation[start - 1] ?? '';
+      const next = translation[end] ?? '';
+      // Chèn TRƯỚC: khi đang dính vào chữ/số, hoặc dính ngay sau dấu kết câu (ca ".SFW").
+      const addLeft = needLeft.has(term) && (/[\p{L}\p{N}]/u.test(prev) || /[.,;:!?]/.test(prev));
+      // Chèn SAU: chỉ khi dính vào chữ/số. Dính vào dấu câu (`NSFW,`) là đúng chính tả, đừng tách.
+      const addRight = needRight.has(term) && /[\p{L}\p{N}]/u.test(next);
+      if (!addLeft && !addRight) continue;
+      if (addLeft) edits.push({ at: start, text: ' ' });
+      if (addRight) edits.push({ at: end, text: ' ' });
+      taken.push([start, end]);
+    }
+  }
+  if (!edits.length) return translation;
+
+  // Chèn từ CUỐI về ĐẦU để chỉ số không bị lệch.
+  let out = translation;
+  for (const e of edits.sort((a, b) => b.at - a.at)) out = out.slice(0, e.at) + e.text + out.slice(e.at);
+  return out;
+}
+
 export function detectStructuralTruncation(original: string, translation: string): StructuralCheckResult {
   if (!original || !translation) {
     return { isTruncated: false, reason: '' };
@@ -3247,6 +3336,10 @@ export async function translateText(
     // Repair closing tags the AI dropped from the END (incl. CJK pseudo-tags like </章节信息>)
     cleaned = repairUnclosedTags(maskedText, cleaned);
     cleaned = normalizeStrayCurlyQuotes(maskedText, cleaned);
+    // (bug 166-1) Chèn lại dấu cách quanh thuật ngữ Latin bị dính chữ ("hiện tạiNSFWchi tiết").
+    // BỎ QUA field code: ở đó một dấu cách thêm vào có thể lọt vào chuỗi literal hoặc giá trị
+    // thuộc tính và làm sai code — cái giá cao hơn hẳn lợi ích trình bày.
+    if (!isCodeHeavy) cleaned = restoreTermSpacing(maskedText, cleaned);
 
     if (isCodeHeavy) {
       const structuralTrunc = detectStructuralTruncation(maskedText, cleaned);
@@ -3704,6 +3797,9 @@ export async function translateText(
   // Repair closing tags the AI dropped from the END (incl. CJK pseudo-tags like </章节信息>)
   cleaned = repairUnclosedTags(maskedText, cleaned);
   cleaned = normalizeStrayCurlyQuotes(maskedText, cleaned);
+  // (bug 166-1) Xem ghi chú ở nhánh một-chunk phía trên. Nhánh này là bản GHÉP nhiều chunk, nên
+  // phải chạy ở đây nữa: chỗ dính chữ có thể nằm ngay mối nối giữa hai chunk.
+  if (!isCodeHeavy) cleaned = restoreTermSpacing(maskedText, cleaned);
 
   if (isCodeHeavy) {
     const structuralTrunc = detectStructuralTruncation(maskedText, cleaned);

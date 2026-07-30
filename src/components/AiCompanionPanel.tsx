@@ -331,7 +331,9 @@ CÁC ACTION HIỆN CÓ:
    Params: { name, content, info? }
 5. VIEW_FULL_REGEX — ĐỌC full nội dung regex (khi context bị truncate). CHỈ ĐỌC, không sửa gì.
     Params: { scriptIndex }
-6. RUN_SCRIPT — Chạy script (sẽ hỏi user xác nhận trước khi thực thi)
+6. VIEW_FULL_ENTRY — ĐỌC TRỌN một entry lorebook (khi content bị cắt trong context). CHỈ ĐỌC.
+    Params: { entryIndex }  — hoặc { name } khớp comment của entry.
+7. RUN_SCRIPT — Chạy script (sẽ hỏi user xác nhận trước khi thực thi)
     Params: { code, language?, description }
 
 KHÔNG CÓ ACTION GHI VÀO REGEX (quan trọng):
@@ -349,6 +351,10 @@ QUY TẮC QUAN TRỌNG KHI DÙNG ACTIONS:
 - Có thể đưa NHIỀU actions trong 1 response.
 - Luôn thêm "reasoning" vào action block để giải thích tại sao chọn action này.
 - Nếu cần xem toàn bộ replaceString (bị truncate trong context), dùng VIEW_FULL_REGEX trước.
+- ĐỪNG BAO GIỜ kết luận về nội dung một entry lorebook khi chỉ thấy đoạn đầu. Ngữ cảnh có ghi rõ
+  entry nào bị cắt và còn bao nhiêu ký tự — thấy dấu "(CẮT …)" thì PHẢI gọi VIEW_FULL_ENTRY đọc
+  trọn rồi mới trả lời. Nói "entry này chỉ có …" dựa trên đoạn đầu là nói sai với người dùng.
+- Cần đọc nhiều entry thì đưa nhiều VIEW_FULL_ENTRY trong cùng một response, khỏi mất lượt.
 
 VÍ DỤ FORMAT:
 User: "Thêm hàm hiển thị thanh HP cho regex 'Tô màu hội thoại'"
@@ -364,8 +370,16 @@ Regex "Tô màu hội thoại" đang ở index 0, tôi đọc trọn nội dung 
 
 /** Max chars for regex replaceString preview in context (full content via VIEW_FULL_REGEX) */
 const REGEX_CONTEXT_MAX_CHARS = 4000;
-/** Max chars for lorebook content preview */
+/**
+ * (bug 166-2) Ngân sách ngữ cảnh cho content lorebook.
+ * SÀN 500 (giữ hành vi cũ cho thẻ có RẤT nhiều entry — không làm nổ ngữ cảnh), TRẦN 6000 cho mỗi
+ * entry, và tổng ~60k ký tự chia đều theo số entry. Thẻ 8 entry thì mỗi entry được ~6000 ký tự
+ * (gần như đọc trọn); thẻ 200 entry thì về sàn 500 và trợ lý dùng VIEW_FULL_ENTRY khi cần đọc sâu.
+ * Trước đây cứng 500 cho mọi thẻ, nên kể cả thẻ chỉ vài entry cũng chỉ thấy đoạn đầu.
+ */
 const LOREBOOK_CONTEXT_MAX_CHARS = 500;
+const LOREBOOK_CONTEXT_MAX_PER_ENTRY = 6000;
+const LOREBOOK_CONTEXT_BUDGET = 60000;
 
 /* ════════════════════════════════════════════════════════════════════
    SIMPLE MARKDOWN & CODE HIGHLIGHT PARSER
@@ -1768,21 +1782,37 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
       }
 
       // ── Lorebook Entries ──
+      // (bug 166-2) User: "trợ lý chỉ đọc/quét được bản tóm tắt/đoạn đầu của các entry".
+      // Đúng, và có hai nguyên nhân cộng lại:
+      //   1. content bị cắt cứng ở 500 ký tự — quá ngắn, một entry lore thường dài hơn nhiều;
+      //   2. dấu cắt chỉ ghi "... (truncated)" mà KHÔNG nói có cách đọc tiếp. Regex thì được 4000
+      //      ký tự VÀ có VIEW_FULL_REGEX; entry lorebook thì không có đường nào, nên trợ lý muốn
+      //      đọc trọn cũng không đọc được — nhìn từ ngoài đúng như "chỉ đọc được bản tóm tắt".
+      // Sửa cả hai: ngân sách THÍCH ỨNG theo số entry (thẻ ít entry thì mỗi entry được nhiều chữ
+      // hơn, thẻ nhiều entry thì siết lại để không nổ ngữ cảnh), và dấu cắt chỉ rõ VIEW_FULL_ENTRY.
       const entries = card.data?.character_book?.entries || [];
       if (entries.length > 0) {
+        const perEntry = Math.max(
+          LOREBOOK_CONTEXT_MAX_CHARS,
+          Math.min(LOREBOOK_CONTEXT_MAX_PER_ENTRY, Math.floor(LOREBOOK_CONTEXT_BUDGET / entries.length)),
+        );
         context += `[LOREBOOK ENTRIES (${entries.length} entries)]:\n`;
+        context += `  (content dài hơn ${perEntry} ký tự bị cắt trong ngữ cảnh này — dùng VIEW_FULL_ENTRY để đọc TRỌN entry trước khi kết luận về nội dung của nó)\n`;
         entries.forEach((e: any, i: number) => {
           const keys = Array.isArray(e.keys) ? e.keys.join(', ') : '';
-          const contentPreview = (e.content || '').length > LOREBOOK_CONTEXT_MAX_CHARS
-            ? e.content.slice(0, LOREBOOK_CONTEXT_MAX_CHARS) + '... (truncated)'
-            : (e.content || '(trống)');
+          const raw = String(e.content ?? '');
+          const contentPreview = raw.length > perEntry
+            ? raw.slice(0, perEntry) + `\n... (CẮT — còn ${raw.length - perEntry}/${raw.length} ký tự nữa; dùng VIEW_FULL_ENTRY với entryIndex=${i} để đọc trọn)`
+            : (raw || '(trống)');
           const cmtTrans = transByPath.get(`data.character_book.entries[${i}].comment`);
           context += `  #${i}: keys=[${keys}] comment="${e.comment || ''}"${cmtTrans ? ` (dịch: "${cmtTrans}")` : ''} enabled=${e.enabled !== false}\n`;
           context += `    content GỐC: ${contentPreview}\n`;
           // (Bug 32) kèm bản DỊCH của content lorebook (nếu có)
           const cTrans = transByPath.get(`data.character_book.entries[${i}].content`);
           if (cTrans) {
-            const ct = cTrans.length > LOREBOOK_CONTEXT_MAX_CHARS ? cTrans.slice(0, LOREBOOK_CONTEXT_MAX_CHARS) + '... (truncated)' : cTrans;
+            const ct = cTrans.length > perEntry
+              ? cTrans.slice(0, perEntry) + `\n... (CẮT — còn ${cTrans.length - perEntry}/${cTrans.length} ký tự nữa; VIEW_FULL_ENTRY entryIndex=${i})`
+              : cTrans;
             context += `    content BẢN DỊCH: ${ct}\n`;
           }
           context += '\n';
@@ -2008,15 +2038,32 @@ ${ragBlock ? `\n${ragBlock}` : ''}${directiveBlock}`;
       }
 
       if (parsedActions.length > 0 && card) {
-        // Handle VIEW_FULL_REGEX immediately (auto-execute, feed back to AI)
-        const viewActions = parsedActions.filter(a => a.action === 'VIEW_FULL_REGEX');
-        const otherActions = parsedActions.filter(a => a.action !== 'VIEW_FULL_REGEX');
+        // Handle read-only VIEW actions immediately (auto-execute, feed back to AI)
+        // (bug 166-2) VIEW_FULL_ENTRY đi cùng đường với VIEW_FULL_REGEX: đều CHỈ ĐỌC, không đụng
+        // vào thẻ, nên tự chạy rồi nạp lại cho AI là an toàn và đỡ cho user một lượt bấm.
+        const isViewAction = (a: { action: string }) =>
+          a.action === 'VIEW_FULL_REGEX' || a.action === 'VIEW_FULL_ENTRY';
+        const viewActions = parsedActions.filter(isViewAction);
+        const otherActions = parsedActions.filter(a => !isViewAction(a));
 
         let viewFeedback = '';
         for (const va of viewActions) {
           const result = executeAction(va, card);
           if (result.viewContent) {
             viewFeedback += `\n\n${result.viewContent}`;
+            // (bug 166-2) Kèm luôn BẢN DỊCH trọn vẹn của entry đó nếu đã dịch — bản dịch nằm trong
+            // store `fields`, không nằm trong card, nên executor không tự lấy được. Thiếu nó thì
+            // trợ lý đọc trọn bản gốc mà vẫn chỉ thấy đoạn đầu bản dịch, sai đúng kiểu cũ.
+            if (va.action === 'VIEW_FULL_ENTRY') {
+              const ei = typeof va.params.entryIndex === 'number'
+                ? va.params.entryIndex
+                : (card.data?.character_book?.entries ?? []).findIndex(
+                    (e: any) => String(e.comment ?? '').trim().toLowerCase() === String(va.params.name ?? '').trim().toLowerCase());
+              const tf = (fields || []).find(f => f.path === `data.character_book.entries[${ei}].content`);
+              if (tf?.translated) {
+                viewFeedback += `\n--- content BẢN DỊCH (FULL, ${tf.translated.length} ký tự) ---\n${tf.translated}`;
+              }
+            }
           }
         }
 
@@ -2030,7 +2077,7 @@ ${ragBlock ? `\n${ragBlock}` : ''}${directiveBlock}`;
           sendingRef.current = false; // mở khoá để lượt tự-gửi tiếp theo chạy được
           // Auto-send the view content back to AI as follow-up
           setTimeout(() => {
-            handleSend(`[VIEW_FULL_REGEX KẾT QUẢ]:\n${viewFeedback}\n\nDựa trên nội dung đầy đủ ở trên, hãy tiếp tục xử lý yêu cầu trước đó của tôi.`);
+            handleSend(`[NỘI DUNG ĐẦY ĐỦ ĐÃ ĐỌC]:\n${viewFeedback}\n\nĐây là nội dung TRỌN VẸN, không còn bị cắt. Dựa trên nó, hãy tiếp tục xử lý yêu cầu trước đó của tôi.`);
           }, 500);
           return;
         }

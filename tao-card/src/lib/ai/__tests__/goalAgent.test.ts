@@ -116,12 +116,35 @@ describe('executeGoalPlan — luật hội tụ #42', () => {
     expect(r.log.some((l) => l.includes('hoàn nguyên'))).toBe(true);
   });
 
-  it('sửa dậm chân tại chỗ (không giảm lỗi) → dừng sau 1 vòng thay vì đốt hết maxFixRounds', async () => {
+  // (bug 162 phần 1) HỢP ĐỒNG NÀY ĐÃ ĐỔI CÓ CHỦ Ý — ghi lại để sau này không ai tưởng là hồi quy.
+  // Luật cũ: một vòng không GIẢM được tổng số lỗi ⇒ dừng ngay (tiết kiệm call).
+  // Vấn đề: vòng 2 mới là vòng ĐẦU TIÊN prompt sửa có phản hồi (bản đã thử + lỗi vẫn còn), nên dừng
+  // ở đó là chặn đúng lúc nó bắt đầu có cơ hội khá lên — và đó là lý do tính năng luôn kết thúc
+  // bằng "còn N lỗi, tự sửa tay đi", việc mà user nói người mới không làm được.
+  // Luật mới: chỉ dừng khi model trả về Y NGUYÊN bản cũ cho mọi mục còn lỗi (lúc đó thử thêm thật
+  // sự vô ích). Chốt "lỗi NỞ RA ⇒ hoàn nguyên + dừng" vẫn giữ nguyên — xem test ngay phía trên.
+  it('trả về Y NGUYÊN bản cũ → dừng sau 1 vòng, không đốt hết maxFixRounds', async () => {
     const plan = JSON.parse(PLAN_2_STEPS) as AgentPlan;
-    const { call, calls } = makeCall({ 'step:s1': 'ok', 'step:s2': 'BAD', 'fix:s2': 'BAD vẫn thế' });
+    const { call, calls } = makeCall({ 'step:s1': 'ok', 'step:s2': 'BAD', 'fix:s2': 'BAD' });
     const r = await executeGoalPlan(plan, makeToyDomain(), call, { maxFixRounds: 3 });
     expect(r.ok).toBe(false);
     expect(calls.filter((c) => c === 'fix:s2')).toHaveLength(1);
+    expect(r.log.some((l) => l.includes('trả về đúng bản cũ'))).toBe(true);
+  });
+
+  it('bản mới KHÁC nhưng chưa hết lỗi → vẫn thử tiếp (đây là chỗ "tự sửa" thật sự diễn ra)', async () => {
+    const plan = JSON.parse(PLAN_2_STEPS) as AgentPlan;
+    // Mỗi lần sửa trả một bản khác — đúng như model thật khi prompt đã đổi.
+    let k = 0;
+    const call: AgentCallFn = async (msgs) => {
+      const text = msgs.map((m) => m.content).join('\n');
+      if (text.includes('plan')) return PLAN_2_STEPS;
+      if (text.includes('fix')) return `BAD khác ${++k}`;
+      return text.includes('s1') ? 'ok' : 'BAD';
+    };
+    const r = await executeGoalPlan(plan, makeToyDomain(), call, { maxFixRounds: 3 });
+    expect(r.fixRounds, 'phải thử hết số vòng cho phép thay vì bỏ ngang').toBe(3);
+    expect(r.ok).toBe(false);
   });
 
   it('autofixDeterministic sửa được hết → không tốn call AI sửa nào', async () => {

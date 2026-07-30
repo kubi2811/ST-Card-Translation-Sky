@@ -23,7 +23,7 @@
  */
 import type { ChatMessage, LorebookEntry } from '../../types';
 import type { MVUZODSchema } from '../../types/mvuzod.types';
-import type { AgentIssue, AgentPlan, AgentStepSpec, GoalAgentDomain, AgentCallFn } from '../ai/goalAgent';
+import type { AgentIssue, AgentPlan, AgentStepSpec, GoalAgentDomain, AgentCallFn, FixAttemptInfo } from '../ai/goalAgent';
 import { EJS_SYSTEM_PROMPT, parseEjsResponse, type EJSEntryAction, type EjsStrategy } from '../../prompts/ejsPrompt';
 import { validateEJSEntry } from './ejsParser';
 import { STPT_API_PROMPT_BLOCK } from './stptApi';
@@ -503,7 +503,32 @@ export function createEjsDomain(ctx: EjsAgentContext): GoalAgentDomain<EjsDraft>
       return { items: out, fixed };
     },
 
-    buildFixMessages(item: EjsDraft, issues: AgentIssue[]): ChatMessage[] {
+    // (bug 162 phần 1) Cho phép khung BỎ khối không tự sửa được, thay vì bắt user sửa code.
+    canDropItems: true,
+
+    buildFixMessages(item: EjsDraft, issues: AgentIssue[], attempt?: FixAttemptInfo): ChatMessage[] {
+      // (bug 162 phần 1) Lần thử thứ 2 trở đi thì ĐỔI CÁCH, không gửi lại y nguyên prompt cũ:
+      // nói rõ lần trước đã sửa mà VẪN sai, kèm bản đã thử, và siết dần yêu cầu. Đây là chỗ biến
+      // "thử lại" thành "thích nghi" — thiếu nó thì vòng 2 chỉ là bản sao của vòng 1.
+      const escalate: string[] = [];
+      if (attempt && attempt.round > 1) {
+        escalate.push(
+          '',
+          `⚠️ ĐÂY LÀ LẦN THỬ ${attempt.round}/${attempt.maxRounds}. Lần trước bạn đã sửa nhưng bộ kiểm VẪN báo đúng những lỗi trên.`,
+          'Đừng sửa lại theo cùng một cách. Hãy làm khác đi:',
+          '- Đọc lại đúng nghĩa của từng mã lỗi, đừng đoán;',
+          '- Nếu một đoạn logic là nguồn lỗi mà không chắc sửa đúng, hãy VIẾT LẠI đoạn đó cho đơn giản hơn (ít nhánh, ít biến trung gian) — thà đơn giản mà chạy;',
+          '- Nếu lỗi do trùng tên/trùng biến, hãy đổi hẳn sang tên khác thay vì chỉnh nhẹ.',
+        );
+        if (attempt.round >= attempt.maxRounds) {
+          escalate.push(
+            `- ĐÂY LÀ LẦN CUỐI: hãy trả về bản TỐI GIẢN NHẤT còn giữ được mục đích chính, cắt hết phần phụ. Bản đơn giản mà sạch lỗi có giá trị hơn bản đầy đủ mà vỡ.`,
+          );
+        }
+      }
+      if (attempt?.previousAttempt) {
+        escalate.push('', 'Bản bạn đã thử ở lần trước (vẫn còn lỗi — đừng lặp lại nó):', '```', attempt.previousAttempt.slice(0, 3000), '```');
+      }
       return [
         { role: 'system', content: EJS_SYSTEM_PROMPT },
         { role: 'user', content: [
@@ -518,6 +543,7 @@ export function createEjsDomain(ctx: EjsAgentContext): GoalAgentDomain<EjsDraft>
           '```',
           'Lỗi cần sửa:',
           ...issues.map((i) => `- [${i.code}] ${i.message}`),
+          ...escalate,
         ].join('\n') },
       ];
     },

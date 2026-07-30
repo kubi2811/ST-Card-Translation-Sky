@@ -34,8 +34,12 @@ import {
   createEjsDomain, planEjsRich, buildAgentPlanFromRows,
   type EjsDraft, type EjsAgentContext,
 } from '../../lib/ejs/ejsAgent';
-import { ACTIVATION_LABEL, findOrphanConditionalEntries, type EjsPlanRow } from '../../lib/ejs/ejsPlanModel';
+import {
+  ACTIVATION_LABEL, findOrphanConditionalEntries, entriesNeedingLiveActivationCheck,
+  liveActivationCheckHint, type EjsPlanRow,
+} from '../../lib/ejs/ejsPlanModel';
 import { QUICK_PRESETS, PRESET_GROUP_LABEL, type PresetGroup } from '../../lib/ejs/ejsQuickPresets';
+import { attributePlanRows } from '../../lib/ejs/ejsPresetAttribution';
 
 /** Thứ tự nhóm preset hiện trên màn — đi từ việc hay dùng nhất tới việc nâng cao. */
 const PRESET_GROUP_ORDER: PresetGroup[] = ['all', 'condition', 'mvu', 'ui', 'bigdata', 'dynamic', 'orchestrate'];
@@ -77,6 +81,11 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
   // (bug 159-9) MỞ NHIỀU CÙNG LÚC — trước là một cái một lúc nên không so hai preset cạnh nhau
   // được, mà đây đúng là lúc cần so: chọn cái nào trong 20 cái thì phải đọc song song.
   const [expandedPresets, setExpandedPresets] = useState<Set<string>>(() => new Set());
+  // (bug 162 mục 3.1) Preset user vừa chọn — dùng để gắn nhãn cho từng dòng bảng kế hoạch.
+  // Dùng ref vì hàm lập kế hoạch đọc giá trị này ngoài chu kỳ render (trong callback async).
+  const [activePresetIds, setActivePresetIds] = useState<string[]>([]);
+  const activePresetIdsRef = useRef<string[]>([]);
+  useEffect(() => { activePresetIdsRef.current = activePresetIds; }, [activePresetIds]);
   const togglePreset = (id: string) => setExpandedPresets((prev) => {
     const n = new Set(prev);
     if (n.has(id)) n.delete(id); else n.add(id);
@@ -145,7 +154,8 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
     abortRef.current = ac;
     try {
       const p = await planEjsRich(s.goal, ctx, makeCall(ac.signal), ac.signal);
-      s.setPlan(p, cardKey);
+      // (bug 162 mục 3.1) Gắn nhãn preset cho từng dòng trước khi đưa vào bảng.
+      s.setPlan({ ...p, rows: attributePlanRows(p.rows, activePresetIdsRef.current) }, cardKey);
       s.setPhase('review');
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') { s.setPhase('idle'); return; }
@@ -448,6 +458,12 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
         );
       }
 
+      // (bug 162 mục 3.7) Entry TẮT TAY trông vào activewi — nói rõ tool kiểm được gì và KHÔNG kiểm
+      // được gì, kèm cách user tự xác nhận một lần trong chat thật.
+      for (const line of liveActivationCheckHint(
+        entriesNeedingLiveActivationCheck(plan.rows.filter(r => accepted.has(r.id))),
+      )) s.pushProgress(line);
+
       // (Goal 28/07) CHỐT THAM CHIẾU: quét toàn bộ getwi/activewi trong lorebook xem còn trỏ
       // đúng entry tồn tại không. Vá tất định theo mapping tách/đổi tên + khớp không phân biệt
       // hoa-thường; còn lại BÁO RÕ, không đoán mò. Sạch thì báo sạch.
@@ -649,7 +665,10 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
                         <div className="flex items-start gap-1 p-1.5">
                           <button
                             disabled={busy || blocked}
-                            onClick={() => st.setGoal(built.goal)}
+                            // (bug 162 mục 3.1) Nhớ luôn preset vừa chọn — bấm preset chỉ đổ ra
+                            // chuỗi goal nên danh tính preset rơi mất ngay ở bước đầu, khiến bảng
+                            // kế hoạch không biết dòng nào của preset nào.
+                            onClick={() => { st.setGoal(built.goal); setActivePresetIds([preset.id]); }}
                             title={blocked ? built.blockers.join('\n') : preset.effect}
                             className={`flex-1 min-w-0 text-left ${blocked ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
                           >
@@ -812,6 +831,16 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
                             </span>
                           )}
                           <span className="text-xs font-medium truncate">{r.name}</span>
+                          {/* (bug 162 mục 3.1) Dòng này do PRESET NÀO sinh ra. Trước đây bảng chỉ có
+                              mũi tên chế độ và nhãn Tách/Tạo mới, nên user phải tự đoán qua icon
+                              hoặc nội dung lý do. Không suy được chắc chắn thì KHÔNG hiện nhãn —
+                              nhãn sai còn tệ hơn không có nhãn. */}
+                          {r.presetTitle && (
+                            <span
+                              title={`Thay đổi này đến từ Preset Nhanh: ${r.presetTitle} (${r.presetId})`}
+                              className="px-1.5 py-0.5 rounded text-[9px] bg-sky-500/15 text-sky-300 shrink-0"
+                            >⚡ {r.presetTitle}</span>
+                          )}
                           {typeof r.tokensDelta === 'number' && r.tokensDelta !== 0 && (
                             <span className={`px-1.5 py-0.5 rounded text-[9px] ${
                               r.tokensDelta < 0 ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300'

@@ -101,9 +101,43 @@ function varList(ctx: PresetCardContext, max = 20): string {
     : '(chưa có biến nào)';
 }
 
+/**
+ * (bug 162 mục 3.3–3.6) QUY ƯỚC CHUNG CHO MỌI KHỐI EJS — áp cho CẢ preset chạy lẻ.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Bốn mục user nêu sau khi soi kết quả trên card thật đều là MỘT loại lỗi: hai entry EJS trong cùng
+ * một card không thống nhất với nhau. Chúng vô hại khi đọc riêng từng entry, nhưng đặt cạnh nhau là
+ * so sánh sai giá trị → kích hoạt sai → không có lỗi nào báo.
+ *   3.3 tạo dư entry điều khiển gần trùng tên ("Bộ điều khiển EJS" và "… - Mapping Ngữ cảnh").
+ *   3.4 ba kiểu default khác nhau cho biến cùng vai trò ('' / 'Chưa rõ' / 'Chưa xác định').
+ *   3.5 default '100' dạng CHUỖI cho biến số học, trong khi entry khác đã ép Number() đúng.
+ *   3.6 tách entry không đồng đều — dồn phần còn lại vào một entry "Khác" chung, làm loãng chi tiết.
+ * Đây là hợp đồng dạng chữ đưa thẳng vào prompt, nên preset lẻ hay gói tổng đều bị ràng như nhau.
+ */
+export const EJS_HOUSE_RULES: string[] = [
+  '• MỘT bộ điều khiển cho MỘT việc: không tạo hai entry điều khiển gần trùng tên (ví dụ "Bộ điều khiển EJS" và "Bộ điều khiển EJS - Mapping Ngữ cảnh"). Cần thêm logic thì SỬA entry điều khiển đã có, không tạo entry mới cạnh nó. Trước khi tạo, kiểm tên đã tồn tại chưa — kể cả trùng gần.',
+  '• GIÁ TRỊ MẶC ĐỊNH phải thống nhất trong toàn card, không mỗi entry một kiểu:',
+  '   – biến CHỮ: dùng đúng một chuỗi "Chưa rõ" (không dùng \'\' rỗng, không "Chưa xác định", không "N/A" lẫn lộn);',
+  '   – biến SỐ : mặc định 0;',
+  '   – biến ĐÚNG/SAI: mặc định false.',
+  '   Lý do: entry này so sánh với \'\' còn entry kia so với "Chưa rõ" thì điều kiện sai âm thầm, kích hoạt lệch mà không báo lỗi.',
+  '• BIẾN SỐ HỌC luôn ép kiểu: Number(getvar(...) ?? 0) — không bao giờ để default dạng chuỗi kiểu \'100\'. So chuỗi với số ("100" > 90 là false) là lỗi im lặng kinh điển.',
+  '• TÁCH ENTRY thì tách ĐỀU: mỗi mục có mô tả riêng đủ dày trong bản gốc thì được một entry riêng. Không dồn phần còn lại vào một entry "Khác"/"Còn lại" chung, vì làm vậy là mất chi tiết riêng của từng mục. Chỉ gộp những mục thật sự chỉ có một hai dòng lặt vặt, và khi gộp phải giữ NGUYÊN VĂN nội dung của từng mục, không rút gọn.',
+  '• Không dùng chung một tên biến cho hai đường dẫn khác nhau, và không trùng tên entry.',
+];
+
+/** Dấu nhận biết bộ quy ước đã được nối vào goal — để không nối hai lần. */
+const HOUSE_RULES_MARK = 'QUY ƯỚC CHUNG CHO MỌI KHỐI EJS';
+
+/** Nối bộ quy ước vào goal của preset lẻ (idempotent). */
+function withHouseRules(r: QuickPresetResult): QuickPresetResult {
+  if (r.goal.includes(HOUSE_RULES_MARK)) return r;
+  return { ...r, goal: `${r.goal}\n\n━━ ${HOUSE_RULES_MARK} ━━\n${EJS_HOUSE_RULES.join('\n')}` };
+}
+
 // ── Các preset ──────────────────────────────────────────────────────────────
 
-export const QUICK_PRESETS: QuickPreset[] = [
+/** Bản GỐC — gói tổng ghép từ danh sách này để bộ quy ước không bị nối lồng 19 lần. */
+const RAW_PRESETS: QuickPreset[] = [
   {
     id: 'save-tokens',
     group: 'condition',
@@ -469,15 +503,33 @@ export const QUICK_PRESETS: QuickPreset[] = [
     icon: '🎛️',
     build: (ctx) => {
       const ui = detectExistingStatusUi(ctx.entries, ctx.regexScripts ?? [], ctx.tavernScripts ?? []);
+      // (bug 162 phần 2) TỰ CHẠY ĐƯỢC MỘT MÌNH.
+      // Bản cũ chặn thẳng: 'Thẻ chưa có thanh trạng thái nào để gắn nút — chạy preset "Thanh trạng
+      // thái đồ hoạ" trước.' Đó đúng là thứ user cấm: "19 preset phải hoàn toàn độc lập, mỗi cái tự
+      // chạy được từ đầu đến cuối một mình, không phụ thuộc phải chạy chung với preset khác".
+      // Thẻ chưa có thanh trạng thái thì preset này TỰ dựng một thanh tối giản rồi gắn nút lên,
+      // chứ không đẩy việc sang preset khác. Vẫn chặn nếu thiếu schema — cái đó là thiếu DỮ LIỆU
+      // đầu vào, không phải phụ thuộc preset khác, và không có biến thì chẳng có gì để hiện.
+      const goal = [
+        'Thêm BẢNG ĐIỀU KHIỂN TƯƠNG TÁC vào thanh trạng thái:',
+        '- Nút thu gọn/mở rộng phần chi tiết; nếu có nhiều nhân vật thì thêm tab chuyển qua lại.',
+        '- JS nhúng trong @@iframe, chỉ thao tác DOM bên trong iframe.',
+        '- KHÔNG ghi ngược vào biến MVU (trừ khi có cơ chế sendPrompt rõ ràng) — tránh làm lệch dữ liệu.',
+      ];
+      if (ui.hasStatusUi) {
+        goal.push(`- Thẻ ĐÃ CÓ thanh trạng thái (${ui.places[0]}) — gắn nút vào CHÍNH cái đó, tuyệt đối không tạo thanh mới song song.`);
+      } else {
+        goal.push(
+          '- Thẻ CHƯA có thanh trạng thái: preset này tự dựng luôn một thanh tối giản (chỉ khung + vài',
+          `  chỉ số chính từ ${varList(ctx, 6)}) rồi gắn nút lên đó. Không đòi người dùng chạy preset khác trước.`,
+          '- Thanh tự dựng phải để sẵn chỗ mở rộng, để sau này chạy preset "Thanh trạng thái đồ hoạ" thì',
+          '  nó SỬA cái này chứ không tạo thêm cái thứ hai.',
+        );
+      }
       return {
-        goal: [
-          'Thêm BẢNG ĐIỀU KHIỂN TƯƠNG TÁC vào thanh trạng thái:',
-          '- Nút thu gọn/mở rộng phần chi tiết; nếu có nhiều nhân vật thì thêm tab chuyển qua lại.',
-          '- JS nhúng trong @@iframe, chỉ thao tác DOM bên trong iframe.',
-          '- KHÔNG ghi ngược vào biến MVU (trừ khi có cơ chế sendPrompt rõ ràng) — tránh làm lệch dữ liệu.',
-        ].join('\n'),
-        blockers: ui.hasStatusUi ? [] : ['Thẻ chưa có thanh trạng thái nào để gắn nút — chạy preset "Thanh trạng thái đồ hoạ" trước.'],
-        notes: [],
+        goal: goal.join('\n'),
+        blockers: needSchema(ctx),
+        notes: ui.hasStatusUi ? [] : ['Thẻ chưa có thanh trạng thái — preset sẽ tự dựng một thanh tối giản để gắn nút.'],
       };
     },
   },
@@ -625,56 +677,107 @@ export const QUICK_PRESETS: QuickPreset[] = [
       'Gói tổng: tối ưu token cho toàn bộ entry, mở lore theo tiến trình, chỉnh từ khoá cho NPC/địa điểm, ' +
       'chèn khối biến cho AI đọc, và đổi tính cách theo chỉ số. Nên chạy khi card đã tương đối hoàn chỉnh ' +
       'vì kế hoạch sẽ dài — bạn vẫn duyệt được từng dòng trước khi chạy.',
-    build: (ctx) => {
-      const ui = detectExistingStatusUi(ctx.entries, ctx.regexScripts ?? [], ctx.tavernScripts ?? []);
-      const hasSchema = !!ctx.schema?.fields?.length;
-      const consts = constantEntries(ctx.entries);
-      const heavy = ctx.entries.reduce((s, e) => s + estimateEntryTokens(e), 0);
-
-      const parts = [
-        `Làm một lượt tổng cho card này (${ctx.entries.length} entry, ~${heavy} token lore).`,
-        'Hãy tự quyết những việc dưới đây, việc nào card không cần thì bỏ và nói rõ vì sao:',
-        '',
-        `1. TIẾT KIỆM TOKEN: rà ${consts.length} entry đang "Luôn bật", giữ lại đúng những entry AI buộc`,
-        '   phải biết mọi lượt (quy tắc xưng hô, thiết lập thế giới), còn lại hạ xuống từ khoá hoặc điều kiện.',
-        '   KHÔNG đụng entry thuộc bộ máy MVU ([initvar], quy tắc cập nhật, danh sách biến, khối EJS).',
-        '2. TỪ KHOÁ: entry nhân vật phụ / địa điểm / vật phẩm → kích hoạt theo từ khoá, đặt keys sát với',
-        '   cách người chơi thật sự gọi tên; key của hai entry không được trùng hệt hay bao nhau.',
-        '3. TÁCH ENTRY GỘP: entry nhồi nhiều phần có điều kiện kích hoạt khác nhau (chuỗi sự kiện, danh',
-        '   sách địa điểm…) → tách thành entry riêng (action split_entry, khai rõ splitInto từng phần).',
-        '   Nội dung luôn đi cùng nhau thì giữ chung.',
-      ];
-      if (hasSchema) {
-        parts.push(
-          `4. LORE THEO TIẾN TRÌNH: dùng biến của card (${varList(ctx, 12)}) để mở lore đúng mốc — entry tắt`,
-          '   sẵn, controller bật bằng await activewi(tên, true); mỗi entry tắt phải có đúng chỗ bật nó.',
-          '5. KHỐI BIẾN CHO AI ĐỌC: chèn giá trị biến hiện tại vào prompt để AI không phải đoán chỉ số,',
-          '   ưu tiên DIỄN GIẢI thành văn ngắn thay vì bảng số khô.',
-          '6. TÍNH CÁCH THEO CHỈ SỐ: chọn một biến làm thang, chia 3-4 mốc, mỗi mốc một giọng điệu.',
-          '7. CHĂM SÓC DỮ LIỆU MVU (nếu thấy đáng làm): khối chuẩn hoá giá trị lệch schema (không sửa',
-          '   schema) và/hoặc cảnh báo ngưỡng chỉ số quan trọng.',
-        );
-      } else {
-        parts.push(
-          '4. Card CHƯA có MVUZOD schema nên bỏ qua phần điều khiển theo biến — chỉ làm phần từ khoá,',
-          '   tách entry và tối ưu Constant. Nêu trong ghi chú rằng nên tạo schema để mở khoá phần còn lại.',
-        );
-      }
-      if (ui.hasStatusUi) {
-        parts.push('', 'QUAN TRỌNG: card ĐÃ CÓ thanh trạng thái riêng — TUYỆT ĐỐI không tạo giao diện mới, chỉ dùng lại/sửa cái sẵn có.');
-      }
-      parts.push('', 'Các khối EJS tạo ra KHÔNG được trùng tên entry và không được dùng chung tên biến cho hai đường dẫn khác nhau.');
-
-      const notes: string[] = [];
-      if (!hasSchema) notes.push('Chưa có MVUZOD schema — gói tổng sẽ bỏ phần điều khiển theo biến. Tạo schema ở tab MVUZOD để dùng đủ.');
-      if (ui.hasStatusUi) notes.push(`Đã phát hiện thanh trạng thái sẵn có (${ui.places[0]}) — preset đã dặn AI không tạo trùng.`);
-      if (ctx.entries.length > 150) notes.push(`Card có ${ctx.entries.length} entry — kế hoạch sẽ dài và tốn nhiều call. Bạn có thể từ chối bớt dòng trước khi chạy.`);
-
-      return {
-        goal: parts.join('\n'),
-        blockers: ctx.entries.length === 0 ? ['Card chưa có entry lorebook nào để làm việc.'] : [],
-        notes,
-      };
-    },
+    // (bug 162 phần 2) DỰNG TỪ CHÍNH 19 PRESET CON, KHÔNG VIẾT TAY SONG SONG.
+    // Bản cũ liệt kê tay đúng 7 mục (user đếm ra "7/19" — đếm đúng): thiếu hẳn status-display,
+    // mvu-delta, ui-hud, ui-panel, ctx-compress, data-cleanup, dyn-random, dyn-timing,
+    // orch-dynkeys, orch-postfix. Đó là hệ quả tất yếu của việc có HAI nguồn sự thật: mỗi lần thêm
+    // preset con thì phải nhớ sửa cả gói tổng, và không ai nhớ.
+    // Nay gói tổng gọi build() của từng preset con rồi ghép lại → thêm preset thứ 20 là nó tự có
+    // mặt, không thể lệch lại được. Preset nào KHÔNG áp được cho card này (blockers) thì bỏ và nói
+    // rõ vì sao — đúng yêu cầu "việc nào card không cần thì bỏ và giải thích".
+    build: (ctx) => buildFullSuite(ctx),
   },
 ];
+
+/** Vì sao một preset bị bỏ khỏi gói tổng — hiện thẳng cho user, không im lặng. */
+export interface SkippedPreset { id: string; title: string; reason: string }
+
+export interface FullSuiteBreakdown {
+  applied: QuickPreset[];
+  skipped: SkippedPreset[];
+}
+
+/**
+ * Danh sách preset dùng cho UI — mỗi preset lẻ đã được nối bộ quy ước chung.
+ * Phải nối ở đây chứ không nối trong từng build(): yêu cầu của user là "19 preset phải hoàn toàn
+ * độc lập, mỗi cái tự chạy được một mình mà không lỗi", nên preset chạy LẺ cũng phải chịu đúng
+ * những ràng buộc mà gói tổng áp — không thì chạy lẻ ra kết quả lệch chuẩn so với chạy gói.
+ */
+export const QUICK_PRESETS: QuickPreset[] = RAW_PRESETS.map((p) =>
+  p.group === 'all' ? p : { ...p, build: (ctx: PresetCardContext) => withHouseRules(p.build(ctx)) },
+);
+
+/** 19 preset riêng lẻ — mọi thứ trừ gói tổng. Một nguồn sự thật duy nhất. */
+export function individualPresets(): QuickPreset[] {
+  return RAW_PRESETS.filter((p) => p.group !== 'all');
+}
+
+/**
+ * (bug 162 phần 2) Preset nào áp được cho card này, preset nào không.
+ * Dùng CHÍNH blockers của từng preset con làm điều kiện — không đoán lại lần thứ hai, nên gói tổng
+ * và preset lẻ luôn nói cùng một điều về cùng một card.
+ */
+export function fullSuiteBreakdown(ctx: PresetCardContext): FullSuiteBreakdown {
+  const applied: QuickPreset[] = [];
+  const skipped: SkippedPreset[] = [];
+  for (const p of individualPresets()) {
+    let r: QuickPresetResult | null = null;
+    try { r = p.build(ctx); } catch (e) {
+      skipped.push({ id: p.id, title: p.title, reason: `lỗi khi dựng: ${e instanceof Error ? e.message : String(e)}` });
+      continue;
+    }
+    if (r.blockers.length) skipped.push({ id: p.id, title: p.title, reason: r.blockers[0] });
+    else applied.push(p);
+  }
+  return { applied, skipped };
+}
+
+function buildFullSuite(ctx: PresetCardContext): QuickPresetResult {
+  const uiFound = detectExistingStatusUi(ctx.entries, ctx.regexScripts ?? [], ctx.tavernScripts ?? []);
+  const heavy = ctx.entries.reduce((s, e) => s + estimateEntryTokens(e), 0);
+  const { applied, skipped } = fullSuiteBreakdown(ctx);
+
+  const parts: string[] = [
+    `Làm một lượt tổng cho card này (${ctx.entries.length} entry, ~${heavy} token lore).`,
+    `Gói tổng gồm ${applied.length} việc dưới đây — làm HẾT, việc nào xét thấy card này thật sự không cần thì vẫn phải nói rõ lý do trong ghi chú thay vì im lặng bỏ.`,
+    '',
+  ];
+  applied.forEach((p, i) => {
+    const r = p.build(ctx);
+    // Giữ nguyên văn goal của preset con: đó chính là thứ đã được viết và kiểm cho preset lẻ, nên
+    // gói tổng làm y hệt preset lẻ chứ không phải một bản diễn giải khác dễ lệch.
+    parts.push(`━━ ${i + 1}. ${p.title.toUpperCase()} [preset: ${p.id}] ━━`, r.goal, '');
+  });
+
+  // (bug 162 mục 3.2) Bao phủ TOÀN BỘ entry, trừ đúng bộ máy MVU.
+  parts.push(
+    '━━ PHẠM VI RÀ SOÁT (bắt buộc) ━━',
+    `Card có ${ctx.entries.length} entry. Phải XEM XÉT TỪNG entry một, không được chỉ chạm vào vài entry liên quan tới nhân vật chính.`,
+    'CHỈ được miễn trừ nhóm bộ máy MVU: [initvar], entry quy tắc cập nhật biến, entry danh sách biến cho AI đọc — nhóm này giữ nguyên tuyệt đối, không đụng.',
+    'Mọi entry lore / nhân vật phụ / địa điểm / vật phẩm / cơ chế khác đều phải được cân nhắc. Entry nào xét rồi mà quyết định giữ nguyên thì ghi vào ghi chú kèm lý do — để người dùng biết nó ĐÃ được xét, chứ không phải bị bỏ sót.',
+    '',
+    '━━ QUY ƯỚC CHUNG CHO MỌI KHỐI EJS TẠO RA ━━',
+    ...EJS_HOUSE_RULES,
+  );
+  if (uiFound.hasStatusUi) {
+    parts.push('', 'QUAN TRỌNG: card ĐÃ CÓ thanh trạng thái riêng — TUYỆT ĐỐI không tạo giao diện mới, chỉ dùng lại/sửa cái sẵn có.');
+  }
+
+  const notes: string[] = [];
+  notes.push(`Gói tổng áp ${applied.length}/${individualPresets().length} preset con.`);
+  for (const s of skipped) notes.push(`Bỏ "${s.title}": ${s.reason}`);
+  if (uiFound.hasStatusUi) notes.push(`Đã phát hiện thanh trạng thái sẵn có (${uiFound.places[0]}) — preset đã dặn AI không tạo trùng.`);
+  if (ctx.entries.length > 150) notes.push(`Card có ${ctx.entries.length} entry — kế hoạch sẽ dài và tốn nhiều call. Bạn có thể từ chối bớt dòng trước khi chạy.`);
+
+  return {
+    goal: parts.join('\n'),
+    // Gói tổng chỉ bị chặn khi KHÔNG preset con nào chạy được — còn một cái chạy được thì vẫn có
+    // việc để làm, chặn cả gói là làm mất luôn phần dùng được.
+    blockers: ctx.entries.length === 0
+      ? ['Card chưa có entry lorebook nào để làm việc.']
+      : applied.length === 0
+        ? ['Không preset nào áp được cho card này — xem lý do từng cái ở phần ghi chú.']
+        : [],
+    notes,
+  };
+}

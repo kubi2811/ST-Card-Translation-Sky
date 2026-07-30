@@ -64,9 +64,33 @@ export interface GoalAgentDomain<TItem> {
    * Trả về items mới + danh sách mô tả đã sửa gì (cho log). Không bắt buộc.
    */
   autofixDeterministic?(items: TItem[], issues: AgentIssue[]): { items: TItem[]; fixed: string[] };
-  buildFixMessages(item: TItem, issues: AgentIssue[]): ChatMessage[];
+  /**
+   * (bug 162 phần 1) `attempt` để prompt sửa BIẾT nó là lần thử thứ mấy và lần trước đã fail ra sao.
+   * Bản cũ mỗi vòng gửi lại prompt y hệt → model trả lại y hệt → vòng 2 không bao giờ khá hơn vòng
+   * 1, nên khung phải dừng sớm và đẩy danh sách lỗi kỹ thuật cho user tự sửa. Có phản hồi thì mới
+   * gọi là "tự sửa".
+   */
+  buildFixMessages(item: TItem, issues: AgentIssue[], attempt?: FixAttemptInfo): ChatMessage[];
   parseFixOutput(raw: string, item: TItem): TItem;
   itemKey(item: TItem): string;
+  /**
+   * (bug 162 phần 1) Mục vẫn lỗi sau khi thử hết cách thì có được BỎ đi không.
+   * Với EJS thì có: thà áp 11/12 khối chạy được còn hơn đưa cho user (nhất là người mới) một danh
+   * sách lỗi kỹ thuật kèm câu "tự sửa tay đi" — họ sửa mò là hỏng cả card.
+   */
+  canDropItems?: boolean;
+}
+
+/** (bug 162 phần 1) Bối cảnh một lần thử sửa — để prompt thích nghi thay vì lặp lại. */
+export interface FixAttemptInfo {
+  /** Lần thử thứ mấy (1-based). */
+  round: number;
+  /** Tổng số lần sẽ thử. */
+  maxRounds: number;
+  /** Code/nội dung của lần thử TRƯỚC (đã fail) — null ở lần đầu. */
+  previousAttempt?: string;
+  /** Lỗi VẪN CÒN sau lần thử trước. */
+  stillFailing?: AgentIssue[];
 }
 
 export interface GoalRunEvent {
@@ -82,6 +106,8 @@ export interface GoalRunResult<TItem> {
   issues: AgentIssue[];
   fixRounds: number;
   log: string[];
+  /** (bug 162 phần 1) Mục đã BỎ vì không tự sửa được — user cần biết đã mất gì, nhưng không phải sửa. */
+  dropped?: string[];
 }
 
 export interface GoalRunOptions {
@@ -171,6 +197,9 @@ export async function executeGoalPlan<TItem>(
 
   // ─── Vòng sửa AI hội tụ (luật #42: không tiến bộ ⇒ hoàn nguyên + dừng) ───
   let fixRounds = 0;
+  /** (bug 162 phần 1) Bản đã thử của từng mục — đưa vào prompt lần sau làm phản hồi. */
+  const prevAttempt = new Map<string, string>();
+  const errsOf = (list: AgentIssue[], key: string) => list.filter((x) => x.level === 'error' && x.where === key);
   let errCount = countErrors(issues);
   while (errCount > 0 && fixRounds < maxFixRounds) {
     assertNotAborted(signal);
@@ -183,9 +212,18 @@ export async function executeGoalPlan<TItem>(
       const itemIssues = issues.filter((x) => x.level === 'error' && x.where === key);
       if (!itemIssues.length) continue;
       assertNotAborted(signal);
+      // (bug 162 phần 1) Gửi kèm bản đã thử lần trước + lỗi VẪN CÒN. Bản cũ mỗi vòng gửi lại prompt
+      // y hệt nên model trả lại y hệt, vòng 2 không bao giờ khá hơn vòng 1 — đó chính là lý do
+      // khung phải dừng sớm rồi đẩy danh sách lỗi cho user tự sửa.
       const raw = await callWithRetry(
-        call, domain.buildFixMessages(nextItems[i], itemIssues), `${domain.name}: sửa ${key}`, signal,
+        call,
+        domain.buildFixMessages(nextItems[i], itemIssues, {
+          round: fixRounds, maxRounds: maxFixRounds,
+          previousAttempt: prevAttempt.get(key), stillFailing: itemIssues,
+        }),
+        `${domain.name}: sửa ${key} (vòng ${fixRounds})`, signal,
       );
+      prevAttempt.set(key, JSON.stringify(nextItems[i]));
       nextItems[i] = domain.parseFixOutput(raw, nextItems[i]);
     }
     // Lỗi không gắn item cụ thể (where rỗng) thì AI không có chỗ sửa — thoát sớm cho đỡ tốn call.
@@ -197,18 +235,55 @@ export async function executeGoalPlan<TItem>(
       items = nextItems;
       issues = nextIssues;
       errCount = nextErr;
+    } else if (nextErr === errCount) {
+      // (bug 162 phần 1) BẰNG NHAU KHÔNG CÒN LÀ LÝ DO ĐỂ DỪNG.
+      // Bản cũ gộp "bằng" với "nở ra" rồi dừng cả hai. Nhưng vòng 2 mới là vòng ĐẦU TIÊN có phản
+      // hồi (bản đã thử + lỗi vẫn còn) — dừng ở đó là chặn đúng lúc nó bắt đầu có cơ hội khá lên,
+      // và đó chính là lý do tính năng này luôn kết thúc bằng "còn N lỗi, tự sửa đi".
+      // Nay chỉ dừng khi model trả về Y NGUYÊN bản cũ cho MỌI mục còn lỗi — lúc đó thử thêm mới
+      // thật sự là vô ích. Còn "khác nhưng chưa hết lỗi" thì vẫn cho đi tiếp.
+      const failing = nextItems.filter((it) => errsOf(nextIssues, domain.itemKey(it)).length > 0);
+      const allIdentical = failing.length > 0 && failing.every((it) => {
+        const before = items.find((o) => domain.itemKey(o) === domain.itemKey(it));
+        return before !== undefined && JSON.stringify(before) === JSON.stringify(it);
+      });
+      if (allIdentical) {
+        say('reverted', `↩️ Vòng sửa trả về đúng bản cũ cho mọi mục còn lỗi (${errCount} lỗi) — thử thêm cũng vô ích, dừng tự sửa.`);
+        break;
+      }
+      items = nextItems;
+      issues = nextIssues;
+      say('fixing', `Tổng lỗi giữ nguyên (${errCount}) nhưng bản mới khác bản cũ — tiếp tục thử cách khác.`);
     } else {
-      // Không giảm (hoặc NỞ RA) ⇒ giữ bản cũ, dừng — đây là chốt chống "3 lỗi thành 500".
-      say('reverted', `↩️ Vòng sửa làm lỗi ${nextErr > errCount ? `NỞ từ ${errCount} lên ${nextErr}` : `giữ nguyên ${errCount}`} — hoàn nguyên bản trước và dừng tự sửa.`);
+      // NỞ RA ⇒ giữ bản cũ, dừng — chốt chống "3 lỗi thành 500", giữ nguyên từ bản cũ.
+      say('reverted', `↩️ Vòng sửa làm lỗi NỞ từ ${errCount} lên ${nextErr} — hoàn nguyên bản trước và dừng tự sửa.`);
       break;
     }
     if (orphan.length === issues.filter((x) => x.level === 'error').length && orphan.length > 0) break;
   }
 
+  // ─── (bug 162 phần 1) CÒN LỖI THÌ BỎ MỤC LỖI, ĐỪNG TRAO VIỆC SỬA CODE CHO USER ───
+  // User nói thẳng: "với người mới, không phải ai cũng biết cách sửa, dễ làm hỏng cả Card khi cố tự
+  // sửa mà không hiểu rõ". Nên thà áp 11/12 khối chạy được và nói rõ đã bỏ cái nào, còn hơn đưa ra
+  // một danh sách lỗi kỹ thuật kèm hàm ý "tự lo".
+  const dropped: string[] = [];
+  if (countErrors(issues) > 0 && domain.canDropItems) {
+    const bad = new Set(issues.filter((x) => x.level === 'error').map((x) => x.where).filter(Boolean));
+    const keep = items.filter((it) => !bad.has(domain.itemKey(it)));
+    if (keep.length < items.length) {
+      for (const it of items) if (bad.has(domain.itemKey(it))) dropped.push(domain.itemKey(it));
+      items = keep;
+      issues = domain.validate(items);
+      say('fixing', `🗑️ Đã bỏ ${dropped.length} mục không tự sửa được sau ${fixRounds} vòng: ${dropped.join(', ')}. Phần còn lại vẫn dùng được bình thường.`);
+    }
+  }
+
   const ok = countErrors(issues) === 0;
   say('done', ok
-    ? `✅ Xong: ${items.length} kết quả qua kiểm tự động${issues.length ? ` (${issues.length} cảnh báo nhẹ)` : ''}.`
+    ? `✅ Xong: ${items.length} kết quả qua kiểm tự động`
+      + `${dropped.length ? ` (đã bỏ ${dropped.length} mục không tự sửa được — bạn không phải sửa gì bằng tay)` : ''}`
+      + `${issues.length ? ` (${issues.length} cảnh báo nhẹ)` : ''}.`
     : `⚠️ Còn ${countErrors(issues)} lỗi sau ${fixRounds} vòng tự sửa — xem chi tiết bên dưới.`);
 
-  return { ok, items, issues, fixRounds, log };
+  return { ok, items, issues, fixRounds, log, dropped };
 }

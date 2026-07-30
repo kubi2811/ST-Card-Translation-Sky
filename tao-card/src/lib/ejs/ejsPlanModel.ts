@@ -88,6 +88,14 @@ export interface EjsPlanRow {
    * Là ƯỚC LƯỢNG tất định từ dữ liệu đo được, hiện trong bảng để user thấy hiệu quả trước khi duyệt.
    */
   tokensDelta?: number;
+  /**
+   * (bug 162 mục 3.1) PRESET NÀO sinh ra dòng này.
+   * User: "bảng chỉ hiện mũi tên 'Luôn bật → Theo từ khoá' hoặc nhãn 'Tách'/'Tạo mới' — không ghi
+   * rõ mục đó đang áp Preset Nhanh nào trong 19 preset, phải tự đoán qua icon hay nội dung lý do".
+   * Đúng: bảng vốn không mang thông tin này. `presetId` để đối chiếu máy, `presetTitle` để hiện nhãn.
+   */
+  presetId?: string;
+  presetTitle?: string;
 }
 
 /** Kế hoạch đầy đủ — thay cho AgentPlan văn xuôi của bản cũ. */
@@ -339,8 +347,13 @@ export function findOrphanConditionalEntries(
   rowsAccepted: EjsPlanRow[],
   generatedCode: string[],
 ): string[] {
+  // (bug 162 mục 3.7) TÍNH CẢ 'disabled', KHÔNG CHỈ 'conditional'.
+  // Bằng chứng user: "Cấp Hiệu Trấn Minh" và "Shard Collapse Mechanic" bị chuyển hẳn sang TẮT THỦ
+  // CÔNG rồi dựa vào activewi để cưỡng bức bật. Chốt chặn cũ chỉ soi proposedMode === 'conditional'
+  // nên hai entry đó lọt hoàn toàn — không controller nào bật thì lore mất sạch mà không lỗi nào
+  // báo, đúng loại "cơ chế bị vô hiệu âm thầm" mà user đã gặp trước đây.
   const wantConditional = rowsAccepted
-    .filter(r => r.target === 'lorebook' && r.proposedMode === 'conditional')
+    .filter(r => r.target === 'lorebook' && (r.proposedMode === 'conditional' || r.proposedMode === 'disabled'))
     .map(r => r.name);
   if (!wantConditional.length) return [];
 
@@ -350,4 +363,33 @@ export function findOrphanConditionalEntries(
     const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return !new RegExp(`(?:activewi|activateWorldInfo|getwi)\\s*\\([^)]*${esc}`, 'i').test(allCode);
   });
+}
+
+/**
+ * (bug 162 mục 3.7) Entry bị TẮT TAY mà trông vào activewi để bật — cần user xác nhận MỘT LẦN
+ * trong chat thật.
+ *
+ * Nói thẳng giới hạn: tool kiểm được "có controller gọi activewi đúng tên entry đó hay không"
+ * (findOrphanConditionalEntries ở trên), nhưng KHÔNG kiểm được "activewi có thắng nổi cờ tắt tay
+ * trong SillyTavern hay không" — đó là hành vi runtime của SillyTavern, chỉ chat thật mới trả lời
+ * được. Bịa ra một câu "đã kiểm, ổn" thì tệ hơn im lặng.
+ * Nên trả về danh sách entry rơi vào diện đó kèm hướng dẫn kiểm cụ thể, để user xác nhận một lần
+ * rồi yên tâm về sau.
+ */
+export function entriesNeedingLiveActivationCheck(rowsAccepted: EjsPlanRow[]): string[] {
+  return rowsAccepted
+    .filter(r => r.target === 'lorebook' && r.proposedMode === 'disabled')
+    .map(r => r.name);
+}
+
+/** Hướng dẫn kiểm — cụ thể tới mức bấm theo được, không nói chung chung. */
+export function liveActivationCheckHint(names: string[]): string[] {
+  if (!names.length) return [];
+  return [
+    `⚠️ ${names.length} entry được đặt TẮT TAY và trông vào activewi để bật: ${names.slice(0, 5).join(', ')}${names.length > 5 ? '…' : ''}.`,
+    'Tool đã kiểm có controller gọi đúng tên chúng, NHƯNG việc "activewi có thắng được cờ tắt tay" là hành vi của SillyTavern — chỉ chat thật mới xác nhận được. Kiểm một lần rồi khỏi lo về sau:',
+    `1. Nạp thẻ vào SillyTavern, mở panel World Info và xác nhận các entry trên đang ở trạng thái tắt (đèn xám).`,
+    `2. Chat một câu tạo ra đúng điều kiện mà controller đang chờ (ví dụ đưa biến tới mốc mà nó kiểm).`,
+    `3. Mở lại World Info: entry phải sáng lên trong lượt đó. Nếu KHÔNG sáng thì activewi không thắng cờ tắt tay — lúc đó hãy chuyển các entry này sang "kích hoạt theo từ khoá" thay vì tắt tay.`,
+  ];
 }

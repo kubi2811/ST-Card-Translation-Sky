@@ -257,8 +257,24 @@ lại biến, đè sạch dữ liệu người chơi.
 ### 5.6 EJS Studio
 
 Mô tả "bạn muốn EJS làm gì" → app lập **bảng kế hoạch**, gộp các thay đổi liên quan thành nhóm, tách
-entry khi cần, **ước lượng token**, và **rà xung đột** trước khi áp. Có **Preset Nhanh** cho các mẫu
-hay dùng, kèm bước **xác minh preset đã thật sự áp** — trước đây bấm xong không biết nó có vào không.
+entry khi cần, **ước lượng token**, và **rà xung đột** trước khi áp.
+
+**Preset Nhanh — 19 preset lẻ + 1 gói tổng.** Mỗi preset lẻ **tự chạy được một mình**, không cái nào
+đòi phải chạy preset khác trước. Gói **"Áp dụng TẤT CẢ"** được dựng từ chính 19 preset đó nên luôn
+gồm đủ; preset nào không áp được cho thẻ của bạn thì nó **nói rõ vì sao bỏ** thay vì im lặng.
+
+Mỗi dòng trong bảng kế hoạch có **nhãn ⚡ tên preset** đã sinh ra thay đổi đó — không phải đoán qua
+icon nữa. Dòng nào không xác định được chắc chắn thì **để trống**, vì nhãn sai còn tệ hơn không nhãn.
+
+**Lỗi thì app tự sửa, bạn không phải sửa code.** Sau khi sinh EJS, app kiểm tự động rồi tự sửa qua
+nhiều vòng — mỗi vòng nó biết lần trước đã thử gì và còn sai chỗ nào để đổi cách làm. Khối nào sửa
+mãi không được thì app **bỏ khối đó** và nói rõ đã bỏ gì, để bạn nhận phần chạy được thay vì một
+danh sách lỗi kỹ thuật.
+
+**Một việc bạn nên tự xác nhận một lần:** entry bị đặt *tắt tay* và trông vào `activewi` để bật.
+App kiểm được là có controller gọi đúng tên entry đó, nhưng "activewi có thắng nổi cờ tắt tay" là
+hành vi của SillyTavern — chỉ chat thật mới trả lời được. App sẽ hiện hướng dẫn kiểm từng bước khi
+gặp trường hợp này.
 
 ### 5.7 Phòng thí nghiệm Regex
 

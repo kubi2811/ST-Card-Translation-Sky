@@ -379,6 +379,46 @@ export function generateUpdateRulesEntry(schema: MVUZODSchema): string {
     processUpdateRuleField(field, 1, lines);
   }
 
+  // (bug 159-8) DẠY CÁCH CHÈN VÀO MẢNG / TỪ ĐIỂN.
+  // Luật array/record đã có trong prompt lúc TẠO thẻ, nhưng entry này là thứ AI đọc lúc CHƠI — và
+  // nó im lặng hoàn toàn về hai kiểu đó. Nên AI chỉ biết replace/delta các biến phẳng, còn Túi Đồ
+  // với Hồ Sơ Quan Hệ đứng nguyên rỗng suốt ván. Đúng cảnh user báo: "mới chỉ được tạo giao diện,
+  // chưa có logic xử lý và cập nhật dữ liệu".
+  // Chỉ in khi thẻ THẬT SỰ có array/record, và nêu ĐÍCH DANH đường dẫn — luật chung chung thì AI
+  // phải tự suy đường dẫn, mà suy sai là lệnh trỏ vào chỗ không tồn tại rồi bị MVU bỏ.
+  const arrays: string[] = [];
+  const records: string[] = [];
+  const scan = (fields: MVUZODField[], prefix: string) => {
+    for (const f of fields ?? []) {
+      const nm = getFieldName(f);
+      if (!nm || nm.startsWith('_')) continue;
+      const path = prefix ? `${prefix}/${nm}` : nm;
+      if (f.type === 'array') arrays.push(path);
+      else if (f.type === 'record') records.push(path);
+      const kids = (f.children ?? []).filter(c => !String(c.path || '').includes('/_child/'));
+      if (kids.length) scan(kids, path);
+    }
+  };
+  scan(schema.fields ?? [], '');
+
+  if (arrays.length || records.length) {
+    lines.push('');
+    lines.push('Cách thêm/bớt mục trong danh sách và từ điển:');
+  }
+  for (const a of arrays) {
+    lines.push(`  ${a} (DANH SÁCH — tra theo thứ tự, số phần tử đổi khi chơi):`);
+    lines.push(`    - thêm mục mới: {"op":"insert","path":"/${a}/-","value":{…}}  ← path KẾT THÚC bằng "/-"`);
+    lines.push(`    - sửa mục đã có: {"op":"replace","path":"/${a}/0/<trường>","value":…}  ← dùng CHỈ SỐ 0,1,2…`);
+    lines.push(`    - bỏ mục: {"op":"remove","path":"/${a}/0"}`);
+    lines.push('    - KHÔNG insert lại mục đã có trong danh sách — hãy replace trường của mục đó.');
+  }
+  for (const r of records) {
+    lines.push(`  ${r} (TỪ ĐIỂN — tra theo TÊN, tên chỉ biết khi chơi):`);
+    lines.push(`    - gặp lần ĐẦU (tên chưa có): {"op":"insert","path":"/${r}/<tên cụ thể>","value":{…}}`);
+    lines.push(`    - đã có tên đó: {"op":"replace","path":"/${r}/<tên cụ thể>/<trường>","value":…}`);
+    lines.push('    - PHẢI kiểm tên đã tồn tại chưa trước khi chọn insert hay replace: insert đè lên tên đã có sẽ xoá sạch dữ liệu cũ của mục đó.');
+  }
+
   return lines.join('\n');
 }
 

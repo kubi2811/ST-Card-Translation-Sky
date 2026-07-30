@@ -93,6 +93,13 @@ interface SectionAnalysis {
   enumFields: FieldAnalysis[];
   booleanFields: FieldAnalysis[];
   recordFields: FieldAnalysis[];
+  /**
+   * (bug 159-8) `array` TRƯỚC ĐÂY KHÔNG CÓ CHỖ NÀO ĐỂ VỀ.
+   * Chuỗi phân loại là object → record → number → enum → boolean → else, nên array rơi vào `else`
+   * và bị dựng thành MỘT Ô NHẬP CHỮ. Đúng cảnh user báo: "Túi đồ chỉ cho nhập một vật phẩm và
+   * số lượng", còn Status Bar thì "không hiện gì".
+   */
+  arrayFields: FieldAnalysis[];
   nestedSections: SectionAnalysis[];
   /** All flat leaf fields (for counting) */
   allLeafFields: FieldAnalysis[];
@@ -166,6 +173,7 @@ function analyzeSection(
     enumFields: [],
     booleanFields: [],
     recordFields: [],
+    arrayFields: [],
     nestedSections: [],
     allLeafFields: [],
   };
@@ -192,6 +200,10 @@ function analyzeSection(
       section.allLeafFields.push(...nested.allLeafFields);
     } else if (child.type === 'record') {
       section.recordFields.push(fa);
+      section.allLeafFields.push(fa);
+    } else if (child.type === 'array') {
+      // (bug 159-8) Phải đứng TRƯỚC nhánh `else`, không thì array thành ô nhập chữ.
+      section.arrayFields.push(fa);
       section.allLeafFields.push(fa);
     } else if (child.type === 'number') {
       section.numericFields.push(fa);
@@ -335,6 +347,17 @@ function buildSectionContent(section: SectionAnalysis, bindings: string[]): stri
     bindings.push(buildRecordBinding(rf));
   }
 
+  // (bug 159-8) Array → danh sách cuộn, mỗi phần tử một dòng. Dùng lại đúng khung của record
+  // (renderRecordListHTML) vì hai thứ cùng là "danh sách hiện lên màn hình", khác nhau chỉ ở chỗ
+  // record tra theo TÊN KHOÁ còn array tra theo THỨ TỰ.
+  for (const af of section.arrayFields) {
+    const listId = `${af.elementId}-list`;
+    parts.push(`<div class="stcs-divider"></div>`);
+    parts.push(`<div style="font-size:var(--fs-sm);color:var(--text-secondary);margin-bottom:4px">${af.icon} ${af.field.label}</div>`);
+    parts.push(renderRecordListHTML(listId, 'Trống', true));
+    bindings.push(buildArrayBinding(af));
+  }
+
   // Nested sections → recursive panels
   for (const nested of section.nestedSections) {
     const nestedContent = buildSectionContent(nested, bindings);
@@ -349,6 +372,46 @@ function buildSectionContent(section: SectionAnalysis, bindings: string[]): stri
   }
 
   return parts.join('\n');
+}
+
+/**
+ * (bug 159-8) Binding cho `array`: lặp theo CHỈ SỐ, hiện mỗi phần tử một dòng.
+ * Phần tử là object (khai qua "_child") thì ghép vài trường con lại cho dễ đọc; phần tử là giá
+ * trị đơn thì in thẳng. Mảng rỗng hiện "Trống" — chứ không im lặng như trước.
+ */
+function buildArrayBinding(af: FieldAnalysis): string {
+  const pathExpr = af.keyPath.map(k => `'${k.replace(/'/g, "\'")}'`).join(', ');
+  const listId = `${af.elementId}-list`;
+  // children của array mang path "_child" — đó là khai cấu trúc MỘT phần tử.
+  const childFields = (af.field.children ?? []).filter(c => String(c.path || '').includes('/_child/'));
+  const subValues = childFields.slice(0, 4)
+    .map(c => `' + (item['${c.label}'] == null ? '—' : item['${c.label}']) + '`)
+    .join(' | ');
+
+  return `    // Array: ${af.field.label}
+    (function() {
+        var arr = _.get(d, [${pathExpr}], []);
+        if (!Array.isArray(arr)) arr = [];
+        var el = document.getElementById('${listId}');
+        if (!el) return;
+        if (arr.length === 0) {
+            el.innerHTML = '<li class="stcs-list-item" style="justify-content:center;font-weight:normal;color:var(--text-muted)">Trống</li>';
+            return;
+        }
+        var html = '';
+        arr.forEach(function(item, i) {
+            if (item !== null && typeof item === 'object') {
+                html += '<li class="stcs-list-item interactive" data-array-index="' + i + '" data-array-path="${af.keyPath.join('/')}">'
+                     + '<span>' + (item['${childFields[0]?.label ?? 'Tên'}'] || ('#' + (i + 1))) + '</span>'
+                     + '<span style="font-size:var(--fs-sm);color:var(--text-secondary);font-weight:normal">${subValues}</span>'
+                     + '</li>';
+            } else {
+                html += '<li class="stcs-list-item"><span>#' + (i + 1) + '</span><span style="color:var(--text-secondary)">' + item + '</span></li>';
+            }
+        });
+        el.innerHTML = html;
+    })();
+`;
 }
 
 function buildRecordBinding(rf: FieldAnalysis): string {

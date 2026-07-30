@@ -11,6 +11,9 @@ import { CallMonitor } from './callMonitor';
  * to avoid browser CORS blocks from endpoints like gcli.ggchan.dev.
  */
 function proxyUrl(url: string): string {
+  // (bug 163) Ngoài trình duyệt (test chạy thật bằng Node) thì không có CORS để né, và cũng không
+  // có `window` — đụng vào là ném ReferenceError trước cả khi gọi được API. Gọi thẳng.
+  if (typeof window === 'undefined') return url;
   // Only proxy in dev mode and for external URLs
   if (import.meta.env.PROD) return url;
   // Don't proxy local URLs
@@ -72,6 +75,22 @@ class RPMLimiter {
 // tổng throughput = RPM × số key. Gặp 429/quá tải thì tự xoay sang key kế rồi thử lại.
 export function parseApiKeys(raw: string): string[] {
   return (raw || '').split(/[\n,]+/).map(k => k.trim()).filter(Boolean);
+}
+
+// ─── (bug 163) Khoá HỎNG thì bỏ qua, đừng để nó giết cả lượt chạy ───────────
+// Bộ khoá user đưa để test có 3 khoá thì 1 khoá đã bị thu hồi (401 invalid API key). Vì 401 không
+// nằm trong nhóm "lỗi tạm thời" nên nó ném thẳng ra ngoài: cứ 3 lượt gọi là 1 lượt chết, và một
+// lượt quét truyện dài (hàng trăm call) không bao giờ chạy nổi tới cuối → lại ra 0 entry, đúng cái
+// triệu chứng user báo. Một khoá cũ còn sót trong ô cấu hình không được phép làm hỏng cả buổi.
+const deadKeys = new Set<string>();
+export function markKeyDead(profileId: string, key: string): void { deadKeys.add(`${profileId}:${key}`); }
+export function isKeyDead(profileId: string, key: string): boolean { return deadKeys.has(`${profileId}:${key}`); }
+/** Chỉ dùng cho test — xoá trí nhớ khoá hỏng. */
+export function resetDeadKeys(): void { deadKeys.clear(); }
+/** Bỏ các khoá đã biết là hỏng. Hỏng HẾT thì trả lại nguyên danh sách để lỗi thật nổi lên. */
+export function liveKeys(profileId: string, keys: string[]): string[] {
+  const alive = keys.filter((k) => !isKeyDead(profileId, k));
+  return alive.length ? alive : keys;
 }
 
 const keyLimiters = new Map<string, RPMLimiter>();
@@ -158,7 +177,7 @@ export async function callAI(options: AICallOptions): Promise<AICallResult> {
     // markProfileDead nên pool né luôn).
     const profile = pickPoolProfile(options.profile);
     const base = profile.baseUrl.replace(/\/+$/, '');
-    const keys = parseApiKeys(profile.apiKey);
+    const keys = liveKeys(profile.id, parseApiKeys(profile.apiKey));
     const tier = useSecondary && profile.enableSecondaryModel ? 's' : 'p';
     const rpm = tier === 's' ? (profile.secondaryRpm ?? 10) : (profile.primaryRpm ?? 5);
 
@@ -209,13 +228,34 @@ export async function callAI(options: AICallOptions): Promise<AICallResult> {
           `\nChi tiết: ${msg}`,
         );
       }
-      const retriable = connRefused
+      // (bug 163) Khoá bị thu hồi/sai (401/403): ghi sổ để KHÔNG dùng lại khoá đó nữa, rồi coi như
+      // lỗi thử-lại-được — lần sau xoay sang khoá còn sống. Chỉ làm vậy khi còn khoá khác; một
+      // khoá duy nhất mà sai thì phải báo lỗi ngay chứ đừng thử lại vô ích 4 lần.
+      const badKey = /\b(401|403)\b/.test(msg) || /invalid[_ ]api[_ ]key|authentication_error|unauthorized/i.test(msg);
+      let keyRotated = false;
+      if (badKey && keys.length > 1 && key) {
+        markKeyDead(profile.id, key);
+        const left = liveKeys(profile.id, keys).length;
+        keyRotated = left > 0 && left < keys.length;
+        if (!keyRotated) {
+          lastErr = new Error(`Mọi API key của provider "${profile.label}" đều bị từ chối (401/403) — kiểm tra lại khoá trong Cài đặt.\nChi tiết: ${msg}`);
+        }
+      }
+      const retriable = connRefused || keyRotated
         || /\b(408|409|425|429|500|502|503|504|509|520|521|522|523|524|529)\b/.test(msg)
         || /rate.?limit|overloaded|quá tải|timeout|quá hạn|vượt quá .* giây|failed to fetch|load failed|network|econnreset|fetch failed|socket hang up|the operation was aborted due to timeout/i.test(msg);
       // Lỗi tạm thời (api kẹt/timeout/5xx/provider chết) → backoff rồi thử lại — lần sau pickPoolProfile
       // sẽ xoay sang provider còn sống.
       if (a < attempts - 1 && retriable && !signal?.aborted) {
-        await new Promise(r => setTimeout(r, connRefused ? 150 : Math.min(1200 * (a + 1), 8000)));
+        // (bug 163) 429 phải chờ LÂU hơn hẳn. Đo trên proxy thật: provider giới hạn 10 lượt/phút,
+        // mà backoff cũ tối đa 8 giây — thử lại 4 lần trong 20 giây thì lần nào cũng dính tiếp,
+        // hết lượt là ném lỗi và giết cả buổi quét. Cửa sổ giới hạn tính theo PHÚT nên phải chờ
+        // theo phút thì mới có nghĩa.
+        const rateLimited = /\b429\b/.test(msg) || /rate.?limit|速率限制|quá tải|overloaded/i.test(msg);
+        const delay = connRefused ? 150
+          : rateLimited ? Math.min(15000 * (a + 1), 60000)
+            : Math.min(1200 * (a + 1), 8000);
+        await new Promise(r => setTimeout(r, delay));
         continue;
       }
       throw lastErr;

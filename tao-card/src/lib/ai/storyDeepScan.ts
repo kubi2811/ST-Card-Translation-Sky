@@ -187,6 +187,43 @@ export function addUniqueLines(list: string[], incoming: string[], cap = 400): n
   return added;
 }
 
+/**
+ * (bug 163) Tách các khối <entry> — CHỊU ĐƯỢC THẺ ĐÓNG BỊ THIẾU.
+ *
+ * User hỏi: "nếu bị thiếu tag khi trả data về hay là khỏi cần tag luôn để đỡ lỗi?".
+ * Bỏ tag hẳn thì KHÔNG nên: mỗi entry là một bản ghi NHIỀU TRƯỜNG (cat/title/keys/content), không
+ * có ranh giới thì không tài nào biết đâu là tên đâu là nội dung — parser sẽ đẻ ra entry rác mà
+ * vẫn báo thành công, tức đổi một lỗi thấy được lấy một lỗi im lặng. Cái đáng làm là giữ tag
+ * nhưng ĐỪNG BẮT BUỘC thẻ đóng.
+ *
+ * Vì sao thẻ đóng hay mất thật: model chạm trần token thì bị cắt giữa chừng, entry CUỐI mất
+ * </entry>. allTags() chỉ bắt cặp đóng-mở nên lặng lẽ vứt luôn entry đó. Cắt ở giữa một danh sách
+ * dài thì mất đúng phần dài nhất — không có lỗi nào báo.
+ *
+ * Lưu ý: đây là lưới đỡ, KHÔNG phải nguyên nhân của bug 163. Nguyên nhân là mảng entry bị xoá
+ * trước lượt soát chất lượng (xem ghi chú ở vòng chạy pass).
+ */
+export function splitEntryBlocks(text: string): string[] {
+  const out: string[] = [];
+  const re = /<entry>/gi;
+  let m: RegExpExecArray | null;
+  const starts: number[] = [];
+  while ((m = re.exec(text)) !== null) starts.push(m.index + m[0].length);
+  for (let i = 0; i < starts.length; i++) {
+    const from = starts[i];
+    // Kết thúc ở </entry> nếu có; không thì tới <entry> kế tiếp; không nữa thì hết chuỗi.
+    const close = text.toLowerCase().indexOf('</entry>', from);
+    const nextOpen = i + 1 < starts.length ? text.toLowerCase().lastIndexOf('<entry>', starts[i + 1]) : -1;
+    let end: number;
+    if (close !== -1 && (nextOpen === -1 || close < nextOpen)) end = close;
+    else if (nextOpen !== -1) end = nextOpen;
+    else end = text.length;
+    const block = text.slice(from, end).trim();
+    if (block) out.push(block);
+  }
+  return out;
+}
+
 export function emptyMemory(): StoryMemory {
   return {
     overview: '', partNotes: [], mainCharacter: '', glossary: [],
@@ -399,7 +436,12 @@ export function buildYieldWarnings(
       + (emptyJobs.length
         ? `Các lượt tổng hợp trắng tay: ${emptyJobs.slice(0, 8).join(' · ')}${emptyJobs.length > 8 ? ' …' : ''}. `
         : '')
-      + 'Hãy bấm Chạy lại từ đầu; nếu vẫn vậy thì đổi model — model đang dùng không giữ được định dạng <entries><entry>.',
+      // (bug 163) Câu cũ ở đây là "đổi model — model đang dùng không giữ được định dạng
+      // <entries><entry>". Nói vậy là ĐỔ OAN cho model: nguyên nhân thật của mọi lần user báo lỗi
+      // là entry bị code xoá sạch trước lượt soát chất lượng. Đã sửa. Nên câu cảnh báo cũng phải
+      // đổi — chỉ sang đúng chỗ đáng ngờ còn lại, thay vì bắt user đi thay model vô ích.
+      + 'Trường hợp này lẽ ra không còn xảy ra sau bản vá 163. Nếu vẫn gặp: bấm Chạy lại từ đầu, '
+      + 'kiểm tra API key còn hạn không (khoá hỏng làm gãy giữa chừng), rồi gửi kèm ảnh màn hình này để dò tiếp.',
     ];
   }
   if (emptyJobs.length) {
@@ -433,18 +475,40 @@ export async function runDeepScan(
   const conc = Math.max(1, computePoolConcurrency(profile));
 
   /** callAI + đếm lượt gọi (stat "số lượt AI đã quét" trên UI). */
-  const ai = async (label: string, system: string, user: string): Promise<string> => {
+  const ai = async (label: string, system: string, user: string, useSecondary = false): Promise<string> => {
     checkAbort();
+    // (bug 163) Gửi lượt AI với phần nội dung RỖNG thì provider trả về lỗi khó hiểu — trong log
+    // của user là `[400] Bad Request: "Unable to submit request because at least one contents
+    // field is required"`, đọc xong không ai đoán nổi là do đâu. Chặn ngay tại chỗ và nói rõ lượt
+    // nào rỗng, vì rỗng ở đây luôn là hệ quả của một khâu TRƯỚC đó đã hỏng.
+    if (!user.trim()) throw new Error(`Lượt "${label}" không có dữ liệu đầu vào — khâu trước đó đã hỏng.`);
     const { text } = await callAI({
-      profile, params, signal: opts.signal, label,
+      profile, params, signal: opts.signal, label, useSecondary,
       messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
     });
     st.stats.aiCalls++;
     return text;
   };
 
+  /**
+   * (bug 163) Lượt ĐỌC dùng MODEL PHỤ nếu user có đặt; lượt VIẾT vẫn dùng model chính.
+   *
+   * Trước đây pipeline này không đụng tới model phụ lần nào — đặt model phụ trong Cài đặt cũng
+   * không có tác dụng gì ở đây, chỉ deduplicator dùng. Trong khi phần lớn số lượt gọi lại nằm ở
+   * khâu ĐỌC (bóc dữ kiện theo từng chunk: cấu trúc, nhân vật, thế giới, timeline, văn phong, đối
+   * chiếu) — việc máy móc, đúng tầm model nhanh. Khâu VIẾT ENTRY mới là chỗ cần model mạnh.
+   * App "Trích Card" đã đi đúng lối này sẵn ("quét bằng model phụ, tạo thẻ vẫn dùng model chính").
+   *
+   * Không đặt model phụ thì `useSecondary` bị client bỏ qua → mọi thứ chạy bằng model chính, y như
+   * cũ. Nên đây là tuỳ chọn, không phải thay đổi bắt buộc.
+   */
+  const aiRead = (label: string, system: string, user: string) => ai(label, system, user, true);
+
   const m = st.memory;
   const pass = () => st.passes[st.passIndex];
+
+  /** (bug 163) Các phần bị bỏ qua vì lỗi — đưa vào báo cáo cuối để user biết bản quét chưa trọn. */
+  const chunkFailures: string[] = [];
 
   /** Chạy pass dạng map-trên-chunk, có ghi nhớ chunk đã xong để resume. */
   const mapPass = async (key: string, chunkIdxs: number[], worker: (chunk: string, i: number) => Promise<void>) => {
@@ -454,14 +518,34 @@ export async function runDeepScan(
     p.total = chunkIdxs.length;
     p.done = doneSet.size;
     emit();
+    // (bug 163) MỘT CHUNK HỎNG KHÔNG ĐƯỢC GIẾT CẢ LƯỢT QUÉT.
+    // Đo được trên API thật: provider giới hạn 10 lượt/phút, một lượt dính 429 sau khi hết số lần
+    // thử lại là ném thẳng ra ngoài → toàn bộ pass chết → pipeline dừng ở trạng thái error → user
+    // nhận về 0 entry và mất trắng mọi thứ đã gom. Với truyện dài (hàng trăm lượt gọi, chạy hàng
+    // giờ) thì xác suất dính ít nhất một lỗi tạm thời gần như là chắc chắn — nên đây cũng là một
+    // nguồn thật của chính triệu chứng "0 entry", độc lập với chỗ xoá mảng đã sửa ở trên.
+    // Bỏ qua chunk hỏng và chạy tiếp: thiếu vài chunk thì lorebook mỏng hơn một chút, còn hơn là
+    // không có gì. Hỏng SẠCH thì mới báo lỗi thật.
+    let failed = 0;
     await runPool(todo, Math.min(conc, Math.max(1, todo.length)), async (i) => {
       checkAbort();
-      await worker(chunks[i], i);
+      try {
+        await worker(chunks[i], i);
+      } catch (e) {
+        if (isAbortErr(e)) throw e;          // user bấm dừng thì phải dừng thật
+        failed++;
+        chunkFailures.push(`${key}#${i + 1}: ${e instanceof Error ? e.message : String(e)}`);
+        log(`⚠️ Bỏ qua phần ${i + 1} của lượt "${key}" — ${e instanceof Error ? e.message : String(e)}`);
+        return;                              // KHÔNG đánh dấu done → lần resume sau còn chạy lại
+      }
       doneSet.add(i);
       st.chunkDone[key] = [...doneSet];
       p.done = doneSet.size;
       emit();
     });
+    if (failed > 0 && failed === todo.length && todo.length > 0) {
+      throw new Error(`Lượt "${key}" hỏng toàn bộ ${failed}/${todo.length} phần — ${chunkFailures[chunkFailures.length - 1] ?? ''}`);
+    }
   };
 
   const allIdx = chunks.map((_, i) => i);
@@ -472,7 +556,7 @@ export async function runDeepScan(
 
   const passStructure = async () => {
     await mapPass('structure', allIdx, async (chunk, i) => {
-      const text = await ai(`Đọc lượt 1 — cấu trúc (${chunkLabel(i)})`,
+      const text = await aiRead(`Đọc lượt 1 — cấu trúc (${chunkLabel(i)})`,
         `Bạn là nhà nghiên cứu văn học, đang đọc LƯỢT ĐẦU một tác phẩm để lập hồ sơ.
 Nhiệm vụ: đọc ${multi ? 'ĐOẠN truyện' : 'truyện'} và ghi chú CẤU TRÚC — không phân tích sâu nhân vật ở lượt này.
 ${NO_FABRICATE}
@@ -498,7 +582,7 @@ CHỈ xuất đúng khối sau, mọi tag đóng, ngoài tag không viết gì:
     });
     // Reduce: gộp ghi chú từng đoạn thành TỔNG QUAN — nền cho mọi lượt sau.
     const notes = m.partNotes.filter(Boolean).join('\n\n');
-    const text = await ai('Đọc lượt 1 — tổng hợp cấu trúc',
+    const text = await aiRead('Đọc lượt 1 — tổng hợp cấu trúc',
       `Bạn nhận ghi chú đọc lượt đầu của TỪNG ĐOẠN một tác phẩm. Hãy tổng hợp thành TỔNG QUAN CẤU TRÚC toàn truyện.
 ${NO_FABRICATE}
 ${LANGUAGE_RULE}
@@ -522,7 +606,7 @@ CHỈ xuất đúng khối:
     });
     st.stats.aiCalls += chunks.length; // scanCharacters gọi AI theo chunk (xấp xỉ, đủ cho stat).
     // Phân vai + chốt nhân vật chính (đối chiếu với overview lượt 1).
-    const text = await ai('Tổng hợp nhân vật — phân vai',
+    const text = await aiRead('Tổng hợp nhân vật — phân vai',
       `Từ TỔNG QUAN truyện và DANH SÁCH nhân vật đã quét, phân vai từng người và chốt NHÂN VẬT CHÍNH thật của truyện.
 ${NO_USER_MIX}
 ${NO_FABRICATE}
@@ -573,7 +657,7 @@ CHỈ xuất đúng khối:
 
   const passCharacters = async () => {
     await mapPass('characters', allIdx, async (chunk, i) => {
-      const text = await ai(`Phân tích nhân vật (${chunkLabel(i)})`,
+      const text = await aiRead(`Phân tích nhân vật (${chunkLabel(i)})`,
         `Bạn đang đọc lại tác phẩm LƯỢT ${multi ? '3' : 'phân tích nhân vật'}: gom DỮ KIỆN cho TỪNG nhân vật trong danh sách.
 Thông tin một nhân vật thường RẢI RÁC nhiều chương — nhiệm vụ của bạn là nhặt hết những gì đoạn này nói về họ.
 Ghi các loại dữ kiện: ngoại hình; tuổi/giới tính; tính cách biểu hiện qua hành động; mục tiêu/động cơ; năng lực + điểm mạnh/yếu; CÁCH XƯNG HÔ và giọng điệu khi nói (kèm ví dụ ngắn); thói quen/sở thích; quan hệ với nhân vật khác (rõ quan hệ gì); biến cố quan trọng họ trải qua trong đoạn + hậu quả; thay đổi tâm lý so với trước.
@@ -595,7 +679,7 @@ CHỈ xuất đúng khối:
 
   const passWorld = async () => {
     await mapPass('world', allIdx, async (chunk, i) => {
-      const text = await ai(`Thu thập thế giới (${chunkLabel(i)})`,
+      const text = await aiRead(`Thu thập thế giới (${chunkLabel(i)})`,
         `Bạn đang đọc lại tác phẩm để thu thập THIẾT LẬP THẾ GIỚI (worldbuilding) — mọi thứ KHÔNG phải diễn biến nhân vật.
 Phân loại (cat): worldview (vũ trụ/bối cảnh vĩ mô) | system (hệ thống sức mạnh/tu luyện/kinh tế/chính trị, kèm cấp bậc) | mechanic (cơ chế vận hành cụ thể) | rule (luật lệ/quy tắc/lời nguyền + hệ quả vi phạm) | location (quốc gia/thành phố/địa danh/kiến trúc) | faction (phe phái/tổ chức/gia tộc/tôn giáo) | item (vật phẩm/trang bị/công nghệ) | history (sự kiện lịch sử/truyền thuyết/bí mật) | culture (văn hoá/phong tục/tôn giáo/tiền tệ/đơn vị đo/nghề nghiệp) | term (thuật ngữ riêng cần định nghĩa) | other.
 topic = TÊN RIÊNG của thực thể/chủ đề (vd "Kiếm Tông", "Hệ thống linh căn"). Mỗi dữ kiện 1 dòng <f>, cụ thể (số liệu, cấp bậc, vị trí, quan hệ), tự đứng được.
@@ -631,7 +715,7 @@ CHỈ xuất đúng khối:
 
   const passTimeline = async () => {
     await mapPass('timeline', allIdx, async (chunk, i) => {
-      const text = await ai(`Dựng timeline (${chunkLabel(i)})`,
+      const text = await aiRead(`Dựng timeline (${chunkLabel(i)})`,
         `Bạn đang đọc lại tác phẩm để dựng DÒNG THỜI GIAN chi tiết.
 Ghi MỌI sự kiện đáng kể theo đúng trình tự trong đoạn: ai làm gì, ở đâu, gặp ai, hậu quả gì.
 MỐC THỜI GIAN: truyện ghi ngày/tháng/năm/mùa/giờ thì chép CHÍNH XÁC; không ghi thì dùng mốc TƯƠNG ĐỐI nhất quán ("Ngày 1", "3 ngày sau", "Sau sự kiện X") — TUYỆT ĐỐI không bịa ngày cụ thể. Không xác định nổi thì dùng "?".
@@ -663,7 +747,7 @@ CHỈ xuất đúng khối:
     // Học văn phong không cần cả truyện — mẫu đầu / giữa / cuối là đủ đại diện.
     const sample = chunks.length <= 3 ? allIdx : [0, Math.floor(chunks.length / 2), chunks.length - 1];
     await mapPass('style', sample, async (chunk, i) => {
-      const text = await ai(`Học văn phong (${chunkLabel(i)})`,
+      const text = await aiRead(`Học văn phong (${chunkLabel(i)})`,
         `Bạn là nhà phê bình văn học. Phân tích VĂN PHONG tác giả từ đoạn trích — KHÔNG phân tích nội dung.
 Soi từng mặt: cấu trúc câu (dài/ngắn, đảo, điệp); nhịp kể + tốc độ; mật độ + kiểu miêu tả (thị giác? cảm giác?); cách dựng hội thoại + khẩu khí nhân vật; từ ngữ/thành ngữ đặc trưng; sắc thái cảm xúc chủ đạo; mức hài hước vs nghiêm túc; cách đẩy cao trào; cách miêu tả nội tâm; cách giới thiệu nhân vật mới. Mỗi nhận xét 1 dòng <s>, kèm VÍ DỤ NGẮN trích từ đoạn (dịch sang tiếng Việt nếu truyện gốc tiếng nước ngoài).
 ${NO_FABRICATE}
@@ -690,7 +774,7 @@ CHỈ xuất đúng khối:
       const digest = buildMemoryDigest(m);
       const key = `verify${round}`;
       await mapPass(key, allIdx, async (chunk, i) => {
-        const text = await ai(`Đối chiếu vòng ${round} (${chunkLabel(i)})`,
+        const text = await aiRead(`Đối chiếu vòng ${round} (${chunkLabel(i)})`,
           `Bạn đang ở LƯỢT ĐỌC ĐỐI CHIẾU vòng ${round}: so sánh đoạn truyện với BỘ NHỚ nghiên cứu hiện có.
 CHỈ báo những gì bộ nhớ CHƯA CÓ hoặc GHI SAI — không lặp lại điều đã có. Đối chiếu cả thông tin ở đoạn này với những gì các chương khác đã ghi để phát hiện mâu thuẫn/hiểu sai.
 ${NO_FABRICATE}
@@ -749,7 +833,7 @@ CHỈ xuất đúng khối (không có gì mới thì xuất <none/>):
 
   const ENTRY_CATS: EntryCat[] = ['meta', 'worldview', 'system', 'mechanic', 'rule', 'character', 'faction', 'location', 'item', 'history', 'culture', 'term', 'timeline', 'style', 'other'];
   const parseEntries = (text: string, fallbackCat: EntryCat): DeepEntry[] =>
-    allTags(tag(text, 'entries') || text, 'entry').map((e) => {
+    splitEntryBlocks(tag(text, 'entries') || text).map((e) => {
       const catRaw = tag(e, 'cat').trim().toLowerCase() as EntryCat;
       const cat: EntryCat = ENTRY_CATS.includes(catRaw) ? catRaw : fallbackCat;
       return {
@@ -1045,11 +1129,21 @@ CHỈ xuất đúng khối, mọi tag đóng, ngoài tag không viết gì:
       checkAbort();
       log(job.label);
       const before = synthEntries.length;
-      await job.run();
+      // (bug 163) Job tổng hợp hỏng cũng KHÔNG được giết cả pass — cùng lý do như mapPass: một lỗi
+      // tạm thời (429/timeout) ở job thứ 40 sẽ vứt luôn 39 job đã chạy xong trước đó.
+      const tryRun = async (): Promise<boolean> => {
+        try { await job.run(); return true; } catch (e) {
+          if (isAbortErr(e)) throw e;
+          log(`⚠️ ${job.label} — lỗi: ${e instanceof Error ? e.message : String(e)}`);
+          chunkFailures.push(`${job.label}: ${e instanceof Error ? e.message : String(e)}`);
+          return false;
+        }
+      };
+      const ok = await tryRun();
       if (job.kind === 'entries' && synthEntries.length === before) {
-        log(`↻ ${job.label} — không ra entry nào, thử lại`);
+        log(`↻ ${job.label} — ${ok ? 'không ra entry nào' : 'lỗi'}, thử lại`);
         checkAbort();
-        await job.run();
+        await tryRun();
         if (synthEntries.length === before) {
           emptySynthJobs.push(job.label);
           log(`⚠️ ${job.label} — vẫn không ra entry sau khi thử lại`);
@@ -1093,7 +1187,11 @@ CHỈ xuất đúng khối, mọi tag đóng, ngoài tag không viết gì:
     emit();
 
     // (b) Một lượt AI soát MÂU THUẪN giữa các entry (tên gọi lệch nhau, số liệu vênh, quan hệ ngược).
-    try {
+    // (bug 163) Không entry nào thì KHÔNG gọi AI: soát mâu thuẫn giữa số không entry là vô nghĩa,
+    // và nó chính là lượt đã ném ra lỗi 400 trong log của user. Bỏ qua ở đây không giấu chuyện gì
+    // — chốt chặn ngay bên dưới mới là chỗ nói thẳng "0 entry là hỏng".
+    if (kept.length === 0) report.push('(bỏ qua lượt soát nhất quán: chưa có entry nào để soát)');
+    else try {
       const digest = kept.map((e) => `- [${e.cat}] ${e.title}: ${capText(e.content.replace(/\s+/g, ' '), 300)}`).join('\n');
       const text = await ai('Kiểm tra tính nhất quán',
         `Bạn soát LẦN CUỐI bộ lorebook vừa tổng hợp từ một tác phẩm. Tìm MÂU THUẪN giữa các entry: cùng thực thể nhưng tên/số liệu/quan hệ vênh nhau; sự kiện timeline ngược thứ tự; nhân vật được mô tả trái ngược không có ghi chú.
@@ -1115,6 +1213,12 @@ CHỈ xuất: <issues><issue>…</issue>…</issues> hoặc <none/>`,
     const factCount = m.characters.reduce((n, c) => n + c.facts.length, 0)
       + m.worldFacts.length + m.timeline.length;
     report.unshift(...buildYieldWarnings(kept.length, factCount, emptySynthJobs));
+    // (bug 163) Phần bị bỏ qua vì lỗi phải NÓI RA. Bỏ qua âm thầm thì user cầm một bản lorebook
+    // thiếu mà tưởng là đủ — đúng kiểu lỗi im lặng tệ nhất.
+    if (chunkFailures.length) {
+      report.unshift(`⚠️ ${chunkFailures.length} phần bị bỏ qua do lỗi (bản quét chưa trọn — chạy lại để bù): `
+        + `${chunkFailures.slice(0, 5).join(' · ')}${chunkFailures.length > 5 ? ' …' : ''}`);
+    }
 
     st.result = { entries: kept, cards: synthCards, report };
     st.stats.entries = kept.length;
@@ -1134,10 +1238,39 @@ CHỈ xuất: <issues><issue>…</issue>…</issues> hoặc <none/>`,
       if (p.status === 'done' || p.status === 'skipped') continue;
       p.status = 'running';
       emit();
-      // synthesize/quality không resume giữa chừng được (kết quả nằm ngoài chunkDone) → chạy lại trọn pass.
-      if (p.id === 'synthesize' || p.id === 'quality') { synthEntries.length = 0; }
-      if (p.id === 'synthesize') synthCards.length = 0;
-      await runners[p.id]();
+      // (bug 163) ĐÂY LÀ CHỖ LÀM MẤT SẠCH ENTRY, từ bug 150 tới giờ — tức tính năng này CHƯA BAO
+      // GIỜ chạy đúng, không phải "thỉnh thoảng lỗi".
+      // Bản cũ: `if (p.id === 'synthesize' || p.id === 'quality') synthEntries.length = 0;`
+      // synthesize sinh ra vài trăm entry (UI hiện đúng con số đó), vòng lặp bước sang quality,
+      // dòng trên xoá sạch mảng NGAY TRƯỚC KHI passQuality đọc nó → kept = [] → "Thêm 0 entry".
+      // Khớp từng chữ với mô tả của user: "lúc quét có ghi 200 entry, xong thì không có entry nào".
+      // synthesize thì xoá là ĐÚNG (chạy lại pass mà không xoá thì entry nhân đôi); quality thì
+      // xoá là tự huỷ đầu vào của chính mình — nó chỉ ĐỌC entry chứ không sinh ra entry nào.
+      if (p.id === 'synthesize') { synthEntries.length = 0; synthCards.length = 0; }
+      // Resume từ một tiến trình cũ có thể nhảy thẳng vào quality trong khi synthEntries (biến
+      // cục bộ, không nằm trong state lưu xuống đĩa) đang rỗng. Trước đây chuyện đó cũng ra 0
+      // entry. Nay tự dựng lại: chạy bù synthesize rồi mới soát.
+      if (p.id === 'quality' && synthEntries.length === 0) {
+        log('Chưa có entry trong bộ nhớ (tiến trình được nạp lại) — chạy bù lượt tổng hợp.');
+        synthCards.length = 0;
+        await runners.synthesize();
+      }
+      // (bug 163) LƯỚI CUỐI: pipeline phải LUÔN đi tới được lượt soát chất lượng.
+      // Ngoài các lượt đọc theo chunk (đã chịu lỗi ở mapPass) còn vài lượt gọi GỘP đứng một mình
+      // — gộp cấu trúc, phân vai nhân vật. Một lỗi tạm thời ở đúng những lượt đó vẫn ném thẳng ra
+      // ngoài và giết cả buổi quét, y như trước. Nên chặn ở đây, chỗ duy nhất bao hết mọi đường.
+      // Nguyên tắc: chỉ user bấm Dừng mới được phép làm dừng pipeline. Còn lại thì thà ra một
+      // lorebook mỏng kèm lời cảnh báo, còn hơn trả về con số 0 và mất sạch hàng giờ chạy.
+      // Riêng 'quality' hỏng thì phải ném thật — nó là chỗ dựng st.result, không có nó thì user
+      // không nhận được gì để mà mỏng hay dày.
+      try {
+        await runners[p.id]();
+      } catch (e) {
+        if (isAbortErr(e) || p.id === 'quality') throw e;
+        const msg = e instanceof Error ? e.message : String(e);
+        chunkFailures.push(`Lượt "${p.id}": ${msg}`);
+        log(`⚠️ Lượt "${p.id}" hỏng (${msg}) — bỏ qua, chạy tiếp các lượt sau.`);
+      }
       p.status = 'done';
       emit();
     }

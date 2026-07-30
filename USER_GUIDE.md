@@ -219,6 +219,9 @@ Lorebook → khử trùng lặp & soát nhất quán.
 - Tạm dừng / tiếp tục bất kỳ lúc nào; tiến trình tự lưu, F5 không mất.
 - Quét xong mà ra **0 entry thì đó là lỗi**, không phải "truyện thiếu dữ liệu". App sẽ cảnh báo rõ
   khi số dữ kiện thu được nhiều mà số entry ra lại bằng không.
+- **Một phần hỏng không làm mất cả lượt quét.** Lượt đọc nào dính lỗi tạm thời (hết lượt/phút,
+  timeout, khoá hết hạn) sẽ bị bỏ qua và quá trình chạy tiếp, cuối cùng vẫn ra lorebook — chỉ mỏng
+  hơn. Báo cáo cuối ghi rõ đã bỏ qua những phần nào để bạn chạy lại bù nếu muốn.
 
 ### 5.4 Sổ tay tri thức (Lorebook)
 
@@ -466,8 +469,9 @@ xong, báo xanh, mà kết quả sai. Vì thế:
 - Xem **panel Kiểm tra** trước khi xuất thẻ.
 - Báo cáo cuối của Dịch Script / Dịch Preset nói rõ cái gì được giữ nguyên và vì sao — **đọc nó**,
   đừng chỉ nhìn dấu ✅.
-- Thấy **"0 entry"** sau một lượt chạy dài thì **đó là lỗi**, không phải "truyện thiếu dữ liệu". Chạy
-  lại; vẫn vậy thì đổi model.
+- Thấy **"0 entry"** sau một lượt chạy dài thì **đó là lỗi**, không phải "truyện thiếu dữ liệu".
+  Nguyên nhân đã được vá (bản 163); nếu vẫn gặp thì kiểm tra **API key còn hạn không** — một khoá
+  hết hạn nằm lẫn trong danh sách là đủ làm gãy giữa chừng.
 - Thấy cảnh báo **script có thể vỡ cú pháp** thì mở diff kiểm tay trước khi dùng.
 
 **Nửa đổi nửa không còn tệ hơn không đổi.** Đổi tên biến, đổi nhãn, đổi khoá dữ liệu — nếu chỉ áp

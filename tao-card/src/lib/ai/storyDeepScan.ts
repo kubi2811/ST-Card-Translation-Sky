@@ -509,6 +509,9 @@ export async function runDeepScan(
 
   /** (bug 163) Các phần bị bỏ qua vì lỗi — đưa vào báo cáo cuối để user biết bản quét chưa trọn. */
   const chunkFailures: string[] = [];
+  /** (bug 163) Chỗ bị cắt vì chạm trần — cũng phải nói ra, cắt âm thầm là lỗi im lặng. */
+  const capNotices: string[] = [];
+  const capHit = { world: false };
 
   /** Chạy pass dạng map-trên-chunk, có ghi nhớ chunk đã xong để resume. */
   const mapPass = async (key: string, chunkIdxs: number[], worker: (chunk: string, i: number) => Promise<void>) => {
@@ -703,7 +706,13 @@ CHỈ xuất đúng khối:
           const fact = f.trim();
           if (!fact) continue;
           if (m.worldFacts.some((x) => normLine(x.topic) === normLine(topic) && normLine(x.fact) === normLine(fact))) continue;
-          if (m.worldFacts.length >= 2000) break;
+          // (bug 163) Trần này chặn số CHỦ ĐỀ thế giới, mà chủ đề là nguồn entry lớn nhất (đo
+          // được: 503 chủ đề → 400+ entry). Truyện thật 48 đoạn đã lên 1851/2000, tức truyện dài
+          // hơn là chạm trần và mất dữ kiện âm thầm. Nâng lên 5000 và ghi lại khi chạm.
+          if (m.worldFacts.length >= 5000) {
+            if (!capHit.world) { capHit.world = true; capNotices.push('Đã chạm trần 5000 dữ kiện thế giới — truyện quá lớn, phần sau không được thu thập thêm.'); }
+            break;
+          }
           m.worldFacts.push({ topic, cat, fact });
           added++;
         }
@@ -886,7 +895,17 @@ CHỈ xuất đúng khối:
     });
 
     // 2) Nhân vật — MỖI NHÂN VẬT CÓ DỮ KIỆN một entry riêng, gộp theo lô để tiết kiệm call.
-    const withFacts = m.characters.filter((c) => c.facts.length > 0).slice(0, 60);
+    // (bug 163) Trần 60 nhân vật là quá chặt và cắt ÂM THẦM. Đo trên truyện thật (11 triệu ký tự,
+    // 48 đoạn): gom được 153 nhân vật CÓ dữ kiện, tổng hợp chỉ lấy 60 → 93 nhân vật bị bỏ mà không
+    // một dòng nào nói ra. User lấy mốc "truyện lớn thì phải trên 500 entry" nên cắt như vậy là
+    // chặn đúng thứ họ đang đo. Nâng lên 200 (đủ cho dàn nhân vật của truyện dài), và nếu vẫn phải
+    // cắt thì NÓI RA trong báo cáo.
+    const CHAR_CAP = 200;
+    const allWithFacts = m.characters.filter((c) => c.facts.length > 0);
+    const withFacts = allWithFacts.slice(0, CHAR_CAP);
+    if (allWithFacts.length > CHAR_CAP) {
+      capNotices.push(`Chỉ tổng hợp ${CHAR_CAP}/${allWithFacts.length} nhân vật có dữ kiện (trần an toàn) — ${allWithFacts.length - CHAR_CAP} nhân vật phụ bị lược.`);
+    }
     const CHAR_BATCH = 4;
     for (let b = 0; b < withFacts.length; b += CHAR_BATCH) {
       const batch = withFacts.slice(b, b + CHAR_BATCH);
@@ -1219,6 +1238,7 @@ CHỈ xuất: <issues><issue>…</issue>…</issues> hoặc <none/>`,
       report.unshift(`⚠️ ${chunkFailures.length} phần bị bỏ qua do lỗi (bản quét chưa trọn — chạy lại để bù): `
         + `${chunkFailures.slice(0, 5).join(' · ')}${chunkFailures.length > 5 ? ' …' : ''}`);
     }
+    for (const n of capNotices) report.unshift(`ℹ️ ${n}`);
 
     st.result = { entries: kept, cards: synthCards, report };
     st.stats.entries = kept.length;

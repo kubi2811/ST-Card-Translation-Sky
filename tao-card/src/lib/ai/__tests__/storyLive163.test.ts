@@ -95,8 +95,24 @@ describe.skipIf(!CAN_RUN)('(bug 163) chạy thật: truyện thật + API thật
     const byCat = new Map<string, number>();
     for (const e of st.result?.entries ?? []) byCat.set(e.cat, (byCat.get(e.cat) ?? 0) + 1);
     console.log('theo loại    : ' + [...byCat.entries()].sort((a, b) => b[1] - a[1]).map(([c, k]) => `${c}=${k}`).join(' '));
+    // Bộ nhớ có TRẦN cứng (worldFacts 2000, mỗi nhân vật 120 dữ kiện, nhân vật đưa vào tổng hợp
+    // 60). Chạm trần thì đọc thêm truyện cũng không ra thêm entry — phải biết trần nào đang chặn
+    // trước khi bảo user "quét nhiều đoạn hơn đi".
+    const mem = st.memory;
+    const memInfo = {
+      nhanVat: mem.characters.length,
+      nhanVatCoDuKien: mem.characters.filter((c) => c.facts.length > 0).length,
+      duKienNhanVat: mem.characters.reduce((n, c) => n + c.facts.length, 0),
+      worldFacts: mem.worldFacts.length,
+      chuDeTheGioi: new Set(mem.worldFacts.map((f) => `${f.cat}|${f.topic}`)).size,
+      timeline: mem.timeline.length,
+      unknowns: mem.unknowns.length,
+    };
+    console.log('bộ nhớ       : ' + JSON.stringify(memInfo));
+    console.log(`  → worldFacts ${memInfo.worldFacts}/2000${memInfo.worldFacts >= 2000 ? '  ⚠️ ĐÃ CHẠM TRẦN' : ''}`);
+    console.log(`  → nhân vật có dữ kiện ${memInfo.nhanVatCoDuKien}, tổng hợp tối đa 60${memInfo.nhanVatCoDuKien > 60 ? '  ⚠️ ĐANG BỊ CẮT' : ''}`);
     writeFileSync(resolve(process.env.TEMP || '.', 'live163-result.json'),
-      JSON.stringify({ status: st.status, stats: st.stats, entries: st.result?.entries ?? [], report: st.result?.report ?? [] }, null, 2));
+      JSON.stringify({ status: st.status, stats: st.stats, mem: memInfo, entries: st.result?.entries ?? [], report: st.result?.report ?? [] }, null, 2));
 
     expect(st.status, `pipeline lỗi: ${st.error ?? ''}`).toBe('done');
     // Chính là con số trên nút "Thêm N entry vào Lorebook".

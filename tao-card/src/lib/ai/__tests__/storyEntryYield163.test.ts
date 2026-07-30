@@ -13,6 +13,8 @@
  * Không có test ở mức này thì mọi lỗi "mất entry giữa đường" đều lọt.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 // AI giả: luôn trả về khối <entries> hợp lệ cho mọi lượt tổng hợp, và dữ liệu vừa đủ cho các
 // lượt đọc. Mục đích là loại hẳn biến "model trả sai định dạng" ra khỏi phép thử — còn 0 entry
@@ -90,6 +92,31 @@ describe('(bug 163) entry sinh ra rồi phải TỚI ĐƯỢC kết quả cuối
     });
     const bad = (st.result?.report ?? []).filter((r) => r.includes('❌') || r.includes('không ra entry'));
     expect(bad, 'AI giả luôn trả entry hợp lệ nên không được có lượt nào trắng tay').toEqual([]);
+  });
+});
+
+// Trần bộ nhớ — đo được trên truyện thật, không phải phỏng đoán.
+describe('(bug 163) trần không được cắt âm thầm và không được quá chặt', () => {
+  const SRC = readFileSync(resolve(__dirname, '../storyDeepScan.ts'), 'utf-8');
+
+  it('trần nhân vật tổng hợp ≥ 200', () => {
+    // Đo thật: truyện 11 triệu ký tự / 48 đoạn gom được 153 nhân vật CÓ dữ kiện, mà trần cũ là 60
+    // → 93 nhân vật bị lược mà không dòng nào nói ra. User lấy mốc "truyện lớn phải trên 500
+    // entry", nên trần 60 chặn đúng thứ họ đang đo.
+    const cap = Number(/const CHAR_CAP = (\d+)/.exec(SRC)?.[1] ?? 0);
+    expect(cap, 'hạ trần này xuống là mất nhân vật của truyện dài').toBeGreaterThanOrEqual(200);
+  });
+
+  it('trần dữ kiện thế giới ≥ 5000', () => {
+    // Chủ đề thế giới là nguồn entry lớn nhất (503 chủ đề → 400+ entry). Trần cũ 2000 đã lên
+    // 1851/2000 ở 48 đoạn, tức truyện dài hơn là chạm trần.
+    const cap = Number(/worldFacts\.length >= (\d+)/.exec(SRC)?.[1] ?? 0);
+    expect(cap).toBeGreaterThanOrEqual(5000);
+  });
+
+  it('chạm trần thì phải GHI RA, không im lặng', () => {
+    expect(SRC).toContain('capNotices');
+    expect(SRC, 'trần nhân vật phải báo khi cắt').toMatch(/capNotices\.push\([^)]*nhân vật/);
   });
 });
 

@@ -73,8 +73,15 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
 
   const st = useEjsStudioStore();
   const abortRef = useRef<AbortController | null>(null);
-  // (bugNeedFix/147) Preset nào đang mở phần giải thích đầy đủ (chỉ một cái một lúc).
-  const [expandedPreset, setExpandedPreset] = useState<string | null>(null);
+  // (bugNeedFix/147) Preset nào đang mở phần giải thích đầy đủ.
+  // (bug 159-9) MỞ NHIỀU CÙNG LÚC — trước là một cái một lúc nên không so hai preset cạnh nhau
+  // được, mà đây đúng là lúc cần so: chọn cái nào trong 20 cái thì phải đọc song song.
+  const [expandedPresets, setExpandedPresets] = useState<Set<string>>(() => new Set());
+  const togglePreset = (id: string) => setExpandedPresets((prev) => {
+    const n = new Set(prev);
+    if (n.has(id)) n.delete(id); else n.add(id);
+    return n;
+  });
 
   // Đổi card → kế hoạch cũ trỏ vào entry của card khác nên phải bỏ (xem ejsStudioStore).
   const cardKey = card.data.name || '(chưa đặt tên)';
@@ -616,9 +623,9 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
             <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
               Preset nhanh · {presets.filter(x => x.built.blockers.length === 0).length}/{presets.length} dùng được với thẻ này
             </div>
-            {expandedPreset && (
-              <button onClick={() => setExpandedPreset(null)}
-                className="text-[10px] text-muted-foreground hover:text-foreground">Thu gọn</button>
+            {expandedPresets.size > 0 && (
+              <button onClick={() => setExpandedPresets(new Set())}
+                className="text-[10px] text-muted-foreground hover:text-foreground">Thu gọn tất cả</button>
             )}
           </div>
 
@@ -633,7 +640,7 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
                 <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
                   {inGroup.map(({ preset, built }) => {
                     const blocked = built.blockers.length > 0;
-                    const open = expandedPreset === preset.id;
+                    const open = expandedPresets.has(preset.id);
                     return (
                       <div key={preset.id}
                         className={`rounded-lg border transition-colors ${
@@ -655,7 +662,7 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
                             </div>
                           </button>
                           <button
-                            onClick={() => setExpandedPreset(open ? null : preset.id)}
+                            onClick={() => togglePreset(preset.id)}
                             title="Xem giải thích đầy đủ"
                             className="shrink-0 p-0.5 rounded text-muted-foreground/60 hover:text-foreground hover:bg-muted/30"
                           >

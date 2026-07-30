@@ -12,6 +12,11 @@ import { scanFieldsHealth, buildTranslationReport, type HealthSeverity } from '.
 import { verifyFields, quickVerify, type FieldIssue, type VerifyIssue } from '../utils/aiVerify';
 import { countEjsBlocks } from '../utils/ejsSegmenter';
 import { isLikelyJsScript, jsParseErrorAny } from '../utils/scriptSafety';
+// (bugNeedFix/170) Sửa entry lỗi bằng AI — đọc bản gốc + bản dịch + [initvar] rồi vá, có chốt chặn.
+import {
+  collectRepairContext, buildRepairMessages, parseRepairResponse, verifyRepair, summarizeRepair,
+} from '../utils/aiEntryRepair';
+import { callProvider } from '../utils/apiClient';
 import type { ExportKeyMode, TranslationField } from '../types/card';
 import { useThrottledStore } from '../hooks/useThrottledStore';
 import { useIdleMemo } from '../hooks/useIdleMemo';
@@ -50,6 +55,7 @@ export default function ExportPanel() {
   const _pngArrayBuffer = useStore((s) => s._pngArrayBuffer);
   const translationConfig = useStore((s) => s.translationConfig);
   const setTranslationConfig = useStore((s) => s.setTranslationConfig);
+  const proxy = useStore((s) => s.proxy);   // (bug 170) cấu hình API cho lượt sửa bằng AI
   const phase = useStore((s) => s.phase);
   const saveTranslationCache = useStore((s) => s.saveTranslationCache);
   const locale = useStore((s) => s.locale);
@@ -62,6 +68,59 @@ export default function ExportPanel() {
   const t = useT();
   const ui = useUi();
   const isWorldbook = contentType === 'worldbook';
+
+  /**
+   * (bugNeedFix/170) SỬA MỘT ENTRY LỖI BẰNG AI.
+   * User: "ở phần kiểm tra lỗi hãy thêm nút chỉnh sửa bằng AI kế bên. AI sẽ quét lại toàn bộ
+   * entry, bản dịch và bản raw để tìm ra chính xác lỗi là gì, kết hợp với schema và initvar của
+   * lorebook để chỉnh sửa entry đó lại cho đúng."
+   *
+   * Vì sao cần đường riêng chứ không dùng nút "dịch lại": dịch lại là chạy lại đúng con đường đã
+   * sinh ra lỗi, nên ra lại lỗi cũ. Đây là đường KHÁC — đưa cho AI cả bản gốc, bản dịch hỏng,
+   * danh sách biến thật trong [initvar], và những gì máy đã bắt được, rồi bắt nó chẩn đoán.
+   * Bản sửa phải qua verifyRepair mới được ghi đè; trượt thì GIỮ NGUYÊN bản cũ và nói lý do.
+   */
+  const [repairingPath, setRepairingPath] = useState<string | null>(null);
+  const [repairNotes, setRepairNotes] = useState<Record<string, string>>({});
+
+  const repairWithAi = async (path: string) => {
+    const field = fields.find(f => f.path === path);
+    if (!field || repairingPath) return;
+    setRepairingPath(path);
+    try {
+      const ctx = collectRepairContext(field, fields);
+      addLog('info', `🤖 Sửa bằng AI: "${field.label}" — ${ctx.machineFindings.length} dấu hiệu máy bắt được.`);
+
+      const msgs = buildRepairMessages(ctx);
+      const raw = await callProvider(proxy, msgs[0].content, msgs[1].content, undefined, undefined, { label: 'Sửa entry' });
+
+      const parsed = parseRepairResponse(raw);
+      if (!parsed) {
+        const why = 'AI không trả về khối <da_sua> — giữ nguyên bản cũ.';
+        setRepairNotes(p => ({ ...p, [path]: why }));
+        addLog('warning', `⚠️ ${why}`);
+        return;
+      }
+
+      const verdict = verifyRepair(ctx, parsed.fixed);
+      const note = `${parsed.diagnosis} — ${summarizeRepair(verdict, parsed)}`;
+      setRepairNotes(p => ({ ...p, [path]: note }));
+
+      if (verdict.ok) {
+        updateField(path, { translated: parsed.fixed, status: 'done', error: undefined });
+        addLog('success', `✅ Đã sửa "${field.label}": ${summarizeRepair(verdict, parsed)}`);
+      } else {
+        // Không ghi đè. User vẫn thấy chẩn đoán để tự quyết — im lặng bỏ qua mới là tệ.
+        addLog('warning', `⚠️ Không nhận bản sửa cho "${field.label}": ${verdict.reasons.join(' ')}`);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setRepairNotes(p => ({ ...p, [path]: `Lỗi gọi AI: ${msg}` }));
+      addLog('error', `❌ Sửa bằng AI thất bại: ${msg}`);
+    } finally {
+      setRepairingPath(null);
+    }
+  };
 
   const doneCount = fields.filter((f) => f.status === 'done').length;
   const ignoredCount = fields.filter((f) => f.status === 'ignored').length;
@@ -605,6 +664,32 @@ export default function ExportPanel() {
                         </span>
                       )}
                       <b>{iss.label}</b> — {iss.detail} <span style={{ color: 'var(--text-muted)', fontSize: '0.64rem' }}>{iss.path}</span> {iss.path && <span style={{ color: 'var(--accent-primary)', fontSize: '0.64rem' }}>{ui.epJump}</span>}
+
+                      {/* (bugNeedFix/170) Nút sửa bằng AI ĐỨNG NGAY CẠNH dòng lỗi — đúng chỗ user
+                          đang nhìn thấy lỗi, không bắt đi tìm ở panel khác. */}
+                      {iss.path && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); void repairWithAi(iss.path); }}
+                          disabled={repairingPath !== null}
+                          title={'AI đọc BẢN GỐC + BẢN DỊCH + danh sách biến thật trong [initvar] để tìm đích danh lỗi rồi vá lại entry này.\n'
+                            + 'Khác với "dịch lại": dịch lại là chạy lại đúng con đường đã sinh ra lỗi.\n'
+                            + 'Bản sửa phải qua kiểm (đủ macro, đủ khối EJS, không đẻ biến lạ, cú pháp sạch) mới được ghi đè.'}
+                          style={{
+                            marginLeft: '6px', fontSize: '0.62rem', fontWeight: 600,
+                            padding: '0 5px', borderRadius: '3px', cursor: repairingPath ? 'wait' : 'pointer',
+                            border: '1px solid rgba(124,106,240,0.45)', background: 'transparent',
+                            color: 'var(--accent-primary)', opacity: repairingPath && repairingPath !== iss.path ? 0.4 : 1,
+                          }}
+                        >
+                          {repairingPath === iss.path ? '⏳ đang sửa…' : '🤖 Sửa bằng AI'}
+                        </button>
+                      )}
+
+                      {repairNotes[iss.path] && (
+                        <div style={{ marginTop: '2px', fontSize: '0.64rem', color: 'var(--text-muted)', lineHeight: 1.45, paddingLeft: '2px', borderLeft: '2px solid rgba(124,106,240,0.35)', paddingInlineStart: '6px' }}>
+                          {repairNotes[iss.path]}
+                        </div>
+                      )}
                     </span>
                   </div>
                 ))}

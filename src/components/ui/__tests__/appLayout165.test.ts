@@ -10,10 +10,18 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const APP = readFileSync(resolve(__dirname, '../../../App.tsx'), 'utf-8');
-const VI = readFileSync(resolve(__dirname, '../../../i18n/ui/vi.ts'), 'utf-8');
-const EN = readFileSync(resolve(__dirname, '../../../i18n/ui/en.ts'), 'utf-8');
-const ZH = readFileSync(resolve(__dirname, '../../../i18n/ui/zh.ts'), 'utf-8');
+/**
+ * Đọc mã nguồn và CHUẨN HOÁ xuống dòng về \n.
+ * Repo này checkout ra CRLF trên Windows. Trong JS, `.` không khớp `\r` (nó là ký tự kết thúc
+ * dòng), nên mọi khẳng định trải trên HAI dòng kiểu /A.*\n?.*B/ đều trượt — báo đỏ vì định dạng
+ * file chứ không phải vì hành vi hỏng. Chuẩn hoá một lần ở đây để test canh đúng thứ nó định canh.
+ */
+const readSrc = (rel: string) => readFileSync(resolve(__dirname, rel), 'utf-8').replace(/\r\n/g, '\n');
+
+const APP = readSrc('../../../App.tsx');
+const VI = readSrc('../../../i18n/ui/vi.ts');
+const EN = readSrc('../../../i18n/ui/en.ts');
+const ZH = readSrc('../../../i18n/ui/zh.ts');
 
 describe('(bug 165) giữ nguyên cơ chế lazy + warmup', () => {
   it('warmupLazyChunks vẫn còn và vẫn được gọi', () => {

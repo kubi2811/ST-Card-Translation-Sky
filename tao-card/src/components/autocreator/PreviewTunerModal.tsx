@@ -117,6 +117,30 @@ export function PreviewTunerModal({ open, onClose, onStart }: Props) {
   // (bug 149) Khung 64px cao chỉ đủ thấy phần đầu — user muốn 'mở rộng thanh ra' để xem hết chữ bên trong.
   const [bigPreview, setBigPreview] = useState(false);
 
+  /**
+   * (bug 159-4) CỬA CHUYỂN TIẾP giữa hai iframe của cùng một mẫu giao diện.
+   *
+   * Hai iframe không nói chuyện trực tiếp được (khác document, lại là sandbox), nên cha đứng giữa:
+   * nhận gói từ khung `form` rồi đẩy sang khung `status` CÙNG THEME. Phải khớp theme, không thì
+   * điền form của mẫu này lại làm đổi Status Bar của mẫu khác.
+   * Chỉ nhận gói có cờ `__stcsPreview` — không tin bất kỳ message lạ nào khác.
+   */
+  useEffect(() => {
+    const onMsg = (ev: MessageEvent) => {
+      const d = ev.data as { __stcsPreview?: boolean; role?: string; stat?: unknown } | null;
+      if (!d?.__stcsPreview || d.role !== 'form' || !d.stat) return;
+      const src = [...document.querySelectorAll<HTMLIFrameElement>('iframe[data-preview-role="form"]')]
+        .find(f => f.contentWindow === ev.source);
+      const theme = src?.dataset.previewTheme;
+      if (!theme) return;
+      document
+        .querySelector<HTMLIFrameElement>(`iframe[data-preview-role="status"][data-preview-theme="${CSS.escape(theme)}"]`)
+        ?.contentWindow?.postMessage({ __stcsPreview: true, role: 'relay', stat: d.stat }, '*');
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+
   const activeProfile = settings.getActiveProfile();
   const idea = store.config.idea;
   const ideaChanged = !!tuning && tuning.ideaSig !== ideaSignature(idea);
@@ -406,9 +430,32 @@ export function PreviewTunerModal({ open, onClose, onStart }: Props) {
                       <span className="truncate">{c.label}</span>
                       <span className="ml-auto opacity-60">{tuning.themeId === c.themeId ? 'đang chọn' : 'chọn'}</span>
                     </button>
+                    {/* (bug 159-4) HAI KHUNG như trong SillyTavern thật: Opening Form và Status Bar
+                        là hai khối regex riêng, mỗi khối một iframe. Bản cũ chỉ hiện Status Bar vì
+                        `full_set` trả về đúng nó. Điền vào form rồi bấm Xác nhận thì form GHI biến,
+                        khung Status Bar bên dưới nhận được và vẽ lại — nối qua postMessage ở cha. */}
+                    {c.openingFormHtml && (
+                      <div className="border-b border-border">
+                        <div className="px-2 py-1 text-[10px] text-muted-foreground bg-muted/10">
+                          Opening Form — điền thử rồi bấm Xác nhận, Status Bar bên dưới sẽ cập nhật theo
+                        </div>
+                        <iframe title={`${c.themeId}-form`} sandbox="allow-scripts"
+                          data-preview-role="form" data-preview-theme={c.themeId}
+                          srcDoc={withData
+                            ? withPreviewData(toIframeHtml(c.openingFormHtml), tuning.schema, 'form')
+                            : toIframeHtml(c.openingFormHtml)}
+                          className={`w-full bg-white ${bigPreview ? 'h-[45vh]' : 'h-64'}`} />
+                      </div>
+                    )}
+                    {c.openingFormHtml && (
+                      <div className="px-2 py-1 text-[10px] text-muted-foreground bg-muted/10">Status Bar</div>
+                    )}
                     <iframe title={c.themeId} sandbox="allow-scripts"
-                      srcDoc={withData ? withPreviewData(toIframeHtml(c.previewHtml), tuning.schema) : toIframeHtml(c.previewHtml)}
-                      className={`w-full bg-white ${bigPreview ? 'h-[70vh]' : 'h-72'}`} />
+                      data-preview-role="status" data-preview-theme={c.themeId}
+                      srcDoc={withData
+                        ? withPreviewData(toIframeHtml(c.previewHtml), tuning.schema, c.openingFormHtml ? 'status' : 'solo')
+                        : toIframeHtml(c.previewHtml)}
+                      className={`w-full bg-white ${bigPreview ? 'h-[45vh]' : 'h-64'}`} />
                   </div>
                 ))}
               </div>

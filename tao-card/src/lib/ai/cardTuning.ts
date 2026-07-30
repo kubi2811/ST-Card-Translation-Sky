@@ -86,6 +86,11 @@ export interface ThemeChoice {
   label: string;
   /** HTML preview đầy đủ (Opening Form + Status Bar) — đổ vào iframe srcdoc. */
   previewHtml: string;
+  /**
+   * (bug 159-4) Opening Form tách riêng. `full_set` vốn dựng cả hai nhưng chỉ trả về Status Bar
+   * ("use status bar as primary preview"), nên Bước 2 mất hẳn Opening Form — đúng cảnh user báo.
+   */
+  openingFormHtml?: string;
 }
 
 /** Nhãn hiện cho user — THEME_PRESETS chỉ có id máy. */
@@ -119,7 +124,7 @@ export function buildThemeChoices(schema: MVUZODSchema, gameName: string, count 
       });
       // Theme AI không có trong THEME_LABELS — dùng chính tên AI đặt cho nó.
       const label = THEME_LABELS[themeId] ?? THEME_PRESETS[themeId]?.name ?? themeId;
-      out.push({ themeId, label, previewHtml: built.previewHtml });
+      out.push({ themeId, label, previewHtml: built.previewHtml, openingFormHtml: built.parts?.openingForm });
     } catch { /* theme lỗi thì bỏ phương án đó, không chặn các phương án còn lại */ }
   }
   return out;

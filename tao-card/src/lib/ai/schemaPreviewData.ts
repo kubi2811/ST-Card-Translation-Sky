@@ -109,12 +109,48 @@ export function toIframeHtml(previewHtml: string): string {
  * Đặt NGAY SAU <head> để chạy trước mọi script của giao diện: `waitGlobalInitialized` trả về
  * ngay, `getAllVariables()` có dữ liệu, nên `populateData()` vẽ đúng số của schema đang chỉnh.
  */
-export function withPreviewData(previewHtml: string, schema: MVUZODSchema | null | undefined): string {
+export function withPreviewData(
+  previewHtml: string,
+  schema: MVUZODSchema | null | undefined,
+  /**
+   * (bug 159-4) Khung này đóng vai gì trong bộ đôi mô phỏng.
+   * `role` để hai iframe chia sẻ MỘT trạng thái: Opening Form GHI, Status Bar ĐỌC. Không có nó
+   * thì mỗi khung một bản dữ liệu riêng, điền form xong Status Bar vẫn đứng im — mà "điền form
+   * thì Status Bar tự cập nhật theo" chính là yêu cầu của mục này.
+   */
+  role: 'form' | 'status' | 'solo' = 'solo',
+): string {
   const stat = buildSampleStatData(schema);
   const stub = `<script>
-/* (bug 148) MVU giả CHỈ dùng cho khung xem trước — không đi vào thẻ xuất ra. */
+/* (bug 148/159-4) MVU giả CHỈ dùng cho khung xem trước — không đi vào thẻ xuất ra.
+ * (159-4) Nay GHI ĐƯỢC: bản cũ để insertOrAssignVariables/setvar là hàm rỗng nên bấm Xác nhận
+ * trong Opening Form chẳng có gì xảy ra, và Status Bar không bao giờ đổi. Cách nối đúng chính là
+ * cách MVU thật hoạt động: ai ghi thì phát sự kiện VARIABLE_UPDATE_ENDED, ai vẽ thì đã đăng ký
+ * lắng nghe sự kiện đó qua eventOn — nên chỉ cần stub tôn trọng đúng hợp đồng ấy. */
 (function () {
+  var ROLE = ${JSON.stringify(role)};
   var DATA = { stat_data: ${JSON.stringify(stat)} };
+  var listeners = [];
+
+  function deepMerge(dst, src) {
+    if (!src || typeof src !== 'object') return dst;
+    Object.keys(src).forEach(function (k) {
+      var v = src[k];
+      if (v && typeof v === 'object' && !Array.isArray(v) && dst[k] && typeof dst[k] === 'object' && !Array.isArray(dst[k])) {
+        deepMerge(dst[k], v);
+      } else {
+        dst[k] = v;   // mảng và giá trị đơn thì THAY, không trộn — trộn mảng là nhân đôi phần tử
+      }
+    });
+    return dst;
+  }
+  function fire() { listeners.slice().forEach(function (cb) { try { cb(); } catch (e) { console.warn(e); } }); }
+  /** Đẩy thay đổi sang khung bên kia (Status Bar) qua cửa cha. */
+  function broadcast() {
+    if (ROLE === 'solo') return;
+    try { parent.postMessage({ __stcsPreview: true, role: ROLE, stat: DATA.stat_data }, '*'); } catch (e) { /* khác origin thì bỏ */ }
+  }
+
   window.getAllVariables = function () { return DATA; };
   window.getvar = function (path, opts) {
     var p = String(path || '').replace(/^stat_data\\./, '').split('.');
@@ -122,15 +158,39 @@ export function withPreviewData(previewHtml: string, schema: MVUZODSchema | null
     for (var i = 0; i < p.length; i++) { if (cur == null) break; cur = cur[p[i]]; }
     return cur === undefined ? (opts && opts.defaults) : cur;
   };
-  window.setvar = function () {};
+  window.setvar = function (path, value) {
+    var p = String(path || '').replace(/^stat_data\\./, '').split('.').filter(Boolean);
+    var cur = DATA.stat_data;
+    for (var i = 0; i < p.length - 1; i++) { if (cur[p[i]] == null || typeof cur[p[i]] !== 'object') cur[p[i]] = {}; cur = cur[p[i]]; }
+    if (p.length) cur[p[p.length - 1]] = value;
+    fire(); broadcast();
+    return true;
+  };
   window.waitGlobalInitialized = function () { return Promise.resolve(); };
-  window.eventOn = function () {};
-  window.eventEmit = function () {};
+  window.eventOn = function (_evt, cb) { if (typeof cb === 'function') listeners.push(cb); };
+  window.eventEmit = function () { fire(); };
   window.errorCatched = function (fn) { return function () { try { return fn.apply(this, arguments); } catch (e) { console.warn(e); } }; };
   window.Mvu = { events: { VARIABLE_UPDATE_ENDED: 'preview' }, getMvuData: function () { return DATA; } };
-  window.insertOrAssignVariables = function () { return Promise.resolve(); };
+  /* Opening Form ghi qua ĐÚNG một đường này (xem buildSubmitHandler). */
+  window.insertOrAssignVariables = function (vars) {
+    if (vars && vars.stat_data) deepMerge(DATA.stat_data, vars.stat_data);
+    else deepMerge(DATA.stat_data, vars || {});
+    fire(); broadcast();
+    return Promise.resolve();
+  };
+  window.replaceVariables = window.insertOrAssignVariables;
   window.activewi = function () { return Promise.resolve(true); };
   window.getwi = function () { return Promise.resolve(''); };
+
+  /* Khung ĐỌC nhận dữ liệu do khung GHI gửi sang rồi vẽ lại. */
+  if (ROLE === 'status') {
+    addEventListener('message', function (ev) {
+      var d = ev && ev.data;
+      if (!d || !d.__stcsPreview || d.role === 'status' || !d.stat) return;
+      deepMerge(DATA.stat_data, d.stat);
+      fire();
+    });
+  }
 })();
 </script>`;
 

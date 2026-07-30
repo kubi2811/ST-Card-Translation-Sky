@@ -62,6 +62,14 @@ export interface ProgrammaticBuildResult {
   fieldsRendered: number;
   /** Full HTML preview string (for iframe) */
   previewHtml: string;
+  /**
+   * (bug 159-4) HAI PHẦN RIÊNG của `full_set`.
+   * Bản cũ trả `previewHtml: statusResult.previewHtml` kèm chú thích "use status bar as primary
+   * preview" — nên Opening Form bị VỨT BỎ khỏi khung xem trước, đúng cảnh user báo "Bước 2 chỉ
+   * cho xem trước giao diện Status Bar". Trong SillyTavern thật hai thứ này là HAI khối regex
+   * riêng, mỗi khối một iframe, nên giữ chúng tách nhau ở đây mới là mô phỏng thật.
+   */
+  parts?: { statusBar?: string; openingForm?: string };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1286,7 +1294,9 @@ function buildFullSetResult(
     scripts: allScripts,
     totalSize,
     fieldsRendered: statusResult.fieldsRendered + formResult.fieldsRendered,
-    previewHtml: statusResult.previewHtml, // Use status bar as primary preview
+    // Giữ previewHtml = Status Bar cho những chỗ gọi cũ, nhưng KHÔNG đánh mất Opening Form nữa.
+    previewHtml: statusResult.previewHtml,
+    parts: { statusBar: statusResult.previewHtml, openingForm: formResult.previewHtml },
   };
 }
 

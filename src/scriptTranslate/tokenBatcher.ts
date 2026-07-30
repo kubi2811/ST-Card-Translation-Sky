@@ -61,6 +61,8 @@ ${buildProperNounRules(opts.nameStyle, opts.fandomMode, opts.fandomName)}
 2. Keep leading/trailing whitespace of each string unchanged.
 3. Translate ONLY the human language. If an item is pure code/CSS with no prose, return it UNCHANGED.
 4. Output format: for EVERY input item, echo its marker line <<<ID>>> then the translation on the following line(s). Same number of items, same IDs, in the same order. NO extra commentary, no markdown fences.
+5. Return ONLY the translation. Do NOT repeat the Chinese source, do NOT output "original → translation" pairs, do NOT add notes. (bug 160: doing this injected the source text back into the script.)
+6. NEVER add a line break that the source item did not have. These strings live inside single-line JavaScript string literals — one stray newline makes the whole file "Unterminated string constant" and the script dies completely.
 ${glossaryBlock}${nsfwBlock}`;
 
   const user = batch.map((b) => `<<<${b.token.id}>>>\n${b.original}`).join('\n');

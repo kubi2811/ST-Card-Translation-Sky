@@ -114,6 +114,7 @@ const ui: UiKeys = {
   scrTrRepPreservedHint: 'Muốn đổi tên khoá thì thêm vào Từ Điển — tool sẽ đổi đồng loạt cả chỗ đọc lẫn chỗ ghi. Đang giữ: {names}',
   scrTrRepDictRenamed: '{n} khoá dữ liệu đổi tên theo Từ Điển của bạn (đổi tất định, không qua AI)',
   scrTrRepRegex: 'Regex: vá {changed}, hoàn nguyên {reverted} (nhánh mới không compile được thì trả lại nguyên trạng)',
+  scrTrRepLineBloat: 'Số dòng phình từ {in} lên {out} — có ký tự xuống dòng bị chèn vào giữa chuỗi JS (bản dịch tự thêm dòng mới). Đây là nguyên nhân làm chuỗi không kết thúc và cả file chết.',
   scrTrRepCjk: 'Ký tự Trung: {in} → {out}',
   scrTrRepTime: 'Chạy hết {s}s',
   scrTrDownload: 'Tải script đã dịch',

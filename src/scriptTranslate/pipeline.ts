@@ -185,6 +185,15 @@ export async function runScriptTranslation(
   // 4) Reinsert — chỉ token có translated được thay, còn lại giữ nguyên văn
   cb({ stage: 'reinsert' });
   let output = await callWorker<string>('reinsert', { code: working, tokens });
+
+  // (bug 160) SỐ DÒNG PHÌNH RA = có ký tự xuống dòng bị chèn vào giữa chuỗi.
+  // Đây là dấu hiệu của cả một LỚP lỗi: model trả "nguyên_văn ⏎ bản_dịch" rồi cục đó bị nhét vào
+  // một chuỗi JS một dòng ⇒ "Unterminated string constant", file chết hẳn (đúng ca bug/160: gốc 1
+  // dòng, bản dịch 42 dòng). reinsert nay đã chặn, nhưng vẫn đo lại ở đây: nếu mai này có biến thể
+  // khác lọt qua thì báo cáo phải nói được NGAY nguyên nhân, thay vì để user đọc "Unterminated
+  // string constant" rồi không hiểu vì sao.
+  const linesBefore = working.split('\n').length;
+  const linesAfter = output.split('\n').length;
   throwIfAborted(ctl.signal);
 
   // Kiểm PARITY ngay tại đây — TRƯỚC bước alternation. Mỗi nhánh `(?:Hán|Việt)` thêm 1 cặp
@@ -265,6 +274,8 @@ export async function runScriptTranslation(
     regexReverted,
     bytesIn,
     bytesOut: output.length,
+    linesIn: linesBefore,
+    linesOut: linesAfter,
     durationMs: Date.now() - t0,
   };
   cb({ stage: 'done' });

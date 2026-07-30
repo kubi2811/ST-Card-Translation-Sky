@@ -112,6 +112,7 @@ const ui = {
   scrTrRepPreservedHint: 'To rename a key, add it to the Glossary — it will be renamed everywhere, both reads and writes. Currently kept: {names}',
   scrTrRepDictRenamed: '{n} data keys renamed from your Glossary (deterministic, never sent to the AI)',
   scrTrRepRegex: 'Regex: {changed} patched, {reverted} reverted (a new branch that fails to compile is rolled back)',
+  scrTrRepLineBloat: 'Line count grew from {in} to {out} — a newline was injected inside a JS string (the translation added one). This is what makes the string unterminated and kills the whole file.',
   scrTrRepCjk: 'Chinese characters: {in} → {out}',
   scrTrRepTime: 'Took {s}s',
   scrTrDownload: 'Download translated script',

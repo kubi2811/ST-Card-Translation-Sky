@@ -110,6 +110,7 @@ const ui: UiKeys = {
   scrTrRepPreservedHint: '要改键名请加入术语表 — 读写两处会一并改。当前保留：{names}',
   scrTrRepDictRenamed: '{n} 个数据键按术语表改名（确定性替换，不经过 AI）',
   scrTrRepRegex: '正则：修补 {changed}，还原 {reverted}（新分支无法编译则回滚）',
+  scrTrRepLineBloat: '行数从 {in} 增至 {out} — 有换行符被插入 JS 字符串内部（译文自行添加）。这正是字符串未闭合、整个文件失效的原因。',
   scrTrRepCjk: '中文字符：{in} → {out}',
   scrTrRepTime: '耗时 {s} 秒',
   scrTrDownload: '下载译好的脚本',

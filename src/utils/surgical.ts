@@ -498,6 +498,15 @@ export function extractCJKTokens(
     const _beforeId = _idPrefix ? contextBefore.slice(0, contextBefore.length - _idPrefix.length) : contextBefore;
     /** Đang ở thế THUỘC TÍNH (sau dấu chấm) — reinsert bọc bracket được nên đổi tên vẫn hợp lệ. */
     const _inPropPos = /[\w$\])}'"一-鿿㐀-䶿]\??\.$/.test(_beforeId) && !/[0-9]\??\.$/.test(_beforeId);
+    /**
+     * (bug 160) Đang ở thế KHOÁ OBJECT (`{世界运转: …}`) — bọc nháy được nên cũng đổi tên an toàn.
+     * Bản vá 154 chỉ cho từ điển thắng lớp bảo vệ ở thế THUỘC TÍNH, nên `ee={世界运转:{},主角:{}}`
+     * bị bỏ qua trong khi `世界运转.当前日期` ở chỗ khác lại được đổi ⇒ nửa đổi nửa không, đúng ví
+     * dụ (d) user gửi. Nửa vời còn tệ hơn không đổi: chỗ ghi và chỗ đọc trỏ vào hai ô khác nhau.
+     */
+    const _inKeyPos = /(?:[{,]\s*|\n\s*|^['"\s]*)['"]?$/.test(_beforeId)
+      && /^['"]?\s*:/.test(contextAfter)
+      && !/^['"]?\s*:\/\//.test(contextAfter);
 
     // ═══ (bug 151) ĐƯỜNG DẪN DỮ LIỆU NẰM TRONG CHUỖI: '军事.各营' ═══
     // `_.get(t,'军事.各营')` là chuỗi nên không đi qua nhánh bảo vệ nào, bị coi là văn xuôi và
@@ -565,7 +574,7 @@ export function extractCJKTokens(
       // bọc `t['…']` là xong). Nếu bỏ qua cả hai thì tên trong chuỗi `_.get(t,'配置.x')` vẫn
       // bị đổi trong khi code đọc thì không → đọc trúng ô rỗng, hỏng âm thầm.
       const _dictHit = mvuDictionary?.[match[0].trim()];
-      if ((protectedIds.has(match[0]) || protectedIds.has(text.slice(wStart, wEnd))) && !(_dictHit && _inPropPos)) continue;
+      if ((protectedIds.has(match[0]) || protectedIds.has(text.slice(wStart, wEnd))) && !(_dictHit && (_inPropPos || _inKeyPos))) continue;
 
       // ═══ CỤM TRUY CẬP THUỘC TÍNH VỚI BASE CHỮ HÁN: 配置.调试验证 ═══
       // Dấu `.` ASCII nằm trong bộ JOINER (để câu văn "3.5米" không bị băm), nên cả cụm
@@ -765,6 +774,34 @@ export function reinsertTranslations(original: string, tokens: CJKToken[]): stri
       let replaceStart = token.start;
       const replaceEnd = token.end;
 
+      // ═══ (bug 160) BẢN DỊCH KHÔNG ĐƯỢC TỰ THÊM KÝ TỰ XUỐNG DÒNG ═══
+      // Bằng chứng bug/160: script gốc minify MỘT dòng, bản dịch nhận về có 42 dòng. Dòng 1 dừng
+      // giữa câu Hán "…她仰头看了一眼房梁", dòng 2 bắt đầu bằng đúng bản dịch của câu đó — nghĩa là
+      // AI trả về `nguyên_văn` + XUỐNG DÒNG + `bản_dịch` rồi cả cục bị chèn vào. MỘT nguyên nhân,
+      // hai triệu chứng nặng:
+      //   • xuống dòng thật nằm trong chuỗi JS ⇒ "Unterminated string constant", file chết hẳn;
+      //   • nguyên văn còn nguyên bên trên bản dịch ⇒ "dịch mà không xoá đoạn gốc".
+      // Token gốc không có xuống dòng thì bản dịch cũng không được có — bất biến tất định, không
+      // phải trông chờ AI ngoan. Gộp về MỘT dấu cách để không dính chữ vào nhau.
+      // ═══ (bug 160) AI LẶP LẠI NGUYÊN VĂN RỒI MỚI DỊCH → bóc phần nguyên văn đi ═══
+      // Prompt của Dịch Card có luật "Return ONLY the translated text, do NOT include the original"
+      // nhưng prompt của Dịch Script thì KHÔNG có — nên model hay trả kiểu "原文 → 译文". Chặn ở đây
+      // là chặn tất định, dù prompt có được siết hay không (và prompt cũng đã siết thêm).
+      // Chỉ bóc khi nguyên văn nằm ở ĐẦU và còn phần dịch phía sau — không thì đây là bản dịch
+      // hợp lệ vô tình chứa lại vài chữ Hán (tên riêng giữ nguyên), đụng vào là làm hỏng.
+      {
+        const orig = token.text.trim();
+        const cut = finalTranslation.replace(/^\s+/, '');
+        if (orig.length >= 4 && cut.startsWith(orig)) {
+          const rest = cut.slice(orig.length).replace(/^[\s\r\n:：\-–—→>]+/, '');
+          if (rest.trim()) finalTranslation = rest;
+        }
+      }
+
+      if (!/[\r\n]/.test(token.text) && /[\r\n]/.test(finalTranslation)) {
+        finalTranslation = finalTranslation.replace(/\s*[\r\n]+\s*/g, ' ').trim();
+      }
+
       // Check if the CJK token is ALREADY surrounded by quotes in the original text.
       // e.g. '西晋' → regex extracted 西晋 without quotes, but the source has quotes.
       // If we add quotes again, we get ''Tây Tấn'' which is a fatal JS SyntaxError.
@@ -825,10 +862,21 @@ export function reinsertTranslations(original: string, tokens: CJKToken[]): stri
       }
       
       // AUTO-SPACE FIX FOR VIETNAMESE CJK UNITS
-      if (finalTranslation && /^[a-zA-ZÀ-ỹ]/.test(finalTranslation) && !finalTranslation.startsWith('[')) {
+      // (bug 160) Mở rộng sang ranh giới HÁN ↔ LATIN. User báo: "…dành choAIDùng để hiểu…".
+      // Nguyên nhân: bộ gom token cắt quanh cụm Latin, nên "给AI使用" thành ba mảnh
+      // `给` + (giữ nguyên `AI`) + `使用`. Tiếng Trung không có dấu cách nên nối lại là dính liền,
+      // còn tiếng Việt thì bắt buộc phải có. Thêm dấu cách ở CẢ HAI phía khi hai bên đều là chữ.
+      // KHÔNG áp cho token định danh/khoá/CSS — thêm dấu cách ở đó là vỡ code.
+      const isCodeToken = token.isIdentifier || token.isObjectKey || token.isDotNotation
+        || token.isCssClass || token.isHtmlAttr;
+      if (finalTranslation && !isCodeToken && !/^[['"`.]/.test(finalTranslation)) {
         const prevChar = result.charAt(replaceStart - 1);
-        if (prevChar && /[\d\}\)\]>]/.test(prevChar)) {
+        const nextChar = result.charAt(replaceEnd);
+        if (/^[a-zA-ZÀ-ỹ]/.test(finalTranslation) && prevChar && /[\d\}\)\]>a-zA-Z0-9À-ỹ]/.test(prevChar)) {
           finalTranslation = ' ' + finalTranslation;
+        }
+        if (/[a-zA-ZÀ-ỹ0-9]$/.test(finalTranslation) && nextChar && /[a-zA-Z0-9À-ỹ]/.test(nextChar)) {
+          finalTranslation = finalTranslation + ' ';
         }
       }
 

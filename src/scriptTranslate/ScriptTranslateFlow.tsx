@@ -458,6 +458,11 @@ export default function ScriptTranslateFlow() {
             )}
             <li>🧩 {fmt(ui.scrTrRepRegex, { changed: report.regexChanged, reverted: report.regexReverted })}</li>
             <li>🈶 {fmt(ui.scrTrRepCjk, { in: report.cjkCharsIn.toLocaleString(), out: report.cjkCharsOut.toLocaleString() })}</li>
+            {/* (bug 160) Số dòng phình ra = có xuống dòng bị chèn vào giữa chuỗi JS. Nói thẳng
+                nguyên nhân, đừng để user chỉ thấy "Unterminated string constant". */}
+            {report.linesIn !== undefined && report.linesOut !== undefined && report.linesOut > report.linesIn && (
+              <li>⚠️ {fmt(ui.scrTrRepLineBloat, { in: report.linesIn, out: report.linesOut })}</li>
+            )}
             <li>⏱️ {fmt(ui.scrTrRepTime, { s: Math.round(report.durationMs / 1000) })} · {Math.round(report.bytesIn / 1024)}KB → {Math.round(report.bytesOut / 1024)}KB</li>
           </ul>
           <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>

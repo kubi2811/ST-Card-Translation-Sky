@@ -59,6 +59,9 @@ export interface ScriptTranslateReport {
   regexReverted: number;
   bytesIn: number;
   bytesOut: number;
+  /** (bug 160) Số dòng trước/sau — phình ra là có xuống dòng bị chèn vào giữa chuỗi JS. */
+  linesIn?: number;
+  linesOut?: number;
   durationMs: number;
 }
 

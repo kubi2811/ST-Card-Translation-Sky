@@ -42,26 +42,61 @@ const TM_PRUNE_TARGET = 4000; // After pruning, keep this many
 
 /* ─── Hash utility ─── */
 
+/**
+ * (bug 164 · HM6-A) BĂM TOÀN VĂN, KHÔNG PHẢI 200 KÝ TỰ ĐẦU.
+ * Bản cũ băm `text.slice(0, 200)` — tức là khớp theo TIỀN TỐ, trái với chính điều tài liệu khẳng
+ * định ("match theo hash CHÍNH XÁC, không match theo tiền tố"). Hai entry dài khác nhau mà giống 200
+ * ký tự đầu (rất thường gặp: các entry cùng mở đầu bằng một khối quy tắc chung) sẽ CÙNG hash, nên
+ * lookup trả `similarity: 1.0` cho một bản dịch không phải của nó.
+ * Mức nguy hại có hạn — hit chỉ được nạp vào prompt làm tư liệu tham khảo, không tự áp làm bản dịch
+ * — nhưng gợi ý sai vẫn kéo AI đi lệch, mà sửa thì gần như miễn phí. DJB2 trên toàn văn vẫn rất
+ * nhanh (tuyến tính, không cấp phát), và kèm ĐỘ DÀI để chặn nốt lớp trùng còn lại.
+ */
 function simpleHash(text: string): string {
-  // DJB2 hash — fast, good distribution for short strings
   let hash = 5381;
-  const sample = text.slice(0, 200);
-  for (let i = 0; i < sample.length; i++) {
-    hash = ((hash << 5) + hash + sample.charCodeAt(i)) & 0xFFFFFFFF;
+  for (let i = 0; i < text.length; i++) {
+    hash = ((hash << 5) + hash + text.charCodeAt(i)) & 0xFFFFFFFF;
   }
-  return hash.toString(36);
+  return `${text.length.toString(36)}_${hash.toString(36)}`;
 }
 
 /* ─── Core API ─── */
 
 let memoryCache: TranslationMemoryEntry[] | null = null;
+/**
+ * (bug 164 · HM6-B) CHỐNG RACE MẤT BẢN GHI KHI GHI ĐA LUỒNG.
+ * Bản cũ: mỗi lượt gọi ensureLoaded() lúc `memoryCache === null` đều tự await `IDB.get` và nhận MỘT
+ * MẢNG RIÊNG. Vòng dịch gọi storeTranslation() mỗi khi một field xong; chạy đa luồng thì nhiều field
+ * xong gần như cùng lúc ⇒ lượt A đẩy bản ghi vào mảng A rồi gán memoryCache = A, lượt B đẩy vào mảng
+ * B (không có bản ghi của A) rồi gán memoryCache = B → bản ghi của A biến mất. Không lỗi nào báo,
+ * chỉ là Translation Memory thiếu dần và không ai biết vì sao.
+ * Vá bằng single-flight: mọi lượt gọi đồng thời chờ CHUNG một promise, nên chỉ có đúng một mảng tồn
+ * tại. Sau đó phần thêm/sửa là đồng bộ (không có await ở giữa findIndex và push) nên không còn khe
+ * xen kẽ nào nữa.
+ */
+let loadPromise: Promise<TranslationMemoryEntry[]> | null = null;
+/**
+ * Thế hệ cache — tăng mỗi khi có người CỐ Ý đặt lại cache (vd clearTranslationMemory).
+ * Cần nó vì lượt nạp đang bay không huỷ được: nếu user bấm Xoá đúng lúc IDB.get chưa resolve thì
+ * `.then` của nó sẽ ghi dữ liệu CŨ trở lại và việc xoá bị lặng lẽ hoàn tác.
+ */
+let cacheEpoch = 0;
 
 /** Load TM from IDB into memory cache */
 async function ensureLoaded(): Promise<TranslationMemoryEntry[]> {
   if (memoryCache !== null) return memoryCache;
-  const stored = await IDB.get<TranslationMemoryEntry[] | null>(TM_IDB_KEY, null);
-  memoryCache = stored || [];
-  return memoryCache;
+  if (!loadPromise) {
+    const epoch = cacheEpoch;
+    loadPromise = IDB.get<TranslationMemoryEntry[] | null>(TM_IDB_KEY, null)
+      .then((stored) => {
+        // Cache đã bị đặt lại trong lúc chờ → bỏ kết quả cũ, trả về cache hiện hành.
+        if (epoch !== cacheEpoch) return memoryCache ?? [];
+        memoryCache = stored || [];
+        return memoryCache;
+      })
+      .finally(() => { loadPromise = null; });
+  }
+  return loadPromise;
 }
 
 /** Persist memory cache back to IDB */
@@ -227,6 +262,7 @@ export async function autoPruneTranslationMemory(): Promise<number> {
  * Clear all Translation Memory entries.
  */
 export async function clearTranslationMemory(): Promise<void> {
+  cacheEpoch++;          // vô hiệu hoá lượt nạp đang bay, kẻo nó ghi dữ liệu cũ trở lại
   memoryCache = [];
   await IDB.remove(TM_IDB_KEY);
 }

@@ -2,7 +2,7 @@ import { useStore } from '../store';
 import { useThrottledStore } from '../hooks/useThrottledStore';
 import { useT, useUi } from '../i18n/useLocale';
 import { Eye, ChevronDown, ChevronRight, Languages, BookOpen } from 'lucide-react';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import StPreviewModal from './StPreviewModal';
 
 /* ─── Map field paths to translated values ─── */
@@ -27,10 +27,23 @@ export default function CardPreview() {
   const ui = useUi() as Record<string, string>;
   const translated = useTranslatedFields();
   const [showStPreview, setShowStPreview] = useState(false);
+  // (bug 164 · HM5) GỢI Ý MỞ PREVIEW SAU KHI DỊCH XONG.
+  // Trước đây StPreviewModal CHỈ mở được bằng một nút bấm tay ở đây — không chỗ nào mời người dùng
+  // xem sau khi dịch. Mà đây đúng là lúc cần xem nhất: lỗi vỡ giao diện do dịch (thẻ chưa đóng,
+  // dấu nháy lọt vào chuỗi — xem bug 161) không làm app báo gì, chỉ nhìn mới thấy.
+  // Chỉ GỢI Ý, không tự mở: tự bung modal giữa lúc người ta đang đọc kết quả là giành quyền điều
+  // khiển. Đóng rồi thì không hỏi lại trong lượt đó.
+  const phase = useStore((s) => s.phase);
+  const [previewHintDone, setPreviewHintDone] = useState(false);
+  useEffect(() => {
+    // Bắt đầu lượt dịch mới → cho phép gợi ý lại.
+    if (phase === 'translating') setPreviewHintDone(false);
+  }, [phase]);
   if (!card) return null;
 
   const isWorldbook = contentType === 'worldbook';
   const hasTranslations = translated.size > 0;
+  const suggestPreview = !isWorldbook && phase === 'done' && hasTranslations && !previewHintDone && !showStPreview;
 
   // Helper: get translated text or original
   const tv = (dataPath: string, rootPath: string, original?: string) => {
@@ -85,6 +98,47 @@ export default function CardPreview() {
       </div>
 
       {showStPreview && <StPreviewModal onClose={() => setShowStPreview(false)} />}
+
+      {/* (bug 164 · HM5) Dịch xong thì MỜI người dùng soi giao diện — đây là lúc lỗi vỡ giao diện do
+          dịch dễ xuất hiện nhất mà app không tự phát hiện được bằng số liệu (nút bấm liệt vì một
+          dấu nháy lọt vào chuỗi — bug 161 — không làm sai bất kỳ phép đếm nào).
+          Giữ inline style theo CSS variables sẵn có: đợt đại tu giao diện (bug 165) chưa chạy nên
+          chưa có CollapsibleSection/ToolButton dùng chung, tự sáng tạo pattern mới ở đây là tạo hai
+          kiểu song song rồi lại phải gỡ. */}
+      {suggestPreview && (
+        <div
+          style={{
+            display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '14px',
+            padding: '10px 12px', borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--accent-secondary)',
+            background: 'color-mix(in srgb, var(--accent-secondary) 8%, transparent)',
+          }}
+        >
+          <Eye size={16} style={{ color: 'var(--accent-secondary)', flexShrink: 0, marginTop: 2 }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: 2 }}>{ui.spSuggestTitle}</div>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>{ui.spSuggestBody}</div>
+          </div>
+          <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+            <button
+              onClick={() => { setShowStPreview(true); setPreviewHintDone(true); }}
+              style={{
+                fontSize: '0.7rem', fontWeight: 600, padding: '4px 10px', cursor: 'pointer',
+                borderRadius: 'var(--radius-md)', border: '1px solid var(--accent-secondary)',
+                background: 'var(--accent-secondary)', color: 'var(--bg-primary)',
+              }}
+            >{ui.spSuggestOpen}</button>
+            <button
+              onClick={() => setPreviewHintDone(true)}
+              style={{
+                fontSize: '0.7rem', padding: '4px 10px', cursor: 'pointer',
+                borderRadius: 'var(--radius-md)', border: '1px solid var(--border-default)',
+                background: 'transparent', color: 'var(--text-muted)',
+              }}
+            >{ui.spSuggestDismiss}</button>
+          </div>
+        </div>
+      )}
 
       {isWorldbook ? (
         <WorldbookPreview card={card} translated={translated} />

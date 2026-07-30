@@ -18,11 +18,27 @@ export function applyVarRenames(text: string, vars: Record<string, string>): str
   const keys = Object.keys(vars).filter((k) => k && vars[k] && k !== vars[k]).sort((a, b) => b.length - a.length);
   for (const zh of keys) {
     const en = vars[zh];
-    out = out.split(`{{setvar::${zh}`).join(`{{setvar::${en}`);
-    out = out.split(`{{getvar::${zh}`).join(`{{getvar::${en}`);
+    // (bug 164 · HM0-A) PHẢI PHỦ ĐỦ CẢ 7 MACRO, KHÔNG CHỈ setvar/getvar.
+    // Bộ macro app tự khai (và macroResolver.ts xử đủ) gồm 7 cái dưới đây. Bản cũ chỉ đổi tên
+    // setvar + getvar, nên nếu một biến được dịch thì `{{setvar::好感度}}` thành
+    // `{{setvar::affection}}` còn `{{addvar::好感度::1}}` vẫn giữ chữ Hán — chỗ GHI và chỗ TĂNG trỏ
+    // vào hai biến khác nhau. Không lỗi nào báo, chỉ là số liệu sai dần.
+    // Delimiter `::` nằm ngay sau tên macro nên thay chuỗi thẳng vẫn nguyên tử như cũ.
+    for (const m of VAR_MACROS) {
+      out = out.split(`{{${m}::${zh}`).join(`{{${m}::${en}`);
+    }
   }
   return out;
 }
+
+/**
+ * (bug 164 · HM0-A) Bảy macro biến của SillyTavern mà app này hỗ trợ.
+ * Nguồn: chính `src/utils/macroResolver.ts` — nơi duy nhất thực thi chúng. Thêm macro mới thì thêm
+ * ở CẢ hai nơi, không thì rename lại hở đúng chỗ mới thêm.
+ */
+export const VAR_MACROS = [
+  'setvar', 'getvar', 'addvar', 'incvar', 'decvar', 'setglobalvar', 'getglobalvar',
+] as const;
 
 /**
  * Đổi tên tag: cả dạng delimited (<旧>, </旧>, <旧␣, ### 旧) LẪN dạng trần — mẫu thật dịch

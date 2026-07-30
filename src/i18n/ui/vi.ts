@@ -483,6 +483,11 @@ const ui: UiKeys = {
   gpXianxiaHint: 'Nạp ~85 thuật ngữ tu tiên/võ hiệp chuẩn cộng đồng convert (金丹→Kim Đan, 灵气→linh khí, 宗门→tông môn…) vào Từ điển. Mục bạn đã tự nhập luôn được giữ nguyên. Chỉ mục thật sự xuất hiện trong đoạn đang dịch mới được đưa vào prompt nên không tốn token.',
   gpLoadedToast: '📚 Đã nạp {count} thuật ngữ vào Từ điển.',
   spBtn: '👁 Xem như SillyTavern',
+  // (bug 164 · HM5) Gợi ý soi giao diện sau khi dịch xong.
+  spSuggestTitle: 'Dịch xong — nên soi giao diện một lượt',
+  spSuggestBody: 'Lỗi vỡ giao diện do dịch (thẻ chưa đóng, dấu nháy lọt vào chuỗi làm liệt nút) không làm sai bất kỳ con số nào, nên chỉ nhìn mới thấy. Mở Xem trước để kiểm nhanh trước khi xuất thẻ.',
+  spSuggestOpen: 'Xem trước ngay',
+  spSuggestDismiss: 'Để sau',
   spBtnHint: 'Render tĩnh lời mở đầu (áp macro + regex hiển thị của card) — thấy ngay giao diện in-chat sau dịch có vỡ không, khỏi cần import vào ST.',
   spTitle: 'Xem trước như SillyTavern (render tĩnh)',
   spOriginal: 'Gốc',

@@ -10,6 +10,9 @@
  */
 
 import type { GlossaryEntry, NameStyle } from '../types/card';
+// (bug 164 · HM0-B) Lấy tên hàm API từ NGUỒN DUY NHẤT thay vì liệt kê tay — bản cũ gõ tay 4 tên
+// không tồn tại trong API thật, tức đang dạy AI bảo vệ thứ không có.
+import { TH_FUNCTION_LIST, thApiPromptSample } from './stPreview';
 
 /* ─── Quy tắc phiên âm DANH TỪ RIÊNG (dùng CHUNG cho cả 3 chiến lược dịch) ───
    Nguồn: yêu cầu client (PhatSiz). Dùng cho:
@@ -510,11 +513,14 @@ RULE C3.1 — Preserve Javascript Logic and Tavern Helper API:
   EJS blocks <% ... %> execute raw Javascript.
   NEVER translate Javascript keywords or standard library functions (if, else, for, while, function, return, const, let, var, true, false, null, undefined, Math.*, Array.*, String.*).
   
-  NEVER translate Tavern Helper API functions:
-    - registerMacroLike, updateCharacterWith, updateWorldbookWith
-    - getChatMessages, setChatMessages
-    - setVariable, getVariable, executeSlashCommands, fetch, sendMessage
+  NEVER translate Tavern Helper API functions. The real API has ${TH_FUNCTION_LIST.length} functions;
+  treat EVERY camelCase identifier used as a function call as an API name and leave it untouched.
+  Most-often-damaged names (taken from the real API list, not from memory):
+    ${thApiPromptSample().join(', ')}
+    - registerMacroLike, updateCharacterWith, updateWorldbookWith, triggerSlash, waitGlobalInitialized
     - stat_data prefixes (variables often have a 'stat_data.' prefix, NEVER translate this prefix)
+  NOTE: there is NO setVariable/getVariable/sendMessage/executeSlashCommands in this API — if you
+  think you see one, it is a variable or a user-defined function, not an API call.
   
   ONLY TRANSLATE:
     1. ALL CJK (Chinese/Japanese/Korean) characters.
@@ -569,6 +575,22 @@ RULE E3 — EJS String Literal Synchronization Checklist:
     - ALWAYS translate the CJK text to the target language
     - PRESERVE the quote characters and string boundaries exactly
     - NEVER leave CJK text inside JS string literals — it causes variable lookup failures at runtime.
+
+  REAL FAILURES OBSERVED IN PRODUCTION — do NOT repeat these (bug 161, bug 166):
+    (1) DO NOT invent quote characters inside a string. The source had ONE pair of quotes; your
+        output must have exactly the same pair. Adding a quote splits the string and the whole
+        <script> stops parsing — every button in the card goes dead, while the HTML still renders,
+        so nothing looks broken.
+          Source : +'同时返回JSON对象，包含：\\n'
+          WRONG  : +'Đồng thời trả vềJSONđối tượng, 'bao gồm':\\n'   ← invented quotes = SyntaxError
+          RIGHT  : +'Đồng thời trả về JSON đối tượng, bao gồm:\\n'
+        If a phrase needs emphasis, use a typographic quote (’ ”) or none at all — never a straight
+        quote of the same kind that delimits the string.
+    (2) DO NOT glue words to Latin terms you keep. Chinese needs no spaces; Vietnamese does.
+          Source : 结合当前NSFW细节
+          WRONG  : Nội dung kết hợp hiện tạiNSFWchi tiết
+          RIGHT  : Nội dung kết hợp hiện tại NSFW chi tiết
+        Same for punctuation: 更新。SFW → "cập nhật. SFW", not "cập nhật.SFW".
 
 RULE C3.3 — BRACKET NOTATION FOR KEYS WITH SPACES (CRITICAL FOR VIETNAMESE/MULTI-WORD TRANSLATIONS):
    When CJK keys (e.g., 系统, 角色) are translated into multi-word target language strings
@@ -1219,6 +1241,13 @@ export function fieldGroupToFieldType(
 
     case 'system':
     case 'depth_prompt':
+      return 'mixed';
+
+    // (bug 164 · HM1) Khai TƯỜNG MINH thay vì để rơi vào default — KHÔNG đổi hành vi, chỉ để người
+    // sau biết là đã xét. Field mythic là `description`/`triggerWhen` nằm trong JSON nhúng ở comment
+    // (Chiến lược A): văn xuôi, nhưng Agent đọc để quyết định nạp entry, nên vẫn cần lớp bảo vệ code
+    // của 'mixed' — 'mixed' được tính là code field và vẫn nhận lớp phiên âm tên riêng.
+    case 'mythic':
       return 'mixed';
 
     default:

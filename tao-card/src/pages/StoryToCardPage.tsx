@@ -15,6 +15,7 @@ import {
   type DeepScanState, type DeepScanOptions, type DeepEntry, type DeepPassId, type EntryCat,
 } from '../lib/ai/storyDeepScan';
 import { isSameAsUserPersona } from '../lib/ai/userPersonaSwap';
+import { adviseChunks, adviceText, type ChunkAdvice } from '../lib/ai/chunkAdvice';
 import { t as ui, fmt } from '../i18n';
 
 /**
@@ -88,6 +89,8 @@ export function StoryToCardPage() {
   // Tuỳ chọn quét
   const [chunkSize, setChunkSize] = usePersistedState('s2c.chunkSize', 40000);
   const [maxChunks, setMaxChunks] = usePersistedState('s2c.maxChunks', 12);
+  /** (bug 163) Lời khuyên số đoạn quét — hiện sau khi nạp truyện, null = không hiện. */
+  const [chunkAdvice, setChunkAdvice] = useState<ChunkAdvice | null>(null);
   const [includeIdentity, setIncludeIdentity] = usePersistedState('s2c.includeIdentity', true);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -313,8 +316,14 @@ export function StoryToCardPage() {
       const { readStoryFiles } = await import('../lib/ai/storyFileImport');
       const r = await readStoryFiles(files);
       if (r.text) {
-        setStory((prev: string) => (prev.trim() ? `${prev.trimEnd()}\n\n${r.text}` : r.text));
+        const merged = story.trim() ? `${story.trimEnd()}\n\n${r.text}` : r.text;
+        setStory(merged);
         toast.success(fmt(ui.s2cFilesDone, { n: r.parts.length, chars: r.parts.reduce((s, p) => s + p.chars, 0).toLocaleString() }));
+        // (bug 163) NGAY LÚC NẠP là lúc duy nhất user còn để ý tới cấu hình quét. Mặc định 12 đoạn
+        // chỉ đọc 480k ký tự — với truyện triệu chữ là vài phần trăm, và không có chỗ nào nói ra
+        // nên user cứ tưởng "tool quét cả truyện" rồi không hiểu vì sao ít entry. Hỏi ngay tại đây.
+        const adv = adviseChunks(merged.length, chunkSize, maxChunks);
+        if (adv.shouldAdvise) setChunkAdvice(adv);
       }
       for (const sk of r.skipped) toast.warning(`${sk.name}: ${sk.reason}`);
     } catch (e) {
@@ -408,6 +417,41 @@ export function StoryToCardPage() {
         <textarea value={story} onChange={(e) => setStory(e.target.value)} rows={8}
           className="settings-input text-sm resize-y w-full" placeholder={ui.s2cStoryPh} />
         <div className="text-xs text-muted-foreground">{fmt(ui.s2cChars, { n: story.length.toLocaleString() })}{chunkSize > 0 && story.length > chunkSize ? fmt(ui.s2cChunks, { n: Math.min(Math.ceil(story.length / chunkSize), maxChunks) }) : ''}</div>
+
+        {/* (bug 163) HỘP ĐỀ XUẤT SỐ ĐOẠN QUÉT — hiện ngay sau khi nạp truyện.
+            Lý do có màn này: mặc định 12 đoạn chỉ đọc 480.000 ký tự; truyện triệu chữ thì đó là vài
+            phần trăm, phần còn lại không được nhìn tới nên nửa sau truyện KHÔNG có entry nào — mà
+            app không có cách nào tự biết để báo. User đặt mốc "trên 500 entry" rồi không hiểu vì
+            sao mãi không đạt, thật ra chỉ vì app chưa đọc tới đó.
+            Nói cả cái giá (thời gian, số lượt gọi) rồi để user tự chọn — không tự ý nâng, vì nâng
+            là nhân chi phí của MỌI lần chạy sau đó. */}
+        {chunkAdvice && (
+          <div className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-3 space-y-2">
+            <div className="flex items-start gap-2">
+              <span className="text-base leading-none mt-0.5">💡</span>
+              <div className="flex-1">
+                <div className="text-sm font-semibold">Nên tăng số đoạn quét lên {chunkAdvice.recommended}?</div>
+                <ul className="mt-1.5 space-y-1 text-xs text-muted-foreground list-disc pl-4">
+                  {adviceText(chunkAdvice, story.length, maxChunks).map((line, i) => <li key={i}>{line}</li>)}
+                </ul>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2 pt-0.5">
+              <button
+                onClick={() => { setMaxChunks(chunkAdvice.recommended); setChunkAdvice(null); toast.success(`Đã đặt ${chunkAdvice.recommended} đoạn quét.`); }}
+                className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:opacity-90"
+              >Dùng {chunkAdvice.recommended} đoạn (khuyên dùng)</button>
+              <button
+                onClick={() => setChunkAdvice(null)}
+                className="px-3 py-1.5 rounded-lg border border-border text-xs hover:bg-muted"
+              >Giữ {maxChunks} đoạn</button>
+              <button
+                onClick={() => { setShowAdvanced(true); setChunkAdvice(null); }}
+                className="px-3 py-1.5 rounded-lg border border-border text-xs hover:bg-muted"
+              >Tự đặt số khác…</button>
+            </div>
+          </div>
+        )}
 
         {/* Nâng cao: chunk — dùng chung cho cả hai chế độ */}
         <button onClick={() => setShowAdvanced((v) => !v)} className="text-xs inline-flex items-center gap-1 text-muted-foreground hover:text-foreground">

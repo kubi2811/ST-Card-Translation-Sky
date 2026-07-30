@@ -24,6 +24,9 @@ export interface CJKToken {
    *  Chỉ bật khi chính user đưa tên đó vào từ điển, nên đây là quyết định của user chứ không
    *  phải tool tự ý; reinsert vẫn bọc bracket/nháy nên cú pháp luôn hợp lệ. */
   fromDictionary?: boolean;
+  /** (bug 161) Dấu nháy đang BAO chuỗi chứa cụm này (nếu cụm nằm trong chuỗi). Reinsert dùng nó để
+   *  vô hiệu hoá dấu nháy mà bản dịch tự mọc thêm — thêm đúng dấu này là xẻ đôi chuỗi, chết script. */
+  inStringQuote?: "'" | '"';
 }
 
 /**
@@ -356,6 +359,17 @@ function restoreCSSFromOriginal(original: string, translated: string): string {
  * ${obj.<CJK>} của template literal vẫn được coi là code để wrap bracket).
  */
 export function isInsideStringAtEnd(lineBefore: string): boolean {
+  return enclosingQuoteAtEnd(lineBefore) !== null;
+}
+
+/**
+ * (bug 161) Như isInsideStringAtEnd nhưng trả về CHÍNH dấu nháy đang bao chuỗi.
+ *
+ * Cần biết là dấu nào, không chỉ "có hay không": bản dịch mọc thêm dấu nháy CÙNG LOẠI với dấu đang
+ * bao chuỗi thì xẻ đôi chuỗi; mọc thêm dấu nháy loại KHÁC thì hoàn toàn vô hại (nháy kép nằm
+ * trong chuỗi nháy đơn là hợp lệ). Không phân biệt được thì hoặc bỏ sót lỗi, hoặc sửa oan.
+ */
+export function enclosingQuoteAtEnd(lineBefore: string): "'" | '"' | null {
   let quote: "'" | '"' | null = null;
   for (let i = 0; i < lineBefore.length; i++) {
     const c = lineBefore[i];
@@ -367,7 +381,7 @@ export function isInsideStringAtEnd(lineBefore: string): boolean {
       if (c === "'" || c === '"') quote = c;   // mở chuỗi
     }
   }
-  return quote !== null;
+  return quote;
 }
 
 /**
@@ -485,7 +499,8 @@ export function extractCJKTokens(
     // dấu " nằm trong chuỗi '…' KHÔNG tính là mở chuỗi (và ngược lại), có xử lý \escape.
     const _lineStart = text.lastIndexOf('\n', mStart - 1) + 1;
     const _lineBefore = text.slice(_lineStart, mStart);
-    const insideStringLiteral = isInsideStringAtEnd(_lineBefore);
+    const _enclosingQuote = enclosingQuoteAtEnd(_lineBefore);
+    const insideStringLiteral = _enclosingQuote !== null;
 
     // ═══ (bugNeedFix/128) ĐỊNH DANH JS TRẦN → KHÔNG DỊCH ═══
     // `const 配置` dịch ra `const Cấu hình` là SyntaxError không thuốc chữa — không như object-key
@@ -690,6 +705,7 @@ export function extractCJKTokens(
       isObjectKey,
       isCssClass,
       isHtmlAttr,
+      ...(_enclosingQuote ? { inStringQuote: _enclosingQuote } : {}),
       ...(isMvuVariable ? { translated: isMvuVariable, fromDictionary: true } : {}),
     });
   }
@@ -800,6 +816,30 @@ export function reinsertTranslations(original: string, tokens: CJKToken[]): stri
 
       if (!/[\r\n]/.test(token.text) && /[\r\n]/.test(finalTranslation)) {
         finalTranslation = finalTranslation.replace(/\s*[\r\n]+\s*/g, ' ').trim();
+      }
+
+      // ═══ (bug 161) BẢN DỊCH KHÔNG ĐƯỢC TỰ MỌC THÊM DẤU NHÁY ĐÓNG CHUỖI ═══
+      // Bằng chứng bug/161 — file "ui dịch lỗi.txt" parse bằng chính engine JS thì đỏ ở dòng 410:
+      //   nguyên bản : +'同时返回JSON对象，包含：\n'
+      //   bản dịch   : +'Đồng thời trả vềJSONđối tượng, 'bao gồm':\n'   ⇒ Unexpected identifier 'bao'
+      // Cụm `对象，包含` là MỘT token (bộ tách nối cụm qua dấu câu full-width) và model dịch thành
+      // `đối tượng, 'bao gồm'` — tự thêm nháy vì tưởng đó là nhãn. TOOL KHÔNG THÊM DẤU NÀO; nó chỉ
+      // chèn nguyên văn vào giữa một chuỗi đang mở, thế là chuỗi bị xẻ đôi.
+      // Hậu quả đúng như user báo: cả khối <script> không parse được ⇒ go(), connectApi()… không
+      // tồn tại ⇒ bấm nút nào cũng không ăn, kể cả nút đầu tiên. Mà HTML vẫn hiện ra bình thường
+      // nên không có dấu hiệu nào để đoán.
+      // Vá bằng bất biến tất định: chỉ vô hiệu hoá dấu nháy CÙNG LOẠI với dấu đang bao chuỗi, và
+      // chỉ khi nguyên văn KHÔNG có dấu đó. Đổi sang nháy in (’ ”) thay vì xoá hẳn hay escape:
+      //   • xoá hẳn thì mất ý nhấn mạnh của câu;
+      //   • escape (\') chỉ đúng trong chuỗi JS — chuỗi này còn có thể nằm trong thuộc tính HTML,
+      //     ở đó dấu backslash không cứu được gì;
+      //   • nháy in thì không lớp cú pháp nào coi là dấu đóng, mà người đọc vẫn thấy tự nhiên.
+      // Nháy loại KHÁC (nháy kép trong chuỗi nháy đơn) là hợp lệ nên tuyệt đối không đụng.
+      if (token.inStringQuote && !token.text.includes(token.inStringQuote)) {
+        const q = token.inStringQuote;
+        if (finalTranslation.includes(q)) {
+          finalTranslation = finalTranslation.split(q).join(q === "'" ? '’' : '”');
+        }
       }
 
       // Check if the CJK token is ALREADY surrounded by quotes in the original text.

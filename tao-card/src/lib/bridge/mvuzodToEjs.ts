@@ -331,8 +331,6 @@ export function generateInjectPrompt(
     : leaves.find(f => f.type === 'string') ?? leaves[0];
   if (!target) return null;
 
-  const position = options.position ?? 'in_chat';
-  const depth = options.depth ?? 4;
   const getvarPath = `stat_data.${target.dotPath}`;
   const defaultVal = target.defaultValue ?? (target.type === 'string' ? '' : 0);
   const defaultStr = typeof defaultVal === 'string' ? `'${escapeQuotes(defaultVal)}'` : String(defaultVal);
@@ -346,12 +344,13 @@ export function generateInjectPrompt(
     `// Auto-generated: Inject prompt based on "${target.label}"`,
     `if (typeof ${target.varName} === 'undefined') var ${target.varName} = getvar('${getvarPath}', { defaults: ${defaultStr} });`,
     '',
-    'injectPrompt({',
-    `  text: \`${promptTemplate}\`,`,
-    `  position: '${position}',`,
-    `  depth: ${depth},`,
-    '  scan: true,',
-    '});',
+    // (bug 174) TRƯỚC ĐÂY sinh ra `injectPrompt({ text, position, depth })`. Chữ ký thật của
+    // ST-Prompt-Template là injectPrompt(key, prompt, order, sticky, uid) — tham số VỊ TRÍ, không
+    // hề có position/depth. Truyền object vào thì prompt = undefined: khối chạy trơn tru, không
+    // lỗi đỏ, mà AI không nhận được chữ nào. Mọi thẻ tool sinh ra đều dính (thẻ bug/174 có 10 khối
+    // chết vì lý do này). Nay in thẳng bằng print() — nội dung rơi đúng vị trí/độ sâu của chính
+    // entry, không cần vế đọc thứ hai nên không thể thiếu nửa cặp.
+    `print(\`${promptTemplate}\`);`,
     '_%>',
   ];
 

@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
 import { simulateCard, parseInitVar, extractReadPaths } from '../simulateCard';
+import { repairInjectPromptArgs } from '../../ai/cardAutoRepair';
 
 const CARD = 'G:/ClaudePJ/TOOL_CARD_GUILLICHAN/d-ch-card-sillytarven/bug/174/Eldran MVU + EJS.json';
 
@@ -55,6 +56,22 @@ describe.skipIf(!existsSync(CARD))('(bug 174) thẻ thật của user', () => {
     expect(res.issues.filter(i => i.code === 'sim-update-noop')).toEqual([]);
     // Dòng đỏ duy nhất còn lại là HỆ QUẢ của Phả Hệ = null, không phải lỗi riêng.
     expect(missing.length).toBeLessThanOrEqual(1);
+  });
+
+  it('10 khối EJS của thẻ đang gọi injectPrompt sai chữ ký → phép vá dọn sạch', () => {
+    const card = JSON.parse(readFileSync(CARD, 'utf-8'));
+    const entries = (card.data.character_book?.entries ?? []) as Entry[];
+    const before = entries.reduce(
+      (n, e) => n + (String(e.content ?? '').match(/injectPrompt\s*\(\s*\{/g) ?? []).length, 0);
+    expect(before, 'đo trên thẻ thật: đây là số khối EJS chạy mà AI không đọc được gì').toBe(10);
+
+    const after = repairInjectPromptArgs(entries as never);
+    expect(after.fixed.length, 'mỗi entry hỏng phải có một dòng báo đã sửa').toBeGreaterThan(0);
+    const left = after.entries.reduce(
+      (n, e) => n + (String(e.content ?? '').match(/injectPrompt\s*\(\s*\{/g) ?? []).length, 0);
+    expect(left).toBe(0);
+    // Nội dung chỉ thị phải còn nguyên, chỉ đổi cách đưa ra.
+    expect(after.entries.some(e => /print\('\[CẢNH BÁO HỆ THỐNG/.test(String(e.content ?? '')))).toBe(true);
   });
 
   it('vá initvar xong thì thẻ sạch hoàn toàn phần biến', () => {

@@ -77,7 +77,7 @@ const BUILTIN_FUNCTIONS = [
     { name: 'setEntryContent(comment, text)', desc: ui.esFnSetEntryContent, example: "setEntryContent('Dynamic', 'text...')" },
   ]},
   { group: ui.esGroupInjection, funcs: [
-    { name: 'injectPrompt(opts)', desc: ui.esFnInjectPrompt, example: "injectPrompt({ text: '...', position: 'in_chat', depth: 4 })" },
+    { name: 'injectPrompt(key, text, order)', desc: ui.esFnInjectPrompt, example: "injectPrompt('nhom', '...', 10) + <%- getPromptsInjected('nhom') %> — KHÔNG có position/depth; in tại chỗ thì dùng print()" },
   ]},
   { group: ui.esGroupChat, funcs: [
     { name: 'getChatMessages(idx, role)', desc: ui.esFnGetChatMessages, example: "getChatMessages(-1, 'assistant')" },

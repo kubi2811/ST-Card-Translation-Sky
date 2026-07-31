@@ -127,8 +127,8 @@ _%>
 
   dynamic_content: [
     {
-      title: 'Mô tả trạng thái động & ngoại hình nhân vật (injectPrompt)',
-      description: 'Đọc HP, tâm trạng, vũ khí và sinh text mô tả động, dùng injectPrompt ở depth 0 để AI thấy ngay trước phản hồi',
+      title: 'Mô tả trạng thái động & ngoại hình nhân vật',
+      description: 'Đọc HP, tâm trạng, vũ khí và sinh text mô tả động, in thẳng bằng print() — nội dung rơi đúng vị trí/độ sâu của chính entry',
       code: `@@preprocessing
 <%_
 var hp = Number(getvar('stat_data.Nhân vật.HP', { defaults: 100 }));
@@ -147,11 +147,9 @@ else if (mood === 'Sợ hãi') desc.push('run rẩy, mắt liên tục liếc nh
 if (weapon !== 'Không') desc.push('tay nắm chặt ' + weapon);
 
 if (desc.length > 0) {
-  injectPrompt({
-    text: '[Ngoại hình {{char}} lúc này: ' + desc.join(', ') + ']',
-    position: 'in_chat',
-    depth: 0
-  });
+  /* print() chứ KHÔNG phải injectPrompt({text, position, depth}): chữ ký thật là
+     injectPrompt(key, prompt, order, sticky, uid) và nó không tự vào prompt. */
+  print('[Ngoại hình {{char}} lúc này: ' + desc.join(', ') + ']');
 }
 _%>`,
     },
@@ -211,13 +209,9 @@ else if (affinity >= 75) stage = 'Gắn bó';
 // Load entry persona của stage hiện tại
 var personaContent = await getwi(null, 'Persona: ' + stage);
 
-// Inject sát tin nhắn cuối cùng để AI áp dụng cách roleplay chuẩn
+// In ra tại chỗ — vị trí do cấu hình position/depth của chính entry quyết định
 if (personaContent) {
-  injectPrompt({
-    text: '[Hành vi & Cách nói của {{char}} lúc này: ' + personaContent.trim() + ']',
-    position: 'in_chat',
-    depth: 0
-  });
+  print('[Hành vi & Cách nói của {{char}} lúc này: ' + personaContent.trim() + ']');
 }
 _%>`,
     },
@@ -237,11 +231,7 @@ if (status === 'Kẻ thù') {
   speech = '{{char}} xưng hô lịch sự tôi-bạn, giữ khoảng cách chừng mực.';
 }
 
-injectPrompt({
-  text: '[Cách nói chuyện của {{char}}: ' + speech + ']',
-  position: 'in_chat',
-  depth: 0
-});
+print('[Cách nói chuyện của {{char}}: ' + speech + ']');
 _%>`,
     },
   ],

@@ -655,7 +655,10 @@ const RAW_PRESETS: QuickPreset[] = [
     build: () => ({
       goal: [
         'Tạo khối EJS ĐỒNG BỘ WORLDBOOK → PRESET:',
-        '- Soạn nội dung trong entry worldbook, đẩy vào prompt bằng injectPrompt({ text, position, depth }).',
+        '- Soạn nội dung trong entry worldbook, gom vào một nhóm bằng injectPrompt("<nhóm>", <nội dung>, <order>),',
+        '  rồi hút ra đúng chỗ trong Preset bằng <%- getPromptsInjected("<nhóm>") %>. PHẢI ĐỦ CẶP —',
+        '  injectPrompt chỉ bỏ nội dung vào một danh sách nội bộ, thiếu vế đọc là nội dung không bao giờ',
+        '  tới tay AI. Nó cũng KHÔNG có tham số position/depth (đó là injectPrompts của TavernHelper).',
         '- Ghi rõ vị trí/độ sâu để nội dung rơi đúng chỗ mong muốn trong preset.',
       ].join('\n'),
       blockers: [], notes: [],

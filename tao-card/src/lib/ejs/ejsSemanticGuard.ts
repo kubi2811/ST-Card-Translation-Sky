@@ -36,7 +36,10 @@ export type SemanticIssueKind =
   | 'default-type'        // defaults là chuỗi trong khi biến là số/bool
   | 'fragile-match'       // so khớp bằng ký tự đơn lẻ / mảnh quá ngắn
   | 'enum-not-matched'    // so sánh với giá trị không có trong enum của schema
-  | 'duplicate-read';     // nhiều entry cùng đọc một biến (gợi ý gộp)
+  | 'duplicate-read'      // nhiều entry cùng đọc một biến (gợi ý gộp)
+  | 'injectprompt-args'   // (bug 174) injectPrompt({…}) — sai chữ ký, nội dung bị vứt
+  | 'injectprompt-orphan' // (bug 174) injectPrompt đúng cú pháp nhưng không ai getPromptsInjected
+  | 'preprocessing-memo'; // (bug 174) đọc-rồi-ghi-đè một biến tạm trong @@preprocessing
 
 export interface SemanticIssue {
   kind: SemanticIssueKind;
@@ -198,6 +201,27 @@ export interface SemanticCheckInput {
  * Soi NGỮ NGHĨA code EJS so với dữ liệu thật của thẻ.
  * Chỉ báo những thứ ĐO ĐƯỢC — không đoán ý đồ người viết.
  */
+/**
+ * (bug 174) Chữ ký THẬT của extension ST-Prompt-Template
+ * (src/function/inject.ts:24 — docs/reference.md:451):
+ *     injectPrompt(key, prompt, order = 100, sticky = 0, uid = '')
+ * Tham số VỊ TRÍ, không có `position`/`depth`. Truyền object vào là `prompt` = undefined,
+ * nội dung bị vứt thẳng, không lỗi không cảnh báo.
+ * Dạng object là của `injectPrompts` (SỐ NHIỀU, {id, position, depth, content}) bên TavernHelper
+ * — API khác, extension khác. Hai cái tên gần giống nhau chính là cái bẫy.
+ */
+const INJECT_OBJ_RE = /\binjectPrompt\s*\(\s*\{/g;
+/** Lệnh viết ĐÚNG chữ ký: injectPrompt('nhóm', …) — bắt lấy tên nhóm để soi có ai đọc không. */
+const INJECT_KEY_RE = /\binjectPrompt\s*\(\s*['"]([^'"]+)['"]/g;
+const READER_RE = /getPromptsInjected\s*\(\s*['"]([^'"]+)['"]|hasPromptsInjected\s*\(\s*['"]([^'"]+)['"]|\{\{outletPromptsInjected:([^}]+)\}\}/g;
+
+/** Bỏ chú thích JS (giữ nguyên độ dài dòng không cần thiết — chỉ cần nội dung để dò lệnh). */
+function stripComments(code: string): string {
+  return String(code || '')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+}
+
 export function checkEjsSemantics(input: SemanticCheckInput): SemanticIssue[] {
   const issues: SemanticIssue[] = [];
   const truth = readInitVarTruth(input.entries);
@@ -292,7 +316,92 @@ export function checkEjsSemantics(input: SemanticCheckInput): SemanticIssue[] {
     }
   }
 
-  // ⑤ NHIỀU ENTRY CÙNG ĐỌC MỘT BIẾN — gợi ý gộp (mục 4 bản đánh giá: 3 entry cùng đọc Máu)
+  /* ⑤ (bug 174) injectPrompt — LỖI IM LẶNG NẶNG NHẤT TRONG CẢ BỘ EJS
+     Hai kiểu hỏng, cùng một hậu quả: khối chạy trơn tru mà AI không nhận được chữ nào. */
+  {
+    // Chỗ đọc có thể nằm ở BẤT KỲ entry nào (hoặc trong preset) — nên gom cả thẻ rồi mới xét.
+    const readKeys = new Set<string>();
+    for (const b of input.blocks) {
+      for (const m of b.code.matchAll(READER_RE)) readKeys.add((m[1] ?? m[2] ?? m[3] ?? '').trim());
+    }
+    for (const e of input.entries) {
+      for (const m of String(e.content ?? '').matchAll(READER_RE)) readKeys.add((m[1] ?? m[2] ?? m[3] ?? '').trim());
+    }
+
+    for (const b of input.blocks) {
+      // Bỏ chú thích trước khi soi: một dòng `// đừng dùng injectPrompt({...})` là lời giải
+      // thích, không phải lệnh — soi thô sẽ báo oan đúng những thẻ viết cẩn thận nhất.
+      const code = stripComments(b.code);
+      for (const _m of code.matchAll(INJECT_OBJ_RE)) {
+        issues.push({
+          kind: 'injectprompt-args',
+          level: 'error',
+          entry: b.name,
+          message:
+            'injectPrompt({ text, position, depth }) SAI CHỮ KÝ nên không có tác dụng gì. Chữ ký thật là '
+            + 'injectPrompt(key, prompt, order, sticky, uid) — tham số vị trí, KHÔNG có position/depth. '
+            + 'Truyền object vào thì prompt = undefined, nội dung bị vứt thẳng: khối vẫn chạy, không lỗi đỏ, '
+            + 'nhưng AI không bao giờ đọc được câu chỉ thị đó. '
+            + 'Dạng object là của injectPrompts (SỐ NHIỀU) bên TavernHelper — API khác, extension khác.',
+          fix:
+            'Cách gọn nhất: in thẳng bằng print(<nội dung>) — nội dung rơi đúng vào vị trí/độ sâu của chính '
+            + 'entry này. Nếu cần gom nhiều nơi rồi hút vào một chỗ trong preset thì dùng cặp '
+            + "injectPrompt('<tên nhóm>', <nội dung>) + getPromptsInjected('<tên nhóm>').",
+        });
+      }
+
+      for (const m of code.matchAll(INJECT_KEY_RE)) {
+        const key = m[1].trim();
+        if (readKeys.has(key)) continue;
+        issues.push({
+          kind: 'injectprompt-orphan',
+          level: 'error',
+          entry: b.name,
+          message:
+            `injectPrompt('${key}', …) viết đúng cú pháp nhưng cả thẻ KHÔNG có chỗ nào đọc nhóm "${key}" ra. `
+            + 'injectPrompt chỉ bỏ nội dung vào một danh sách nội bộ, phải có getPromptsInjected mới thành prompt — '
+            + 'thiếu vế đọc thì nội dung nằm im trong bộ nhớ tới hết lượt rồi bị xoá.',
+          fix:
+            `Thêm \`<%- getPromptsInjected('${key}') %>\` vào entry/preset ở đúng chỗ muốn nội dung xuất hiện, `
+            + `hoặc bỏ injectPrompt và in thẳng bằng print(...) trong chính khối này.`,
+        });
+      }
+    }
+  }
+
+  /* ⑥ (bug 174) "NHỚ GIÁ TRỊ LƯỢT TRƯỚC" BẰNG BIẾN TẠM TRONG @@preprocessing
+     Ca thật của thẻ user: đọc temp_old_vp, so với VP hiện tại để phát hiện sụt giảm, rồi
+     setvar('temp_old_vp', VP hiện tại). Khối @@preprocessing chạy MỖI LẦN dựng prompt — swipe,
+     regenerate, sửa tin nhắn đều dựng lại. Lần dựng thứ hai của CÙNG một lượt đã ghi đè mốc cũ
+     bằng giá trị hiện tại, nên chênh lệch thành 0: swipe lại là cảnh báo biến mất, và mốc so
+     sánh vĩnh viễn lệch khỏi "lượt trước". */
+  for (const b of input.blocks) {
+    if (!/@@preprocessing/.test(b.code)) continue;
+    const code = stripComments(b.code);
+    const written = new Set<string>();
+    for (const m of code.matchAll(/\bsetvar\s*\(\s*['"]([^'"]+)['"]/g)) written.add(m[1].trim());
+    for (const m of code.matchAll(/\bgetvar\s*\(\s*['"]([^'"]+)['"]/g)) {
+      const key = m[1].trim();
+      if (!written.has(key) || /^stat_data\./.test(key)) continue;
+      issues.push({
+        kind: 'preprocessing-memo',
+        level: 'warning',
+        entry: b.name,
+        path: key,
+        message:
+          `Khối này vừa đọc vừa ghi đè biến tạm "${key}" trong @@preprocessing để nhớ giá trị lượt trước. `
+          + 'Khối @@preprocessing chạy lại MỖI LẦN dựng prompt — swipe, regenerate, sửa tin nhắn đều dựng lại — '
+          + 'nên lần dựng thứ hai của cùng một lượt đã ghi đè mốc cũ bằng giá trị hiện tại: chênh lệch về 0, '
+          + 'cảnh báo im bặt, và mốc so sánh vĩnh viễn không còn là "lượt trước" nữa.',
+        fix:
+          `Ghi mốc theo TỪNG TIN NHẮN thay vì một ô dùng chung: setMessageVar('${key}', …) / getMessageVar, `
+          + 'hoặc chỉ ghi mốc ở @@postprocessing (chạy sau khi đã sinh xong), hoặc kèm số hiệu tin nhắn vào '
+          + 'khoá để mỗi lượt có mốc riêng.',
+      });
+    }
+  }
+
+  // ⑦ NHIỀU ENTRY CÙNG ĐỌC MỘT BIẾN — gợi ý gộp (mục 4 bản đánh giá: 3 entry cùng đọc Máu)
   for (const [path, names] of readers) {
     if (names.size >= 3) {
       issues.push({

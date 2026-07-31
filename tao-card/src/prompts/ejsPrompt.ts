@@ -106,8 +106,11 @@ _%>
     <% print(await getwi('tên entry')) %>   ← Tương đương
 
 💉 INJECTION:
-  injectPrompt(opts)            Inject text vào prompt
-                                opts: { text, position: 'in_chat', depth: N }
+  print(text)                   ← CÁCH ĐÚNG để đưa text vào prompt tại chỗ
+  injectPrompt(key, prompt, order=100, sticky=0, uid='')
+                                Gom text vào một NHÓM; phải có getPromptsInjected(key)
+                                ở đâu đó mới thành prompt. KHÔNG có tham số position/depth.
+  getPromptsInjected(key)       Hút nội dung của nhóm ra tại đúng chỗ đặt lệnh này
 
 💬 CHAT:
   getChatMessages(idx, role)    Đọc tin nhắn chat (-1 = cuối)
@@ -463,12 +466,15 @@ ${entriesSection}
 print('[Trạng thái: ...' + môTả + ']');
 \`\`\`
 
-2. injectPrompt() — inject vào vị trí chính xác trong prompt:
+2. injectPrompt() — GOM nhiều mẩu vào một nhóm rồi hút ra một chỗ:
 \`\`\`
-injectPrompt({ text: '[Mô tả: ' + desc + ']', position: 'in_chat', depth: 0 });
+injectPrompt('mo_ta', '[Mô tả: ' + desc + ']', 10);   // order nhỏ ra trước
+...ở entry/preset nơi muốn nội dung xuất hiện:
+<%- getPromptsInjected('mo_ta') %>
 \`\`\`
-  depth: 0 = tin mới nhất, 1 = trước 1 tin, etc.
-  Vị trí này giúp AI “thấy” mô tả ngay trước khi viết phản hồi.
+  ⚠ injectPrompt KHÔNG có tham số position/depth và KHÔNG tự vào prompt. Thiếu vế
+  getPromptsInjected là nội dung nằm im rồi bị xoá cuối lượt — khối chạy mà AI không thấy gì.
+  Chỉ cần in tại chỗ thì dùng print(), vị trí là vị trí của chính entry.
 
 3. getwi() — load mô tả dài từ entry khác:
 \`\`\`
@@ -492,11 +498,7 @@ PATTERN:
   if (location) desc.push('đang ở ' + location);
 
   if (desc.length > 0) {
-    injectPrompt({
-      text: '[Ngoại hình {{char}}: ' + desc.join(', ') + ']',
-      position: 'in_chat',
-      depth: 0
-    });
+    print('[Ngoại hình {{char}}: ' + desc.join(', ') + ']');
   }
 _%>
 \`\`\``;
@@ -578,7 +580,7 @@ ${fieldsSection}${personaSection}
   else if (affinity < 75) stage = '{{char}} thân thiện, hay đùa giỡn.';
   else stage = '{{char}} cực kỳ thân thiết, chia sẻ bí mật.';
 
-  injectPrompt({ text: '[Persona: ' + stage + ']', position: 'in_chat', depth: 0 });
+  print('[Persona: ' + stage + ']');
 _%>
 \`\`\`
 
@@ -596,9 +598,10 @@ _%>
 <%- await getwi(null, 'Persona: ' + stage) %>
 \`\`\`
 
-IMPORTANT: Dùng injectPrompt() thay vì print() khi cần inject persona vào đúng vị trí.
-  injectPrompt({ text: personaText, position: 'in_chat', depth: 0 })
-  depth: 0 = ngay trước tin mới nhất (AI "thấy" persona sát tin nhắn cuối cùng).`;
+IMPORTANT: in persona bằng print(personaText) — nội dung rơi đúng vị trí/độ sâu của chính entry,
+  nên chỉnh vị trí thì chỉnh ở cấu hình entry (position/depth), không phải trong code.
+  injectPrompt CHỈ dùng khi muốn gom nội dung từ nhiều entry rồi hút vào MỘT chỗ trong preset,
+  và bắt buộc phải kèm getPromptsInjected('<nhóm>') ở chỗ đó.`;
 }
 
 function buildVariableDisplayPrompt(schema: MVUZODSchema | null): string {
@@ -699,7 +702,7 @@ FUNCTIONS CÓ THỂ DÙNG:
   print(text)                  Output text
   await getwi(null, 'comment') Load entry
   await activewi(comment, true)  Kích hoạt entry đang tắt (KHÔNG có setEntryEnabled)
-  injectPrompt({text, position:'in_chat', depth:N})
+  injectPrompt(key, text, order)  + getPromptsInjected(key)  ← PHẢI ĐỦ CẶP
   matchChatMessages(keywords)  Scan chat keywords
   getChatMessages(-1, role)    Đọc chat
   Mvu.getMvuData({type:'message', message_id:'latest'})

@@ -61,7 +61,9 @@ export const STPT_API_PROMPT_BLOCK = `API EJS THẬT của ST-Prompt-template (�
 - await getwi(null, 'tên entry') — đọc NỘI DUNG entry (không kích hoạt).
 - getvar('đường.dẫn', { defaults: x }) / setvar('đường.dẫn', x) — đọc/ghi biến.
 - getChatMessages(-1, 'user'|'assistant') / matchChatMessages(['từ khoá']) — đọc/quét chat.
-- injectPrompt({ text, position, depth }) — chèn prompt.
+- injectPrompt(key, prompt, order = 100, sticky = 0, uid = '') — BỎ nội dung vào một nhóm;
+  phải có getPromptsInjected(key) ở đâu đó mới thành prompt. KHÔNG có tham số position/depth
+  (đó là injectPrompts SỐ NHIỀU của TavernHelper — API khác). Muốn in tại chỗ thì dùng print().
 
 MÔ HÌNH ĐIỀU KHIỂN (BẮT BUỘC HIỂU ĐÚNG):
 - KHÔNG có hàm nào TẮT entry từ EJS. TUYỆT ĐỐI KHÔNG viết setEntryEnabled / activateEntry /

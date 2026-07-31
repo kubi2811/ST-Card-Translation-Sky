@@ -210,6 +210,109 @@ export function repairInitvarAmbiguousScalars(
 }
 
 /**
+ * (bug 174) injectPrompt({ text, position, depth }) → print(text).
+ *
+ * Chữ ký thật của ST-Prompt-Template là injectPrompt(key, prompt, order, sticky, uid) — tham số
+ * VỊ TRÍ, không hề có position/depth. Truyền object vào thì prompt = undefined: khối EJS chạy
+ * trơn tru, không lỗi đỏ, mà AI không nhận được chữ nào. Thẻ user gửi ở bug 174 có 10 khối chết
+ * vì lý do này (cảnh báo VP, giọng điệu GM, thời tiết, NPC lore… đều là mã chết).
+ *
+ * Vá bằng print(): nội dung rơi đúng vị trí/độ sâu của CHÍNH entry đó, không cần vế đọc thứ hai
+ * nên không thể thiếu nửa cặp. Muốn gom nhiều nơi rồi hút vào một chỗ trong preset thì mới cần
+ * cặp injectPrompt('nhóm', …) + getPromptsInjected('nhóm') — việc đó phải người làm thẻ quyết,
+ * máy không tự chọn hộ được.
+ */
+export function repairInjectPromptArgs(entries: LorebookEntry[]): { entries: LorebookEntry[]; fixed: RepairAction[] } {
+  const fixed: RepairAction[] = [];
+  const out = entries.map(e => {
+    const raw = String(e.content ?? '');
+    if (!/injectPrompt\s*\(\s*\{/.test(raw)) return e;
+    const res = rewriteInjectPromptCalls(raw);
+    if (res.count === 0) return e;
+    fixed.push({
+      id: 'ejs-injectprompt-args',
+      description: `Sửa ${res.count} lệnh injectPrompt sai chữ ký trong "${e.comment || `#${e.id}`}" thành print() — `
+        + 'dạng injectPrompt({ text, position, depth }) không tồn tại, nội dung bị vứt thẳng nên khối EJS đó '
+        + 'chạy mà AI không bao giờ đọc được',
+    });
+    return { ...e, content: res.code } as LorebookEntry;
+  });
+  return { entries: out, fixed };
+}
+
+/** Đổi mọi `injectPrompt({ text: X, … })` thành `print(X)`. Đếm ngoặc nên chịu được biểu thức lồng. */
+export function rewriteInjectPromptCalls(code: string): { code: string; count: number } {
+  const src = String(code || '');
+  let out = '';
+  let i = 0;
+  let count = 0;
+
+  /** Nhảy qua chuỗi/template literal để dấu ngoặc bên trong không bị đếm nhầm. */
+  const skipString = (s: string, at: number): number => {
+    const q = s[at];
+    let j = at + 1;
+    while (j < s.length) {
+      if (s[j] === '\\') { j += 2; continue; }
+      if (s[j] === q) return j + 1;
+      j++;
+    }
+    return j;
+  };
+
+  /** Từ vị trí mở ngoặc, trả về vị trí NGAY SAU ngoặc đóng khớp. */
+  const matchBracket = (s: string, at: number): number => {
+    const pairs: Record<string, string> = { '(': ')', '{': '}', '[': ']' };
+    const stack = [pairs[s[at]]];
+    let j = at + 1;
+    while (j < s.length && stack.length) {
+      const c = s[j];
+      if (c === '"' || c === "'" || c === '`') { j = skipString(s, j); continue; }
+      if (c === '(' || c === '{' || c === '[') { stack.push(pairs[c]); j++; continue; }
+      if (c === stack[stack.length - 1]) { stack.pop(); j++; continue; }
+      j++;
+    }
+    return j;
+  };
+
+  const CALL_RE = /\binjectPrompt\s*\(/g;
+  let m: RegExpExecArray | null;
+  while ((m = CALL_RE.exec(src)) !== null) {
+    const openParen = m.index + m[0].length - 1;
+    let k = openParen + 1;
+    while (k < src.length && /\s/.test(src[k])) k++;
+    if (src[k] !== '{') continue;                       // đã viết đúng chữ ký — để yên
+
+    const objEnd = matchBracket(src, k);                // sau `}`
+    const callEnd = matchBracket(src, openParen);       // sau `)`
+    const body = src.slice(k + 1, objEnd - 1);
+
+    // Lấy giá trị của thuộc tính `text` ở CẤP 1 của object.
+    const tm = /(^|[,{\s])(?:text|content)\s*:/.exec(body);
+    if (!tm) continue;
+    const vStart = tm.index + tm[0].length;
+    let j = vStart;
+    let depth = 0;
+    while (j < body.length) {
+      const c = body[j];
+      if (c === '"' || c === "'" || c === '`') { j = skipString(body, j); continue; }
+      if (c === '(' || c === '{' || c === '[') { j = matchBracket(body, j); depth = 0; continue; }
+      if (c === ',' && depth === 0) break;
+      j++;
+    }
+    const value = body.slice(vStart, j).trim();
+    if (!value) continue;
+
+    out += src.slice(i, m.index) + `print(${value})`;
+    // Nuốt luôn dấu `;` ngay sau lời gọi nếu có, để không đẻ ra `print(x);;`
+    i = callEnd;
+    count++;
+    CALL_RE.lastIndex = callEnd;
+  }
+  out += src.slice(i);
+  return { code: out, count };
+}
+
+/**
  * Khối HTML mở fence ```html mà thiếu fence đóng → SillyTavern không render, màn hình trắng.
  * Vá bằng cách đóng fence ở cuối.
  */
@@ -729,6 +832,12 @@ export function autoRepairCard(
     if (scalarRes.fixed.length > 0 && out.data.character_book) {
       out.data.character_book.entries = scalarRes.entries;
       fixed.push(...scalarRes.fixed);
+    }
+    // (bug 174) injectPrompt gọi bằng object → print(). Không phụ thuộc schema nên chạy cho mọi thẻ.
+    const injRes = repairInjectPromptArgs(out.data.character_book?.entries ?? []);
+    if (injRes.fixed.length > 0 && out.data.character_book) {
+      out.data.character_book.entries = injRes.entries;
+      fixed.push(...injRes.fixed);
     }
   }
 

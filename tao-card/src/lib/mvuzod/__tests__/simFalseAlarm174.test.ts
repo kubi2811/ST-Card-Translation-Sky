@@ -106,3 +106,28 @@ describe('(bug 174) khuôn mẫu <UpdateVariable> không phải lệnh thật', 
     expect(res.issues.some(i => i.code === 'sim-update-bad-path')).toBe(true);
   });
 });
+
+describe('(bug 174) tên biến dính khoảng trắng thừa — mìn hẹn giờ', () => {
+  const SCHEMA_SPACE = {
+    version: '1.0',
+    fields: [{
+      path: '/Người Chơi', type: 'object', label: 'Người Chơi', defaultValue: {}, constraints: {},
+      children: [{ path: '/Người Chơi/Điểm Công Trấn ', type: 'number', label: 'Điểm Công Trấn ', defaultValue: 0, constraints: {} }],
+    }],
+  } as unknown as MVUZODSchema;
+
+  it('ca thật của thẻ user bị cảnh báo, có nêu đủ 5 chỗ phải sửa', () => {
+    const res = simulateCard({
+      initVarContent: `'Người Chơi':\n  'Điểm Công Trấn ': 0`,
+      schema: SCHEMA_SPACE,
+    });
+    const w = res.issues.filter(i => i.code === 'sim-var-name-space');
+    expect(w.length).toBe(1);
+    expect(w[0].message).toContain('Điểm Công Trấn ');
+    expect(w[0].level, 'thẻ vẫn chạy được nên là cảnh báo, không phải lỗi').toBe('warning');
+  });
+
+  it('tên biến sạch thì không báo', () => {
+    expect(sim([]).issues.filter(i => i.code === 'sim-var-name-space')).toEqual([]);
+  });
+});

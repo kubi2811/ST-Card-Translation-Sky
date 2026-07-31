@@ -17,6 +17,7 @@ import { callAI } from '../../lib/ai/client';
 import type { ChatMessage } from '../../types';
 import { MVUZOD_INITVAR_PROMPT } from '../../prompts/modeMVUZOD';
 import { parseSchemaInferenceResponse } from '../../lib/mvuzod/schemaInferencer';
+import { emitYamlScalar } from '../../lib/mvuzod/yamlScalars';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -45,14 +46,23 @@ function getTypeDefault(type: string): unknown {
   }
 }
 
+/**
+ * (bug 174) Bộ ghi initvar THỨ BA của tool, và là bộ nguy hiểm nhất: giá trị ở đây do user gõ
+ * TỰ DO vào ô text. Bản cũ không bọc nháy bất kỳ trường hợp nào — gõ 'Null', '0123', 'Yes' hay
+ * để dư dấu cách là YAML đọc sai kiểu, còn gõ chuỗi có ': ' là vỡ cả cây biến.
+ * Nay dùng chung luật với bên đọc (xem yamlScalars.ts).
+ */
 function toYamlLike(data: unknown, indent = 0): string {
   const pad = '  '.repeat(indent);
   if (data === null || data === undefined) return `${pad}~`;
-  if (typeof data === 'string') return `${pad}${data}`;
-  if (typeof data === 'number' || typeof data === 'boolean') return `${pad}${data}`;
+  if (typeof data === 'string' || typeof data === 'number' || typeof data === 'boolean') {
+    return `${pad}${emitYamlScalar(data)}`;
+  }
   if (Array.isArray(data)) {
     if (data.length === 0) return `${pad}[]`;
-    return data.map(item => `${pad}- ${typeof item === 'object' ? '\n' + toYamlLike(item, indent + 1) : item}`).join('\n');
+    return data.map(item => (typeof item === 'object' && item !== null
+      ? `${pad}-\n${toYamlLike(item, indent + 1)}`
+      : `${pad}- ${emitYamlScalar(item)}`)).join('\n');
   }
   if (typeof data === 'object') {
     const entries = Object.entries(data as Record<string, unknown>);
@@ -61,10 +71,10 @@ function toYamlLike(data: unknown, indent = 0): string {
       if (typeof v === 'object' && v !== null) {
         return `${pad}${k}:\n${toYamlLike(v, indent + 1)}`;
       }
-      return `${pad}${k}: ${v}`;
+      return `${pad}${k}: ${emitYamlScalar(v)}`;
     }).join('\n');
   }
-  return `${pad}${String(data)}`;
+  return `${pad}${emitYamlScalar(String(data))}`;
 }
 
 // ─── InitVar Entry Editor (single entry) ─────────────────────────────────

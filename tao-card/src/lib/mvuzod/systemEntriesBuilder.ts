@@ -6,6 +6,7 @@
 import type { LorebookEntry } from '../../types';
 import type { MVUZODSchema, MVUZODField } from '../../types/mvuzod.types';
 import { materializeEntry } from '../converters/cardDefaults';
+import { emitYamlScalar } from './yamlScalars';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // BUILD 5 SYSTEM ENTRIES
@@ -237,12 +238,11 @@ function schemaToYAML(fields: MVUZODField[], indent: number): string {
     } else if (field.type === 'object') {
       lines.push(`${pad}${name}: {}`);
     } else {
-      const val = field.defaultValue;
-      const valStr = typeof val === 'string' ? val
-        : typeof val === 'number' ? String(val)
-        : typeof val === 'boolean' ? String(val)
-        : JSON.stringify(val);
-      lines.push(`${pad}${name}: ${valStr}`);
+      // (bug 174) Trước đây chuỗi ghi NGUYÊN VĂN, không cả phép kiểm ':' mà formatYAMLValue còn
+      // có. Default chứa ': ' là vỡ cả cây YAML chứ không riêng một ô; "Null"/"123"/"true" thì bị
+      // đọc sai kiểu và Zod chặn ngay lúc nhập thẻ. Đây là bộ ghi initvar THỨ HAI trong tool, độc
+      // lập với scriptGenerator — nay cả hai dùng chung một luật.
+      lines.push(`${pad}${name}: ${emitYamlScalar(field.defaultValue)}`);
     }
   }
 

@@ -54,13 +54,10 @@ _%>`,
 <%_
 if (typeof _scene === 'undefined') var _scene = getvar('stat_data.Thế giới.Loại cảnh', { defaults: 'Hàng ngày' });
 
-// Inject prompt vào system position
-injectPrompt({
-  text: \`Hiện tại đang là cảnh \${_scene}. Hãy điều chỉnh phong cách viết phù hợp.\`,
-  position: 'in_chat',
-  depth: 4,
-  scan: true,
-});
+/* In THẲNG bằng print(): nội dung rơi đúng vào vị trí/độ sâu của chính entry này.
+   KHÔNG truyền object dạng { text, position, depth } — chữ ký thật nhận tham số VỊ TRÍ
+   (key, prompt, order, sticky, uid), đưa object vào là nội dung bị vứt thẳng. */
+print(\`Hiện tại đang là cảnh \${_scene}. Hãy điều chỉnh phong cách viết phù hợp.\`);
 _%>`,
   },
   {
@@ -461,38 +458,24 @@ _%>`,
 var scene = getvar('stat_data.Thế giới.Loại cảnh', { defaults: 'Hàng ngày' });
 var importance = Number(getvar('stat_data.Thế giới.Mức quan trọng', { defaults: 5 }));
 
-// Inject background context (sâu trong lịch sử)
-injectPrompt({
-  text: '[Bối cảnh: Đang trong cảnh ' + scene + ']',
-  position: 'in_chat',
-  depth: 8,
-  scan: true,
-});
+/* Gom nhiều mẩu vào MỘT nhóm rồi hút ra một chỗ — đúng công dụng của injectPrompt.
+   Bắt buộc phải có vế đọc getPromptsInjected(), nếu không nội dung không bao giờ tới AI.
+   order nhỏ ra trước. */
+injectPrompt('boi_canh', '[Bối cảnh: Đang trong cảnh ' + scene + ']', 10);
 
 // Inject hướng dẫn viết (gần đây)
 if (scene === 'Chiến đấu') {
-  injectPrompt({
-    text: '[Hướng dẫn: Viết chi tiết hành động chiến đấu, mô tả chuyển động cơ thể.]',
-    position: 'in_chat',
-    depth: 2,
-  });
+  injectPrompt('boi_canh', '[Hướng dẫn: Viết chi tiết hành động chiến đấu, mô tả chuyển động cơ thể.]', 20);
 } else if (scene === 'Lãng mạn') {
-  injectPrompt({
-    text: '[Hướng dẫn: Viết nhẹ nhàng, tập trung cảm xúc và chi tiết lãng mạn.]',
-    position: 'in_chat',
-    depth: 2,
-  });
+  injectPrompt('boi_canh', '[Hướng dẫn: Viết nhẹ nhàng, tập trung cảm xúc và chi tiết lãng mạn.]', 20);
 }
 
 // High importance: inject vào system prompt
 if (importance >= 8) {
-  injectPrompt({
-    text: '[‼️ SỰ KIỆN QUAN TRỌNG: Ưu tiên cao cho cảnh hiện tại!]',
-    position: 'in_chat',
-    depth: 0,
-  });
+  injectPrompt('boi_canh', '[‼️ SỰ KIỆN QUAN TRỌNG: Ưu tiên cao cho cảnh hiện tại!]', 1);
 }
-_%>`,
+_%>
+<%- getPromptsInjected('boi_canh') %>`,
   },
   {
     id: 'adv-chat-history',

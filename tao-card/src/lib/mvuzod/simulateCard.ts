@@ -438,6 +438,26 @@ export function simulateCard(input: SimulateInput): SimulateResult {
       }
     }
 
+    /* ─── 1c. (bug 174) TÊN BIẾN DÍNH KHOẢNG TRẮNG THỪA ───
+       Thẻ user có `'Điểm Công Trấn '` — dư một dấu cách ở cuối, và dư ở CẢ schema, Zod, initvar
+       lẫn giao diện nên hiện tại vẫn chạy. Nhưng nó là mìn hẹn giờ: AI trong game viết
+       `_.set('Người Chơi.Điểm Công Trấn', …)` (không dấu cách) là đẻ ra một biến MỚI nằm cạnh
+       biến thật, thanh trạng thái đọc mãi ô cũ không bao giờ đổi. Chính bộ sinh quy tắc của tool
+       cũng phải viết một dòng dặn "đích patch bắt buộc giữ khoảng trắng cuối" — dấu hiệu rõ ràng
+       là tên biến này cần được cắt gọn ngay từ đầu. */
+    {
+      const bad = leaves.map(l => l.path.split('.').pop() ?? '').filter(n => n !== n.trim());
+      if (bad.length) {
+        issues.push({
+          level: 'warning', code: 'sim-var-name-space',
+          message: `${bad.length} tên biến có khoảng trắng thừa ở đầu/cuối (${bad.map(n => `"${n}"`).join(' · ')}). `
+            + 'Hiện vẫn chạy vì mọi nơi đều dư giống nhau, nhưng chỉ cần AI viết lệnh cập nhật thiếu đúng dấu cách '
+            + 'đó là một biến MỚI mọc ra bên cạnh, còn thanh trạng thái thì đọc mãi ô cũ. '
+            + 'Đổi tên biến bỏ khoảng trắng ở CẢ schema, Zod, [initvar], quy tắc cập nhật và giao diện.',
+        });
+      }
+    }
+
     /* ─── 2. Giả lập Opening Form: ghi từng biến lá rồi đọc lại ─── */
     const probe = leaves
       .filter(l => initSet.has(l.path) && l.value !== undefined && l.value !== null && typeof l.value !== 'object')

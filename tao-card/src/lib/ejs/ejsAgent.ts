@@ -35,7 +35,7 @@ import {
 import { findCollisions, autopatchCollisions, findActivationOverlaps, scanKeywordOverlap, type EjsBlock } from './ejsCollision';
 import { checkEjsSemantics, readInitVarTruth } from './ejsSemanticGuard';
 import { extractRequestedPresets, buildPresetCoverage } from './ejsPresetCoverage';
-import { QUICK_PRESETS } from './ejsQuickPresets';
+import { QUICK_PRESETS, activatableRegexNames } from './ejsQuickPresets';
 
 // ═══ Kiểu dữ liệu ═════════════════════════════════════════════════════════
 
@@ -508,6 +508,27 @@ export function createEjsDomain(ctx: EjsAgentContext): GoalAgentDomain<EjsDraft>
           } else if (!w.includes('@@preprocessing')) {
             issues.push({ level: 'warning', code: 'ejs-warn', message: w, where });
           }
+        }
+
+        // (bug 173) activateRegex() trỏ vào regex KHÔNG BẬT ĐƯỢC → lỗi đỏ ở MỌI lượt chat.
+        // Ảnh user gửi: bốn thẻ "EJS Error … Basic mode regexes must have a string replace value",
+        // sinh từ `activateRegex('Format Fixer')`. SillyTavern chặn regex chế độ cơ bản mà
+        // replaceString rỗng, và tên bịa thì càng chắc chắn hỏng. Dặn AI trong prompt là chưa đủ —
+        // đây là thứ kiểm được TẤT ĐỊNH nên phải kiểm, để vòng tự sửa còn vá được.
+        const okRegex = activatableRegexNames(ctx.regexScripts);
+        const okSet = new Set(okRegex.map((n) => n.toLowerCase()));
+        for (const call of d.code.matchAll(/\bactivateRegex\s*\(\s*['"`]([^'"`]+)['"`]/g)) {
+          const name = call[1].trim();
+          if (okSet.has(name.toLowerCase())) continue;
+          issues.push({
+            level: 'error', code: 'ejs-regex-not-activatable', where,
+            message: okRegex.length
+              ? `activateRegex('${name}') — thẻ không có regex nào tên như vậy ĐANG BẬT ĐƯỢC. `
+                + `Chỉ được dùng: ${okRegex.map((n) => `'${n}'`).join(', ')}. `
+                + 'Gọi sai tên (hoặc regex chưa có replaceString) sẽ ném lỗi đỏ ở mọi lượt chat.'
+              : `activateRegex('${name}') — thẻ này KHÔNG có regex nào bật được (regex chế độ cơ bản `
+                + 'phải có replaceString). Bỏ hẳn lời gọi activateRegex khỏi khối này.',
+          });
         }
       }
 

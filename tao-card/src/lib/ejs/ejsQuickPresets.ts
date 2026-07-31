@@ -87,6 +87,19 @@ function constantEntries(entries: LorebookEntry[]): LorebookEntry[] {
   return entries.filter(e => detectActivationMode(e) === 'constant');
 }
 
+/**
+ * (bug 173) Regex nào THẬT SỰ bật được bằng activateRegex().
+ * SillyTavern chặn regex ở chế độ cơ bản mà không có giá trị thay thế: "Basic mode regexes must have
+ * a string replace value". Gọi activateRegex lên một regex như thế là ném lỗi đỏ ở MỌI lượt chat.
+ * Đây là NGUỒN DUY NHẤT cho câu hỏi đó — preset dùng để chặn, và bộ kiểm của agent dùng để bắt lỗi
+ * nếu AI vẫn bịa ra tên khác.
+ */
+export function activatableRegexNames(scripts: PresetCardContext['regexScripts']): string[] {
+  return (scripts ?? [])
+    .filter((s) => String(s?.scriptName ?? '').trim() && String(s?.replaceString ?? '').length > 0)
+    .map((s) => String(s.scriptName).trim());
+}
+
 function needSchema(ctx: PresetCardContext): string[] {
   return ctx.schema?.fields?.length
     ? []
@@ -655,16 +668,31 @@ const RAW_PRESETS: QuickPreset[] = [
     title: 'Sửa output sau khi AI trả lời',
     effect: 'Dùng activateRegex() để xử lý HẬU KỲ: xoá khối suy luận thừa, thay link ảnh hỏng, chuẩn hoá định dạng — chạy SAU khi AI đã trả lời, khác hẳn mọi preset khác vốn chỉ xử lý TRƯỚC khi gửi.',
     icon: '🩹',
-    build: (ctx) => ({
-      goal: [
-        'Tạo khối EJS XỬ LÝ HẬU KỲ output của AI:',
-        '- Dùng activateRegex() để bật đúng regex cần thiết sau khi AI trả lời.',
-        '- Mục tiêu: xoá khối suy luận thừa, chuẩn hoá định dạng, sửa link hỏng.',
-        '- KHÔNG đụng tới nội dung kể chuyện của AI.',
-      ].join('\n'),
-      blockers: (ctx.regexScripts ?? []).length ? [] : ['Thẻ chưa có regex nào để bật — tạo regex ở tab Regex Lab trước.'],
-      notes: [],
-    }),
+    // (bug 173) Chốt chặn cũ chỉ hỏi "thẻ CÓ regex nào không", không hỏi "regex đó có BẬT ĐƯỢC
+    // không". SillyTavern từ chối bật regex chế độ cơ bản mà replaceString rỗng — nên khối EJS sinh
+    // ra chạy là ném đỏ "Basic mode regexes must have a string replace value", mỗi lượt chat một
+    // lần. Nay chỉ chạy khi có regex thật sự bật được, và nêu ĐÍCH DANH tên hợp lệ cho AI.
+    build: (ctx) => {
+      const ok = activatableRegexNames(ctx.regexScripts);
+      const all = (ctx.regexScripts ?? []).length;
+      return {
+        goal: [
+          'Tạo khối EJS XỬ LÝ HẬU KỲ output của AI:',
+          `- Dùng activateRegex() để bật regex sau khi AI trả lời. CHỈ được bật đúng các tên sau: ${ok.map((n) => `"${n}"`).join(', ')}.`,
+          '- KHÔNG bịa tên regex, không đoán tên khác: gọi activateRegex với tên không có thật (hoặc regex chưa có giá trị thay thế) sẽ ném lỗi đỏ ở MỌI lượt chat.',
+          '- Mục tiêu: xoá khối suy luận thừa, chuẩn hoá định dạng, sửa link hỏng.',
+          '- KHÔNG đụng tới nội dung kể chuyện của AI.',
+        ].join('\n'),
+        blockers: ok.length ? [] : [
+          all
+            ? `Thẻ có ${all} regex nhưng không cái nào bật được — regex ở chế độ cơ bản phải có giá trị thay thế (replaceString) thì SillyTavern mới cho bật. Điền replaceString ở tab Regex Lab trước.`
+            : 'Thẻ chưa có regex nào để bật — tạo regex ở tab Regex Lab trước.',
+        ],
+        notes: all > ok.length
+          ? [`${all - ok.length} regex bị bỏ qua vì chưa có giá trị thay thế (replaceString rỗng) — bật chúng sẽ lỗi.`]
+          : [],
+      };
+    },
   },
 
   {

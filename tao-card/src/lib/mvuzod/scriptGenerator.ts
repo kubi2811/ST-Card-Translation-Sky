@@ -15,6 +15,7 @@
  */
 
 import { buildMvuOutputBlock } from './mvuReference';
+import { emitYamlScalar } from './yamlScalars';
 import type { MVUZODSchema, MVUZODField, InitVarEntry } from '../../types/mvuzod.types';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -687,15 +688,13 @@ function getDefaultForType(type: string): unknown {
   }
 }
 
+/**
+ * (bug 174) Bản cũ chỉ bọc nháy khi chuỗi có `\n`, `:`, `#` hoặc mở đầu bằng `{`/`[`. Nó bỏ lọt
+ * đúng lớp nguy hiểm nhất: chuỗi TRÔNG NHƯ thứ khác. `Null` để trần bị YAML đọc thành RỖNG, và
+ * enum Zod `['…','Null']` không nhận null ⇒ thẻ vừa nhập vào SillyTavern là đỏ, không nạp được
+ * biến nào. Cùng họ: "123", "true", "~", ".inf", chuỗi có dấu cách ở đầu/cuối.
+ * Nay giao hẳn cho yamlScalars.ts — nơi bên ĐỌC cũng lấy luật, nên hai bên không thể lệch nữa.
+ */
 function formatYAMLValue(val: unknown): string {
-  if (val === null || val === undefined) return '~';
-  if (typeof val === 'string') {
-    // Multi-line strings or strings with special chars need quoting
-    if (val.includes('\n') || val.includes(':') || val.includes('#') || val.startsWith('{') || val.startsWith('[')) {
-      return `"${val.replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
-    }
-    return val;
-  }
-  if (typeof val === 'number' || typeof val === 'boolean') return String(val);
-  return JSON.stringify(val);
+  return emitYamlScalar(val);
 }

@@ -19,6 +19,7 @@ import type { CharacterCardV3, LorebookEntry, MVUZODSchema } from '../../types';
 
 import { collectSchemaVarNames } from '../mvuzod/gameUiValidator';
 import { stripInitVarPreamble } from '../mvuzod/simulateCard';
+import { quoteAmbiguousInitVarScalars } from '../mvuzod/yamlScalars';
 import { generateWorldbookEntries, applyGeneratedEntries, findExistingMVUZODEntries } from '../export/worldbookGenerator';
 import { OPENING_FORM_ANCHOR, STATUS_BAR_ANCHOR } from '../mvuzod/regexAnchors';
 import { checkMvuOutputContract } from '../mvuzod/mvuReference';
@@ -171,6 +172,39 @@ export function repairInitvarPreamble(entries: LorebookEntry[]): { entries: Lore
         + 'và nuốt mất biến lớn đầu tiên',
     });
     return { ...e, content: pre.content } as LorebookEntry;
+  });
+  return { entries: out, fixed };
+}
+
+/**
+ * (bug 174) GIÁ TRỊ [initvar] ĐỂ TRẦN MÀ YAML ĐỌC SAI → nhập thẻ vào SillyTavern là đỏ ngay.
+ *
+ * Thẻ user gửi khai `'Phả Hệ': Null` để khớp enum Zod `['…','Null']`. Nhìn thì khớp, nhưng MVU
+ * nạp initvar bằng YAML, mà YAML coi `Null`/`null`/`NULL`/`~` để trần là GIÁ TRỊ RỖNG. Zod nhận
+ * null trong khi enum chỉ có chuỗi "Null" ⇒ "[MVU zod] 变量初始化失败", cả bộ biến không nạp
+ * được — mà cũng chẳng có cách nào đoán ra từ thông báo đó.
+ * Vá bằng cách bọc nháy đúng những ô schema khai là chuỗi. Có schema thì chính xác; không có
+ * thì chỉ cứu ca null, không đụng số/boolean (xem yamlScalars.ts).
+ */
+export function repairInitvarAmbiguousScalars(
+  entries: LorebookEntry[],
+  schema?: MVUZODSchema | null,
+): { entries: LorebookEntry[]; fixed: RepairAction[] } {
+  const fixed: RepairAction[] = [];
+  const out = entries.map(e => {
+    const isInit = String(e.content || '').includes('[initvar]')
+      || String(e.comment || '').toLowerCase().includes('initvar');
+    if (!isInit) return e;
+    const raw = String(e.content || '');
+    const res = quoteAmbiguousInitVarScalars(raw, schema ?? null);
+    if (res.fixed.length === 0) return e;
+    fixed.push({
+      id: 'initvar_ambiguous_scalar',
+      description: `Bọc nháy ${res.fixed.length} giá trị trong "${e.comment || '[initvar]'}" `
+        + `(${res.fixed.slice(0, 3).join(', ')}${res.fixed.length > 3 ? '…' : ''}) — để trần thì YAML đọc `
+        + 'thành rỗng/số/boolean chứ không phải chữ, Zod chặn ngay lúc nhập thẻ vào SillyTavern',
+    });
+    return { ...e, content: res.content } as LorebookEntry;
   });
   return { entries: out, fixed };
 }
@@ -688,6 +722,13 @@ export function autoRepairCard(
     if (missRes.fixed.length > 0 && out.data.character_book) {
       out.data.character_book.entries = missRes.entries;
       fixed.push(...missRes.fixed);
+    }
+    // (bug 174) …rồi bọc nháy giá trị trần mà YAML đọc sai. Đặt SAU bước điền thiếu để giá trị
+    // vừa điền cũng đi qua bộ lọc này.
+    const scalarRes = repairInitvarAmbiguousScalars(out.data.character_book?.entries ?? [], schema);
+    if (scalarRes.fixed.length > 0 && out.data.character_book) {
+      out.data.character_book.entries = scalarRes.entries;
+      fixed.push(...scalarRes.fixed);
     }
   }
 

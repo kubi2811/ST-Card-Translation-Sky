@@ -22,6 +22,7 @@ import { applyMvuCommands, parseMvuCommands, runFormCycle, readMvuVar } from './
 import { normalizeMVUZODSchema } from './normalizeSchema';
 import type { MVUZODSchema, MVUZODField } from '../../types/mvuzod.types';
 import { checkHtmlScripts } from '../scriptSafety';
+import { parseYamlScalar } from './yamlScalars';
 
 export interface SimIssue {
   level: 'error' | 'warning' | 'info';
@@ -61,19 +62,14 @@ export interface SimulateInput {
 // YAML (tập con) → object
 // ═══════════════════════════════════════════════════════════════════════════
 
-function parseScalar(raw: string): unknown {
-  const s = raw.trim();
-  if (s === '' || s === '~' || s === 'null') return null;
-  if (s === '{}') return {};
-  if (s === '[]') return [];
-  if (s === 'true') return true;
-  if (s === 'false') return false;
-  if (/^-?\d+(\.\d+)?$/.test(s)) return Number(s);
-  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
-    return s.slice(1, -1).replace(/\\n/g, '\n').replace(/\\"/g, '"');
-  }
-  return s;
-}
+/**
+ * (bug 174) Phân giải scalar phải GIỐNG HỆT engine, không phải "gần giống".
+ * Bản cũ ở đây chỉ nhận `null` chữ thường và `true/false` chữ thường; `Null` viết hoa thì nó
+ * trả về CHUỖI "Null" trong khi YAML thật đọc ra rỗng. Thẻ user (bug 174) khai đúng
+ * `'Phả Hệ': Null` ⇒ mô phỏng của tool xanh mượt, còn vào SillyTavern thì Zod đỏ ngay vì enum
+ * không có null. Nay dùng chung bộ luật với bên ghi — xem yamlScalars.ts.
+ */
+const parseScalar = parseYamlScalar;
 
 /**
  * Đọc YAML dạng mà MVU/[initvar] dùng: map lồng theo thụt lề, list `- item`, scalar đơn giản.
@@ -221,8 +217,10 @@ export function parseInitVar(content: string): Record<string, unknown> {
 // Đường dẫn lá
 // ═══════════════════════════════════════════════════════════════════════════
 
-export function schemaLeafPaths(schema: MVUZODSchema): Array<{ path: string; value: unknown; type: MVUZODField['type'] }> {
-  const out: Array<{ path: string; value: unknown; type: MVUZODField['type'] }> = [];
+export function schemaLeafPaths(
+  schema: MVUZODSchema,
+): Array<{ path: string; value: unknown; type: MVUZODField['type']; constraints?: MVUZODField['constraints'] }> {
+  const out: Array<{ path: string; value: unknown; type: MVUZODField['type']; constraints?: MVUZODField['constraints'] }> = [];
   const walk = (fields: MVUZODField[], prefix: string) => {
     for (const f of fields ?? []) {
       const name = String(f.path || '').split('/').filter(Boolean).pop() ?? '';
@@ -239,9 +237,9 @@ export function schemaLeafPaths(schema: MVUZODSchema): Array<{ path: string; val
       // là crash và lệnh insert `/-` cần mảng tồn tại sẵn.
       const kids = (f.children ?? []).filter(c => !String(c.path || '').includes('/_child/'));
       if (f.type === 'record') continue;
-      if (f.type === 'array') out.push({ path: p, value: f.defaultValue, type: f.type });
+      if (f.type === 'array') out.push({ path: p, value: f.defaultValue, type: f.type, constraints: f.constraints });
       else if (kids.length) walk(kids, p);
-      else out.push({ path: p, value: f.defaultValue, type: f.type });
+      else out.push({ path: p, value: f.defaultValue, type: f.type, constraints: f.constraints });
     }
   };
   walk(schema.fields ?? [], '');
@@ -255,22 +253,56 @@ function objectLeafPaths(obj: unknown, prefix = ''): string[] {
   return entries.flatMap(([k, v]) => objectLeafPaths(v, prefix ? `${prefix}.${k}` : k));
 }
 
-/** Biến mà một đoạn EJS / status bar ĐỌC: getvar('a.b'), stat_data.a.b, stat_data['a b']. */
-export function extractReadPaths(source: string): string[] {
-  const found = new Set<string>();
-  const push = (p?: string) => {
-    const v = (p || '').trim().replace(/^stat_data\./, '');
-    if (v && !/^\d+$/.test(v)) found.add(v);
+export interface ReadRef {
+  /** Đường dẫn đã bỏ tiền tố `stat_data.` */
+  path: string;
+  /** Có neo vào stat_data không. `getvar('temp_x')` là biến chat thường — KHÔNG neo. */
+  scoped: boolean;
+}
+
+/**
+ * Biến mà một đoạn EJS / status bar ĐỌC: getvar('stat_data.a.b'), _.get(d, 'a.b'),
+ * stat_data.a.b, stat_data['a b'].
+ *
+ * (bug 174) Hai chỗ từng báo oan, nay chữa:
+ *  • Bộ dò `stat_data.a.b` quét cả BÊN TRONG chuỗi đã lấy ở nhánh getvar. Tên biến MVU có dấu
+ *    cách ("Người Chơi") nên nó cắt ngang ở khoảng trắng và đẻ ra một biến ma tên "Người". Nay
+ *    xoá trắng nội dung mọi chuỗi nháy TRƯỚC khi quét kiểu-JS — trong code JS thật thì
+ *    `stat_data.Người Chơi` là cú pháp không tồn tại, chỉ chuỗi mới viết được như vậy.
+ *  • Không phân biệt biến MVU với biến chat thường. `getvar('temp_old_vp')` là biến tạm của
+ *    chính khối EJS, không thuộc stat_data và không việc gì phải có trong [initvar].
+ */
+export function extractReadRefs(source: string): ReadRef[] {
+  const found = new Map<string, ReadRef>();
+  const push = (raw?: string, scopedByForm = false) => {
+    const s = (raw || '').trim();
+    const scoped = scopedByForm || /^stat_data\./.test(s);
+    const v = s.replace(/^stat_data\./, '');
+    if (!v || /^\d+$/.test(v)) return;
+    const prev = found.get(v);
+    if (!prev) found.set(v, { path: v, scoped });
+    else if (scoped) prev.scoped = true;
   };
   for (const m of source.matchAll(/getvar\(\s*['"]([^'"]+)['"]/g)) push(m[1]);
-  for (const m of source.matchAll(/_\.get\(\s*[\w$.]*\s*,\s*['"]([^'"]+)['"]/g)) push(m[1]);
-  for (const m of source.matchAll(/stat_data\s*((?:\.[\p{L}\p{N}_$]+|\[\s*['"][^'"]+['"]\s*\])+)/gu)) {
-    const chain = m[1]
-      .replace(/\[\s*['"]([^'"]+)['"]\s*\]/g, '.$1')
-      .replace(/^\./, '');
-    push(chain);
+  // `_.get(data, 'a.b')` luôn là đọc trên object dữ liệu MVU nên coi như đã neo.
+  for (const m of source.matchAll(/_\.get\(\s*[\w$.]*\s*,\s*['"]([^'"]+)['"]/g)) push(m[1], true);
+
+  const noStrings = source.replace(/'[^'\n]*'|"[^"\n]*"/g, (s) => s[0].repeat(s.length));
+  for (const m of noStrings.matchAll(/stat_data\s*((?:\.[\p{L}\p{N}_$]+|\[\s*['"][^'"]+['"]\s*\])+)/gu)) {
+    push(`stat_data.${m[1].replace(/\[\s*['"]([^'"]+)['"]\s*\]/g, '.$1').replace(/^\./, '')}`);
   }
-  return [...found];
+  // `stat_data['Người Chơi']['Tên']` — nội dung trong ngoặc vừa bị xoá trắng ở trên nên phải quét
+  // riêng trên bản gốc. BẮT BUỘC bắt đầu bằng `[`: nếu cho phép mở đầu bằng `.` thì nó lại ăn
+  // luôn chuỗi `'stat_data.Người Chơi.Tên'` và cắt ra mảnh ma "Người" — đúng lỗi đang chữa.
+  for (const m of source.matchAll(/stat_data\s*(\[\s*['"][^'"\n]+['"]\s*\](?:\[\s*['"][^'"\n]+['"]\s*\]|\.[\p{L}\p{N}_$]+)*)/gu)) {
+    push(`stat_data.${m[1].replace(/\[\s*['"]([^'"]+)['"]\s*\]/g, '.$1').replace(/^\./, '')}`);
+  }
+  return [...found.values()];
+}
+
+/** Như trên nhưng chỉ lấy đường dẫn — giữ cho code cũ. */
+export function extractReadPaths(source: string): string[] {
+  return extractReadRefs(source).map(r => r.path);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -350,6 +382,62 @@ export function simulateCard(input: SimulateInput): SimulateResult {
         message: `${extra.length} biến có trong initvar nhưng schema không khai báo — Zod sẽ bỏ qua/cắt mất: ${extra.slice(0, 6).join(' · ')}${extra.length > 6 ? ' …' : ''}` });
     }
 
+    /* ─── 1b. (bug 174) GIÁ TRỊ initvar phải THOẢ ràng buộc schema ───
+       Chạy đúng phép kiểm mà Zod sẽ chạy lúc SillyTavern nạp thẻ. Trước đây chỗ này chỉ so TÊN
+       biến, nên thẻ có đủ 10/10 biến vẫn "xanh" trong khi vào game là đỏ ngay dòng đầu:
+         [MVU zod] Invalid option: expected one of "Ignis"|…|"Null" → at ["Người Chơi"]["Phả Hệ"]
+       Ca đó sinh từ `'Phả Hệ': Null` không nháy — YAML đọc ra rỗng, enum không nhận. Bắt được
+       ở đây thì user thấy lỗi lúc còn đang làm thẻ, chứ không phải sau khi đã nhập vào ST. */
+    // readMvuVar cố tình gộp null vào "không có" (tiện cho chỗ khác), mà ở đây null CHÍNH LÀ
+    // thứ cần bắt — nên đọc thô, phân biệt rõ "chưa khai" với "khai bằng giá trị rỗng".
+    const readRaw = (obj: unknown, path: string): unknown => {
+      let cur: unknown = obj;
+      for (const part of path.split('.')) {
+        if (cur === null || typeof cur !== 'object') return undefined;
+        cur = (cur as Record<string, unknown>)[part];
+      }
+      return cur;
+    };
+
+    for (const leaf of leaves) {
+      const val = readRaw(statData, leaf.path);
+      if (val === undefined) continue;                 // thiếu biến đã có chốt riêng ở trên
+      if (leaf.type === 'array' || leaf.type === 'record' || leaf.type === 'object') continue;
+
+      const enumValues = leaf.constraints?.enumValues ?? [];
+      const say = (what: string, how: string) => issues.push({
+        level: 'error', code: 'sim-initvar-value-invalid',
+        message: `Biến "${leaf.path}" trong [initvar] ${what} — Zod sẽ chặn ngay lúc nhập thẻ vào SillyTavern ("变量初始化失败"), cả bộ biến không nạp được. ${how}`,
+      });
+
+      if (val === null) {
+        // Gần như luôn là bẫy YAML: Null/null/NULL/~ để trần thì thành rỗng chứ không phải chữ.
+        say('đang là RỖNG (null)',
+          enumValues.length
+            ? `Nếu ý là chuỗi "${enumValues.find(v => /^null$/i.test(v)) ?? enumValues[0]}" thì phải BỌC NHÁY: 'Phả Hệ': "${enumValues.find(v => /^null$/i.test(v)) ?? enumValues[0]}". YAML coi Null/null/NULL/~ để trần là giá trị rỗng.`
+            : 'YAML coi Null/null/NULL/~ để trần là giá trị rỗng — bọc nháy nếu muốn giữ nguyên chữ.');
+        continue;
+      }
+      if (enumValues.length && !enumValues.includes(String(val))) {
+        say(`đang là "${String(val)}", không nằm trong danh sách cho phép`,
+          `Chỉ được nhận một trong: ${enumValues.map(v => `"${v}"`).join(' | ')}.`);
+        continue;
+      }
+      if (leaf.type === 'number' && typeof val !== 'number') {
+        say(`đang là "${String(val)}" (không phải số)`, 'Schema khai kiểu number nên giá trị khởi tạo phải là số, viết trần không nháy.');
+        continue;
+      }
+      if (leaf.type === 'boolean' && typeof val !== 'boolean') {
+        say(`đang là "${String(val)}" (không phải boolean)`, 'Chỉ nhận true hoặc false, viết trần không nháy.');
+        continue;
+      }
+      if (leaf.type === 'number' && typeof val === 'number') {
+        const { min, max } = leaf.constraints ?? {};
+        if (typeof min === 'number' && val < min) say(`đang là ${val}, nhỏ hơn mức tối thiểu ${min}`, 'Sửa lại giá trị khởi tạo cho nằm trong khoảng.');
+        else if (typeof max === 'number' && val > max) say(`đang là ${val}, lớn hơn mức tối đa ${max}`, 'Sửa lại giá trị khởi tạo cho nằm trong khoảng.');
+      }
+    }
+
     /* ─── 2. Giả lập Opening Form: ghi từng biến lá rồi đọc lại ─── */
     const probe = leaves
       .filter(l => initSet.has(l.path) && l.value !== undefined && l.value !== null && typeof l.value !== 'object')
@@ -370,8 +458,15 @@ export function simulateCard(input: SimulateInput): SimulateResult {
     issues.push({ level: 'info', code: 'sim-no-schema', message: 'Card không có schema MVU — bỏ qua đối chiếu schema.' });
   }
 
-  /* ─── 3. Chạy thật lệnh trong <UpdateVariable> ─── */
-  const updates = (input.updateContents ?? []).filter(c => /<UpdateVariable>/i.test(c));
+  /* ─── 3. Chạy thật lệnh trong <UpdateVariable> ───
+     (bug 174) Entry "[mvu_update]Định dạng đầu ra biến" chứa KHUÔN MẪU cho AI điền —
+     `{ "op": "replace", "path": "${/đường/dẫn/tới/biến}" }`. Đó là chỗ trống, không phải lệnh.
+     Đem khuôn mẫu đi chạy thì đương nhiên không đổi được biến nào, rồi báo "khối UpdateVariable
+     không đổi được biến nào" — một dòng đỏ vô nghĩa trên MỌI thẻ đúng chuẩn. */
+  const isTemplateBlock = (c: string) => /\$\{[^}]*\}/.test(c) || /\$\([^)]*\)/.test(c);
+  const updates = (input.updateContents ?? [])
+    .filter(c => /<UpdateVariable>/i.test(c))
+    .filter(c => !isTemplateBlock(c));
   if (updates.length) {
     const working = JSON.parse(JSON.stringify(statData)) as Record<string, unknown>;
     let applied = 0;
@@ -391,7 +486,12 @@ export function simulateCard(input: SimulateInput): SimulateResult {
       for (const f of res.failed) badPaths.push(`${f.command.raw.slice(0, 60)} — ${f.reason}`);
     }
     stats.updateOpsApplied = applied;
-    if (applied === 0) {
+    // (bug 174) Chỉ kêu "không đổi được biến nào" khi thật sự CÓ lệnh để chạy. Entry
+    // "[mvu_update]Nhấn mạnh định dạng đầu ra" chỉ có `<UpdateVariable>\n...\n</UpdateVariable>`
+    // — dấu ba chấm là chỗ trống nhắc AI, không phải lệnh. Đếm nó là "chạy thử thất bại" thì
+    // MỌI thẻ đúng chuẩn đều dính một dòng cảnh báo vô nghĩa.
+    const totalCmds = updates.reduce((n, u) => n + parseMvuCommands(u).length, 0);
+    if (applied === 0 && totalCmds > 0) {
       issues.push({ level: 'warning', code: 'sim-update-noop',
         message: 'Khối <UpdateVariable> mẫu không đổi được biến nào khi chạy thử — thường là do lệnh trỏ vào đường dẫn không tồn tại trong initvar.' });
     }
@@ -402,14 +502,36 @@ export function simulateCard(input: SimulateInput): SimulateResult {
   }
 
   /* ─── 4. EJS / status bar đọc biến có tồn tại không ─── */
+  // (bug 174) Gốc của cây biến MVU ("Thế Giới", "Người Chơi"…) — để phân biệt "quên tiền tố
+  // stat_data." (lỗi thật, đọc ra rỗng) với "biến chat tạm của chính khối EJS" (như temp_old_vp,
+  // chẳng liên quan gì tới initvar). Bộ sinh EJS của tool luôn viết `stat_data.<đường dẫn>`
+  // (bridge/mvuzodToEjs.ts) nên thiếu tiền tố là sai, không phải chuyện phong cách.
+  const mvuRoots = new Set<string>(Object.keys(statData));
+  for (const f of schema?.fields ?? []) {
+    const n = String(f.path || '').split('/').filter(Boolean).pop();
+    if (n) mvuRoots.add(n);
+  }
+
   for (const src of input.readerSources ?? []) {
-    const paths = extractReadPaths(src.content);
-    stats.ejsRefsChecked += paths.length;
-    const missing = paths.filter((p) => readMvuVar(statData, p, undefined) === undefined);
+    const refs = extractReadRefs(src.content);
+    stats.ejsRefsChecked += refs.length;
+
+    const missing = refs
+      .filter(r => r.scoped)
+      .filter(r => readMvuVar(statData, r.path, undefined) === undefined)
+      .map(r => r.path);
     if (missing.length) {
       stats.ejsRefsMissing += missing.length;
       issues.push({ level: 'error', code: 'sim-reader-missing-var',
         message: `"${src.name}" đọc ${missing.length} biến không có trong stat_data mô phỏng — chỗ đó sẽ hiện rỗng/undefined: ${missing.slice(0, 5).join(' · ')}` });
+    }
+
+    // Đọc ĐÚNG tên biến MVU nhưng QUÊN tiền tố: getvar('Người Chơi.Cảnh Giới') luôn trả rỗng vì
+    // biến MVU nằm dưới stat_data. Rất dễ mắc và không có lỗi đỏ nào lúc chạy.
+    const noPrefix = refs.filter(r => !r.scoped && mvuRoots.has(r.path.split('.')[0])).map(r => r.path);
+    if (noPrefix.length) {
+      issues.push({ level: 'error', code: 'sim-reader-missing-prefix',
+        message: `"${src.name}" đọc ${noPrefix.length} biến MVU mà THIẾU tiền tố "stat_data." — getvar sẽ luôn trả về rỗng: ${noPrefix.slice(0, 5).map(p => `getvar('${p}') → getvar('stat_data.${p}')`).join(' · ')}` });
     }
 
     /* ─── (bug 159-6/7) <script> của giao diện có PARSE ĐƯỢC không, và có ID TRÙNG không ───

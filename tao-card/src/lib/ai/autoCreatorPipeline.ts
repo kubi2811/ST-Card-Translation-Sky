@@ -14,6 +14,7 @@ import { auditCardQuality } from '../mvuzod/cardQualityAudit';
 import { tuningUsable, applyLockedSchema } from './cardTuning';
 import { buildOutputFormatContent, buildEmphasisContent } from '../mvuzod/systemEntriesBuilder';
 import { nestFlatInitvarKeys } from '../mvuzod/nestFlatInitvar';
+import { quoteAmbiguousInitVarScalars } from '../mvuzod/yamlScalars';
 import { buildMVUZODScripts } from '../mvuzod/tavernScriptBuilder';
 import { OPENING_FORM_ANCHOR, STATUS_BAR_ANCHOR } from '../mvuzod/regexAnchors';
 import { isMvuUpdateBlockAccepted } from '../mvuzod/mvuReference';
@@ -1536,7 +1537,14 @@ function applyParsedDataToCard(
             // MVU đọc thành MỘT khoá tên đúng chữ "Player/Name", không phải Player > Name, nên
             // không khớp schema lẫn Opening Form. Đo trên thẻ thật (bugNeedFix/41): giao nhau
             // giữa tên biến của initvar và của schema là ĐÚNG 0.
-            content: nestFlatInitvarKeys(result.initVarEntry as string),
+            // (bug 174) …rồi bọc nháy những giá trị TRẦN mà YAML sẽ đọc sai. AI hay viết
+            // `'Phả Hệ': Null` cho khớp enum Zod ['…','Null'] — nhìn thì khớp, nhưng YAML coi
+            // Null/null/NULL/~ để trần là RỖNG, nên Zod nhận null và chặn ngay lúc nhập thẻ
+            // ("变量初始化失败"), cả bộ biến không nạp được.
+            content: quoteAmbiguousInitVarScalars(
+              nestFlatInitvarKeys(result.initVarEntry as string),
+              c.data.extensions.mvuzod?.schema as MVUZODSchema | undefined,
+            ).content,
             constant: true,
           }, { enabled: false, defaultRole: 0, insertionOrderStart: 0 }, nextEntryId(entries)));
         }

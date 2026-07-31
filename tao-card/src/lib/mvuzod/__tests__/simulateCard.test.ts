@@ -133,10 +133,14 @@ describe('EJS / status bar đọc biến có thật không', () => {
     expect(paths).toContain('Thế Giới.Ngày');
   });
 
+  // (bug 174) Hai ca dưới trước đây viết getvar KHÔNG có tiền tố `stat_data.`. Đó là dạng mà
+  // chính bộ sinh EJS của tool KHÔNG BAO GIỜ xuất ra (bridge/mvuzodToEjs.ts luôn ghép
+  // `stat_data.${dotPath}`) và trong SillyTavern nó luôn trả về rỗng — tức test cũ khoá nhầm
+  // một cú pháp sai. Nay viết đúng dạng thật, còn dạng thiếu tiền tố có ca riêng bên dưới.
   it('đọc biến không tồn tại → lỗi chỉ rõ script nào', () => {
     const r = simulateCard({
       initVarContent: INIT_YAML, schema: SCHEMA,
-      readerSources: [{ name: 'Thanh trạng thái', content: "<%= getvar('Người Chơi.Linh Thạch') %>" }],
+      readerSources: [{ name: 'Thanh trạng thái', content: "<%= getvar('stat_data.Người Chơi.Linh Thạch') %>" }],
     });
     expect(r.ok).toBe(false);
     const iss = r.issues.find(i => i.code === 'sim-reader-missing-var')!;
@@ -147,11 +151,21 @@ describe('EJS / status bar đọc biến có thật không', () => {
   it('đọc biến có thật → sạch', () => {
     const r = simulateCard({
       initVarContent: INIT_YAML, schema: SCHEMA,
-      readerSources: [{ name: 'Thanh trạng thái', content: "<%= getvar('Người Chơi.HP') %> ngày <%= getvar('Thế Giới.Ngày') %>" }],
+      readerSources: [{ name: 'Thanh trạng thái', content: "<%= getvar('stat_data.Người Chơi.HP') %> ngày <%= getvar('stat_data.Thế Giới.Ngày') %>" }],
     });
     expect(r.ok).toBe(true);
     expect(r.stats.ejsRefsChecked).toBe(2);
     expect(r.stats.ejsRefsMissing).toBe(0);
+  });
+
+  it('(bug 174) quên tiền tố stat_data. → báo đích danh, kèm cách sửa', () => {
+    const r = simulateCard({
+      initVarContent: INIT_YAML, schema: SCHEMA,
+      readerSources: [{ name: 'Thanh trạng thái', content: "<%= getvar('Người Chơi.HP') %>" }],
+    });
+    const iss = r.issues.find(i => i.code === 'sim-reader-missing-prefix')!;
+    expect(iss, 'đọc luôn ra rỗng mà không có lỗi đỏ nào — đúng loại lỗi im lặng').toBeTruthy();
+    expect(iss.message).toContain("getvar('stat_data.Người Chơi.HP')");
   });
 });
 

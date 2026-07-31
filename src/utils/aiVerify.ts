@@ -1217,6 +1217,51 @@ export function verifyFields(
       const origIds = new Set((orig.match(/\bid\s*=\s*["']([^"']+)["']/g) || []).map(m => m.match(/["']([^"']+)["']/)?.[1] || ''));
       const transIds = new Set((trans.match(/\bid\s*=\s*["']([^"']+)["']/g) || []).map(m => m.match(/["']([^"']+)["']/)?.[1] || ''));
 
+      // ─── (bug 171 mục 2) SELECTOR CSS BỊ VỠ VÌ DỊCH — mất màu mà không sập script ───
+      // Bằng chứng user: `.q-普通 { … }` dịch thành `.q-Phổ Thông { … }`. Trình duyệt đọc đó là HAI
+      // selector (`.q-Phổ` rồi hậu duệ `Thông`) nên luật CSS không bao giờ khớp — toàn bộ màu phẩm
+      // chất biến mất. Không có lỗi nào báo vì script vẫn chạy bình thường.
+      // Chốt cũ chỉ so thuộc tính class="…", KHÔNG soi selector trong khối CSS, nên ca này lọt hẳn.
+      // Chỉ soi phần trong <style>…</style>: ở ngoài đó không có gì bảo đảm dấu `{` là mở khối CSS.
+      // Nếu bản gốc không có <style> thì bỏ qua hẳn — không có gì để đối chiếu, báo bừa còn tệ hơn sót.
+      {
+        const cssOf = (s: string) =>
+          [...s.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)]
+            .map((m) => m[1])
+            .join('\n')
+            .replace(/\/\*[\s\S]*?\*\//g, '');
+        const cssOrig = cssOf(orig);
+        const cssTrans = cssOf(trans);
+        const badSel = new Set<string>();
+        if (cssOrig && cssTrans) {
+          // Phần selector của một luật = đoạn trước `{`, tính từ `}` của luật liền trước.
+          for (const m of cssTrans.matchAll(/(^|\})([^{}]+)\{/g)) {
+            for (const raw of m[2].split(',')) {
+              const sel = raw.trim();
+              if (!sel || sel.startsWith('@')) continue;          // @media/@keyframes: không phải selector
+              if (!/^[.#a-zA-Z][^{}$<%()]*$/.test(sel)) continue; // né chuỗi ghép động `${…}` và rác
+              if (!/[.#]/.test(sel)) continue;                    // chỉ quan tâm class/id — thứ bị dịch
+              if (cssOrig.includes(sel)) continue;                // y như gốc thì không phải do dịch
+              // Dấu cách ở giữa = trình duyệt tách thành nhiều selector. Dấu tiếng Việt = tên class
+              // không còn khớp chuỗi được ghép lúc chạy.
+              if (/\s/.test(sel) || /[À-ỹĐđ]/.test(sel)) badSel.add(sel);
+            }
+          }
+        }
+        for (const sel of badSel) {
+          issues.push({
+            id: crypto.randomUUID(), fieldPath: field.path,
+            severity: 'error', category: 'css_class_sync',
+            location: field.label,
+            description: `Selector CSS "${sel}" chứa dấu cách/dấu tiếng Việt sau khi dịch — trình duyệt hiểu thành nhiều selector rời, luật CSS không bao giờ khớp nên phần giao diện đó MẤT MÀU (script vẫn chạy, không có lỗi đỏ).`,
+            original: sel.split(/\s+/)[0],
+            current: sel,
+            suggestion: 'Tên class phải là slug không dấu, không cách (vd .q-pho-thong). Nếu class được ghép lúc chạy từ dữ liệu (class="q-${q}") thì phải slug hoá ở CẢ ba chỗ: selector CSS, chỗ ghép class, và giá trị trong stat_data — sửa một chỗ là vẫn không khớp.',
+            autoFixable: false,
+          });
+        }
+      }
+
       // CSS classes should NOT be translated
       for (const cls of origClasses) {
         if (cls && !transClasses.has(cls) && cls.length > 2) {

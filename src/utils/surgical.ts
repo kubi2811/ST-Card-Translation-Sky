@@ -474,7 +474,35 @@ export function extractCJKTokens(
     if (!hasIdeograph) continue;
 
     const mStart = match.index;
-    const mEnd   = match.index + match[0].length;
+    let   mEnd   = match.index + match[0].length;
+    let   mText  = match[0];
+
+    // ═══ (bug 171) KHOÁ THUỘC TÍNH TRỘN CJK + ASCII PHẢI LÀ **MỘT** TOKEN ═══
+    // Bằng chứng user: `${f.与user关系 || 'Không Rõ'}` dịch ra `${f['Với']user Quan Hệ || …}` — sai
+    // cú pháp, cả <script> không parse được, mọi nút trong thẻ liệt.
+    // Vì sao ra thế: bộ gom cắt quanh cụm Latin nên khoá `与user关系` thành HAI cụm rời. Cụm `与`
+    // đứng ngay sau dấu chấm nên được nhận là dot-notation và bọc `['…']`; còn `关系` thì ký tự
+    // trước nó là `user` chứ không phải `.`, nên KHÔNG được nhận là khoá — bị coi là văn xuôi, dịch
+    // ra có dấu cách và nằm chình ình ngoài ngoặc.
+    // Sửa tận gốc ở đây: khi cụm Hán đứng ngay sau dấu chấm mà tên thuộc tính CÒN TIẾP, nuốt trọn
+    // phần còn lại của tên vào cùng một token. Reinsert sau đó chỉ bọc ngoặc ĐÚNG MỘT LẦN quanh cả
+    // khoá — `f['Với user Quan Hệ']`.
+    {
+      const beforeCh = text.slice(Math.max(0, mStart - 2), mStart);
+      const afterDot = /[.]\s*$/.test(beforeCh) && !/[0-9]\s*[.]\s*$/.test(beforeCh);
+      if (afterDot) {
+        const IDENT = /[\w$一-鿿㐀-䶿぀-ヿ가-힯]/;
+        let e = mEnd;
+        while (e < text.length && IDENT.test(text[e])) e++;
+        if (e > mEnd) {
+          mEnd = e;
+          mText = text.slice(mStart, mEnd);
+          // Nhảy con trỏ regex qua phần vừa nuốt, kẻo cụm Hán phía sau lại thành token thứ hai
+          // rồi bị dịch/bọc lần nữa — đúng cái sinh ra `f['Với']user Quan Hệ`.
+          regex.lastIndex = mEnd;
+        }
+      }
+    }
 
     // ── Skip tokens overlapping a protected zone (e.g. CSS property name) ──
     if (protectedZones?.some(z => mStart < z.end && mEnd > z.start)) continue;
@@ -536,8 +564,8 @@ export function extractCJKTokens(
     // nối), rồi tra từ điển nguyên cụm — không mục nào khớp nên giữ nguyên. Nhánh tách cũ chỉ
     // chạy khi base nằm trong protectedIds, mà `i.世界运转._开场标识` thì base đứng sau dấu chấm
     // nên không được bảo vệ ⇒ không tách ⇒ chỗ GHI đổi tên mà chỗ ĐỌC thì không: hỏng âm thầm.
-    if (match[0].includes('.')) {
-      const seg = match[0].split('.');
+    if (mText.includes('.')) {
+      const seg = mText.split('.');
       // Đoạn được phép mang tiền tố/hậu tố ASCII (`_开场标识`) nhưng phải CÓ chữ Hán và KHÔNG có
       // khoảng trắng — đủ hẹp để văn xuôi kiểu "3.5 mét" hay "1. Mục lục" không lọt vào.
       const segRe = /^[\w$]*[一-鿿㐀-䶿぀-ヿ가-힯][\w$一-鿿㐀-䶿぀-ヿ가-힯]*$/;
@@ -588,8 +616,8 @@ export function extractCJKTokens(
       // đổi là SyntaxError, không có cách bọc nào cứu được) vừa là thuộc tính (`t.配置` —
       // bọc `t['…']` là xong). Nếu bỏ qua cả hai thì tên trong chuỗi `_.get(t,'配置.x')` vẫn
       // bị đổi trong khi code đọc thì không → đọc trúng ô rỗng, hỏng âm thầm.
-      const _dictHit = mvuDictionary?.[match[0].trim()];
-      if ((protectedIds.has(match[0]) || protectedIds.has(text.slice(wStart, wEnd))) && !(_dictHit && (_inPropPos || _inKeyPos))) continue;
+      const _dictHit = mvuDictionary?.[mText.trim()];
+      if ((protectedIds.has(mText) || protectedIds.has(text.slice(wStart, wEnd))) && !(_dictHit && (_inPropPos || _inKeyPos))) continue;
 
       // ═══ CỤM TRUY CẬP THUỘC TÍNH VỚI BASE CHỮ HÁN: 配置.调试验证 ═══
       // Dấu `.` ASCII nằm trong bộ JOINER (để câu văn "3.5米" không bị băm), nên cả cụm
@@ -599,11 +627,11 @@ export function extractCJKTokens(
       // chấm; base chữ Hán thì xưa nay luôn vỡ — đúng dòng ~85 trong bằng chứng user.
       // Xử: tách cụm theo dấu chấm — base giữ nguyên, MỖI thuộc tính thành token dot-notation
       // riêng để reinsert đổi sang bracket: 配置['Bản dịch'] — hợp lệ và khớp key đã dịch.
-      const dotIdx = match[0].indexOf('.');
+      const dotIdx = mText.indexOf('.');
       if (dotIdx > 0) {
-        const base = match[0].slice(0, dotIdx);
+        const base = mText.slice(0, dotIdx);
         if (protectedIds.has(base)) {
-          const parts = match[0].split('.');
+          const parts = mText.split('.');
           let pos = mStart;
           for (let pi = 0; pi < parts.length; pi++) {
             const part = parts[pi];
@@ -693,11 +721,11 @@ export function extractCJKTokens(
     // Hệ quả nặng: card đã đổi biến sang tiếng Việt thì script đọc khoá Hán ra `undefined` —
     // chạy trơn tru mà dữ liệu rỗng, không lỗi nào báo. Đổi theo từ điển là quyết định của
     // user (họ tự nhập vào đó); tên không có trong từ điển vẫn giữ nguyên như cũ.
-    const isMvuVariable = mvuDictionary?.[match[0].trim()];
+    const isMvuVariable = mvuDictionary?.[mText.trim()];
 
     tokens.push({
       id: id++,
-      text: match[0],
+      text: mText,
       start: mStart,
       end: mEnd,
       isIdentifier,
@@ -912,7 +940,11 @@ export function reinsertTranslations(original: string, tokens: CJKToken[]): stri
       if (finalTranslation && !isCodeToken && !/^[['"`.]/.test(finalTranslation)) {
         const prevChar = result.charAt(replaceStart - 1);
         const nextChar = result.charAt(replaceEnd);
-        if (/^[a-zA-ZÀ-ỹ]/.test(finalTranslation) && prevChar && /[\d\}\)\]>a-zA-Z0-9À-ỹ]/.test(prevChar)) {
+        // (bug 171) BỎ `>` KHỎI TẬP KÝ TỰ ĐÒI DẤU CÁCH.
+        // Bản 160 xếp `>` chung với `}`/`)`/`]` như "hết một biểu thức code" (vd `${x}文字`). Nhưng
+        // trong HTML thì `>` là dấu ĐÓNG THẺ, và `<p>心声</p>` bị chèn thành `<p> Tiếng Lòng</p>` —
+        // thừa một dấu cách ở đầu MỌI đoạn chữ nằm ngay sau thẻ. Test của bug 171 bắt được ca này.
+        if (/^[a-zA-ZÀ-ỹ]/.test(finalTranslation) && prevChar && /[\d\}\)\]a-zA-Z0-9À-ỹ]/.test(prevChar)) {
           finalTranslation = ' ' + finalTranslation;
         }
         if (/[a-zA-ZÀ-ỹ0-9]$/.test(finalTranslation) && nextChar && /[a-zA-Z0-9À-ỹ]/.test(nextChar)) {

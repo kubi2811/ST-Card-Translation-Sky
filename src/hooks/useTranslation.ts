@@ -4,6 +4,8 @@ import { scanFieldsForResidualCjk, buildResidualRetryInstruction } from '../util
 import { buildLorebookRefDictionary, enforceLorebookRefs, validateLorebookRefs, getLockedBookName } from '../utils/lorebookRefSync';
 import { repairInitVarContent, isInitVarEntryText } from '../utils/initVarPreamble';
 import { enforceFormatTagSync, findFormatTagMismatches } from '../utils/formatTagSync';
+// (bugNeedFix/180) Macro {{…}} phải về nguyên văn — xem macroGuard.ts.
+import { restoreMacros } from '../utils/macroGuard';
 import { useCallback, useEffect, useRef } from 'react';
 import { useStore } from '../store';
 import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookEntries, ChunkError, ApiError, setExtraProviders, resetProviderPool, computePoolConcurrency, callProvider, setNameStyle, setFandomMode } from '../utils/apiClient';
@@ -629,6 +631,22 @@ export function useTranslation() {
           if (fixed !== translated) {
             translated = fixed;
             store.addLog('info', `🔧 Auto-fixed ${validation.unreplaced.length} vars in ${field.label}`);
+          }
+        }
+
+        // ─── (bugNeedFix/180) MACRO {{…}} VỀ NGUYÊN VĂN ───
+        // Chạy TRƯỚC mọi bước hậu xử lý khác: các bước sau dùng văn bản này làm đầu vào, để macro
+        // hỏng đi qua là chúng vá tiếp lên một nền đã sai. Áp cho MỌI loại trường, không chỉ
+        // code-like — bằng chứng user là entry lorebook văn xuôi thuần.
+        {
+          const mg = restoreMacros(field.original, translated);
+          if (mg.fixes.length > 0) {
+            translated = mg.text;
+            const list = mg.fixes.map(f => `{{${f.wrong}}}→{{${f.right}}}`).join(', ');
+            store.addLog('warning', `🔒 Trả lại ${mg.fixes.length} macro bị đổi trong ${field.label}: ${list}`);
+          }
+          if (mg.unresolved.length > 0) {
+            store.addLog('warning', `⚠️ ${field.label}: macro lạ ${mg.unresolved.slice(0, 3).join(', ')} — số macro hai bên lệch nhau nên KHÔNG tự sửa, hãy kiểm tay.`);
           }
         }
 
@@ -1440,6 +1458,19 @@ export function useTranslation() {
               store.addLog('info', `🔧 Auto-fixed ${validation.unreplaced.length} vars in ${batchFields[j].label}`);
             } else {
               store.addLog('warning', `⚠️ ${validation.unreplaced.length} unreplaced vars in ${batchFields[j].label}: ${validation.unreplaced.slice(0, 3).join(', ')}`);
+            }
+          }
+
+          // ─── (bugNeedFix/180) MACRO {{…}} VỀ NGUYÊN VĂN — đường hàng loạt cũng phải có ───
+          {
+            const mg = restoreMacros(batchFields[j].original, translated);
+            if (mg.fixes.length > 0) {
+              translated = mg.text;
+              const list = mg.fixes.map(f => `{{${f.wrong}}}→{{${f.right}}}`).join(', ');
+              store.addLog('warning', `🔒 Trả lại ${mg.fixes.length} macro bị đổi trong ${batchFields[j].label}: ${list}`);
+            }
+            if (mg.unresolved.length > 0) {
+              store.addLog('warning', `⚠️ ${batchFields[j].label}: macro lạ ${mg.unresolved.slice(0, 3).join(', ')} — lệch số macro nên KHÔNG tự sửa, hãy kiểm tay.`);
             }
           }
 
@@ -3497,6 +3528,21 @@ export function useTranslation() {
       if (translated && (field.group === 'regex' || field.group === 'tavern_helper')) {
         translated = normalizeSmartQuotesInCode(translated);
         translated = fixNestedQuoteBracketPaths(translated);
+      }
+
+      // (bugNeedFix/180) Đường "dịch lại một trường" cũng phải trả macro về nguyên văn — đây
+      // chính là nút user sẽ bấm để chữa mấy entry đã dính lỗi, nên nó mà không có chốt thì
+      // bấm bao nhiêu lần cũng có thể ra lại đúng cái sai cũ.
+      if (translated) {
+        const mg = restoreMacros(field.original, translated);
+        if (mg.fixes.length > 0) {
+          translated = mg.text;
+          store.addLog('warning', `🔒 Trả lại ${mg.fixes.length} macro bị đổi trong ${field.label}: `
+            + mg.fixes.map(f => `{{${f.wrong}}}→{{${f.right}}}`).join(', '));
+        }
+        if (mg.unresolved.length > 0) {
+          store.addLog('warning', `⚠️ ${field.label}: mất macro ${mg.unresolved.slice(0, 3).join(', ')} — hãy kiểm tay.`);
+        }
       }
 
       store.updateField(path, {

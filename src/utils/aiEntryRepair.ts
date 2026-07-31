@@ -23,6 +23,7 @@
 import type { TranslationField } from '../types/card';
 import { jsParseErrorAny } from './scriptSafety';
 import { segmentEjs } from './ejsSegmenter';
+import { restoreMacros } from './macroGuard';
 
 /* ═══ 1. GOM SỰ THẬT ══════════════════════════════════════════════════════ */
 
@@ -262,6 +263,17 @@ export function verifyRepair(ctx: RepairContext, fixed: string): VerifyVerdict {
   const ratio = fixed.length / Math.max(1, ctx.translated.length);
   if (ratio < 0.6) {
     reasons.push(`Bản sửa ngắn hơn hẳn bản cũ (${Math.round(ratio * 100)}%) — nhiều khả năng AI tóm tắt thay vì sửa.`);
+  }
+
+  // (b0) (bugNeedFix/180) Macro không được ĐỔI RUỘT. Kiểm này khác kiểm "thiếu macro" bên dưới:
+  // {{user}} thành {{基础信息}} thì SỐ macro vẫn đủ, chỉ ruột sai — đếm số không bao giờ thấy.
+  {
+    const mg = restoreMacros(ctx.original, fixed);
+    if (mg.fixes.length > 0) {
+      reasons.push(
+        `Bản sửa đổi tên macro: ${mg.fixes.map(f => `{{${f.wrong}}} (đúng ra {{${f.right}}})`).join(', ')}.`,
+      );
+    }
   }
 
   // (b) Macro phải đủ như BẢN GỐC.

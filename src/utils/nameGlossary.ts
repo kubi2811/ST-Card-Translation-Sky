@@ -1,4 +1,5 @@
 import type { TranslationField, GlossaryEntry } from '../types/card';
+import { isMacroPollutedTerm } from './macroGuard';
 import { buildProperNounRules, buildFandomNameRules, type NameStyle } from './masterPrompt';
 
 /**
@@ -54,6 +55,11 @@ const STOP_TERMS = new Set([
   '格式', '输出', '回复', '对话', '剧情', '当前', '角色', '玩家', '用户', '状态',
 ]);
 
+/**
+ * (bugNeedFix/180) Macro {{…}} TUYỆT ĐỐI không được vào glossary.
+ * Glossary được bơm thẳng vào prompt dưới dạng "nguồn → đích" và model làm theo rất ngoan; chỉ
+ * cần một mục dính macro là nó đổi macro đó ở MỌI entry — đúng cảnh user gặp với {{user}}.
+ */
 /** Tách chuỗi keyword lorebook (phẩy Anh/Trung, chấm phẩy, xuống dòng) thành từng key. */
 function splitKeywordList(text: string): string[] {
   return text.split(/[,，、;；\n]+/).map(s => s.trim()).filter(Boolean);
@@ -98,6 +104,7 @@ export function extractNameCandidates(
       if (chars.length < 2 || chars.length > 8) continue;
       if (!/^\p{Script=Han}+$/u.test(key)) continue;
       if (hasParticle(key) || STOP_TERMS.has(key)) continue;
+      if (isMacroPollutedTerm(key)) continue;   // (bug 180)
       keyTerms.set(key, (keyTerms.get(key) || 0) + 1);
     }
   }
@@ -133,6 +140,7 @@ export function extractNameCandidates(
     const isKey = keyTerms.has(term);
     if (!isKey && count < minCount) continue;
     if (hasParticle(term) || STOP_TERMS.has(term)) continue;
+    if (isMacroPollutedTerm(term)) continue;   // (bug 180)
     passed.push({ term, count });
   }
 
@@ -258,6 +266,8 @@ export function harvestGlossaryFromFields(fields: TranslationField[]): GlossaryE
     const source = rawSource.trim();
     const target = rawTarget.trim().replace(/^["'「『]|["'」』]$/g, '').trim();
     if (!source || !target || source === target || seen.has(source)) return;
+    // (bugNeedFix/180) Dính macro là loại thẳng — cả hai phía.
+    if (isMacroPollutedTerm(source) || isMacroPollutedTerm(target)) return;
     if (!/\p{Script=Han}/u.test(source)) return;   // nguồn phải có chữ Hán (là tên Trung)
     if (/\p{Script=Han}/u.test(target)) return;    // đích còn chữ Hán = chưa dịch xong → bỏ
     const slen = Array.from(source).length;

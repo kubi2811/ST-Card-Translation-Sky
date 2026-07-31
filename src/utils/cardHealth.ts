@@ -7,6 +7,7 @@
 // Tái dùng `checkCodeFieldForCjk` (mvuValidator) cho CJK-trong-code, acorn cho parse JS.
 // ═══════════════════════════════════════════════════════════════════════════════
 import { checkCodeFieldForCjk } from './mvuValidator';
+import { restoreMacros } from './macroGuard';
 import { extractScriptBodies, isJsSyntaxOk, isLikelyJsScript, jsParseErrorAny } from './scriptSafety';
 import type { TranslationField, GlossaryEntry } from '../types/card';
 
@@ -22,6 +23,7 @@ export type HealthKind =
   | 'residual_cjk_code'  // chữ Hán còn trong field code (json_patch/initvar/controller)
   | 'residual_cjk_text'  // chữ Hán còn sót trong văn bản đã "done" (có thể là tên riêng cố ý)
   | 'empty_bracket'      // (bugNeedFix/178) 【nhãn】 ở gốc thành 【】 RỖNG ở bản dịch — mất chữ
+  | 'macro_renamed'      // (bugNeedFix/180) {{user}} bị đổi ruột thành thứ khác — thẻ hiện sai khi chơi
   | 'glossary_unapplied';// thuật ngữ trong Từ điển vẫn còn NGUYÊN GỐC trong bản dịch (dịch chưa nhất quán)
 
 export interface HealthIssue {
@@ -44,6 +46,8 @@ export interface HealthReport {
     residualCjkText: number;
     /** (bugNeedFix/178) Số chỗ 【…】 bị rỗng ruột sau dịch. */
     emptyBrackets: number;
+    /** (bugNeedFix/180) Số macro {{…}} bị đổi ruột sau dịch. */
+    renamedMacros: number;
     glossaryUnapplied: number;
   };
   issues: HealthIssue[];
@@ -93,6 +97,7 @@ export function scanFieldsHealth(fields: TranslationField[], glossary?: Glossary
   const issues: HealthIssue[] = [];
   let brokenScripts = 0, residualCjkCode = 0, residualCjkText = 0, glossaryUnapplied = 0;
   let emptyBrackets = 0;
+  let renamedMacros = 0;
   let done = 0, error = 0, pending = 0, skipped = 0;
 
   // Chỉ giữ mục từ điển hợp lệ (source≠target, đủ dài để không báo nhầm 1 ký tự).
@@ -188,6 +193,23 @@ export function scanFieldsHealth(fields: TranslationField[], glossary?: Glossary
     // và lần đó là "rất nhiều chỗ" trong một entry.
     // Nguyên nhân gốc đã chặn ở surgical.ts (token không còn mang ngoặc lẻ), nhưng model vẫn có
     // thể tự làm rơi chữ vì lý do khác, nên phải có người canh.
+    // ═══ (bugNeedFix/180) MACRO BỊ ĐỔI RUỘT ═══
+    // {{user}} thành {{基础信息}} thì SillyTavern không còn thay bằng tên người chơi nữa — nó in
+    // nguyên cục chữ lạ ra màn hình. Không lỗi cú pháp, không chữ Hán "sót" theo nghĩa thông
+    // thường, nên mọi bộ kiểm cũ đều thấy sạch; user chỉ biết khi đọc từng dòng bằng mắt.
+    if (f.translated && f.translated !== f.original) {
+      const mg = restoreMacros(f.original || '', f.translated);
+      if (mg.fixes.length > 0) {
+        renamedMacros += mg.fixes.length;
+        issues.push({
+          severity: 'error', kind: 'macro_renamed', label: f.label, path: f.path,
+          detail: `${mg.fixes.length} macro bị đổi tên: `
+            + mg.fixes.slice(0, 4).map(x => `{{${x.wrong}}} (đúng ra là {{${x.right}}})`).join(', ')
+            + `${mg.fixes.length > 4 ? '…' : ''} — SillyTavern sẽ in nguyên chữ này ra thay vì thay giá trị.`,
+        });
+      }
+    }
+
     const emptied = countEmptiedBrackets(f.original || '', f.translated || '');
     if (emptied.length > 0) {
       emptyBrackets += emptied.length;
@@ -204,7 +226,7 @@ export function scanFieldsHealth(fields: TranslationField[], glossary?: Glossary
   issues.sort((a, b) => rank[a.severity] - rank[b.severity]);
 
   return {
-    counts: { total: fields.length, done, error, pending, skipped, brokenScripts, residualCjkCode, residualCjkText, emptyBrackets, glossaryUnapplied },
+    counts: { total: fields.length, done, error, pending, skipped, brokenScripts, residualCjkCode, residualCjkText, emptyBrackets, renamedMacros, glossaryUnapplied },
     issues,
     ok: !issues.some((i) => i.severity === 'error'),
   };

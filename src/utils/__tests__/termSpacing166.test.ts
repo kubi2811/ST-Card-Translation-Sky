@@ -93,3 +93,61 @@ describe('(bug 166-1) chèn lại dấu cách quanh thuật ngữ Latin', () => 
     expect(out).not.toContain('10 px');
   });
 });
+
+/**
+ * (bug 172) HỒI QUY DO CHÍNH BẢN VÁ 166-1 — tự thêm khoảng trắng vào GIỮA CHỮ.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * User: "thay vì 'Môi đỏ' lại dịch thành 'M ôi đỏ'", "M ô tả", và trong entry [mvu_update]:
+ * "Theo D õi", "D ữ Liệu", "Đường D ẫn".
+ *
+ * Nguyên nhân, tái hiện được: chữ cái tiếng Việt có dấu KHÔNG phải ASCII, nên trong "Môi" thì cụm
+ * ASCII duy nhất là "M" (ô là U+00F4). Bản 166-1 gom "thuật ngữ" bằng mọi cụm ASCII trong nguyên
+ * bản — chỉ cần MỘT chữ cái đơn lẻ dính CJK ở bất kỳ đâu (ví dụ "M码") là "M" vào danh sách, rồi
+ * MỌI chữ "M" trong bản dịch mà theo sau là chữ cái đều bị chèn dấu cách. Một ký tự lạc ở đầu file
+ * đủ làm hỏng cả bản dịch.
+ *
+ * Bài học: danh sách thuật ngữ gom TOÀN CỤC rồi áp TOÀN CỤC thì một phần tử rác cũng lan ra khắp
+ * nơi. Nên siết hình dạng thuật ngữ, và đòi có RANH GIỚI HOA-THƯỜNG thật sự mới chèn.
+ */
+describe('(bug 172) không được thêm dấu cách vào giữa chữ tiếng Việt', () => {
+  // Nguyên bản có đúng một chữ Latin đơn lẻ dính CJK — điều kiện sinh ra lỗi.
+  const origWithStrayLetter = 'M码红唇，说明';
+
+  it('ca thật: "Môi đỏ" KHÔNG được thành "M ôi đỏ"', () => {
+    expect(restoreTermSpacing(origWithStrayLetter, 'Môi đỏ')).toBe('Môi đỏ');
+  });
+
+  it('ca thật: "Mô tả" giữ nguyên', () => {
+    expect(restoreTermSpacing(origWithStrayLetter, 'Mô tả')).toBe('Mô tả');
+  });
+
+  it('ca thật trong [mvu_update]: "Theo Dõi", "Dữ Liệu", "Đường Dẫn" giữ nguyên', () => {
+    const orig = 'D盘追踪，数据，路径';
+    const tr = 'Theo Dõi, Dữ Liệu, Đường Dẫn';
+    expect(restoreTermSpacing(orig, tr)).toBe(tr);
+  });
+
+  it('chữ cái ASCII ĐƠN LẺ không bao giờ được coi là thuật ngữ', () => {
+    for (const ch of ['M', 'D', 'T', 'K', 'V']) {
+      const tr = `${ch}ôi ${ch}ữ ${ch}ẫn`;
+      expect(restoreTermSpacing(`${ch}码测试`, tr), `chữ ${ch} bị tách`).toBe(tr);
+    }
+  });
+
+  it('cụm chữ thường/hoa-thường lẫn lộn cũng không được tách (chỉ nhận acronym hoặc có chữ số)', () => {
+    // "Trang" là cụm ASCII dài nhưng là TỪ TIẾNG VIỆT bình thường — tách ra là hỏng.
+    const tr = 'Trangphục đẹp';
+    expect(restoreTermSpacing('Trang码服装', tr)).toBe(tr);
+  });
+
+  it('KHÔNG cắt vào giữa một từ ASCII có sẵn (CHAIN chứa AI)', () => {
+    // Nếu "AI" lọt vào danh sách thuật ngữ, tìm chuỗi con sẽ trúng giữa "CHAIN".
+    const tr = 'CHAIN of command';
+    expect(restoreTermSpacing('AI测试链', tr)).toBe(tr);
+  });
+
+  it('nhưng acronym dính chữ thường THẬT thì vẫn phải vá (không siết quá tay)', () => {
+    expect(restoreTermSpacing('结合当前NSFW细节', 'Nội dung kết hợp hiện tạiNSFWchi tiết'))
+      .toContain('hiện tại NSFW chi tiết');
+  });
+});

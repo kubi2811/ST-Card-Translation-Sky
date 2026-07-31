@@ -2116,11 +2116,25 @@ export function restoreTermSpacing(original: string, translation: string): strin
   // Thuật ngữ = cụm chữ/số Latin. Cho phép . _ - ở GIỮA (v1.2, drop-shadow) nhưng không ở hai đầu.
   const TERM = /[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*/g;
 
+  /**
+   * (bug 172) THUẬT NGỮ PHẢI CÓ HÌNH DẠNG KỸ THUẬT — nếu không thì bản vá này phá nhiều hơn sửa.
+   * Bản 166-1 nhận MỌI cụm ASCII làm thuật ngữ. Nhưng chữ tiếng Việt có dấu KHÔNG phải ASCII, nên
+   * trong "Môi" cụm ASCII duy nhất là "M" (ô = U+00F4). Chỉ cần một chữ cái đơn lẻ dính CJK ở bất
+   * kỳ đâu trong nguyên bản (vd "M码") là "M" vào danh sách, rồi MỌI chữ "M" trong bản dịch theo sau
+   * bởi chữ cái đều bị chèn dấu cách → "M ôi đỏ", "M ô tả", "Theo D õi". Một ký tự lạc làm hỏng cả
+   * bản dịch — đúng bug 172 user báo.
+   * Nay chỉ nhận: dài ≥2 VÀ (viết HOA hết — acronym như NSFW/SFW/WAR — HOẶC có chữ số như 10px).
+   * Cụm chữ thường/hoa-thường lẫn ("Trang", "getVar") bị loại: chúng vừa có thể là từ tiếng Việt
+   * bình thường, vừa là chỗ mà tách ra sẽ làm hỏng code.
+   */
+  const isTechTerm = (t: string) => t.length >= 2 && (!/[a-z]/.test(t) || /\d/.test(t));
+
   const needLeft = new Set<string>();
   const needRight = new Set<string>();
   let m: RegExpExecArray | null;
   while ((m = TERM.exec(original)) !== null) {
     const term = m[0];
+    if (!isTechTerm(term)) continue;
     // Placeholder của khâu mask (__CODE_BLOCK_0__, __URL_1__): chèn dấu cách vào là unmask hết
     // khớp, mất luôn cả khối code. Nhận diện bằng dấu gạch dưới sát hai bên.
     if (original[m.index - 1] === '_' || original[m.index + term.length] === '_') continue;
@@ -2159,10 +2173,15 @@ export function restoreTermSpacing(original: string, translation: string): strin
 
       const prev = translation[start - 1] ?? '';
       const next = translation[end] ?? '';
-      // Chèn TRƯỚC: khi đang dính vào chữ/số, hoặc dính ngay sau dấu kết câu (ca ".SFW").
-      const addLeft = needLeft.has(term) && (/[\p{L}\p{N}]/u.test(prev) || /[.,;:!?]/.test(prev));
-      // Chèn SAU: chỉ khi dính vào chữ/số. Dính vào dấu câu (`NSFW,`) là đúng chính tả, đừng tách.
-      const addRight = needRight.has(term) && /[\p{L}\p{N}]/u.test(next);
+      // (bug 172) ĐÒI RANH GIỚI HOA-THƯỜNG THẬT SỰ.
+      // Dấu hiệu của "acronym bị dính chữ" là chữ THƯỜNG áp sát acronym viết hoa (…tạiNSFWchi…).
+      // Nếu ký tự kề cũng VIẾT HOA thì đây là một từ liền mạch, không phải chỗ dính — ví dụ "AI" nằm
+      // giữa "CHAIN": chèn cách vào đó là xẻ đôi một từ có thật.
+      const lower = (c: string) => /\p{Ll}/u.test(c);
+      // Chèn TRƯỚC: dính vào chữ THƯỜNG, hoặc dính ngay sau dấu kết câu (ca ".SFW").
+      const addLeft = needLeft.has(term) && (lower(prev) || /[.,;:!?]/.test(prev));
+      // Chèn SAU: chỉ khi dính vào chữ THƯỜNG. Dính dấu câu (`NSFW,`) là đúng chính tả, đừng tách.
+      const addRight = needRight.has(term) && lower(next);
       if (!addLeft && !addRight) continue;
       if (addLeft) edits.push({ at: start, text: ' ' });
       if (addRight) edits.push({ at: end, text: ' ' });

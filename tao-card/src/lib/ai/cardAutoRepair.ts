@@ -20,6 +20,7 @@ import type { CharacterCardV3, LorebookEntry, MVUZODSchema } from '../../types';
 import { collectSchemaVarNames } from '../mvuzod/gameUiValidator';
 import { stripInitVarPreamble } from '../mvuzod/simulateCard';
 import { quoteAmbiguousInitVarScalars } from '../mvuzod/yamlScalars';
+import { reorderRenderScriptsLast, type StRegexScript } from '../regexEngine/stRegexChain';
 import { generateWorldbookEntries, applyGeneratedEntries, findExistingMVUZODEntries } from '../export/worldbookGenerator';
 import { OPENING_FORM_ANCHOR, STATUS_BAR_ANCHOR } from '../mvuzod/regexAnchors';
 import { checkMvuOutputContract } from '../mvuzod/mvuReference';
@@ -310,6 +311,33 @@ export function rewriteInjectPromptCalls(code: string): { code: string; count: n
   }
   out += src.slice(i);
   return { code: out, count };
+}
+
+/**
+ * (bug 175) THỨ TỰ REGEX: bộ RENDER giao diện phải đứng CUỐI nhóm hiển thị.
+ *
+ * SillyTavern áp mọi regex hiển thị lần lượt lên CÙNG một chuỗi (regex/engine.js:346 — global
+ * trước, scoped sau, mỗi nhóm theo thứ tự mảng). Thẻ user ở bug 175 xếp `[Render] Opening Form`
+ * TRƯỚC `[Style] Tô màu Tài nguyên`, nên regex tô màu chạy sau và khớp "115 VP" nằm trong một
+ * chuỗi JSON TRONG JavaScript, bọc nó bằng <span style="color: …"> — dấu nháy kép cắt đứt chuỗi
+ * JS ⇒ cả khối <script type="module"> không biên dịch được ⇒ không handler nào lên window ⇒ 47
+ * nút chết sạch trong khi giao diện vẫn hiện đẹp.
+ *
+ * Đẩy script render xuống cuối là chữa tận gốc: lúc đó mọi regex trang trí (của thẻ LẪN các
+ * regex toàn cục của user) đều đã chạy xong trên văn xuôi trước khi khối HTML+JS được chèn vào.
+ */
+export function repairRenderScriptOrder(scripts: RegexScript[]): { scripts: RegexScript[]; fixed: RepairAction[] } {
+  const res = reorderRenderScriptsLast(scripts as unknown as StRegexScript[]);
+  if (res.moved.length === 0) return { scripts, fixed: [] };
+  return {
+    scripts: res.scripts as unknown as RegexScript[],
+    fixed: [{
+      id: 'regex-render-order',
+      description: `Đưa ${res.moved.length} bộ render giao diện xuống CUỐI danh sách regex (${res.moved.join(', ')}) — `
+        + 'SillyTavern chạy regex theo đúng thứ tự mảng, để chúng đứng trước thì regex trang trí phía sau sẽ ăn vào '
+        + 'chính đoạn JavaScript vừa chèn, làm vỡ cú pháp và mọi nút trong giao diện bấm không phản ứng',
+    }],
+  };
 }
 
 /**
@@ -853,6 +881,10 @@ export function autoRepairCard(
 
     const clashRes = repairAnchorClash(scripts);
     scripts = clashRes.scripts; fixed.push(...clashRes.fixed);
+
+    // (bug 175) Bộ render phải đứng CUỐI, kẻo regex trang trí phía sau ăn vào code nó vừa chèn.
+    const orderRes = repairRenderScriptOrder(scripts);
+    scripts = orderRes.scripts; fixed.push(...orderRes.fixed);
 
     if (schema) {
       const varRes = repairDataVarCasing(scripts, collectSchemaVarNames(schema));

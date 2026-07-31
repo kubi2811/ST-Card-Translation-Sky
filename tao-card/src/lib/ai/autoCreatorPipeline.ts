@@ -1183,6 +1183,10 @@ export async function buildFinalCheckReport(
           .filter(en => /<UpdateVariable>/i.test(String(en.content || '')))
           .map(en => String(en.content || '')),
         readerSources: readers,
+        // (bug 175) Đưa CẢ danh sách regex + lời mở đầu vào để chạy đúng chuỗi regex như
+        // SillyTavern — chỗ mà regex trang trí ăn vào code của bộ render, làm liệt mọi nút.
+        regexScripts: regexScripts as never,
+        firstMes: String(data.first_mes || ''),
       });
       const errs = sim.issues.filter(i => i.level === 'error');
       const warns = sim.issues.filter(i => i.level === 'warning');

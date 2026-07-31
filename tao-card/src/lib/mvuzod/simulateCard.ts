@@ -23,6 +23,7 @@ import { normalizeMVUZODSchema } from './normalizeSchema';
 import type { MVUZODSchema, MVUZODField } from '../../types/mvuzod.types';
 import { checkHtmlScripts } from '../scriptSafety';
 import { parseYamlScalar } from './yamlScalars';
+import { findChainBreaks, type StRegexScript } from '../regexEngine/stRegexChain';
 
 export interface SimIssue {
   level: 'error' | 'warning' | 'info';
@@ -51,6 +52,9 @@ export interface SimulateResult {
 export interface SimulateInput {
   /** Nội dung entry [initvar] (JSON hoặc YAML, có thể còn cả nhãn [initvar]). */
   initVarContent: string;
+  /** (bug 175) Toàn bộ regex_scripts + lời mở đầu — để chạy CẢ CHUỖI regex như SillyTavern. */
+  regexScripts?: StRegexScript[];
+  firstMes?: string;
   schema?: MVUZODSchema | null;
   /** Nội dung các entry [mvu_update] — lấy khối <UpdateVariable> bên trong. */
   updateContents?: string[];
@@ -577,6 +581,26 @@ export function simulateCard(input: SimulateInput): SimulateResult {
     if (dupIds.length) {
       issues.push({ level: 'error', code: 'sim-ui-duplicate-id',
         message: `"${src.name}" có ${dupIds.length} id HTML bị TRÙNG — getElementById chỉ thấy phần tử đầu tiên nên form đọc/ghi sai ô: ${dupIds.slice(0, 5).join(' · ')}` });
+    }
+  }
+
+  /* ─── 5. (bug 175) CHẠY CẢ CHUỖI REGEX HIỂN THỊ NHƯ SILLYTAVERN ───
+     ST áp mọi regex hiển thị LẦN LƯỢT lên CÙNG một chuỗi tin nhắn. Script render chèn 40KB
+     HTML+JS vào trước, rồi regex trang trí đứng sau ăn thẳng vào code đó. Ca thật (bug 175):
+     `[Style] Tô màu Tài nguyên` khớp "115 VP" nằm trong một chuỗi JSON TRONG JS và bọc nó bằng
+     <span style="color: …"> — dấu nháy kép cắt đứt chuỗi ⇒ cả <script type="module"> không biên
+     dịch được ⇒ 47 nút của Opening Form chết sạch, mà HTML/CSS vẫn render đẹp nên không ai ngờ.
+     Regex Lab không bao giờ thấy vì nó thử TỪNG script một trên tin nhắn gốc. */
+  if (input.regexScripts?.length && input.firstMes) {
+    for (const b of findChainBreaks(input.firstMes, input.regexScripts)) {
+      issues.push({
+        level: 'error', code: 'sim-regex-chain-breaks-ui',
+        message: `Regex "${b.culprit}" chạy SAU "${b.victim}" và ăn vào chính đoạn JavaScript mà "${b.victim}" vừa chèn `
+          + `— khối <script> hết biên dịch được (${b.detail}), nên MỌI nút trong giao diện đó bấm không phản ứng, `
+          + 'trong khi HTML/CSS vẫn hiện đẹp nên nhìn ngoài không thấy gì bất thường. '
+          + `Sửa: đưa "${b.victim}" xuống CUỐI danh sách regex (SillyTavern chạy theo đúng thứ tự mảng), `
+          + 'để regex trang trí chỉ còn ăn vào văn xuôi.',
+      });
     }
   }
 

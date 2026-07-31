@@ -50,6 +50,53 @@ interface AttachedFile {
   part?: { index: number; total: number };
 }
 
+/**
+ * (bugNeedFix/179) ĐỌC ẢNH TỪ CLIPBOARD.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * User: "mỗi lần cần gửi hình/ảnh chụp màn hình phải mất công dán vào file hình rồi gửi hình đó
+ * lên cho Trợ lý rất mất thời gian. Nên thêm tính năng có thể Ctrl+V hình vào hộp thoại văn bản."
+ *
+ * Ảnh chụp màn hình (PrintScreen / Win+Shift+S) đã nằm sẵn trong clipboard dưới dạng FILE ảnh,
+ * nên chỉ cần đọc `clipboardData.items` rồi đi đúng đường mà nút đính kèm vẫn đi (DataURL →
+ * attachedFiles). Phần gửi ảnh cho model không phải sửa một dòng nào.
+ *
+ * Đặt ở MODULE SCOPE vì hai tab (Chat và MVU) là hai component khác nhau trong cùng file — để
+ * trong một component thì cái kia không với tới.
+ *
+ * Trả null khi clipboard KHÔNG có ảnh, và chỉ khi đó mới để trình duyệt dán như thường: dán chữ
+ * phải hoạt động y hệt trước.
+ */
+async function readImagesFromClipboard(
+  e: React.ClipboardEvent,
+  readErrMsg: string,
+): Promise<AttachedFile[] | null> {
+  const imageFiles = Array.from(e.clipboardData?.items ?? [])
+    .filter(it => it.kind === 'file' && it.type.startsWith('image/'))
+    .map(it => it.getAsFile())
+    .filter((f): f is File => !!f);
+  if (imageFiles.length === 0) return null;
+
+  e.preventDefault();   // có ảnh thì đừng để trình duyệt dán thêm đường dẫn/HTML vào ô chữ
+  const stamp = new Date().toISOString().slice(11, 19).replace(/:/g, '-');
+  const loaded: AttachedFile[] = [];
+  for (let i = 0; i < imageFiles.length; i++) {
+    const file = imageFiles[i];
+    const content = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(new Error(readErrMsg));
+      reader.readAsDataURL(file);
+    });
+    // Ảnh dán từ clipboard thường không có tên, hoặc tên nào cũng là "image.png" — đặt tên kèm
+    // giờ để dán nhiều tấm liên tiếp còn phân biệt được, không thì các chip trông y hệt nhau.
+    const name = file.name && file.name !== 'image.png'
+      ? file.name
+      : `anh-dan-${stamp}${imageFiles.length > 1 ? `-${i + 1}` : ''}.png`;
+    loaded.push({ name, size: file.size, content, isImage: true });
+  }
+  return loaded;
+}
+
 /** Pending script awaiting user confirmation */
 interface PendingScript {
   code: string;
@@ -2326,6 +2373,32 @@ ${ragBlock ? `\n${ragBlock}` : ''}${directiveBlock}`;
     }
   };
 
+  /**
+   * (bugNeedFix/179) DÁN ẢNH THẲNG BẰNG Ctrl+V.
+   * ─────────────────────────────────────────────────────────────────────────────
+   * User: "mỗi lần cần gửi hình/ảnh chụp màn hình phải mất công dán vào file hình rồi gửi hình đó
+   * lên cho Trợ lý rất mất thời gian. Nên thêm tính năng có thể Ctrl+V hình vào hộp thoại văn bản."
+   *
+   * Ảnh chụp màn hình (PrintScreen / Win+Shift+S) nằm sẵn trong clipboard dưới dạng file ảnh —
+   * `ClipboardEvent.clipboardData.files` đọc thẳng được, đi đúng đường mà nút đính kèm vẫn đi
+   * (đọc DataURL rồi push vào attachedFiles) nên phần gửi ảnh cho model không phải sửa gì.
+   *
+   * Chỉ chặn hành vi dán mặc định KHI THẬT SỰ có ảnh — dán chữ vẫn phải hoạt động y như cũ.
+   */
+  const handlePasteInChat = async (e: React.ClipboardEvent) => {
+    try {
+      const loaded = await readImagesFromClipboard(e, ui.acImgReadErr);
+      if (!loaded) return;
+      setAttachedFiles(prev => [...prev, ...loaded]);
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: `📋 Đã dán ${loaded.length} ảnh từ clipboard: ${loaded.map(f => f.name).join(', ')}. Cứ hỏi bình thường, tôi nhìn được ảnh.`,
+      }]);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : ui.acAttachErr);
+    }
+  };
+
   const handleRemoveFile = (idx: number) => {
     setAttachedFiles(prev => prev.filter((_, i) => i !== idx));
   };
@@ -2461,6 +2534,8 @@ ${ragBlock ? `\n${ragBlock}` : ''}${directiveBlock}`;
                     value={inputValue}
                     onChange={e => setInputValue(e.target.value)}
                     onKeyDown={handleKeyDown}
+                    /* (bugNeedFix/179) Ctrl+V ảnh thẳng vào đây, khỏi lưu ra file rồi đính kèm. */
+                    onPaste={handlePasteInChat}
                     placeholder={ui.acInputPh}
                     className="companion-textarea custom-scrollbar"
                     disabled={isGenerating}
@@ -3512,6 +3587,17 @@ function MvuZodTab() {
       setMvuUploadError(err.message || ui.acAttachErr);
     } finally {
       if (mvuFileInputRef.current) mvuFileInputRef.current.value = '';
+    }
+  };
+
+  /** (bugNeedFix/179) Dán ảnh vào ô chat của tab MVU — dùng chung bộ đọc clipboard ở trên. */
+  const handlePasteInMvuChat = async (e: React.ClipboardEvent) => {
+    try {
+      const loaded = await readImagesFromClipboard(e, ui.acImgReadErr);
+      if (!loaded) return;
+      setMvuAttachedFiles(prev => [...prev, ...loaded]);
+    } catch (err) {
+      setMvuUploadError(err instanceof Error ? err.message : ui.acAttachErr);
     }
   };
 
@@ -5127,6 +5213,8 @@ QUY TẮC BẮT BUỘC:
               value={chatInput}
               onChange={e => setChatInput(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') handleSendMvuChatMessage(); }}
+              /* (bugNeedFix/179) Tab MVU cũng dán ảnh được — cùng một đường đọc clipboard. */
+              onPaste={handlePasteInMvuChat}
               style={{
                 flex: 1,
                 background: 'var(--bg-default)',

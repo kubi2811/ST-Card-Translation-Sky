@@ -405,6 +405,49 @@ export function enclosingQuoteAtEnd(lineBefore: string): "'" | '"' | null {
  *      văn xuôi Trung dùng 。fullwidth nên không đụng.
  * Mọi lần xuất hiện của đúng những tên này (ngoài string literal) đều được giữ nguyên.
  */
+/**
+ * (bugNeedFix/178) Cặp ngoặc có thể lọt vào token CJK vì chúng nằm trong bảng JOINER.
+ * Chỉ liệt kê ngoặc THẬT SỰ có cặp; dấu câu đơn (、。，…) không có khái niệm cân bằng nên không tính.
+ * Nháy cong ‘’ “” cũng là cặp và cũng nằm trong bảng joiner, nên phải canh luôn.
+ */
+const BRACKET_PAIRS: Record<string, string> = {
+  '〈': '〉', // 〈〉
+  '《': '》', // 《》
+  '「': '」', // 「」
+  '『': '』', // 『』
+  '【': '】', // 【】
+  '〔': '〕', // 〔〕
+  '〖': '〗', // 〖〗
+  '〘': '〙', // 〘〙
+  '〚': '〛', // 〚〛
+  '（': '）', // （）
+  '‘': '’', // ‘’
+  '“': '”', // “”
+};
+const CLOSERS = new Set(Object.values(BRACKET_PAIRS));
+
+/**
+ * Vị trí ngoặc LẺ ĐẦU TIÊN trong một token — tức chỗ token bắt đầu mang nửa cặp ngoặc mà nửa kia
+ * nằm ngoài. Trả -1 nếu token cân ngoặc (trường hợp thường gặp nhất, thoát sớm không tốn gì).
+ *
+ * Hai loại lẻ đều phải bắt:
+ *   • dấu ĐÓNG mà trong token không có dấu mở tương ứng → `消费监测】支出` (ca của user);
+ *   • dấu MỞ mà tới cuối token vẫn chưa đóng      → `支出（金额` .
+ */
+export function firstUnbalancedBracket(token: string): number {
+  const stack: Array<{ ch: string; at: number }> = [];
+  for (let i = 0; i < token.length; i++) {
+    const ch = token[i];
+    if (BRACKET_PAIRS[ch]) { stack.push({ ch, at: i }); continue; }
+    if (CLOSERS.has(ch)) {
+      const top = stack[stack.length - 1];
+      if (top && BRACKET_PAIRS[top.ch] === ch) stack.pop();
+      else return i;               // đóng mồ côi
+    }
+  }
+  return stack.length ? stack[0].at : -1;   // mở mà không đóng
+}
+
 export function collectProtectedJsIdentifiers(text: string): Set<string> {
   const out = new Set<string>();
   const src = String(text || '');
@@ -501,6 +544,30 @@ export function extractCJKTokens(
           // rồi bị dịch/bọc lần nữa — đúng cái sinh ra `f['Với']user Quan Hệ`.
           regex.lastIndex = mEnd;
         }
+      }
+    }
+
+    // ═══ (bugNeedFix/178) KHÔNG ĐỂ NGOẶC LẺ LỌT VÀO TOKEN ═══
+    // User: "dịch còn ăn bớt" — 【消费监测】 dịch ra 【】 RỖNG ở rất nhiều chỗ.
+    // Gốc: ngoặc toàn giác là JOINER (để câu dài không bị băm ở mỗi dấu câu), nhưng token bắt buộc
+    // BẮT ĐẦU bằng chữ Hán — nên `【` nằm ngoài token còn `】` bị nuốt vào. Với
+    //     - 模板: 【消费监测】支出{金额}元
+    // token gửi đi dịch là `消费监测】支出`: một cụm có dấu đóng ngoặc mồ côi. Model thấy chuỗi
+    // hỏng nên trả về mỗi phần sau ngoặc, phần nhãn rơi mất; ghép lại thành `【` + `】 chi tiêu`
+    // = `【】 chi tiêu` — đúng y bằng chứng user gửi, kể cả dấu cách thừa.
+    // Xử: token phải CÂN NGOẶC. Gặp dấu đóng không có dấu mở tương ứng bên trong thì cắt token
+    // ngay trước nó; phần còn lại được regex quét tiếp thành token riêng. Kết quả: `消费监测` và
+    // `支出` đi dịch riêng, cả hai đều là cụm sạch, và hai dấu ngoặc không bao giờ rời nội dung.
+    {
+      const cut = firstUnbalancedBracket(mText);
+      if (cut > 0) {
+        mEnd = mStart + cut;
+        mText = text.slice(mStart, mEnd);
+        regex.lastIndex = mEnd;   // quét tiếp TỪ dấu ngoặc, không bỏ sót phần sau
+      } else if (cut === 0) {
+        // Cả token mở đầu bằng ngoặc lẻ (không thể xảy ra vì token bắt đầu bằng CJK) — bỏ cho chắc.
+        regex.lastIndex = mStart + 1;
+        continue;
       }
     }
 

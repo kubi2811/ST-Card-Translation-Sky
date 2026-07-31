@@ -1059,7 +1059,7 @@ const ui: UiKeys = {
   acClearChat: '清空聊天',
   acTabChat: '聊天',
   acTabMvu: '生成 MVU-Zod',
-  acInputPh: '在这里输入问题或需求……（Shift + Enter 换行）',
+  acInputPh: '在这里输入问题或需求……（Shift + Enter 换行 · Ctrl+V 直接粘贴截图）',
   acSend: '发送',
   acContinueTitle: '基于之前的上下文继续',
   acContinue: '继续',

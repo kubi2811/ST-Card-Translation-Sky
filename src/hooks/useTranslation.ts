@@ -3673,10 +3673,26 @@ export function useTranslation() {
   }, [startTranslation]);
 
   /** Retry all fields that are in 'error' status */
-  const retryAllErrors = useCallback(async () => {
-    const errorFields = useStore.getState().fields.filter(f => f.status === 'error');
+  /**
+   * (bugNeedFix/176 + 177) DỊCH LẠI HÀNG LOẠT — ĐA LUỒNG.
+   * ─────────────────────────────────────────────────────────────────────────────
+   * Trước đây đây là `retryAllErrors`, chạy `for` tuần tự: field sau chỉ bắt đầu khi field
+   * trước có phản hồi. Ảnh user gửi ở bug 177 chụp đúng cảnh đó — "Luồng đang chạy: 1" trong
+   * khi cùng thẻ lúc dịch đạt cao điểm 11 luồng, log chạy nối đuôi từng dòng Re-translated.
+   *
+   * Nay nhận DANH SÁCH FIELD bất kỳ và chạy qua pool, nên dùng chung được cho hai việc:
+   *   • thử lại các mục LỖI (nút cũ), và
+   *   • dịch lại các mục BỎ QUA (bug 176 — user có 93 mục bị bỏ qua, cần dịch lại một phát).
+   * Trần RPM không đổi: mỗi call vẫn qua pickLane/waitForRateLimit của apiClient như cũ.
+   */
+  const retranslateFieldsBulk = useCallback(async (
+    targets: TranslationField[],
+    opts?: { verb?: string },
+  ) => {
+    const errorFields = targets;
+    const verb = opts?.verb ?? 'dịch lại';
     if (errorFields.length === 0) {
-      store.addToast('info', 'No error fields to retry');
+      store.addToast('info', `Không có mục nào để ${verb}.`);
       return;
     }
 
@@ -3693,21 +3709,30 @@ export function useTranslation() {
     runningRef.current = true;
     store.setPhase('translating');
 
-    store.addLog('info', `♻️ Đang dịch lại ${errorFields.length} mục bị lỗi…`);
+    store.addLog('info', `♻️ Đang ${verb} ${errorFields.length} mục bằng ${computePoolConcurrency(store.proxy)} luồng…`);
     let successCount = 0;
     let failCount = 0;
 
-    for (const field of errorFields) {
+    let bulkCancelled = false;
+    await runWorkerPool({
+      total: errorFields.length,
+      concurrency: computePoolConcurrency(store.proxy),
+      shouldStop: () => bulkCancelled || !!checkAbort(),
+      waitIfPaused: () => waitForPause(),
+      runOne: async (bulkIdx: number) => {
+      const field = errorFields[bulkIdx];
       // Check abort/pause between fields
       if (checkAbort()) {
         runningRef.current = false;
         store.setPhase(pauseRef.current ? 'paused' : 'cancelled');
+        bulkCancelled = true;
         store.addLog('warning', 'Retry cancelled by user');
         return;
       }
       if (await waitForPause()) {
         runningRef.current = false;
         store.setPhase(pauseRef.current ? 'paused' : 'cancelled');
+        bulkCancelled = true;
         return;
       }
 
@@ -3812,6 +3837,7 @@ export function useTranslation() {
             fieldAbortMap.current.delete(field.path);
             runningRef.current = false;
             store.setPhase(pauseRef.current ? 'paused' : 'cancelled');
+            bulkCancelled = true;
             store.addLog('warning', 'Retry cancelled by user');
             return;
           }
@@ -3864,7 +3890,8 @@ export function useTranslation() {
           break;
         }
       }
-    }
+      },
+    });
 
     runningRef.current = false;
     // Only set phase to done/cancelled if still in 'translating' (not already cancelled by user)
@@ -3873,8 +3900,30 @@ export function useTranslation() {
     }
     store.saveTranslationCache();
     store.addLog('info', `Thử lại xong: ${successCount} đã sửa, ${failCount} vẫn lỗi`);
-    store.addToast(failCount === 0 ? 'success' : 'error', `Retry: ${successCount}/${errorFields.length} fixed`);
+    store.addToast(failCount === 0 ? 'success' : 'error', `${verb}: ${successCount}/${errorFields.length} xong`);
   }, [store]);
+
+  /** Thử lại mọi mục LỖI — giữ nguyên nút cũ, nay chạy đa luồng qua engine chung. */
+  const retryAllErrors = useCallback(async () => {
+    const errs = useStore.getState().fields.filter(f => f.status === 'error');
+    await retranslateFieldsBulk(errs, { verb: 'thử lại' });
+  }, [retranslateFieldsBulk]);
+
+  /**
+   * (bugNeedFix/176) Dịch lại mọi mục BỊ BỎ QUA.
+   * User: "thêm cơ chế kiểu lọc cho mình xem bao nhiêu mục bỏ qua để chọn tất cả cái bỏ qua
+   * dịch lại nhanh, lỗi bỏ qua gần trăm trường dịch."
+   * `skipped` là do bộ dò ngôn ngữ tưởng nội dung đã ở ngôn ngữ đích (hoặc sai ngôn ngữ nguồn)
+   * nên tự bỏ. Nó đoán sai hàng loạt là chuyện có thật — nên phải có đường ép dịch lại.
+   * Ở đây CỐ Ý bỏ qua bộ dò đó: user đã nhìn tận mắt và bảo dịch thì cứ dịch.
+   */
+  const retranslateSkipped = useCallback(async (paths?: string[]) => {
+    const all = useStore.getState().fields;
+    const picked = paths?.length
+      ? all.filter(f => paths.includes(f.path))
+      : all.filter(f => f.status === 'skipped');
+    await retranslateFieldsBulk(picked, { verb: 'dịch lại mục bỏ qua' });
+  }, [retranslateFieldsBulk]);
 
   /** Apply Mod instructions to a single field by path (standalone mode — no language change) */
   const applyModToField = useCallback(async (path: string) => {
@@ -5037,6 +5086,8 @@ export function useTranslation() {
     cancelAllFieldTranslations,
     retranslateField,
     retryAllErrors,
+    retranslateFieldsBulk,
+    retranslateSkipped,
     getExportCard,
     applyModToField,
     applyModToAllFields,

@@ -1078,7 +1078,7 @@ const ui: UiKeys = {
   acClearChat: 'Xóa chat',
   acTabChat: 'Trò Chuyện',
   acTabMvu: 'Tạo MVU-Zod',
-  acInputPh: 'Nhập câu hỏi hoặc yêu cầu tại đây... (Shift + Enter để xuống dòng)',
+  acInputPh: 'Nhập câu hỏi hoặc yêu cầu tại đây... (Shift + Enter để xuống dòng · Ctrl+V dán thẳng ảnh chụp màn hình)',
   acSend: 'Gửi',
   acContinueTitle: 'Tiếp tục xử lý ngữ cảnh cũ',
   acContinue: 'Tiếp tục',

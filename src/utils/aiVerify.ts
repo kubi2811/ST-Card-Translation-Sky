@@ -2,7 +2,29 @@ import { compareInitvarKeys } from './initvarKeyCollision';
 import { countCjkText } from './cjk';
 import { fandomNameOverride } from './fandomMode';
 import type { CharacterCard, ProxySettings, TranslationField } from '../types/card';
-import { detectStructuralTruncation, callProvider } from './apiClient';
+import { detectStructuralTruncation, callProvider, computePoolConcurrency } from './apiClient';
+// (bugNeedFix/177) Dò lỗi phải chạy đa luồng như mọi luồng khác — xem ghi chú ở verifyConcurrency().
+import { runWorkerPool } from './runWorkerPool';
+
+/**
+ * (bugNeedFix/177) SỐ LUỒNG CHO CÁC LƯỢT "DÒ LỖI"/"SỬA LỖI" BẰNG AI.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * User: "phần dò lỗi cho phép chạy nhiều luồng chứ không phải từng luồng 1, hiện nay dò lỗi chỉ
+ * chạy 1 luồng, cậu áp dụng hệ thống đa luồng cũ của chúng ta đi." Ảnh chụp cho thấy "Luồng đang
+ * chạy: 1" trong khi cùng thẻ đó lúc dịch đạt cao điểm 11 luồng.
+ *
+ * Đúng: bốn vòng dò/sửa trong file này đều là `for` tuần tự `await` từng call một. Chúng KHÔNG bị
+ * chặn bởi RPM — chỉ là chưa bao giờ được nối vào pool. Hạ tầng đã có sẵn và đã chạy tốt ở luồng
+ * dịch: computePoolConcurrency (ngân sách RPM thật của mọi provider/key) + runWorkerPool (worker
+ * xong là kéo việc kế, không đợi cả đợt).
+ *
+ * Trần RPM KHÔNG tăng: mỗi call vẫn đi qua pickLane/waitForRateLimitModel của apiClient như cũ.
+ * Ở đây chỉ bỏ phần NGỒI CHỜ vô ích giữa các call.
+ */
+function verifyConcurrency(config: ProxySettings): number {
+  // Tối thiểu 2 để kể cả cấu hình 1 key cũng không lùi về đúng hành vi tuần tự cũ.
+  return Math.max(2, computePoolConcurrency(config));
+}
 
 /* ═══ Template-literal interpolation check (sửa bug #2) ═══
  * Trích các block `${...}` CÂN BẰNG NGOẶC (chịu được lồng nhau `${ `${x}` }`), rồi CHỈ soi những
@@ -1839,8 +1861,19 @@ export async function aiFixIssues(
     roundsCompleted = round;
     let done = 0;
 
-    for (const [path, { issueList, field: origField }] of fieldsToFix) {
-      if (signal?.aborted) break;
+    // (bugNeedFix/177) TRONG MỘT VÒNG, các field được sửa SONG SONG.
+    // Các VÒNG vẫn tuần tự — vòng sau lấy bản sửa tốt nhất của vòng trước làm điểm xuất phát.
+    // Nhưng trong cùng một vòng thì mỗi field độc lập hoàn toàn: không field nào đọc kết quả của
+    // field khác, mỗi cái ghi vào bestFixes theo `path` riêng. Nên song song ở đây không đổi kết
+    // quả, chỉ bỏ phần ngồi chờ giữa các call.
+    const roundJobs = [...fieldsToFix.entries()];
+    await runWorkerPool({
+      total: roundJobs.length,
+      concurrency: verifyConcurrency(config),
+      shouldStop: () => !!signal?.aborted,
+      runOne: async (ji: number) => {
+      const [path, { issueList, field: origField }] = roundJobs[ji];
+      if (signal?.aborted) return;
       onProgress?.(done, fieldsToFix.size, origField.label, round);
 
       // Use the best fix so far as the current translation for subsequent rounds
@@ -1856,7 +1889,7 @@ export async function aiFixIssues(
         if (recheck.length === 0) {
           // Already clean — skip
           done++;
-          continue;
+          return;
         }
         currentIssueList = recheck;
       }
@@ -1887,7 +1920,7 @@ export async function aiFixIssues(
           });
           done++;
           onProgress?.(done, fieldsToFix.size, origField.label, round);
-          continue;
+          return;
         }
         // Update baseline for LLM and validation
         workingField.translated = preFixedTranslation;
@@ -1926,7 +1959,7 @@ export async function aiFixIssues(
           });
           done++;
           onProgress?.(done, fieldsToFix.size, origField.label, round);
-          continue;
+          return;
         }
 
         // Multi-layer validation — pass initialIssueCount for tolerance
@@ -1942,7 +1975,7 @@ export async function aiFixIssues(
           });
           done++;
           onProgress?.(done, fieldsToFix.size, origField.label, round);
-          continue;
+          return;
         }
 
         // Count issues after fix
@@ -1975,7 +2008,8 @@ export async function aiFixIssues(
 
       done++;
       onProgress?.(done, fieldsToFix.size, origField.label, round);
-    }
+      },
+    });
 
     // Remove fields that are now clean (0 issues)
     const nextFieldsToFix = new Map<string, { issueList: (FieldIssue | VerifyIssue)[]; field: TranslationField }>();
@@ -2254,19 +2288,20 @@ export async function aiVerifyCardStreaming(
   const modelLimit = getModelContentLimit(config.model);
   const sectionLimit = Math.floor(modelLimit / 2.5); // leave room for system prompt + response
 
-  // Step 3: Iterate through each section
-  for (let i = 0; i < sections.length; i++) {
-    if (signal?.aborted) {
-      onProgress({
-        currentSection: '', sectionIndex: i, totalSections: sections.length,
-        issuesSoFar: allIssues, status: 'cancelled', sectionResults,
-      });
-      break;
-    }
-
+  // ═══ (bugNeedFix/177) Step 3: quét CÁC SECTION SONG SONG ═══
+  // Trước đây là `for` tuần tự: section sau chỉ bắt đầu khi section trước có phản hồi, nên thẻ
+  // 20 section = 20 lượt chờ nối đuôi trong khi 10 luồng khác ngồi không.
+  // Các section ĐỘC LẬP với nhau (mỗi cái một cặp gốc/dịch riêng, không dùng kết quả của nhau),
+  // nên chạy song song không đổi kết quả — chỉ đổi thời gian.
+  let doneCount = 0;
+  await runWorkerPool({
+    total: sections.length,
+    concurrency: verifyConcurrency(config),
+    shouldStop: () => !!signal?.aborted,
+    runOne: async (i: number) => {
     const section = sections[i];
     onProgress({
-      currentSection: section.name, sectionIndex: i, totalSections: sections.length,
+      currentSection: section.name, sectionIndex: doneCount, totalSections: sections.length,
       issuesSoFar: allIssues, status: 'scanning', sectionResults,
     });
 
@@ -2340,8 +2375,9 @@ Check ALL functional elements are preserved or correctly renamed per MVU Diction
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (signal?.aborted) break;
-      
+      // Bị huỷ thì đừng ghi "AI verification failed" — đó là user bấm dừng, không phải lỗi thẻ.
+      if (signal?.aborted) return;
+
       sectionResults[i] = { name: section.name, status: 'error', issueCount: 0 };
       allIssues.push({
         id: crypto.randomUUID(),
@@ -2353,11 +2389,21 @@ Check ALL functional elements are preserved or correctly renamed per MVU Diction
       });
     }
 
-    // Report progress after each section
+    // Tiến độ đếm theo SỐ VIỆC ĐÃ XONG, không theo chỉ số vòng lặp: chạy song song thì thứ tự
+    // hoàn thành không còn trùng thứ tự phát việc, lấy `i` làm tiến độ sẽ nhảy giật lùi.
+    doneCount++;
     onProgress({
-      currentSection: section.name, sectionIndex: i + 1, totalSections: sections.length,
-      issuesSoFar: allIssues, status: i === sections.length - 1 ? 'done' : 'scanning',
+      currentSection: section.name, sectionIndex: doneCount, totalSections: sections.length,
+      issuesSoFar: allIssues, status: doneCount >= sections.length ? 'done' : 'scanning',
       sectionResults,
+    });
+    },
+  });
+
+  if (signal?.aborted) {
+    onProgress({
+      currentSection: '', sectionIndex: doneCount, totalSections: sections.length,
+      issuesSoFar: allIssues, status: 'cancelled', sectionResults,
     });
   }
 
@@ -2441,20 +2487,18 @@ export async function aiRegexScan(
     ? `\n\nMVU Variable Dictionary:\n${Object.entries(mvuDictionary).map(([k, v]) => `  "${k}" → "${v}"`).join('\n')}`
     : '';
 
-  for (let si = 0; si < scripts.length; si++) {
-    if (signal?.aborted) {
-      onProgress({
-        currentRegex: '', regexIndex: si, totalRegex: scripts.length,
-        issuesSoFar: allIssues, status: 'cancelled', regexResults,
-      });
-      break;
-    }
-
+  // (bugNeedFix/177) Quét TỪNG SCRIPT REGEX SONG SONG — mỗi script là một cặp gốc/dịch độc lập.
+  let scanDone = 0;
+  await runWorkerPool({
+    total: scripts.length,
+    concurrency: verifyConcurrency(config),
+    shouldStop: () => !!signal?.aborted,
+    runOne: async (si: number) => {
     const [idx, script] = scripts[si];
     const label = `regex[${idx}] ${script.name}`;
 
     onProgress({
-      currentRegex: label, regexIndex: si, totalRegex: scripts.length,
+      currentRegex: label, regexIndex: scanDone, totalRegex: scripts.length,
       issuesSoFar: allIssues, status: 'scanning', regexResults,
     });
 
@@ -2530,7 +2574,7 @@ ${transContent}`;
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (signal?.aborted) break;
+      if (signal?.aborted) return;
       regexResults[si] = { name: label, status: 'error', issueCount: 0 };
       allIssues.push({
         id: crypto.randomUUID(), severity: 'info', location: label,
@@ -2539,10 +2583,19 @@ ${transContent}`;
       });
     }
 
+    scanDone++;
     onProgress({
-      currentRegex: label, regexIndex: si + 1, totalRegex: scripts.length,
-      issuesSoFar: allIssues, status: si === scripts.length - 1 ? 'done' : 'scanning',
+      currentRegex: label, regexIndex: scanDone, totalRegex: scripts.length,
+      issuesSoFar: allIssues, status: scanDone >= scripts.length ? 'done' : 'scanning',
       regexResults,
+    });
+    },
+  });
+
+  if (signal?.aborted) {
+    onProgress({
+      currentRegex: '', regexIndex: scanDone, totalRegex: scripts.length,
+      issuesSoFar: allIssues, status: 'cancelled', regexResults,
     });
   }
 
@@ -2587,12 +2640,17 @@ export async function aiRegexFixAll(
   const mvuTerms = Object.entries(mvuDictionary).map(([k, v]) => `"${k}" → "${v}"`).slice(0, 50);
   const mvuBlock = mvuTerms.length > 0 ? `\nMVU DICTIONARY:\n${mvuTerms.join('\n')}` : '';
 
-  for (let fi = 0; fi < fieldPaths.length; fi++) {
-    if (signal?.aborted) break;
-
+  // (bugNeedFix/177) SỬA TỪNG FIELD REGEX SONG SONG. Mỗi field được sửa độc lập (kết quả ghi vào
+  // `results`, không field nào đọc bản sửa của field khác), nên song song không đổi kết quả.
+  let fixDone = 0;
+  await runWorkerPool({
+    total: fieldPaths.length,
+    concurrency: verifyConcurrency(config),
+    shouldStop: () => !!signal?.aborted,
+    runOne: async (fi: number) => {
     const fieldPath = fieldPaths[fi];
     const field = fields.find(f => f.path === fieldPath);
-    if (!field?.translated) continue;
+    if (!field?.translated) { fixDone++; return; }
 
     const idxMatch = fieldPath.match(/regex_scripts\[(\d+)\]/);
     const regexIdx = idxMatch ? parseInt(idxMatch[1]) : -1;
@@ -2602,14 +2660,17 @@ export async function aiRegexFixAll(
     const nameField = fields.find(nf => nf.path === `data.extensions.regex_scripts[${regexIdx}].scriptName`);
     const scriptName = nameField?.translated || nameField?.original || `regex[${regexIdx}]`;
 
-    onProgress({ fixing: `${scriptName} → ${fieldType}`, done: fi, total: fieldPaths.length, results });
+    onProgress({ fixing: `${scriptName} → ${fieldType}`, done: fixDone, total: fieldPaths.length, results });
+    // Chạy song song nên MỌI nhánh thoát đều phải báo tiến độ — đặt trong finally. Và mọi
+    // `continue` cũ đổi thành `return`: đây giờ là callback của worker, không còn vòng lặp.
+    try {
 
     // Collect relevant issues for this field
     const fieldIssues = issues.filter(i => {
       const loc = i.location || '';
       return loc.includes(`regex[${regexIdx}]`);
     });
-    if (fieldIssues.length === 0) continue;
+    if (fieldIssues.length === 0) return;
 
     const issueDesc = fieldIssues.map((i, idx) =>
       `${idx + 1}. [${i.severity}] ${i.description}${i.original ? ` | original: "${i.original}"` : ''}${i.suggestion ? ` | fix: ${i.suggestion}` : ''}`
@@ -2663,7 +2724,7 @@ Return the corrected ${fieldType} (fix listed issues, change NOTHING else):`;
           success: false, before: field.translated, after: '',
           reason: `Empty or too short (${fixed?.length || 0} chars)`,
         });
-        continue;
+        return;
       }
 
       // ─── Strict validation for regex fields ───
@@ -2678,7 +2739,7 @@ Return the corrected ${fieldType} (fix listed issues, change NOTHING else):`;
           success: false, before: current, after: fixed,
           reason: `Length ratio ${(lengthRatio * 100).toFixed(0)}% — too different`,
         });
-        continue;
+        return;
       }
 
       // 2. Bracket balance must match original
@@ -2698,7 +2759,7 @@ Return the corrected ${fieldType} (fix listed issues, change NOTHING else):`;
           success: false, before: current, after: fixed,
           reason: 'Fix broke bracket balance',
         });
-        continue;
+        return;
       }
 
       // 3. findRegex must remain a valid regex literal
@@ -2709,7 +2770,7 @@ Return the corrected ${fieldType} (fix listed issues, change NOTHING else):`;
             success: false, before: current, after: fixed,
             reason: 'Fix broke regex literal format (/pattern/flags)',
           });
-          continue;
+          return;
         }
       }
 
@@ -2730,7 +2791,7 @@ Return the corrected ${fieldType} (fix listed issues, change NOTHING else):`;
           success: false, before: current, after: fixed,
           reason: 'Fix lost standard macros',
         });
-        continue;
+        return;
       }
 
       // 5. Verify fix actually reduces issues
@@ -2747,7 +2808,7 @@ Return the corrected ${fieldType} (fix listed issues, change NOTHING else):`;
           success: false, before: current, after: fixed,
           reason: `Fix worsened issues: ${scoreBefore} → ${scoreAfter}`,
         });
-        continue;
+        return;
       }
 
       // ✅ All validation passed
@@ -2757,7 +2818,8 @@ Return the corrected ${fieldType} (fix listed issues, change NOTHING else):`;
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (signal?.aborted) break;
+      // Huỷ giữa chừng thì không ghi "sửa thất bại" — đó là user bấm dừng, không phải regex hỏng.
+      if (signal?.aborted) return;
       results.push({
         regexIndex: regexIdx, scriptName, fieldPath, fieldType,
         success: false, before: field.translated, after: '',
@@ -2765,8 +2827,12 @@ Return the corrected ${fieldType} (fix listed issues, change NOTHING else):`;
       });
     }
 
-    onProgress({ fixing: `${scriptName} → ${fieldType}`, done: fi + 1, total: fieldPaths.length, results });
-  }
+    } finally {
+      fixDone++;
+      onProgress({ fixing: `${scriptName} → ${fieldType}`, done: fixDone, total: fieldPaths.length, results });
+    }
+    },
+  });
 
   return results;
 }

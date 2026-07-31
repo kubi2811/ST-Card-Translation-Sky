@@ -21,6 +21,7 @@ export type HealthKind =
   | 'source_script_broken' // script GỐC đã vỡ SẴN (card import bị lỗi từ trước, không phải do dịch)
   | 'residual_cjk_code'  // chữ Hán còn trong field code (json_patch/initvar/controller)
   | 'residual_cjk_text'  // chữ Hán còn sót trong văn bản đã "done" (có thể là tên riêng cố ý)
+  | 'empty_bracket'      // (bugNeedFix/178) 【nhãn】 ở gốc thành 【】 RỖNG ở bản dịch — mất chữ
   | 'glossary_unapplied';// thuật ngữ trong Từ điển vẫn còn NGUYÊN GỐC trong bản dịch (dịch chưa nhất quán)
 
 export interface HealthIssue {
@@ -41,6 +42,8 @@ export interface HealthReport {
     brokenScripts: number;
     residualCjkCode: number;
     residualCjkText: number;
+    /** (bugNeedFix/178) Số chỗ 【…】 bị rỗng ruột sau dịch. */
+    emptyBrackets: number;
     glossaryUnapplied: number;
   };
   issues: HealthIssue[];
@@ -58,9 +61,38 @@ const CODE_ENTRY_TYPES = new Set(['json_patch', 'initvar', 'controller']);
  *  `glossary` (tuỳ chọn) = Từ điển thuật ngữ đang dùng → kiểm bản dịch có ÁP đúng chưa
  *  (tên riêng/thuật ngữ còn nguyên gốc = dịch thiếu nhất quán). Tái dùng chính glossary mà
  *  engine đã bơm vào mỗi call — không dựng từ điển mới. */
+/**
+ * (bugNeedFix/178) Đếm những cặp ngoặc BỊ RỖNG RUỘT sau khi dịch.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Chỉ báo khi CHẮC CHẮN là mất chữ: bản dịch có cặp ngoặc rỗng (hoặc chỉ còn khoảng trắng) mà
+ * bản GỐC lại KHÔNG hề có cặp rỗng nào cùng loại. Gốc vốn đã có 【】 rỗng (một số thẻ dùng làm ô
+ * điền) thì im lặng — không phải lỗi do dịch, báo là báo oan.
+ */
+export function countEmptiedBrackets(original: string, translated: string): string[] {
+  if (!original || !translated) return [];
+  const PAIRS: Array<[string, string]> = [
+    ['【', '】'], ['（', '）'], ['《', '》'], ['「', '」'], ['『', '』'], ['〔', '〕'], ['〖', '〗'],
+  ];
+  const out: string[] = [];
+  for (const [open, close] of PAIRS) {
+    const emptyRe = new RegExp(`${open}\\s*${close}`, 'g');
+    const inOrig = (original.match(emptyRe) ?? []).length;
+    const inTrans = (translated.match(emptyRe) ?? []).length;
+    if (inTrans <= inOrig) continue;   // không nhiều hơn gốc ⇒ không phải do dịch
+
+    // Cặp có RUỘT ở bản gốc — lấy vài cái đầu làm bằng chứng cho user đối chiếu.
+    const filledRe = new RegExp(`${open}\\s*([^${open}${close}\\r\\n]{1,40}?)\\s*${close}`, 'g');
+    const labels = [...original.matchAll(filledRe)].map(m => `${open}${m[1]}${close}`);
+    const n = inTrans - inOrig;
+    for (let i = 0; i < n; i++) out.push(labels[i] ?? `${open}…${close}`);
+  }
+  return out;
+}
+
 export function scanFieldsHealth(fields: TranslationField[], glossary?: GlossaryEntry[]): HealthReport {
   const issues: HealthIssue[] = [];
   let brokenScripts = 0, residualCjkCode = 0, residualCjkText = 0, glossaryUnapplied = 0;
+  let emptyBrackets = 0;
   let done = 0, error = 0, pending = 0, skipped = 0;
 
   // Chỉ giữ mục từ điển hợp lệ (source≠target, đủ dài để không báo nhầm 1 ký tự).
@@ -149,6 +181,22 @@ export function scanFieldsHealth(fields: TranslationField[], glossary?: Glossary
           detail: `Thuật ngữ chưa được áp bản dịch: ${list}${missed.length > 6 ? '…' : ''}` });
       }
     }
+
+    // ═══ (bugNeedFix/178) NGOẶC RỖNG RUỘT SAU DỊCH ═══
+    // Gốc có 【消费监测】 mà bản dịch ra 【】 là MẤT CHỮ, nhưng không lỗi cú pháp nào báo, không
+    // chữ Hán nào sót — mọi bộ kiểm hiện có đều thấy sạch. User chỉ phát hiện khi đọc bằng mắt,
+    // và lần đó là "rất nhiều chỗ" trong một entry.
+    // Nguyên nhân gốc đã chặn ở surgical.ts (token không còn mang ngoặc lẻ), nhưng model vẫn có
+    // thể tự làm rơi chữ vì lý do khác, nên phải có người canh.
+    const emptied = countEmptiedBrackets(f.original || '', f.translated || '');
+    if (emptied.length > 0) {
+      emptyBrackets += emptied.length;
+      issues.push({
+        severity: 'error', kind: 'empty_bracket', label: f.label, path: f.path,
+        detail: `${emptied.length} chỗ ngoặc bị rỗng ruột sau dịch (bản gốc có chữ bên trong): `
+          + `${emptied.slice(0, 4).join(', ')}${emptied.length > 4 ? '…' : ''} — nội dung trong ngoặc đã mất, cần dịch lại hoặc bấm Sửa bằng AI.`,
+      });
+    }
   }
 
   // Sắp xếp: error → warning → info (để danh sách hiển thị cái quan trọng trước).
@@ -156,7 +204,7 @@ export function scanFieldsHealth(fields: TranslationField[], glossary?: Glossary
   issues.sort((a, b) => rank[a.severity] - rank[b.severity]);
 
   return {
-    counts: { total: fields.length, done, error, pending, skipped, brokenScripts, residualCjkCode, residualCjkText, glossaryUnapplied },
+    counts: { total: fields.length, done, error, pending, skipped, brokenScripts, residualCjkCode, residualCjkText, emptyBrackets, glossaryUnapplied },
     issues,
     ok: !issues.some((i) => i.severity === 'error'),
   };

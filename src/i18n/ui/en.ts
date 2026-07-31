@@ -1064,7 +1064,7 @@ const ui = {
   acClearChat: 'Clear chat',
   acTabChat: 'Chat',
   acTabMvu: 'Build MVU-Zod',
-  acInputPh: 'Type your question or request here... (Shift + Enter for a new line)',
+  acInputPh: 'Type your question or request here... (Shift + Enter for a new line · Ctrl+V to paste a screenshot)',
   acSend: 'Send',
   acContinueTitle: 'Continue with the previous context',
   acContinue: 'Continue',

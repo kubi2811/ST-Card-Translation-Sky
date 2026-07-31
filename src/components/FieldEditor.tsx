@@ -7,7 +7,7 @@ import { fmt } from '../i18n';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { FieldGroup, TranslationField, TranslationStatus } from '../types/card';
 import { auditChunks, joinChunks, summarizeAudit } from '../utils/chunkAudit';
-import { RotateCcw, AlertTriangle, CheckCircle2, Clock, ArrowLeftRight, BarChart3, Ban, Search, X, Copy, Check, Eye, Wand2, Zap, Brain, Download } from 'lucide-react';
+import { RotateCcw, AlertTriangle, CheckCircle2, Clock, ArrowLeftRight, BarChart3, Ban, Search, X, Copy, Check, Eye, Wand2, Zap, Brain, Download, Filter } from 'lucide-react';
 import { countCjkText } from '../utils/cjk';
 import { TranslatedTextarea } from './TranslatedTextarea';
 
@@ -59,6 +59,25 @@ function CopyButton({ text }: { text: string }) {
 const TAB_IDS: (FieldGroup | 'all')[] = [
   'all', 'core', 'messages', 'lorebook', 'lorebook_keys', 'system', 'creator', 'depth_prompt', 'tavern_helper',
 ];
+
+/**
+ * (bugNeedFix/176) Dải lọc theo TRẠNG THÁI.
+ * "Bỏ qua" (skipped) khác "Không dịch" (ignored): skipped là do bộ dò ngôn ngữ TỰ quyết — nó tưởng
+ * nội dung đã ở ngôn ngữ đích nên bỏ; ignored là do chính user tắt. Chỉ cái đầu mới là thứ user
+ * cần soi lại hàng loạt, nên hai cái phải là hai chip riêng, không gộp.
+ */
+const STATUS_CHIPS: Array<{ id: 'all' | TranslationStatus; label: string; icon: string; color: string; hint: string }> = [
+  { id: 'all', label: 'Tất cả', icon: '☰', color: 'var(--accent-primary)', hint: 'Bỏ lọc trạng thái.' },
+  { id: 'skipped', label: 'Bỏ qua', icon: '⏭', color: 'var(--accent-warning)',
+    hint: 'Máy tự bỏ vì tưởng nội dung đã ở ngôn ngữ đích (hoặc sai ngôn ngữ nguồn). Đoán sai thì dịch lại hàng loạt ở đây.' },
+  { id: 'error', label: 'Lỗi', icon: '✖', color: 'var(--accent-danger)', hint: 'Dịch thất bại.' },
+  { id: 'pending', label: 'Chưa dịch', icon: '⏳', color: 'var(--text-muted)', hint: 'Chưa tới lượt hoặc chưa chạy.' },
+  { id: 'done', label: 'Đã dịch', icon: '✓', color: 'var(--accent-success)', hint: 'Đã dịch xong.' },
+  { id: 'ignored', label: 'Không dịch', icon: '🚫', color: 'var(--text-muted)', hint: 'Do BẠN tắt — máy không đụng tới.' },
+];
+
+/** Trạng thái nào thì việc "dịch lại cả tập" mới có nghĩa. */
+const RETRANSLATABLE = new Set<string>(['skipped', 'error', 'pending']);
 
 function useTabLabels() {
   const t = useT();
@@ -1794,13 +1813,22 @@ export default function FieldEditor() {
   const translationConfig = useStore((s) => s.translationConfig);
   const jumpToFieldPath = useStore((s) => s.jumpToFieldPath);
   const setJumpToFieldPath = useStore((s) => s.setJumpToFieldPath);
-  const { retranslateField, applyModToField } = useTranslation();
+  const { retranslateField, applyModToField, retranslateSkipped } = useTranslation();
   const t = useT();
   const modEnabled = Boolean(translationConfig.enableModMode && translationConfig.modInstructions?.trim());
   const tabLabels = useTabLabels();
   const [activeTab, setActiveTab] = useState<FieldGroup | 'all'>('all');
   const [viewMode, setViewMode] = useState<'table' | 'diff'>('table');
   const [searchQuery, setSearchQuery] = useState('');
+  /**
+   * (bugNeedFix/176) LỌC THEO TRẠNG THÁI.
+   * User: "thêm cơ chế kiểu lọc cho mình xem bao nhiêu mục bỏ qua để chọn tất cả cái bỏ qua dịch
+   * lại nhanh, lỗi bỏ qua gần trăm trường dịch."
+   * Trước đây bảng chỉ lọc theo NHÓM (Core/Lorebook/Keys…) và ô tìm chữ. Muốn biết có bao nhiêu
+   * mục bị bỏ qua thì phải cuộn hết 1104 dòng đếm bằng mắt, và muốn dịch lại thì phải bấm từng cái.
+   */
+  const [statusFilter, setStatusFilter] = useState<'all' | TranslationStatus>('all');
+  const [bulkRunning, setBulkRunning] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [jumpPath, setJumpPath] = useState<string | null>(null);
 
@@ -1826,9 +1854,10 @@ export default function FieldEditor() {
     return () => clearTimeout(id);
   }, [jumpPath]);
 
-  const filteredFields = useMemo(() => {
-    let result = activeTab === 'all' 
-      ? fields.filter((f) => f.group !== 'regex') 
+  /** Tập field sau khi lọc theo TAB + Ô TÌM (chưa lọc trạng thái) — dùng để đếm chip. */
+  const scopedFields = useMemo(() => {
+    let result = activeTab === 'all'
+      ? fields.filter((f) => f.group !== 'regex')
       : fields.filter((f) => f.group === activeTab);
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -1842,6 +1871,18 @@ export default function FieldEditor() {
     }
     return result;
   }, [fields, activeTab, searchQuery]);
+
+  // (bugNeedFix/176) Đếm theo TRẠNG THÁI trong phạm vi đang xem.
+  const statusCounts = useMemo(() => {
+    const c: Record<string, number> = { all: scopedFields.length, skipped: 0, error: 0, pending: 0, done: 0, ignored: 0 };
+    for (const f of scopedFields) if (f.status in c) c[f.status]++;
+    return c;
+  }, [scopedFields]);
+
+  const filteredFields = useMemo(
+    () => (statusFilter === 'all' ? scopedFields : scopedFields.filter(f => f.status === statusFilter)),
+    [scopedFields, statusFilter],
+  );
 
   // Count fields per tab
   const tabCounts = useMemo(() => {
@@ -1985,6 +2026,58 @@ export default function FieldEditor() {
             );
           })}
         </div>
+
+        {/* ═══ (bugNeedFix/176) LỌC THEO TRẠNG THÁI + DỊCH LẠI HÀNG LOẠT ═══
+            Chip nào có 0 mục thì ẩn, để dải này không phình ra vô ích. Bấm chip đang chọn lần nữa
+            là bỏ lọc. Khi lọc đang ra một tập ĐANG CẦN DỊCH LẠI (bỏ qua / lỗi / chưa dịch) thì
+            hiện luôn nút dịch lại CẢ TẬP ĐANG THẤY — nghĩa là nó tôn trọng cả tab và ô tìm, muốn
+            dịch lại riêng Lorebook thì chọn tab Lorebook rồi bấm. */}
+        {statusCounts.all > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap', padding: '8px 0 2px' }}>
+            <Filter size={12} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+            {STATUS_CHIPS.map(chip => {
+              const n = statusCounts[chip.id] || 0;
+              if (chip.id !== 'all' && n === 0) return null;
+              const active = statusFilter === chip.id;
+              return (
+                <button
+                  key={chip.id}
+                  onClick={() => setStatusFilter(active && chip.id !== 'all' ? 'all' : chip.id)}
+                  title={chip.hint}
+                  style={{
+                    fontSize: '0.68rem', fontWeight: active ? 700 : 500, padding: '2px 8px',
+                    borderRadius: '999px', cursor: 'pointer',
+                    border: `1px solid ${active ? chip.color : 'var(--border-subtle)'}`,
+                    background: active ? `${chip.color}22` : 'transparent',
+                    color: active ? chip.color : 'var(--text-secondary)',
+                  }}
+                >{chip.icon} {chip.label} {n}</button>
+              );
+            })}
+
+            {RETRANSLATABLE.has(statusFilter) && filteredFields.length > 0 && (
+              <button
+                disabled={bulkRunning || phase === 'translating'}
+                onClick={async () => {
+                  const paths = filteredFields.map(f => f.path);
+                  setBulkRunning(true);
+                  try { await retranslateSkipped(paths); } finally { setBulkRunning(false); }
+                }}
+                title={`Dịch lại toàn bộ ${filteredFields.length} mục đang hiện — chạy đa luồng theo đúng ngân sách RPM của bạn.\n`
+                  + 'Với mục "Bỏ qua": bộ dò ngôn ngữ đã tưởng nhầm là không cần dịch, lần này sẽ ép dịch.'}
+                style={{
+                  marginLeft: 'auto', fontSize: '0.7rem', fontWeight: 600, padding: '3px 10px',
+                  borderRadius: 'var(--radius-sm)', cursor: bulkRunning ? 'wait' : 'pointer',
+                  border: '1px solid var(--accent-primary)', background: 'rgba(124,106,240,0.12)',
+                  color: 'var(--accent-primary)',
+                  opacity: bulkRunning || phase === 'translating' ? 0.5 : 1,
+                }}
+              >
+                {bulkRunning ? '⏳ Đang dịch lại…' : `🔁 Dịch lại tất cả ${filteredFields.length} mục đang hiện`}
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Virtualized Diff View */}

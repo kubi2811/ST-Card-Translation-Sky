@@ -6,6 +6,7 @@ import { useT, useUi } from '../i18n/useLocale';
 import { fmt } from '../i18n';
 import { aiVerifyCard, aiVerifyCardStreaming, aiRegexScan, aiRegexFixAll, quickVerify, extractSystemReferences, verifyFields, applyAutoFix, aiFixIssues, aiFixSingleIssue } from '../utils/aiVerify';
 import type { VerifyIssue, VerifyResult, FieldIssue, AIFixReport, StreamingVerifyProgress, RegexScanProgress, RegexFixResult } from '../utils/aiVerify';
+import { computePoolConcurrency } from '../utils/apiClient';
 import { crossCheckHtmlVsInitvar, validateFindRegexVsNarrative } from '../utils/mvuValidator';
 import { checkSchemaVsUpdateFormat, type SchemaFormatSyncResult } from '../utils/mvuSchemaFormatSync';
 import type { CrossCheckResult, FindRegexValidationResult } from '../utils/mvuValidator';
@@ -79,6 +80,9 @@ export default function VerifyPanel() {
   // (bug 156) Schema zod ↔ hướng dẫn định dạng biến — lệch nhau thì không lỗi nào báo.
   const [schemaFmtResult, setSchemaFmtResult] = useState<SchemaFormatSyncResult | null>(null);
   const [findRegexResult, setFindRegexResult] = useState<FindRegexValidationResult | null>(null);
+  // (bugNeedFix/177) Số luồng dò lỗi sẽ dùng — cùng công thức với engine (verifyConcurrency),
+  // hiện ra cho user thấy thay vì phải đoán qua bảng luồng của phần dịch.
+  const verifyLanes = useMemo(() => Math.max(2, computePoolConcurrency(proxy)), [proxy]);
   // Streaming verify state
   const [streamingProgress, setStreamingProgress] = useState<StreamingVerifyProgress | null>(null);
   const aiVerifyAbortRef = useRef<AbortController | null>(null);
@@ -564,7 +568,15 @@ export default function VerifyPanel() {
             <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-primary)' }}>
               {t.verifyScanning.replace('{section}', streamingProgress.currentSection || '...')}
             </span>
-            <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginLeft: 'auto' }}>
+            {/* (bugNeedFix/177) Số luồng đang chạy — user báo "dò lỗi chỉ chạy 1 luồng" và chỉ
+                biết được qua bảng luồng của phần dịch. Hiện thẳng ở đây để thấy nó đã dùng đúng
+                ngân sách RPM như luồng dịch, không phải nối đuôi từng call. */}
+            <span
+              title={`Dò lỗi chạy song song ${verifyLanes} luồng — bằng ngân sách RPM của toàn bộ key/provider bạn đã cấu hình.`}
+              style={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--accent-primary)',
+                border: '1px solid rgba(124,106,240,0.35)', borderRadius: '3px', padding: '0 5px', marginLeft: 'auto' }}
+            >⚡ {verifyLanes} luồng</span>
+            <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
               {t.verifySectionProgress
                 .replace('{current}', String(streamingProgress.sectionIndex))
                 .replace('{total}', String(streamingProgress.totalSections))}

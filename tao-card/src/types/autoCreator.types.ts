@@ -222,6 +222,35 @@ export interface CardTuning {
   confirmed: boolean;
   /** Chữ ký ý tưởng lúc sinh schema — ý tưởng đổi thì tuning cũ không còn giá trị. */
   ideaSig: string;
+  /** (bugNeedFix/186) Phong cách đã HỌC từ card mẫu — persist để F5 xong theme học vẫn dựng lại được. */
+  styleProfile?: StyleProfile;
+}
+
+/** (bugNeedFix/186) Phạm vi học phong cách từ card mẫu. */
+export type StyleLearnScope = 'all' | 'opening_form' | 'status_bar' | 'visual';
+
+/**
+ * (bugNeedFix/186) STYLE PROFILE — kết quả AI phân tích card mẫu, ĐÃ qua chốt máy.
+ * Phần thị giác (colors/extras/font) áp vào ThemePreset đè lên khung máy dựng từ schema Bước 1;
+ * phần ghi chú (openingForm/statusBar/decorations/ux) là chỉ dẫn HÌNH THỨC cho các bước AI —
+ * đã được máy lọc sạch mọi tên biến của card mẫu (luật "không nhại biến").
+ */
+export interface StyleProfile {
+  name: string;
+  description: string;
+  icon: string;
+  scope: StyleLearnScope;
+  fontImport: string;
+  fontFamily: string;
+  headingFont: string;
+  /** Chỉ các khoá trong AI_THEME_COLOR_KEYS, giá trị đã qua COLOR_RE. */
+  colors: Record<string, string>;
+  /** Chỉ các khoá --radius-/--shadow-/--transition-/--bar-/--fs-. */
+  extras: Record<string, string>;
+  openingForm: string[];
+  statusBar: string[];
+  decorations: string[];
+  ux: string[];
 }
 
 /**

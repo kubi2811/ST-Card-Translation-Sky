@@ -22,6 +22,14 @@ import {
   AI_THEME_ID, type AiThemeSpec,
 } from '../../lib/ai/themeDesigner';
 import { normalizeMVUZODSchema } from '../../lib/mvuzod/normalizeSchema';
+// (bugNeedFix/186) 🎨 Học Phong Cách Giao Diện từ card mẫu.
+import {
+  STYLE_SCOPES, extractUiFromCard, collectSampleVarNames, buildStyleLearnMessages,
+  parseStyleProfile, sanitizeStyleProfile, styleProfileToThemeSpec,
+  styleNotesToRulesBlock, applyStyleRules,
+} from '../../lib/ai/styleLearner';
+import { extractCharaFromPng } from '../../lib/converters/pngMetadata';
+import type { StyleLearnScope } from '../../types/autoCreator.types';
 import type { MVUZODField, MVUZODSchema } from '../../types/mvuzod.types';
 import { SchemaVarTable, type VarRow } from './SchemaVarTable';
 import { withPreviewData, toIframeHtml } from '../../lib/ai/schemaPreviewData';
@@ -103,7 +111,7 @@ export function PreviewTunerModal({ open, onClose, onStart }: Props) {
   const store = useAutoCreatorStore();
   const settings = useSettingsStore();
   const tuning = store.config.tuning;
-  const [busy, setBusy] = useState<'analyze' | 'copilot' | 'theme' | null>(null);
+  const [busy, setBusy] = useState<'analyze' | 'copilot' | 'theme' | 'style' | null>(null);
   const [copilotAsk, setCopilotAsk] = useState('');
   // (bugNeedFix/145) Bước 2 — "Nhờ AI tạo giao diện". Giữ NGUYÊN spec đang có để lượt chỉnh sau
   // gửi lại cho AI, nhờ đó nó sửa đúng chỗ bị chê thay vì vẽ lại từ đầu.
@@ -216,6 +224,99 @@ export function PreviewTunerModal({ open, onClose, onStart }: Props) {
       setBusy(null);
     }
   }, [activeProfile, themeAsk, aiSpec, settings.generationParams, ideaHeadline]);
+
+  // ═══ (bugNeedFix/186) 🎨 HỌC PHONG CÁCH GIAO DIỆN từ card mẫu ═══
+  // Quy trình đúng như user tả: Import → Phân tích → Style Profile → đối chiếu schema Bước 1 →
+  // Tạo giao diện → Preview → Apply. "Đối chiếu schema" ở đây là CƠ CHẾ chứ không phải lời dặn:
+  // khung Opening Form/Status Bar do buildProgrammaticRegex dựng TỪ CHÍNH schema Bước 1, phong
+  // cách học được chỉ là lớp ThemePreset đè lên — nên không thể copy biến/lore/logic của mẫu,
+  // và MVU/EJS/Regex/Lorebook giữ nguyên tương thích.
+  const [styleScope, setStyleScope] = useState<StyleLearnScope>('all');
+  const [styleRemoved, setStyleRemoved] = useState<string[]>([]);
+  const [styleOpen, setStyleOpen] = useState(false);
+  const styleProfile = tuning?.styleProfile;
+
+  // F5 xong THEME_PRESETS (in-memory) mất theme đã học — dựng lại từ profile persist trong tuning.
+  useEffect(() => {
+    if (open && styleProfile && (Object.keys(styleProfile.colors).length > 0 || styleProfile.fontFamily)) {
+      registerAiTheme(styleProfileToThemeSpec(styleProfile));
+      setAiNonce(n => n + 1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const handleLearnStyle = useCallback(async (file: File) => {
+    const toast = useToastStore.getState();
+    const t = useAutoCreatorStore.getState().config.tuning;
+    if (!activeProfile) { toast.warning('Chưa cấu hình API.'); return; }
+    if (!t) { toast.warning('Chạy Bước 1 (quét schema) trước — phong cách học được sẽ áp lên chính schema đó.'); return; }
+    setBusy('style');
+    setStyleRemoved([]);
+    try {
+      // 1. Đọc card mẫu (.json hoặc .png nhúng chara)
+      let cardObj: Record<string, unknown>;
+      if (/\.png$/i.test(file.name)) {
+        const raw = extractCharaFromPng(await file.arrayBuffer());
+        if (!raw) throw new Error('PNG này không nhúng dữ liệu card.');
+        cardObj = JSON.parse(raw) as Record<string, unknown>;
+      } else {
+        cardObj = JSON.parse(await file.text()) as Record<string, unknown>;
+      }
+
+      // 2. Bóc phần GIAO DIỆN + danh sách tên biến của mẫu (danh sách cấm)
+      const { chunks, truncated } = extractUiFromCard(cardObj);
+      if (chunks.length === 0) {
+        throw new Error('Không tìm thấy giao diện nào trong card mẫu (không có regex HTML/status bar/opening form).');
+      }
+      const sampleVars = collectSampleVarNames(chunks.map(c => c.text).join('\n'));
+
+      // 3. AI phân tích phong cách — kèm nhãn schema HIỆN TẠI để ghi chú áp được cho bộ dữ liệu này
+      const schemaLabels = t.schema.fields.map(f => f.label || f.path);
+      const res = await callAI({
+        profile: activeProfile,
+        params: { ...settings.generationParams, temperature: 0.4, useJsonResponseFormat: true, stream: false },
+        messages: buildStyleLearnMessages(chunks, styleScope, schemaLabels),
+        label: 'Học phong cách giao diện',
+      });
+
+      // 4. Parse + CHỐT MÁY: lọc mọi ghi chú còn dính tên biến của mẫu
+      const parsed = parseStyleProfile(res.text, styleScope);
+      const { profile, removed } = sanitizeStyleProfile(parsed, sampleVars);
+      setStyleRemoved(removed);
+
+      // 5. Áp: phần thị giác → theme đè lên khung dựng từ schema Bước 1 (preview đổi ngay);
+      //    phần ghi chú → khối đánh dấu trong "Yêu cầu/Quy tắc cho AI" (thay khối cũ, không chồng).
+      const hasVisual = Object.keys(profile.colors).length >= 4 || !!profile.fontFamily;
+      if (hasVisual) {
+        const spec = styleProfileToThemeSpec(profile);
+        registerAiTheme(spec);
+        setAiSpec(spec);
+        setAiWarn(checkThemeReadability(spec));
+        setAiNonce(n => n + 1);
+      }
+      useAutoCreatorStore.getState().setTuning({
+        styleProfile: profile,
+        ...(hasVisual ? { themeId: AI_THEME_ID } : {}),
+        confirmed: false,
+      });
+      const block = styleNotesToRulesBlock(profile);
+      if (block) {
+        const cur = useAutoCreatorStore.getState().config.userRules;
+        useAutoCreatorStore.getState().setUserRules(applyStyleRules(cur, block));
+      }
+
+      const noteCount = profile.openingForm.length + profile.statusBar.length + profile.decorations.length + profile.ux.length;
+      toast.success(
+        `Đã học "${profile.name}": ${Object.keys(profile.colors).length} màu, ${Object.keys(profile.extras).length} hiệu ứng, ${noteCount} ghi chú bố cục`
+        + (removed.length ? ` (máy đã lọc ${removed.length} ghi chú dính biến của mẫu)` : '')
+        + (truncated ? ' — card mẫu lớn, chỉ phân tích phần giao diện đậm nhất' : '') + '.',
+      );
+    } catch (e) {
+      toast.error(`Không học được phong cách: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(null);
+    }
+  }, [activeProfile, styleScope, settings.generationParams]);
 
   /** Bước 1 — gọi AI sinh schema từ ý tưởng (chỉ khi chưa có hoặc ý tưởng đã đổi). */
   const handleAnalyze = useCallback(async () => {
@@ -368,6 +469,84 @@ export function PreviewTunerModal({ open, onClose, onStart }: Props) {
               <p className="text-[10px] text-muted-foreground -mt-1">
                 Giao diện dưới đây bấm/kéo được như trong SillyTavern — thử luôn các nút trước khi chốt.
               </p>
+
+              {/* ═══ (bugNeedFix/186) 🎨 HỌC PHONG CÁCH GIAO DIỆN ═══
+                  Import card mẫu → AI rút Style Profile → máy LỌC mọi ghi chú dính tên biến của
+                  mẫu → phần thị giác thành theme đè lên khung dựng từ schema Bước 1 (nên không
+                  thể copy biến/lore của mẫu), phần bố cục/UX vào "Yêu cầu/Quy tắc cho AI". */}
+              <div className="rounded-xl border border-pink-500/30 bg-pink-500/5 p-2.5 space-y-2">
+                <button type="button" onClick={() => setStyleOpen(v => !v)}
+                  className="w-full flex items-center gap-1.5 text-[11px] font-semibold text-pink-300">
+                  <span>🎨</span>
+                  Học Phong Cách Giao Diện{styleProfile ? `: ${styleProfile.icon} ${styleProfile.name}` : ' (từ card mẫu)'}
+                  <span className="ml-auto text-[9px] font-normal text-muted-foreground">{styleOpen ? 'thu gọn ▲' : 'mở ▼'}</span>
+                </button>
+
+                {styleOpen && (
+                  <>
+                    <p className="text-[10px] text-muted-foreground leading-relaxed">
+                      Đưa một card có giao diện đẹp — AI phân tích Opening Form, Status Bar, màu sắc,
+                      animation và cách tổ chức thông tin của nó, rồi áp phong cách đó lên
+                      <b> chính schema bạn chốt ở Bước 1</b>. Card mẫu chỉ là nguồn tham khảo hình thức:
+                      khung giao diện vẫn dựng từ schema của bạn nên <b>không thể</b> copy biến, lore hay
+                      logic của mẫu — ghi chú nào lỡ dính tên biến mẫu sẽ bị máy lọc và báo lại.
+                    </p>
+
+                    {/* Phạm vi học — đúng 4 lựa chọn user yêu cầu */}
+                    <div className="grid grid-cols-2 gap-1">
+                      {STYLE_SCOPES.map(s => (
+                        <label key={s.id} title={s.desc}
+                          className={`flex items-center gap-1.5 px-2 py-1 rounded-lg border text-[10px] cursor-pointer ${styleScope === s.id ? 'border-pink-500/50 bg-pink-500/10 text-pink-200' : 'border-border text-muted-foreground hover:bg-muted/40'}`}>
+                          <input type="radio" name="styleScope" className="accent-pink-500"
+                            checked={styleScope === s.id} onChange={() => setStyleScope(s.id)} />
+                          {s.label}
+                        </label>
+                      ))}
+                    </div>
+
+                    <label className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-dashed text-[11px] cursor-pointer transition-colors ${busy === 'style' ? 'border-border text-muted-foreground' : 'border-pink-500/40 text-pink-300 hover:bg-pink-500/10'}`}>
+                      {busy === 'style'
+                        ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Đang phân tích phong cách card mẫu…</>
+                        : <>📥 {styleProfile ? 'Học card mẫu khác' : 'Chọn card mẫu (.json / .png)'} — 1 call AI</>}
+                      <input type="file" accept=".json,.png" className="hidden" disabled={busy !== null}
+                        onChange={e => { const f = e.target.files?.[0]; if (f) void handleLearnStyle(f); e.currentTarget.value = ''; }} />
+                    </label>
+
+                    {styleProfile && (
+                      <div className="rounded-lg bg-background/60 border border-border p-2 space-y-1">
+                        <p className="text-[10px] text-foreground">
+                          {styleProfile.icon} <b>{styleProfile.name}</b> — {styleProfile.description}
+                        </p>
+                        <p className="text-[9px] text-muted-foreground">
+                          Đã áp: {Object.keys(styleProfile.colors).length} màu + {Object.keys(styleProfile.extras).length} hiệu ứng
+                          (bo góc/đổ bóng/animation) vào giao diện xem trước bên dưới
+                          {(styleProfile.openingForm.length + styleProfile.statusBar.length + styleProfile.decorations.length + styleProfile.ux.length) > 0
+                            && ` · ${styleProfile.openingForm.length + styleProfile.statusBar.length + styleProfile.decorations.length + styleProfile.ux.length} ghi chú bố cục/UX đã nối vào "Yêu cầu/Quy tắc cho AI"`}.
+                        </p>
+                        {[['Opening Form', styleProfile.openingForm], ['Status Bar', styleProfile.statusBar],
+                          ['Trang trí & animation', styleProfile.decorations], ['UX', styleProfile.ux]]
+                          .filter((x): x is [string, string[]] => (x[1] as string[]).length > 0)
+                          .map(([title, notes]) => (
+                            <details key={title} className="text-[9px] text-muted-foreground">
+                              <summary className="cursor-pointer hover:text-foreground">{title} ({notes.length})</summary>
+                              <ul className="pl-4 pt-0.5 space-y-0.5 list-disc">
+                                {notes.map((n, i) => <li key={i}>{n}</li>)}
+                              </ul>
+                            </details>
+                          ))}
+                      </div>
+                    )}
+                    {styleRemoved.length > 0 && (
+                      <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-1.5">
+                        <p className="text-[9px] text-amber-400">
+                          🛡 Máy đã lọc {styleRemoved.length} ghi chú vì nhại lại biến của card mẫu (luật: chỉ học
+                          hình thức, không chép ruột): {styleRemoved.slice(0, 3).join(' · ')}{styleRemoved.length > 3 ? '…' : ''}
+                        </p>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
 
               {/* ═══ (bugNeedFix/145) NHỜ AI TẠO GIAO DIỆN ═══
                   AI chỉ quyết bảng màu + font; khung HTML vẫn do máy dựng như các mẫu sẵn, nên

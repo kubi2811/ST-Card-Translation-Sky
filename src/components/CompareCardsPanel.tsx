@@ -21,6 +21,12 @@ import {
 import { extractTranslatableFields, setNestedValue, DEFAULT_FIELD_GROUPS } from '../utils/cardFields';
 import { syncEmbeddedWorldLink } from '../utils/worldLink';
 import { embedCharaToPNG } from '../utils/pngHandler';
+// (bugNeedFix/184) AI soi khác biệt từng mục Dịch ↔ Final + vá bản dịch thay vì dịch lại cả entry.
+import {
+  buildCompareDiffMessages, parseCompareDiffResponse, verifyPatched, type CompareDiffInput,
+} from '../utils/aiCompareDiff';
+import { callProvider } from '../utils/apiClient';
+import type { CompareEntry } from '../utils/compareCards';
 import type { CharacterCard, FieldGroup, TranslationField } from '../types/card';
 
 export default function CompareCardsPanelDefault(props: Props) {
@@ -58,6 +64,7 @@ function triggerDownload(href: string, filename: string, revoke = false) {
 
 export function CompareCardsPanel({ onClose }: Props) {
   const addToast = useStore((s) => s.addToast);
+  const proxy = useStore((s) => s.proxy);   // (bug 184) cấu hình API cho lượt "AI soi khác"
   const ui = useUi();
   const [slots, setSlots] = useState<Record<SlotId, Slot>>({
     raw: emptySlot(), translated: emptySlot(), final: emptySlot(),
@@ -234,6 +241,68 @@ export function CompareCardsPanel({ onClose }: Props) {
     }, 60);
   }, [slots, merge, addToast, onClose]);
 
+  // ═══ (bugNeedFix/184) AI SOI KHÁC BIỆT TỪNG MỤC ═══
+  // "đôi khi khác có tí xíu nhưng phải dịch lại toàn bộ entry thì không ổn lắm" — gộp thông minh
+  // chỉ biết chia hai loại "y hệt / khác", còn KHÁC GÌ thì nó chịu. Nút này gọi AI cho ĐÚNG MỘT
+  // entry: liệt kê đích danh tác giả đổi gì + trả bản dịch đã vá (giữ nguyên tối đa bản dịch cũ,
+  // chỉ đắp phần thay đổi). Bản vá qua chốt máy (macro/ngoặc/JS) rồi mới cho áp.
+  interface AiDiffState {
+    entry: CompareEntry;
+    status: 'running' | 'done' | 'error';
+    error?: string;
+    differences: string[];
+    patched: string;
+    problems: string[];
+  }
+  const [aiDiff, setAiDiff] = useState<AiDiffState | null>(null);
+  const aiDiffAbortRef = useRef<AbortController | null>(null);
+  // `effective` khai báo phía dưới (cần slots mới nhất) — đọc qua ref để useCallback này không
+  // ôm closure cũ (stale slots) mà cũng không phải re-create theo từng phím gõ.
+  const effectiveRef = useRef<(id: SlotId, path: string) => string | undefined>(() => undefined);
+
+  const runAiDiff = useCallback(async (entry: CompareEntry) => {
+    const translated = effectiveRef.current('translated', entry.path) ?? '';
+    const final = effectiveRef.current('final', entry.path) ?? '';
+    if (!translated.trim() || !final.trim()) { addToast('error', 'Cần cả ô Dịch lẫn ô Final có nội dung.'); return; }
+    aiDiffAbortRef.current?.abort();
+    const ac = new AbortController();
+    aiDiffAbortRef.current = ac;
+    setAiDiff({ entry, status: 'running', differences: [], patched: '', problems: [] });
+    try {
+      const input: CompareDiffInput = {
+        label: entry.label, path: entry.path,
+        raw: effectiveRef.current('raw', entry.path),
+        translated, final,
+      };
+      const { system, user } = buildCompareDiffMessages(input);
+      const rawText = await callProvider(proxy, system, user, ac.signal, undefined,
+        { label: `So khác: ${entry.label}`, charCount: user.length });
+      const parsed = parseCompareDiffResponse(rawText);
+      const verdict = verifyPatched(input, parsed.patched);
+      setAiDiff({
+        entry, status: 'done',
+        differences: parsed.differences,
+        patched: verdict.patched,
+        problems: verdict.problems,
+      });
+    } catch (e) {
+      if (ac.signal.aborted) { setAiDiff(null); return; }
+      setAiDiff({
+        entry, status: 'error', error: e instanceof Error ? e.message : String(e),
+        differences: [], patched: '', problems: [],
+      });
+    }
+  }, [proxy, addToast]);
+
+  /** Áp bản vá vào một cột (thường là Final — chính là card sẽ xuất ra). */
+  const applyAiPatch = useCallback((target: SlotId) => {
+    if (!aiDiff || aiDiff.status !== 'done' || !aiDiff.patched) return;
+    editCell(target, aiDiff.entry.path, aiDiff.patched);
+    saveCell(target, aiDiff.entry.path);
+    addToast('success', `Đã áp bản vá vào cột ${target === 'final' ? 'Final' : 'Dịch'} — ${aiDiff.entry.label}.`);
+    setAiDiff(null);
+  }, [aiDiff, editCell, saveCell, addToast]);
+
   // Xuất Card Final đã gộp (đắp bản dịch cũ vào entry không đổi, phần mới giữ nguyên ngữ).
   const exportFinalMerged = useCallback(() => {
     const finalSlot = slots.final;
@@ -259,6 +328,7 @@ export function CompareCardsPanel({ onClose }: Props) {
     if (path in slot.edits) return slot.edits[path];
     return slot.valueByPath.has(path) ? slot.valueByPath.get(path) : undefined;
   };
+  effectiveRef.current = effective;   // (bug 184) cho runAiDiff đọc state mới nhất
   const isDirty = (id: SlotId, path: string) =>
     path in slots[id].edits && slots[id].edits[path] !== slots[id].valueByPath.get(path);
 
@@ -450,6 +520,21 @@ export function CompareCardsPanel({ onClose }: Props) {
                     <div style={{ padding: '8px 12px', fontSize: '0.7rem', color: 'var(--text-secondary)', wordBreak: 'break-word', borderRight: '1px solid var(--border-subtle)' }}>
                       <div style={{ fontWeight: 600 }}>{e.label}</div>
                       <div style={{ fontSize: '0.58rem', color: 'var(--text-muted)', marginTop: '2px' }}>{e.path}</div>
+                      {/* (bugNeedFix/184) Chỉ hiện khi có cả Dịch lẫn Final và hai bên THẬT SỰ khác —
+                          giống nhau thì không có gì để soi, đỡ tốn call. */}
+                      {(() => {
+                        const tv = effective('translated', e.path);
+                        const fv = effective('final', e.path);
+                        if (!tv?.trim() || !fv?.trim() || tv === fv) return null;
+                        return (
+                          <button
+                            onClick={() => void runAiDiff(e)}
+                            disabled={aiDiff?.status === 'running'}
+                            title="Gọi AI so đúng mục này: liệt kê tác giả đã đổi gì giữa bản Dịch và bản Final, và trả bản dịch ĐÃ VÁ (giữ nguyên tối đa bản dịch cũ, chỉ đắp phần thay đổi) — khỏi dịch lại cả entry vì một câu sửa."
+                            style={{ marginTop: '5px', display: 'flex', alignItems: 'center', gap: '4px', padding: '3px 7px', fontSize: '0.62rem', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(124,106,240,0.45)', background: 'rgba(124,106,240,0.08)', color: 'var(--accent-primary)', cursor: aiDiff?.status === 'running' ? 'default' : 'pointer', opacity: aiDiff?.status === 'running' ? 0.5 : 1 }}
+                          >🤖 AI soi khác</button>
+                        );
+                      })()}
                     </div>
                     {SLOT_ORDER.map((s) => {
                       const isFinal = s.id === 'final';
@@ -491,6 +576,101 @@ export function CompareCardsPanel({ onClose }: Props) {
           </div>
         )}
       </div>
+
+      {/* ═══ (bugNeedFix/184) Modal kết quả "AI soi khác" ═══
+          Làm MODAL chứ không xoè inline trong hàng: bảng đang ảo hoá theo chiều cao ước lượng,
+          hàng tự phình to giữa chừng là các hàng dưới đè lên nhau. */}
+      {aiDiff && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}
+          onClick={() => { if (aiDiff.status !== 'running') setAiDiff(null); }}>
+          <div onClick={(e) => e.stopPropagation()}
+            style={{ width: 'min(860px, 96vw)', maxHeight: '88vh', overflowY: 'auto', background: 'var(--bg-primary)', border: '1px solid var(--border-default)', borderRadius: 'var(--radius-md)', padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '1rem' }}>🤖</span>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: '0.85rem' }}>AI soi khác: {aiDiff.entry.label}</div>
+                <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)' }}>{aiDiff.entry.path}</div>
+              </div>
+              <button
+                onClick={() => { aiDiffAbortRef.current?.abort(); setAiDiff(null); }}
+                style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '4px', padding: '5px 10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-default)', background: 'var(--bg-primary)', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '0.72rem' }}>
+                <X size={13} /> {aiDiff.status === 'running' ? 'Dừng' : 'Đóng'}
+              </button>
+            </div>
+
+            {aiDiff.status === 'running' && (
+              <div style={{ padding: '20px', textAlign: 'center', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                Đang so bản Dịch với bản Final của mục này…
+              </div>
+            )}
+
+            {aiDiff.status === 'error' && (
+              <div style={{ padding: '10px 12px', borderRadius: 'var(--radius-sm)', background: 'rgba(255,82,82,0.08)', border: '1px solid rgba(255,82,82,0.25)', color: 'var(--accent-danger)', fontSize: '0.74rem' }}>
+                Lỗi gọi AI: {aiDiff.error}
+              </div>
+            )}
+
+            {aiDiff.status === 'done' && (
+              <>
+                <div>
+                  <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                    Tác giả đã đổi gì ({aiDiff.differences.length})
+                  </div>
+                  {aiDiff.differences.length === 0 ? (
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                      AI không thấy khác biệt NỘI DUNG nào — hai bên có thể chỉ lệch định dạng/khoảng trắng.
+                    </div>
+                  ) : (
+                    <ul style={{ margin: 0, paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                      {aiDiff.differences.map((d, i) => (
+                        <li key={i} style={{ fontSize: '0.72rem', lineHeight: 1.55, color: 'var(--text-primary)' }}>{d}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+
+                {aiDiff.problems.length > 0 && (
+                  <div style={{ padding: '8px 10px', borderRadius: 'var(--radius-sm)', background: 'rgba(240,196,106,0.08)', border: '1px solid rgba(240,196,106,0.35)', fontSize: '0.7rem', color: 'var(--accent-warning)' }}>
+                    ⚠️ Bản vá KHÔNG qua được chốt máy — chỉ nên dùng để tham khảo, đừng áp thẳng:
+                    <ul style={{ margin: '4px 0 0', paddingLeft: '16px' }}>
+                      {aiDiff.problems.map((p, i) => <li key={i}>{p}</li>)}
+                    </ul>
+                  </div>
+                )}
+
+                <div>
+                  <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--accent-success)', marginBottom: '4px' }}>
+                    Bản dịch đã vá (giữ nguyên tối đa bản dịch cũ, chỉ đắp phần tác giả đổi)
+                  </div>
+                  <textarea readOnly value={aiDiff.patched}
+                    style={{ width: '100%', height: '180px', resize: 'vertical', fontSize: '0.7rem', fontFamily: 'monospace', padding: '8px 10px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-default)', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }} />
+                </div>
+
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button onClick={() => applyAiPatch('final')} disabled={aiDiff.problems.length > 0}
+                    title={aiDiff.problems.length > 0 ? 'Bản vá chưa qua chốt máy — sửa tay hoặc chạy lại.' : 'Ghi bản vá vào ô Final (card sẽ xuất ra) của mục này.'}
+                    style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '7px 14px', borderRadius: 'var(--radius-sm)', border: 'none', background: aiDiff.problems.length > 0 ? 'var(--bg-elevated)' : '#22c55e', color: aiDiff.problems.length > 0 ? 'var(--text-muted)' : '#052e12', fontWeight: 700, fontSize: '0.74rem', cursor: aiDiff.problems.length > 0 ? 'default' : 'pointer' }}>
+                    <Save size={13} /> Áp vào cột Final
+                  </button>
+                  <button onClick={() => applyAiPatch('translated')} disabled={aiDiff.problems.length > 0}
+                    title="Ghi bản vá vào ô Dịch (giữ Final nguyên ngữ)."
+                    style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '7px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-default)', background: 'var(--bg-primary)', color: aiDiff.problems.length > 0 ? 'var(--text-muted)' : 'var(--text-primary)', fontSize: '0.74rem', cursor: aiDiff.problems.length > 0 ? 'default' : 'pointer' }}>
+                    Áp vào cột Dịch
+                  </button>
+                  <button onClick={() => { void navigator.clipboard.writeText(aiDiff.patched); addToast('success', 'Đã copy bản vá.'); }}
+                    style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '7px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-default)', background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: '0.74rem', cursor: 'pointer' }}>
+                    Copy
+                  </button>
+                  <button onClick={() => void runAiDiff(aiDiff.entry)}
+                    style={{ marginLeft: 'auto', padding: '7px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-default)', background: 'var(--bg-primary)', color: 'var(--text-secondary)', fontSize: '0.74rem', cursor: 'pointer' }}>
+                    Chạy lại
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

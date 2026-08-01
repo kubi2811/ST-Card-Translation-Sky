@@ -36,22 +36,126 @@ tạo card SillyTavern viết lộn xộn. Việc của bạn có ĐÚNG HAI ph�
 
 Trả về DUY NHẤT JSON: {"polishedIdea": "...", "suggestedRules": ["...", "..."]}`;
 
-export function buildIdeaPolishMessages(idea: string, droppedLastTime?: string[]): ChatMessage[] {
+/* ═══════════════════════════════════════════════════════════════════════════
+ * (bugNeedFix/185) ĐŨA THẦN 3 CHẾ ĐỘ.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * User: "bây giờ khi click vô thì có các lựa chọn" — ngoài Sắp xếp & Chuẩn hoá (bug 137) thêm
+ * Phác thảo Thế giới và Làm giàu & Hoàn thiện. Hai chế độ mới ĐƯỢC PHÉP thêm nội dung, nhưng
+ * ba luật chung thì không đổi:
+ *   • KHÔNG được làm rơi ý gốc — verifyIdeaPolish vẫn canh đủ tên riêng + con số của bản gốc
+ *     (nó chỉ đòi cái CŨ còn nguyên, không cấm cái MỚI, nên dùng chung cho cả ba chế độ);
+ *   • phần AI tự thêm phải PHÂN BIỆT ĐƯỢC với ý gốc — bắt buộc đánh dấu "✚" từng dòng thêm,
+ *     vì trộn lẫn rồi thì user hết đường biết đâu là ý mình;
+ *   • cùng khuôn JSON {polishedIdea, suggestedRules} — parse/verify/UI đi chung một đường.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+export type WandMode = 'polish' | 'world' | 'enrich';
+
+export const WAND_MODES: Array<{ id: WandMode; icon: string; label: string; desc: string }> = [
+  {
+    id: 'polish', icon: '🪄', label: 'Sắp xếp & Chuẩn hoá ý tưởng',
+    desc: 'Giữ 1:1 toàn bộ ý gốc, chỉ tổ chức lại cho rõ ràng + tự rút quy tắc vào ô "Yêu cầu/Quy tắc cho AI". Không thêm, không bớt.',
+  },
+  {
+    id: 'world', icon: '🌍', label: 'Phác thảo Thế giới',
+    desc: 'Từ ý tưởng thế giới sơ khai, AI tự xác định còn thiếu mảng nào (địa lý, phe phái, hệ sức mạnh…) và bổ sung có chừng mực. Phần AI thêm được đánh dấu ✚.',
+  },
+  {
+    id: 'enrich', icon: '✨', label: 'Làm giàu & Hoàn thiện ý tưởng',
+    desc: 'Giữ đúng tinh thần gốc, đào sâu phần đang sơ sài (mô tả, bối cảnh, chiều sâu nhân vật). Phần đã đủ thì không thêm thừa. Phần AI thêm được đánh dấu ✚.',
+  },
+];
+
+/** Khối luật chung nối vào MỌI chế độ — thích nghi theo nội dung, không áp khuôn cứng. */
+const WAND_COMMON = `
+LUẬT CHUNG (mọi chế độ):
+• Thích nghi với TỪNG ý tưởng: đọc xem người dùng đang tổ chức kiểu gì, thế giới thuộc thể loại
+  nào, rồi chọn cách phân tích/sắp xếp/mở rộng cho khớp — KHÔNG áp một template cố định.
+• Ưu tiên ngữ cảnh và dữ liệu hiện có của người dùng hơn mọi khuôn mẫu bạn quen dùng.
+• TUYỆT ĐỐI không đổi tên riêng, không đổi con số, không làm rơi bất kỳ ý nào của bản gốc,
+  không đổi ý nghĩa hoặc phá logic người dùng đã đặt.
+• Trả về DUY NHẤT JSON: {"polishedIdea": "...", "suggestedRules": ["...", "..."]}`;
+
+const WAND_WORLD_SYSTEM = `Bạn là người xây dựng thế giới (worldbuilder) cho card SillyTavern. Người dùng
+đưa một Ý TƯỞNG THẾ GIỚI còn nhỏ hoặc sơ khai. Việc của bạn:
+
+1. "polishedIdea" — PHÁT TRIỂN thành bản phác thảo thế giới có cấu trúc:
+   • GIỮ NGUYÊN VẸN mọi thiết lập gốc: từng tên riêng, con số, quy luật người dùng đã nêu phải
+     còn nguyên văn. Không biến đổi bản chất thế giới.
+   • TỰ XÁC ĐỊNH thế giới đang thiếu thành phần nào trong số: địa lý & khu vực, xã hội & văn hoá,
+     lịch sử, phe phái & tổ chức, hệ thống sức mạnh, chủng tộc & sinh vật, quy luật đặc biệt —
+     và CHỈ bổ sung những mảng phù hợp với ý gốc, ở mức phác thảo hợp lý (không viết tiểu thuyết).
+   • Mảng nào ý gốc đã đủ thì để yên. Phần mới phải logic, liên kết với nhau và KHÔNG mâu thuẫn
+     với bất kỳ thông tin nào người dùng đã cung cấp.
+   • ĐÁNH DẤU PHÂN BIỆT: mỗi dòng/gạch đầu dòng do bạn TỰ THÊM phải mở đầu bằng "✚ ". Ý gốc của
+     người dùng (dù đã diễn đạt lại chỗ đứng) thì KHÔNG mang dấu này. Người dùng phải nhìn phát
+     biết ngay đâu là ý mình, đâu là đề xuất của bạn.
+   • Trình bày bằng tiêu đề "## …" + gạch đầu dòng.
+
+2. "suggestedRules" — quy tắc/ràng buộc rút từ thế giới SAU khi phác thảo (kể cả phần mới thêm),
+   3-8 gạch đầu dòng; quy tắc đến từ phần bạn tự thêm thì cũng mở đầu bằng "✚ ".
+${WAND_COMMON}`;
+
+const WAND_ENRICH_SYSTEM = `Bạn là biên tập viên phát triển nội dung cho card SillyTavern. Người dùng đưa
+một Ý TƯỞNG đã có hồn nhưng còn mỏng. Việc của bạn:
+
+1. "polishedIdea" — LÀM GIÀU ý tưởng mà không đổi hướng:
+   • GIỮ NGUYÊN ý tưởng và thông điệp cốt lõi: mọi tên riêng, con số, thiết lập, tình tiết gốc
+     phải còn nguyên văn. Tuyệt đối không lái ý tưởng sang hướng khác.
+   • TỰ NHẬN DIỆN phần nào đang quá sơ sài để đào sâu (thêm mô tả, bối cảnh, ví dụ, chiều sâu
+     nhân vật, yếu tố phụ phù hợp) và phần nào ĐÃ ĐỦ để KHÔNG thêm thừa. Mục tiêu: phiên bản
+     hoàn thiện hơn nhưng đúng tinh thần ban đầu — không phải phiên bản dài hơn.
+   • ĐÁNH DẤU PHÂN BIỆT: mỗi dòng/gạch đầu dòng do bạn TỰ THÊM phải mở đầu bằng "✚ ". Ý gốc
+     không mang dấu này.
+   • Trình bày bằng tiêu đề "## …" + gạch đầu dòng.
+
+2. "suggestedRules" — quy tắc giữ giọng/không khí rút từ bản đã làm giàu, 3-8 gạch đầu dòng;
+   quy tắc đến từ phần bạn tự thêm thì mở đầu bằng "✚ ".
+${WAND_COMMON}`;
+
+const WAND_SYSTEM: Record<WandMode, string> = {
+  polish: IDEA_POLISH_SYSTEM + WAND_COMMON,
+  world: WAND_WORLD_SYSTEM,
+  enrich: WAND_ENRICH_SYSTEM,
+};
+
+const WAND_TASK_LINE: Record<WandMode, string> = {
+  polish: 'Ý TƯỞNG GỐC (giữ 1-1 về ý, chỉ sắp xếp lại):',
+  world: 'Ý TƯỞNG THẾ GIỚI GỐC (giữ nguyên vẹn, phác thảo thêm phần còn thiếu, đánh dấu ✚ phần bạn thêm):',
+  enrich: 'Ý TƯỞNG GỐC (giữ đúng tinh thần, đào sâu phần sơ sài, đánh dấu ✚ phần bạn thêm):',
+};
+
+export interface WandMessageOpts {
+  droppedLastTime?: string[];
+  /** (bug 185) Ngữ cảnh học từ các lần dùng trước — xem wandMemory.ts. Rỗng = bỏ qua. */
+  styleContext?: string;
+}
+
+export function buildWandMessages(mode: WandMode, idea: string, opts: WandMessageOpts = {}): ChatMessage[] {
   const msgs: ChatMessage[] = [
-    { role: 'system', content: IDEA_POLISH_SYSTEM },
-    { role: 'user', content: `Ý TƯỞNG GỐC (giữ 1-1 về ý, chỉ sắp xếp lại):\n${'─'.repeat(30)}\n${idea}` },
+    { role: 'system', content: WAND_SYSTEM[mode] },
   ];
+  // Ngữ cảnh người dùng đặt TRƯỚC ý tưởng: nó là nền để đọc ý tưởng, không phải nội dung.
+  if (opts.styleContext?.trim()) {
+    msgs.push({ role: 'user', content: opts.styleContext.trim() });
+  }
+  msgs.push({ role: 'user', content: `${WAND_TASK_LINE[mode]}\n${'─'.repeat(30)}\n${idea}` });
   // (bugNeedFix/145) Lượt trước rơi mất chi tiết thì NÓI ĐÍCH DANH rồi cho làm lại, thay vì
   // bắt user tự "bấm thử lại" mà lần sau cũng hỏng y hệt vì AI không biết mình sai ở đâu.
-  if (droppedLastTime && droppedLastTime.length > 0) {
+  if (opts.droppedLastTime && opts.droppedLastTime.length > 0) {
     msgs.push({
       role: 'user',
       content: `LẦN TRƯỚC BẠN LÀM RƠI những chi tiết sau — chúng CÓ trong ý tưởng gốc nhưng KHÔNG có trong bản bạn trả về:\n`
-        + droppedLastTime.map(t => `  • ${t}`).join('\n')
-        + `\n\nLàm lại, giữ NGUYÊN VĂN từng chi tiết trên trong bản sắp xếp. Không được bỏ, không được viết khác đi.`,
+        + opts.droppedLastTime.map(t => `  • ${t}`).join('\n')
+        + `\n\nLàm lại, giữ NGUYÊN VĂN từng chi tiết trên. Không được bỏ, không được viết khác đi.`,
     });
   }
   return msgs;
+}
+
+/** (bug 137) Giữ tên cũ cho chỗ gọi/test hiện có — nay là chế độ 'polish' của đũa thần 3 chế độ. */
+export function buildIdeaPolishMessages(idea: string, droppedLastTime?: string[]): ChatMessage[] {
+  return buildWandMessages('polish', idea, { droppedLastTime });
 }
 
 /**

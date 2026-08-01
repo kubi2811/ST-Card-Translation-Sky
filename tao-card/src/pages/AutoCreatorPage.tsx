@@ -19,6 +19,8 @@ import type { AutoCreatorStep, MinhNguyetStep, AnyPipelineStep } from '../types'
 import { cn } from '../lib/utils';
 import { t as ui, fmt } from '../i18n';
 import { PreviewTunerModal } from '../components/autocreator/PreviewTunerModal';
+import { SingleThreadToggle } from '../components/shared/SingleThreadToggle';
+import { WAND_MODES, type WandMode } from '../lib/ai/ideaPolish';
 import { tuningUsable } from '../lib/ai/cardTuning';
 
 // (User 19/07) Thứ tự hiển thị khớp thứ tự CHẠY mới: mvuzod trước regex (regex bám schema),
@@ -84,21 +86,28 @@ export function AutoCreatorPage() {
   const [showMnPromptOverride, setShowMnPromptOverride] = useState<MinhNguyetStep | null>(null);
   const [ideaExpanded, setIdeaExpanded] = useState(false); // ô "Ý tưởng của bạn" phóng to toàn màn hình
   const [isPolishing, setIsPolishing] = useState(false);   // (bug 137) đũa thần đang chạy
+  const [wandMenuOpen, setWandMenuOpen] = useState(false); // (bug 185) menu 3 chế độ đũa thần
   const [tunerOpen, setTunerOpen] = useState(false);       // (bug 141) wizard Xem trước & Tinh chỉnh
 
   /**
-   * (bug 137) CÂY ĐŨA THẦN: sắp xếp lại ý tưởng (1-1 về ý) + rút quy tắc.
-   * Chốt chặn máy: mọi TÊN RIÊNG và CON SỐ của bản gốc phải còn nguyên trong bản mới —
-   * rơi cái nào là TỪ CHỐI bản đó, giữ nguyên văn của user và nói rõ vì sao.
+   * (bug 137 → 185) CÂY ĐŨA THẦN — nay 3 chế độ: polish (sắp xếp 1-1), world (phác thảo thế
+   * giới), enrich (làm giàu). Chốt chặn máy dùng CHUNG: mọi TÊN RIÊNG và CON SỐ của bản gốc
+   * phải còn nguyên trong bản mới — hai chế độ mới được THÊM nhưng không được LÀM RƠI; rơi cái
+   * nào là TỪ CHỐI bản đó, giữ nguyên văn của user và nói rõ vì sao.
    */
-  const handlePolishIdea = async () => {
+  const handlePolishIdea = async (mode: WandMode = 'polish') => {
     const toast = useToastStore.getState();
     if (!activeProfile) { toast.warning(ui.acNeedProfile); return; }
     const original = store.config.idea;
+    setWandMenuOpen(false);
     setIsPolishing(true);
     try {
       const { callAI } = await import('../lib/ai/client');
-      const { buildIdeaPolishMessages, parseIdeaPolishResponse, verifyIdeaPolish } = await import('../lib/ai/ideaPolish');
+      const { buildWandMessages, parseIdeaPolishResponse, verifyIdeaPolish, WAND_MODES } = await import('../lib/ai/ideaPolish');
+      const { buildWandStyleContext, recordWandRun } = await import('../lib/ai/wandMemory');
+      const modeLabel = WAND_MODES.find(m => m.id === mode)?.label ?? 'Đũa thần';
+      // (bug 185) Hồ sơ học từ các lần trước — AI thích nghi với cách user tổ chức ý tưởng.
+      const styleContext = buildWandStyleContext();
 
       // (bugNeedFix/145) Rơi chi tiết thì THỬ LẠI có chỉ đích danh, chứ không bắt user tự bấm
       // lại — lần sau AI cũng hỏng y hệt nếu không ai nói nó sai chỗ nào. Chỉ khi lượt sửa
@@ -109,9 +118,17 @@ export function AutoCreatorPage() {
       for (let attempt = 0; attempt < 2; attempt++) {
         const res = await callAI({
           profile: activeProfile,
-          params: { ...settings.generationParams, temperature: 0.2, useJsonResponseFormat: true, stream: false },
-          messages: buildIdeaPolishMessages(original, attempt > 0 ? dropped : undefined),
-          label: attempt === 0 ? 'Đũa thần ý tưởng' : 'Đũa thần ý tưởng (bù chi tiết rơi)',
+          params: {
+            ...settings.generationParams,
+            // polish là việc biên tập — lạnh; world/enrich là việc sáng tác — cần nhiệt.
+            temperature: mode === 'polish' ? 0.2 : 0.7,
+            useJsonResponseFormat: true, stream: false,
+          },
+          messages: buildWandMessages(mode, original, {
+            droppedLastTime: attempt > 0 ? dropped : undefined,
+            styleContext,
+          }),
+          label: attempt === 0 ? modeLabel : `${modeLabel} (bù chi tiết rơi)`,
         });
         const parsed = parseIdeaPolishResponse(res.text);
         const check = verifyIdeaPolish(original, parsed.polishedIdea);
@@ -125,9 +142,11 @@ export function AutoCreatorPage() {
       }
       if (!polishedIdea) {
         toast.error(fmt(ui.acPolishDropped, { tokens: dropped.slice(0, 4).join(', ') }));
-        return;   // 1-1 vỡ cả hai lượt → giữ nguyên văn gốc, không âm thầm đổi ý user
+        return;   // ý gốc vỡ cả hai lượt → giữ nguyên văn gốc, không âm thầm đổi ý user
       }
       store.setIdea(polishedIdea);
+      // (bug 185) Ghi dấu vết CẤU TRÚC (không lưu nguyên văn) để lần sau AI có hồ sơ mà thích nghi.
+      recordWandRun(mode, original, polishedIdea);
       // (bug 142 — 137↔141) Đũa thần ĐỔI văn bản ý tưởng ⇒ bản schema đã duyệt ở "Xem trước &
       // Tinh chỉnh" (nếu có) hết hiệu lực theo thiết kế ideaSig. Nói thẳng thay vì để user
       // chạy pipeline rồi mới thấy log "bị bỏ qua".
@@ -510,17 +529,51 @@ export function AutoCreatorPage() {
             <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center justify-between gap-2">
               <span className="flex items-center gap-2">{ui.acYourIdea}</span>
               <span className="flex items-center gap-1">
-                {/* (bug 137) Cây đũa thần: AI sắp xếp lại ý tưởng lộn xộn (1-1 về ý, chỉ đổi
-                    trình bày) + tự rút quy tắc điền vào ô "Yêu cầu/Quy tắc cho AI". */}
-                <button
-                  type="button"
-                  onClick={handlePolishIdea}
-                  disabled={isPolishing || store.isRunning || !store.config.idea.trim() || !activeProfile}
-                  title={ui.acPolishTip}
-                  className="flex items-center gap-1 px-2 py-1 rounded-lg border border-purple-500/40 text-[10px] font-normal normal-case tracking-normal text-purple-300 hover:bg-purple-500/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  {isPolishing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />} {ui.acPolishBtn}
-                </button>
+                {/* (bug 137 → 185) Cây đũa thần: bấm mở menu 3 chế độ — Sắp xếp 1-1 / Phác thảo
+                    thế giới / Làm giàu ý tưởng. Cả ba đều qua chung chốt "không làm rơi ý gốc". */}
+                <span className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setWandMenuOpen(v => !v)}
+                    disabled={isPolishing || store.isRunning || !store.config.idea.trim() || !activeProfile}
+                    title={ui.acPolishTip}
+                    className="flex items-center gap-1 px-2 py-1 rounded-lg border border-purple-500/40 text-[10px] font-normal normal-case tracking-normal text-purple-300 hover:bg-purple-500/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {isPolishing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />} {ui.acPolishBtn}
+                    <ChevronDown className="w-2.5 h-2.5" />
+                  </button>
+                  {wandMenuOpen && (
+                    <>
+                      {/* Lớp lót bắt click ra ngoài — không đóng được menu là bug UI kinh điển.
+                          preventDefault BẮT BUỘC: cả cụm này nằm trong <label>, mà click vào phần
+                          KHÔNG tương tác bên trong label sẽ bị trình duyệt chuyển tiếp thành click
+                          lên nút labelable đầu tiên — chính là nút đũa thần → menu đóng xong mở
+                          lại ngay như chưa hề bấm. */}
+                      <div className="fixed inset-0 z-30"
+                        onClick={(ev) => { ev.preventDefault(); ev.stopPropagation(); setWandMenuOpen(false); }} />
+                      <div className="absolute right-0 top-full mt-1 z-40 w-72 rounded-xl border border-border bg-card shadow-xl p-1 normal-case tracking-normal font-normal text-left">
+                        {WAND_MODES.map(m => (
+                          <button
+                            key={m.id}
+                            type="button"
+                            onClick={() => void handlePolishIdea(m.id)}
+                            className="w-full text-left px-2.5 py-2 rounded-lg hover:bg-purple-500/10 transition-colors"
+                          >
+                            <span className="text-[11px] font-medium text-foreground flex items-center gap-1.5">
+                              <span>{m.icon}</span>{m.label}
+                            </span>
+                            <span className="block text-[10px] text-muted-foreground leading-snug mt-0.5">{m.desc}</span>
+                          </button>
+                        ))}
+                        <p className="px-2.5 py-1.5 text-[9px] text-muted-foreground/70 leading-snug border-t border-border/60 mt-1">
+                          Cả 3 chế độ đều giữ nguyên ý gốc (tên riêng, con số được máy kiểm lại).
+                          Phần AI tự thêm được đánh dấu ✚ để bạn phân biệt. Đũa thần cũng nhớ cách
+                          bạn tổ chức ý tưởng qua các lần dùng để lần sau bám phong cách của bạn hơn.
+                        </p>
+                      </div>
+                    </>
+                  )}
+                </span>
                 {/* Ô ý tưởng thường rất dài — cho mở rộng ra toàn màn hình để dễ soạn/sửa. */}
                 <button
                   type="button"
@@ -720,6 +773,11 @@ export function AutoCreatorPage() {
               <AlertTriangle className="w-4 h-4" /> {ui.acNoProfile}
             </div>
           )}
+          {/* (bugNeedFix/183) Ngay cạnh nút chạy: bước lorebook/batch của pipeline cũng chạy
+              song song, cùng chứng "một nhân vật 7-8 entry giống nhau". */}
+          <div className="flex justify-end mb-2">
+            <SingleThreadToggle />
+          </div>
           {/* (bug 141) "Xem trước & Tinh chỉnh" đứng TRƯỚC nút tạo — duyệt schema + giao diện
               rồi mới chạy; card ra lò áp đúng 100% bản đã chốt. Nút tạo thường vẫn còn cho ai
               muốn đi nhanh. */}

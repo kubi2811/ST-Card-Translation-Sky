@@ -24,6 +24,7 @@ import {
   type EntryCategory, type CardType,
 } from '../../lib/worldbook/worldbookConfig';
 import { buildSchemaContextForBatch, getSchemaPreviewSummary } from '../../lib/mvuzod/schemaContextBuilder';
+import { SingleThreadToggle } from '../shared/SingleThreadToggle';
 import type { MVUZODSchema } from '../../types/mvuzod.types';
 import { t as ui, fmt } from '../../i18n';
 
@@ -299,7 +300,11 @@ export function BatchGeneratorPanel() {
     <div className="space-y-5 p-5 max-w-2xl mx-auto">
       {/* Category Tabs */}
       <div className="flex flex-col gap-2">
-        <label className="settings-label text-sm mb-1">{ui.bgPickTab}</label>
+        <div className="flex items-center gap-2">
+          <label className="settings-label text-sm mb-1 flex-1">{ui.bgPickTab}</label>
+          {/* (bugNeedFix/183) Batch song song không nhìn thấy nhau ⇒ entry trùng na ná. */}
+          <SingleThreadToggle />
+        </div>
         <div className="flex flex-wrap gap-2">
           {TABS.map(tab => (
             <button

@@ -16,6 +16,7 @@ import {
 } from '../lib/ai/storyDeepScan';
 import { isSameAsUserPersona } from '../lib/ai/userPersonaSwap';
 import { adviseChunks, adviceText, type ChunkAdvice } from '../lib/ai/chunkAdvice';
+import { SingleThreadToggle } from '../components/shared/SingleThreadToggle';
 import { t as ui, fmt } from '../i18n';
 
 /**
@@ -378,7 +379,7 @@ export function StoryToCardPage() {
       </div>
 
       {/* (bug 150) Chọn chế độ */}
-      <div className="flex gap-2 text-sm">
+      <div className="flex gap-2 text-sm items-center flex-wrap">
         <button onClick={() => setMode('deep')}
           className="px-3 py-1.5 rounded-lg border inline-flex items-center gap-1.5"
           style={{ borderColor: mode === 'deep' ? '#7c6af0' : '#2a2a3e', background: mode === 'deep' ? 'rgba(124,106,240,0.12)' : 'transparent' }}>
@@ -389,6 +390,9 @@ export function StoryToCardPage() {
           style={{ borderColor: mode === 'quick' ? '#7c6af0' : '#2a2a3e', background: mode === 'quick' ? 'rgba(124,106,240,0.12)' : 'transparent' }}>
           <ScanLine className="w-4 h-4" /> {ui.s2cdTabQuick}
         </button>
+        {/* (bugNeedFix/183) Chạy song song, các luồng không thấy nhau ⇒ một nhân vật ra 7-8 entry
+            na ná. Nút này khoá còn 1 luồng — đặt ngay chỗ user bấm chạy, không giấu trong Settings. */}
+        <SingleThreadToggle className="ml-auto" />
       </div>
 
       {/* 01 — Truyện (chung cho cả hai chế độ) */}

@@ -134,10 +134,50 @@ function buildPool(active: ProxyProfile): ProxyProfile[] {
   const alive = pool.filter(p => !_isDead(p));
   return alive.length ? alive : pool;
 }
+/**
+ * (bugNeedFix/183) CHẾ ĐỘ 1 LUỒNG — user bật là MỌI công cụ sinh nội dung chạy tuần tự.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * User: "song song sẽ dễ dẫn tới tình trạng một nhân vật lại có tới 7-8 entry lorebook y hệt
+ * nhau". Nguyên nhân: các luồng chạy song song KHÔNG NHÌN THẤY NHAU — mỗi luồng đọc cùng một
+ * đoạn truyện/danh sách nhân vật rồi tự sinh, không luồng nào biết luồng kia vừa sinh gì, nên
+ * cùng một nhân vật được N luồng cùng viết entry. Dedup hậu kiểm chỉ vớt được trùng NGUYÊN VĂN;
+ * trùng-mà-viết-khác-chữ thì lọt hết.
+ *
+ * Chạy 1 luồng thì mỗi call sau đều được đứng sau kết quả call trước (các pipeline vốn nối kết
+ * quả tuần tự vào context) — chậm hơn, nhưng không còn cảnh 7-8 entry sinh mù về nhau.
+ *
+ * Van đặt TẠI ĐÂY vì mọi đường song song của app (storyToCard, storyDeepScan, documentChunker,
+ * batchGenerator, lorebookRefiner, wikiImport…) đều lấy số luồng qua computePoolConcurrency —
+ * một van khoá được tất cả, không phải đi sửa từng tool và không tool nào quên được.
+ * Persist ở localStorage: đây là lựa chọn máy-của-tôi-chạy-kiểu-gì, phải sống qua F5.
+ */
+const SINGLE_THREAD_KEY = 'tc-single-thread-api';
+let _singleThread = ((): boolean => {
+  try { return typeof localStorage !== 'undefined' && localStorage.getItem(SINGLE_THREAD_KEY) === '1'; }
+  catch { return false; }
+})();
+const _singleThreadListeners = new Set<(on: boolean) => void>();
+
+export function isSingleThreadMode(): boolean { return _singleThread; }
+
+export function setSingleThreadMode(on: boolean): void {
+  _singleThread = on;
+  try { localStorage.setItem(SINGLE_THREAD_KEY, on ? '1' : '0'); } catch { /* quota/private mode */ }
+  for (const fn of _singleThreadListeners) fn(on);
+}
+
+/** Cho component React theo dõi trạng thái (nhiều panel cùng hiện toggle — phải khớp nhau). */
+export function onSingleThreadChange(fn: (on: boolean) => void): () => void {
+  _singleThreadListeners.add(fn);
+  return () => { _singleThreadListeners.delete(fn); };
+}
+
 /** #11 — Số luồng song song đề xuất = TỔNG ngân sách RPM toàn pool: mỗi provider (active + inPool),
  *  mỗi API key đóng góp (primaryRpm + secondaryRpm nếu bật). callAI đã tự gate nhịp RPM (RPMLimiter)
  *  nên đặt cao vẫn không vượt 429. Trần 256 chỉ chặn cấu hình gõ nhầm. Dùng thay các cap Math.min(8/4). */
 export function computePoolConcurrency(active: ProxyProfile): number {
+  // (bugNeedFix/183) Chế độ 1 luồng thắng mọi ngân sách RPM.
+  if (_singleThread) return 1;
   let total = 0;
   for (const p of buildPool(active)) {
     const kc = Math.max(1, new Set(parseApiKeys(p.apiKey)).size);

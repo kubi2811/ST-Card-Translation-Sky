@@ -604,7 +604,7 @@ function extractHtmlVarReferences(htmlText: string): { varName: string; context:
  * Extract all variable names DEFINED in Initvar fields.
  * Scans YAML keys and {{setvar::KEY::VALUE}} macros.
  */
-function extractInitvarDefinitions(initvarText: string): Set<string> {
+export function extractInitvarDefinitions(initvarText: string): Set<string> {
   const defs = new Set<string>();
   if (!initvarText) return defs;
 

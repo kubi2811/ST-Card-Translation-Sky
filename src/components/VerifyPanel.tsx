@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef } from 'react';
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { useStore } from '../store';
 import { useThrottledStore } from '../hooks/useThrottledStore';
 import { useTranslation } from '../hooks/useTranslation';
@@ -10,6 +10,10 @@ import { computePoolConcurrency } from '../utils/apiClient';
 import { crossCheckHtmlVsInitvar, validateFindRegexVsNarrative } from '../utils/mvuValidator';
 import { checkSchemaVsUpdateFormat, type SchemaFormatSyncResult } from '../utils/mvuSchemaFormatSync';
 import type { CrossCheckResult, FindRegexValidationResult } from '../utils/mvuValidator';
+// (bugNeedFix/181) Kho link ngoài — nguồn code duy nhất mà phép kiểm chéo có thể đọc khi thẻ
+// nạp code từ GitHub thay vì nhúng thẳng vào thẻ.
+import { loadVault, extractCardExternalUrls, type ExternalLinkEntry } from '../utils/externalLinkVault';
+import { buildCardRefContext, checkExternalRefs, type RefCheckReport } from '../utils/externalRefCheck';
 import { ShieldCheck, AlertTriangle, AlertCircle, Info, Loader2, Zap, Eye, ChevronDown, ChevronUp, Wrench, FileWarning, Code2, Braces, Hash, Type, ArrowLeftRight, CheckCircle2, Pencil, Save, Bot, XCircle, Link2, Diff, GitCompare, Fingerprint, Regex, Check, X, Copy } from 'lucide-react';
 
 const SEVERITY_CONFIG = {
@@ -77,6 +81,10 @@ export default function VerifyPanel() {
   const [aiFixingIssueId, setAiFixingIssueId] = useState<string | null>(null);
   const aiFixAbortRef = useRef<AbortController | null>(null);
   const [crossCheckResult, setCrossCheckResult] = useState<CrossCheckResult | null>(null);
+  // (bugNeedFix/181) Bản dịch của các link ngoài — nạp từ Kho để phép kiểm chéo có code mà đọc.
+  const [externalVault, setExternalVault] = useState<ExternalLinkEntry[]>([]);
+  const [extRefReport, setExtRefReport] = useState<RefCheckReport | null>(null);
+  useEffect(() => { void loadVault().then(setExternalVault); }, []);
   // (bug 156) Schema zod ↔ hướng dẫn định dạng biến — lệch nhau thì không lỗi nào báo.
   const [schemaFmtResult, setSchemaFmtResult] = useState<SchemaFormatSyncResult | null>(null);
   const [findRegexResult, setFindRegexResult] = useState<FindRegexValidationResult | null>(null);
@@ -118,9 +126,18 @@ export default function VerifyPanel() {
       addLog('info', `Field verify: ${issues.length} issues (${issues.filter(i => i.severity === 'error').length} errors)`);
 
       // ─── Cross-check: HTML ↔ Initvar ───
+      // (bugNeedFix/181) Thẻ dùng link ngoài thì trong thẻ chỉ còn <script src="…cdn…">, code
+      // thật nằm trên GitHub — `regexFields` gom từ field của thẻ ra RỖNG, và trước đây rơi thẳng
+      // vào nhánh else, tức là kiểm tra chéo TẮT HẲN mà tắt trong im lặng: user thấy màn hình
+      // sạch bong nên tưởng thẻ không có lỗi. Nay bản dịch của link ngoài trong Kho được đưa vào
+      // đúng chỗ đó, nên phép kiểm nhìn thấy code thật và chạy lại được.
+      const vaultFields = externalVault
+        .filter(e => e.translated?.trim())
+        .map(e => ({ translated: e.translated, label: `link ngoài: ${e.name}` }));
       const regexFields = fields
         .filter(f => f.group === 'regex' && f.path.includes('replaceString') && f.translated)
-        .map(f => ({ translated: f.translated, label: f.label }));
+        .map(f => ({ translated: f.translated, label: f.label }))
+        .concat(vaultFields);
       const initvarFields = fields
         .filter(f => f.entryType === 'initvar' && f.translated)
         .map(f => ({ translated: f.translated, label: f.label }));
@@ -129,6 +146,18 @@ export default function VerifyPanel() {
         setCrossCheckResult(crossCheck);
       } else {
         setCrossCheckResult(null);
+      }
+
+      // (bugNeedFix/181) Kiểm tra tham chiếu giữa CÁC LINK NGOÀI với nhau và với thẻ — thứ mà
+      // crossCheckHtmlVsInitvar không làm được vì nó chỉ soi một chiều HTML → initvar.
+      const cardUrls = extractCardExternalUrls(fields);
+      if (externalVault.length > 0 || cardUrls.length > 0) {
+        const ctx = buildCardRefContext(fields, translationConfig.mvuDictionary, cardUrls);
+        const rep = checkExternalRefs(externalVault, ctx);
+        setExtRefReport(rep);
+        if (!rep.ok || rep.stats.blindSpots > 0) addLog('warning', `Link ngoài: ${rep.summary}`);
+      } else {
+        setExtRefReport(null);
       }
 
       // ─── (bug 156) Cross-check: schema zod ↔ hướng dẫn định dạng biến ───
@@ -1001,6 +1030,46 @@ export default function VerifyPanel() {
               ✅ {ui.vpAllHtmlVarsOk}
             </div>
           )}
+        </div>
+      )}
+
+      {/* (bugNeedFix/181) LINK NGOÀI — thẻ nạp code từ GitHub thì mọi phép kiểm ở trên đều chỉ
+          nhìn thấy cái thẻ <script src="…">, không nhìn thấy code. Khối này nói rõ đang có bao
+          nhiêu link, kiểm được tới đâu, và CÒN MÙ chỗ nào — im lặng ở đây từng bị hiểu nhầm là
+          "thẻ sạch". */}
+      {extRefReport && (
+        <div style={{ marginTop: '10px', padding: '10px 12px', borderRadius: 'var(--radius-md)',
+          border: `1px solid ${extRefReport.ok ? 'rgba(76,175,80,0.2)' : 'rgba(255,82,82,0.2)'}`,
+          background: extRefReport.ok ? 'rgba(76,175,80,0.03)' : 'rgba(255,82,82,0.03)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', flexWrap: 'wrap' }}>
+            <Link2 size={14} color={extRefReport.ok ? 'var(--accent-success)' : 'var(--accent-danger)'} />
+            <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+              Tham chiếu link ngoài
+            </span>
+            <Badge color={extRefReport.ok ? 'var(--accent-success)' : 'var(--accent-danger)'}
+              bg={extRefReport.ok ? 'rgba(76,175,80,0.1)' : 'rgba(255,82,82,0.1)'}
+              text={extRefReport.summary} />
+          </div>
+          {extRefReport.stats.translatedLinks === 0 && (
+            <div style={{ fontSize: '0.68rem', color: 'var(--accent-warning)' }}>
+              ⚠️ Kho link ngoài đang trống nên phần code nằm ngoài thẻ KHÔNG được kiểm. Sang tab
+              “Link ngoài”, lưu bản dịch của từng link vào kho rồi kiểm lại.
+            </div>
+          )}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', maxHeight: '220px', overflowY: 'auto' }}>
+            {extRefReport.issues.slice(0, 40).map((iss, i) => {
+              const c = iss.severity === 'error' ? 'var(--accent-danger)'
+                : iss.severity === 'warning' ? 'var(--accent-warning)' : 'var(--text-muted)';
+              return (
+                <div key={i} style={{ padding: '4px 8px', fontSize: '0.66rem', borderRadius: 'var(--radius-sm)',
+                  background: 'rgba(0,0,0,0.15)', borderLeft: `3px solid ${c}` }}>
+                  <span style={{ color: c, fontWeight: 600 }}>{iss.link}</span>
+                  <span style={{ color: 'var(--text-muted)' }}> — {iss.detail}</span>
+                  {iss.suggestion && <span style={{ color: 'var(--accent-success)' }}> 💡 {iss.suggestion}</span>}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 

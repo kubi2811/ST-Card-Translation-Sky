@@ -13,7 +13,8 @@ import {
   buildSupplementRequest, buildCloneRequest, FEATURE_LABEL,
 } from '../utils/presetExemplars';
 import { PromptBlock, RegexScript, ChatMessage } from '../types';
-import { Send, RefreshCw, Sparkles, Plus, Calendar, Code, Paperclip, X, FileJson } from 'lucide-react';
+import { Send, RefreshCw, Sparkles, Plus, Calendar, Code, Paperclip, X, FileJson, ChevronRight, ChevronDown } from 'lucide-react';
+import { usePersistedState } from '../utils/usePersistedState';
 import { t, fmt } from '../i18n';
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
@@ -86,6 +87,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ onOpenSettings }) => {
   );
   const [showGap, setShowGap] = useState(false);
   const [cloneTheme, setCloneTheme] = useState('');
+  // (bugNeedFix/182) "UI như này che hết cái chat rồi" — hai dải nguồn tham khảo (preset mẫu +
+  // thư viện) mỗi cái tự xuống dòng theo số chip, cộng lại nuốt ~6 hàng ngay trên ô nhập. Gộp
+  // thành MỘT thanh, mặc định ĐÓNG. Đóng/mở là chuyện hiển thị: AI vẫn nhận đủ ngữ cảnh như cũ.
+  const [refsOpen, setRefsOpen] = usePersistedState('pt.chat.refsOpen', false);
 
   // (bug 139) Thư viện preset mẫu — nạp một lần, MỌI lượt chat sau tự có ngữ cảnh.
   const [presetLib, setPresetLib] = useState<ImportedPreset[]>(() => loadPresetLibrary());
@@ -436,110 +441,151 @@ ${textToSend}`;
         <div ref={chatEndRef} />
       </div>
 
-      {/* (bugNeedFix/169) HỌC TỪ PRESET MẪU ĐÃ NHẬP.
-          User: "bổ sung cho AI có thể nhìn ví dụ từ những preset hoàn thiện đã nhập… nếu chưa
-          đủ thì vẫn có thể gọi bổ sung hoặc tạo mới dựa trên những preset đã nhập."
-          Ako/Tawa nằm ở danh sách DỰ ÁN nên trước đây nằm ngoài tầm nhìn của AI hoàn toàn.
-          Nay: (1) chúng đi kèm mọi lượt chat, (2) có thước đo "đã đầy đủ chưa" so với chính
-          chúng, (3) hai nút nhờ dựng sẵn từ kết quả đo. */}
-      {exemplars.length > 0 && (
-        <div className="px-4 py-1.5 border-t border-theme-border">
-          <div className="flex items-center gap-1.5 flex-wrap">
+      {/* ═══ NGUỒN THAM KHẢO — một thanh, mặc định thu gọn ═══
+          (bugNeedFix/169) Preset MẪU đã nhập ở danh sách DỰ ÁN (Ako/Tawa…) đi kèm mọi lượt chat,
+          kèm thước đo "đã đầy đủ chưa" và hai nút nhờ dựng sẵn.
+          (bug 139) Thư viện preset kéo-thả (.json/.txt/.yaml) cũng đi kèm mọi lượt chat.
+          (bugNeedFix/182) User: "UI như này che hết cái chat rồi". Hai dải trên vốn là hai khối
+          riêng, mỗi khối tự xuống dòng theo số chip — 3 preset mẫu + 5 file thư viện là mất ~6
+          hàng ngay trên ô nhập, chat còn lại một mẩu. Nay gộp làm MỘT thanh một dòng, mặc định
+          ĐÓNG, nhớ lựa chọn qua localStorage. Đóng/mở CHỈ là chuyện hiển thị — AI vẫn nhận đủ
+          ngữ cảnh y như cũ, nên thu gọn không mất chức năng gì. Kéo-thả file vẫn thả được vào
+          thanh lúc đang đóng, và cảnh báo "thiếu N nhóm" vẫn hiện để không bị bỏ sót. */}
+      <div
+        className="px-4 py-1 border-t border-theme-border"
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => { e.preventDefault(); setRefsOpen(true); void importLibFiles(Array.from(e.dataTransfer.files)); }}
+      >
+        {/* flex-nowrap + truncate: thanh khi ĐÓNG phải gói gọn đúng MỘT hàng kể cả khi cột chat
+            hẹp (~430px như máy user) — cho nó tự xuống dòng là lại lấn vào chat lần nữa. */}
+        <div className="flex items-center gap-1.5 flex-nowrap overflow-hidden">
+          <button
+            onClick={() => setRefsOpen(v => !v)}
+            className="text-[10px] px-2 py-0.5 rounded border border-theme-border hover:bg-white/5 flex items-center gap-1 text-gray-300 shrink-0"
+            title="Những gì AI đang lấy làm tham chiếu cho mọi lượt chat. Thu gọn hay mở ra chỉ đổi cách hiển thị — AI vẫn đọc đủ như nhau."
+          >
+            {refsOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+            📚 Nguồn tham khảo
+            <span className="text-theme-muted">
+              ({exemplars.length + presetLib.length})
+            </span>
+          </button>
+
+          {/* Cảnh báo đáng làm ngay thì hiện cả lúc đang đóng — thu gọn không được che mất việc. */}
+          {exemplars.length > 0 && gap.missingGroups.length > 0 && (
             <button
-              onClick={() => setShowGap(v => !v)}
-              className="text-[10px] px-2 py-0.5 rounded border border-theme-border hover:bg-white/5 flex items-center gap-1"
-              title={`AI đang lấy ${exemplars.length} preset này làm chuẩn về độ đầy đủ. Bấm để xem preset hiện tại còn thiếu gì so với chúng.`}
-            >
-              🎓 Học từ mẫu ({exemplars.length})
-              {gap.missingGroups.length > 0 && (
-                <span className="text-amber-300">· thiếu {gap.missingGroups.length} nhóm</span>
-              )}
-            </button>
-            {exemplars.map(p => (
-              <span key={p.id}
-                className="text-[10px] px-1.5 py-0.5 rounded-full border border-theme-border text-theme-muted"
-                title={`Nhắc tên "${p.name}" trong câu hỏi để AI đọc nguyên văn các khối của nó.`}
-              >📘 {p.name}</span>
-            ))}
-          </div>
-
-          {showGap && (
-            <div className="mt-1.5 rounded-lg border border-theme-border bg-black/20 p-2 space-y-1.5">
-              <p className="text-[10px] leading-relaxed text-gray-300">{gap.verdict}</p>
-
-              {(gap.missingGroups.length > 0 || gap.thinGroups.length > 0) && (
-                <div className="flex flex-wrap gap-1">
-                  {gap.missingGroups.map(g => (
-                    <span key={g} className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300"
-                      title="Đa số preset mẫu đều có nhóm này, preset của bạn chưa có khối nào.">
-                      thiếu: {FEATURE_LABEL[g]}
-                    </span>
-                  ))}
-                  {gap.thinGroups.map(g => (
-                    <span key={g} className="text-[9px] px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300"
-                      title="Có rồi nhưng ít khối hơn hẳn so với preset mẫu.">
-                      mỏng: {FEATURE_LABEL[g]}
-                    </span>
-                  ))}
-                </div>
-              )}
-
-              <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-                <button
-                  disabled={isSending}
-                  onClick={() => { setShowGap(false); void handleSend(buildSupplementRequest(gap)); }}
-                  className="text-[10px] px-2 py-1 rounded bg-emerald-600/80 hover:bg-emerald-600 text-white disabled:opacity-50"
-                  title="Nhờ AI viết thêm đúng những khối còn thiếu, GIỮ NGUYÊN các khối bạn đã có."
-                >✚ Gọi bổ sung phần còn thiếu</button>
-
-                <input
-                  value={cloneTheme}
-                  onChange={e => setCloneTheme(e.target.value)}
-                  placeholder="chủ đề preset mới (để trống = dùng chung)"
-                  className="text-[10px] px-2 py-1 rounded bg-theme-panel border border-theme-border flex-1 min-w-[140px] placeholder:text-theme-muted"
-                />
-                <button
-                  disabled={isSending}
-                  onClick={() => { setShowGap(false); void handleSend(buildCloneRequest(gap.exemplarNames, cloneTheme)); }}
-                  className="text-[10px] px-2 py-1 rounded border border-theme-border hover:bg-white/5 disabled:opacity-50"
-                  title="Tạo preset MỚI hoàn chỉnh, lấy độ đầy đủ của các preset mẫu làm chuẩn. Nội dung viết mới, không chép câu chữ của mẫu."
-                >✨ Tạo mới theo chuẩn mẫu</button>
-              </div>
-            </div>
+              onClick={() => { setRefsOpen(true); setShowGap(true); }}
+              className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 shrink-0"
+              title="So với các preset mẫu, preset hiện tại còn thiếu hẳn một số nhóm khối. Bấm để xem và nhờ AI bổ sung."
+            >thiếu {gap.missingGroups.length} nhóm</button>
           )}
+
+          {!refsOpen && (
+            <span className="text-[10px] text-theme-muted truncate min-w-0 flex-1">
+              {exemplars.length > 0 && `${exemplars.length} preset mẫu`}
+              {exemplars.length > 0 && presetLib.length > 0 && ' · '}
+              {presetLib.length > 0 && `${presetLib.length} file thư viện`}
+              {exemplars.length + presetLib.length === 0 && t.plEmptyHint}
+            </span>
+          )}
+
+          <button
+            onClick={() => {
+              const inp = document.createElement('input');
+              inp.type = 'file'; inp.multiple = true; inp.accept = '.json,.txt,.yaml,.yml,.md';
+              inp.onchange = () => { setRefsOpen(true); void importLibFiles(Array.from(inp.files ?? [])); };
+              inp.click();
+            }}
+            className="text-[10px] px-2 py-0.5 rounded border border-theme-border hover:bg-white/5 flex items-center gap-1 ml-auto shrink-0"
+            title={t.plImportTip}
+          >📚 {t.plImportBtn}</button>
         </div>
-      )}
+
+        {/* Mở ra: trần chiều cao + cuộn riêng, để 20 preset cũng không đẩy chat đi lần nữa. */}
+        {refsOpen && (
+          <div className="mt-1 max-h-40 overflow-y-auto space-y-1.5 pr-1">
+
+            {exemplars.length > 0 && (
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <button
+                  onClick={() => setShowGap(v => !v)}
+                  className="text-[10px] px-2 py-0.5 rounded border border-theme-border hover:bg-white/5 flex items-center gap-1"
+                  title={`AI đang lấy ${exemplars.length} preset này làm chuẩn về độ đầy đủ. Bấm để xem preset hiện tại còn thiếu gì so với chúng.`}
+                >
+                  🎓 Học từ mẫu ({exemplars.length})
+                </button>
+                {exemplars.map(p => (
+                  <span key={p.id}
+                    className="text-[10px] px-1.5 py-0.5 rounded-full border border-theme-border text-theme-muted"
+                    title={`Nhắc tên "${p.name}" trong câu hỏi để AI đọc nguyên văn các khối của nó.`}
+                  >📘 {p.name}</span>
+                ))}
+              </div>
+            )}
+
+            {exemplars.length > 0 && showGap && (
+              <div className="rounded-lg border border-theme-border bg-black/20 p-2 space-y-1.5">
+                <p className="text-[10px] leading-relaxed text-gray-300">{gap.verdict}</p>
+
+                {(gap.missingGroups.length > 0 || gap.thinGroups.length > 0) && (
+                  <div className="flex flex-wrap gap-1">
+                    {gap.missingGroups.map(g => (
+                      <span key={g} className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300"
+                        title="Đa số preset mẫu đều có nhóm này, preset của bạn chưa có khối nào.">
+                        thiếu: {FEATURE_LABEL[g]}
+                      </span>
+                    ))}
+                    {gap.thinGroups.map(g => (
+                      <span key={g} className="text-[9px] px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300"
+                        title="Có rồi nhưng ít khối hơn hẳn so với preset mẫu.">
+                        mỏng: {FEATURE_LABEL[g]}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                  <button
+                    disabled={isSending}
+                    onClick={() => { setShowGap(false); void handleSend(buildSupplementRequest(gap)); }}
+                    className="text-[10px] px-2 py-1 rounded bg-emerald-600/80 hover:bg-emerald-600 text-white disabled:opacity-50"
+                    title="Nhờ AI viết thêm đúng những khối còn thiếu, GIỮ NGUYÊN các khối bạn đã có."
+                  >✚ Gọi bổ sung phần còn thiếu</button>
+
+                  <input
+                    value={cloneTheme}
+                    onChange={e => setCloneTheme(e.target.value)}
+                    placeholder="chủ đề preset mới (để trống = dùng chung)"
+                    className="text-[10px] px-2 py-1 rounded bg-theme-panel border border-theme-border flex-1 min-w-[140px] placeholder:text-theme-muted"
+                  />
+                  <button
+                    disabled={isSending}
+                    onClick={() => { setShowGap(false); void handleSend(buildCloneRequest(gap.exemplarNames, cloneTheme)); }}
+                    className="text-[10px] px-2 py-1 rounded border border-theme-border hover:bg-white/5 disabled:opacity-50"
+                    title="Tạo preset MỚI hoàn chỉnh, lấy độ đầy đủ của các preset mẫu làm chuẩn. Nội dung viết mới, không chép câu chữ của mẫu."
+                  >✨ Tạo mới theo chuẩn mẫu</button>
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {presetLib.map(p => (
+                <span key={p.id}
+                  className={`text-[10px] px-1.5 py-0.5 rounded-full border flex items-center gap-1 ${p.pinned ? 'border-amber-400/60 text-amber-300' : 'border-theme-border text-theme-muted'}`}
+                  title={`${p.format} · ${p.raw.length.toLocaleString()} ký tự\n${p.summary}`}>
+                  <button onClick={() => updateLib(presetLib.map(x => x.id === p.id ? { ...x, pinned: !x.pinned } : x))}
+                    title={p.pinned ? t.plUnpin : t.plPin}>{p.pinned ? '📌' : '📄'}</button>
+                  {p.name}
+                  <button onClick={() => updateLib(presetLib.filter(x => x.id !== p.id))} title={t.plRemove}><X size={10} /></button>
+                </span>
+              ))}
+              {presetLib.length === 0 && <span className="text-[10px] text-theme-muted">{t.plEmptyHint}</span>}
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Attached file indicator */}
-      {/* (bug 139) Thư viện preset mẫu — nạp nhiều file .json/.txt/.yaml, MỌI lượt chat sau
-          tự có ngữ cảnh (nhắc tên hoặc ghim = gửi nguyên văn; còn lại là tóm tắt). */}
-      <div
-        className="px-4 py-1.5 border-t border-theme-border flex items-center gap-1.5 flex-wrap"
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => { e.preventDefault(); void importLibFiles(Array.from(e.dataTransfer.files)); }}
-      >
-        <button
-          onClick={() => {
-            const inp = document.createElement('input');
-            inp.type = 'file'; inp.multiple = true; inp.accept = '.json,.txt,.yaml,.yml,.md';
-            inp.onchange = () => { void importLibFiles(Array.from(inp.files ?? [])); };
-            inp.click();
-          }}
-          className="text-[10px] px-2 py-0.5 rounded border border-theme-border hover:bg-white/5 flex items-center gap-1"
-          title={t.plImportTip}
-        >📚 {t.plImportBtn}{presetLib.length > 0 ? ` (${presetLib.length})` : ''}</button>
-        {presetLib.map(p => (
-          <span key={p.id}
-            className={`text-[10px] px-1.5 py-0.5 rounded-full border flex items-center gap-1 ${p.pinned ? 'border-amber-400/60 text-amber-300' : 'border-theme-border text-theme-muted'}`}
-            title={`${p.format} · ${p.raw.length.toLocaleString()} ký tự\n${p.summary}`}>
-            <button onClick={() => updateLib(presetLib.map(x => x.id === p.id ? { ...x, pinned: !x.pinned } : x))}
-              title={p.pinned ? t.plUnpin : t.plPin}>{p.pinned ? '📌' : '📄'}</button>
-            {p.name}
-            <button onClick={() => updateLib(presetLib.filter(x => x.id !== p.id))} title={t.plRemove}><X size={10} /></button>
-          </span>
-        ))}
-        {presetLib.length === 0 && <span className="text-[10px] text-theme-muted">{t.plEmptyHint}</span>}
-      </div>
 
       {attachedFile && (
         <div className="px-4 py-2 border-t border-theme-border bg-emerald-500/[0.05] flex items-center gap-2 animate-fade-in">

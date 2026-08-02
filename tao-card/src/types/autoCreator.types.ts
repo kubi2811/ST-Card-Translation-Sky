@@ -224,7 +224,16 @@ export interface CardTuning {
   ideaSig: string;
   /** (bugNeedFix/186) Phong cách đã HỌC từ card mẫu — persist để F5 xong theme học vẫn dựng lại được. */
   styleProfile?: StyleProfile;
+  /**
+   * (bug 188) Bộ regex script của giao diện TÁI THIẾT KẾ riêng (AI dựng từ schema + phong cách
+   * học được, đã qua validator + soi rò biến mẫu). themeId === CUSTOM_UI_ID thì bước game_ui
+   * dùng ĐÚNG bộ này thay vì dựng lại từ template.
+   */
+  customScripts?: Array<Record<string, unknown>>;
 }
+
+/** (bug 188) themeId đặc biệt: giao diện tái thiết kế riêng, không phải template + màu. */
+export const CUSTOM_UI_ID = 'custom_redesign';
 
 /** (bugNeedFix/186) Phạm vi học phong cách từ card mẫu. */
 export type StyleLearnScope = 'all' | 'opening_form' | 'status_bar' | 'visual';
@@ -251,6 +260,11 @@ export interface StyleProfile {
   statusBar: string[];
   decorations: string[];
   ux: string[];
+  /**
+   * (bug 188) Danh sách TÊN BIẾN của card mẫu (danh sách cấm) — persist để lượt "tái thiết kế"
+   * chạy sau (kể cả sau F5) vẫn soi được bản HTML sinh ra có rò biến mẫu hay không.
+   */
+  bannedVars?: string[];
 }
 
 /**

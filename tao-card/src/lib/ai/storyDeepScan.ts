@@ -131,6 +131,12 @@ export interface DeepScanState {
   stats: DeepScanStats;
   result?: DeepScanResult;
   error?: string;
+  /**
+   * (bug 189) Kết quả lượt TỔNG HỢP — trước đây chỉ là biến cục bộ trong runDeepScan, nên
+   * resume nhảy vào lượt quality là phải CHẠY LẠI TOÀN BỘ tổng hợp (hàng trăm call). Lưu vào
+   * state thì bước cuối lỗi/F5 chỉ cần chạy lại đúng bước cuối — 495 call tổng hợp giữ nguyên.
+   */
+  synthCache?: { entries: DeepEntry[]; cards: DeepCardResult[] };
 }
 
 export interface DeepScanOptions {
@@ -258,6 +264,44 @@ export function canResume(prev: DeepScanState | null | undefined, story: string,
   const wanted = buildPassList(opts).map((p) => p.id).join(',');
   const have = prev.passes.map((p) => p.id).join(',');
   return wanted === have;
+}
+
+/**
+ * (bug 189) CHẠY LẠI TỪ MỘT LƯỢT — nền của nút reroll từng giai đoạn.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Vì sao phải có: một bước hỏng (đặc biệt bước cuối) mà lựa chọn duy nhất là "Chạy lại từ
+ * đầu" thì hơn 12 giờ quét + hàng nghìn call API đi tong. Reroll đặt lại ĐÚNG lượt được chọn
+ * và các lượt SAU nó; mọi lượt TRƯỚC + toàn bộ bộ nhớ nghiên cứu giữ nguyên — resume sẽ chỉ
+ * chạy phần bị đặt lại. An toàn vì mọi pass ghi bộ nhớ qua addUniqueLines/dedup máy: chạy
+ * lại một lượt đọc chỉ bổ sung dữ kiện mới, không nhân đôi.
+ */
+export function rerollFromPass(prev: DeepScanState, passId: DeepPassId): DeepScanState {
+  const st = JSON.parse(JSON.stringify(prev)) as DeepScanState;
+  const idx = st.passes.findIndex((p) => p.id === passId);
+  if (idx === -1) return st;
+  for (let i = idx; i < st.passes.length; i++) {
+    const p = st.passes[i];
+    p.status = 'pending';
+    p.done = 0;
+    p.total = 0;
+    delete p.round;
+    // Khoá chunkDone: các pass map-trên-chunk dùng đúng id pass; riêng verify dùng verify1/2/…
+    delete st.chunkDone[p.id];
+    if (p.id === 'verify') {
+      st.verifyRound = 0;
+      for (const k of Object.keys(st.chunkDone)) {
+        if (/^verify\d+$/.test(k)) delete st.chunkDone[k];
+      }
+    }
+    // Chạy lại tổng hợp thì cache tổng hợp cũ phải bỏ — không thì quality đọc bản cũ.
+    if (p.id === 'synthesize') delete st.synthCache;
+  }
+  st.passIndex = Math.min(st.passIndex, idx);
+  st.status = 'paused';
+  st.error = undefined;
+  // Kết quả cuối dựng ở quality (lượt chót) — mọi reroll đều làm nó lỗi thời.
+  delete st.result;
+  return st;
 }
 
 /** Tìm dossier theo tên/bí danh (chuẩn hoá). */
@@ -1172,6 +1216,10 @@ CHỈ xuất đúng khối, mọi tag đóng, ngoài tag không viết gì:
       st.stats.entries = synthEntries.length;
       emit();
     });
+    // (bug 189) Chốt kết quả tổng hợp vào STATE (được UI persist) — trước đây nó chỉ sống
+    // trong biến cục bộ, nên F5 sau lượt này là vứt hàng trăm call tổng hợp.
+    st.synthCache = { entries: [...synthEntries], cards: [...synthCards] };
+    emit();
   };
 
   const passQuality = async () => {
@@ -1269,11 +1317,20 @@ CHỈ xuất: <issues><issue>…</issue>…</issues> hoặc <none/>`,
       if (p.id === 'synthesize') { synthEntries.length = 0; synthCards.length = 0; }
       // Resume từ một tiến trình cũ có thể nhảy thẳng vào quality trong khi synthEntries (biến
       // cục bộ, không nằm trong state lưu xuống đĩa) đang rỗng. Trước đây chuyện đó cũng ra 0
-      // entry. Nay tự dựng lại: chạy bù synthesize rồi mới soát.
+      // entry. Nay tự dựng lại: (bug 189) ƯU TIÊN cache tổng hợp đã lưu trong state — bước cuối
+      // lỗi/F5 thì chỉ chạy lại bước cuối, không đốt lại hàng trăm call tổng hợp; không có cache
+      // (tiến trình đời cũ) mới phải chạy bù cả lượt.
       if (p.id === 'quality' && synthEntries.length === 0) {
-        log('Chưa có entry trong bộ nhớ (tiến trình được nạp lại) — chạy bù lượt tổng hợp.');
-        synthCards.length = 0;
-        await runners.synthesize();
+        if (st.synthCache?.entries.length) {
+          synthEntries.push(...st.synthCache.entries);
+          synthCards.length = 0;
+          synthCards.push(...st.synthCache.cards);
+          log(`Dùng lại ${synthEntries.length} entry + ${synthCards.length} thẻ đã tổng hợp từ tiến trình lưu — không tốn lượt gọi nào.`);
+        } else {
+          log('Chưa có entry trong bộ nhớ (tiến trình được nạp lại) — chạy bù lượt tổng hợp.');
+          synthCards.length = 0;
+          await runners.synthesize();
+        }
       }
       // (bug 163) LƯỚI CUỐI: pipeline phải LUÔN đi tới được lượt soát chất lượng.
       // Ngoài các lượt đọc theo chunk (đã chịu lỗi ở mapPass) còn vài lượt gọi GỘP đứng một mình

@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { Loader2, ScanLine, Sparkles, Wand2, Users, BookOpen, Settings2, Merge, Trash2, Microscope, Pause, Play, CheckCircle2, Circle, AlertTriangle } from 'lucide-react';
+import { Loader2, ScanLine, Sparkles, Wand2, Users, BookOpen, Settings2, Merge, Trash2, Microscope, Pause, Play, CheckCircle2, Circle, AlertTriangle, RotateCcw } from 'lucide-react';
 import { useSettingsStore } from '../store/settingsStore';
 import { useCardStore } from '../store/cardStore';
 import { useToastStore } from '../store/toastStore';
@@ -11,9 +11,10 @@ import {
   type BatchCardResult, type WorldEntry,
 } from '../lib/ai/storyToCard';
 import {
-  runDeepScan, canResume, toLorebookEntry,
+  runDeepScan, canResume, toLorebookEntry, rerollFromPass,
   type DeepScanState, type DeepScanOptions, type DeepEntry, type DeepPassId, type EntryCat,
 } from '../lib/ai/storyDeepScan';
+import { useIdbState } from '../lib/idbState';
 import { isSameAsUserPersona } from '../lib/ai/userPersonaSwap';
 import { adviseChunks, adviceText, type ChunkAdvice } from '../lib/ai/chunkAdvice';
 import { SingleThreadToggle } from '../components/shared/SingleThreadToggle';
@@ -107,7 +108,18 @@ export function StoryToCardPage() {
   const [batch, setBatch] = usePersistedState<BatchCardResult[]>('s2c.batch', []);
 
   // (bug 150) Trạng thái pipeline quét sâu — persist trọn để TẠM DỪNG / F5 / TIẾP TỤC.
-  const [deep, setDeep] = usePersistedState<DeepScanState | null>('s2c.deep', null);
+  // (bug 189) Chuyển từ localStorage sang IndexedDB: state quét 12 giờ (26k dữ kiện + 2k
+  // entry) là 5-10MB JSON, VƯỢT quota localStorage — mọi lần lưu đều fail trong im lặng nên
+  // F5 là mất trắng, đúng thảm cảnh "4k call đi tong" user báo. IDB không có trần đó.
+  // normalize: status 'running' lưu lại từ phiên trước là xác chết (tab đã đóng giữa chừng)
+  // — đổi thành 'paused' để nút Tiếp tục hiện ra, thay vì chỉ còn "Chạy lại từ đầu".
+  const [deep, setDeep, deepLoaded] = useIdbState<DeepScanState | null>('s2c.deep', null, (s) => {
+    if (!s || s.status !== 'running') return s;
+    const fixed = JSON.parse(JSON.stringify(s)) as DeepScanState;
+    fixed.status = 'paused';
+    for (const p of fixed.passes) if (p.status === 'running') p.status = 'pending';
+    return fixed;
+  });
   const [deepOpts, setDeepOpts] = usePersistedState<DeepUiOpts>('s2c.deepOpts', {
     verifyRounds: 2, nsfw: false, learnStyle: true, makeCard: true,
     cardChar: '', userReplaceName: '', userSetup: '', extraNotes: '',
@@ -152,7 +164,8 @@ export function StoryToCardPage() {
     onLog: (m) => setDeepLog(m),
   });
 
-  const runDeep = async (resume: boolean) => {
+  /** `override` (bug 189): state vừa được reroll — React chưa kịp commit nên không đọc qua `deep`. */
+  const runDeep = async (resume: boolean, override?: DeepScanState) => {
     if (!requireApi()) return;
     if (!story.trim()) { toast.error(ui.s2cNeedStory); return; }
     abortRef.current = new AbortController();
@@ -160,7 +173,7 @@ export function StoryToCardPage() {
     setDeepLog('');
     try {
       const o = buildDeepOptions(abortRef.current.signal);
-      const prev = resume ? deep : null;
+      const prev = override ?? (resume ? deep : null);
       const final = await runDeepScan(story, profile!, settings.generationParams, o, prev);
       setDeep(final);
       if (final.status === 'done' && final.result) {
@@ -189,6 +202,20 @@ export function StoryToCardPage() {
 
   const resumable = !deepRunning && deep != null && (deep.status === 'paused' || deep.status === 'error')
     && canResume(deep, story, buildDeepOptions(new AbortController().signal));
+
+  // (bug 189) Reroll được khi: không đang chạy + tiến trình khớp truyện/cấu hình hiện tại.
+  // Cho phép cả khi status 'done' — kết quả bước cuối tệ thì chạy lại đúng bước cuối.
+  const rerollable = !deepRunning && deep != null
+    && canResume(deep, story, buildDeepOptions(new AbortController().signal));
+
+  /** (bug 189) Đặt lại từ lượt `id` (các lượt sau reset theo, lượt trước + bộ nhớ giữ nguyên) rồi chạy ngay. */
+  const rerollPass = (id: DeepPassId) => {
+    if (!deep) return;
+    if (!confirm(fmt(ui.s2cdRerollConfirm, { name: PASS_LABELS[id]() }))) return;
+    const next = rerollFromPass(deep, id);
+    setDeep(next);
+    void runDeep(true, next);
+  };
 
   // ─────────────────────────── Quick mode (flow cũ) ───────────────────────────
 
@@ -513,10 +540,12 @@ export function StoryToCardPage() {
             </div>
 
             <div className="flex items-center gap-2 flex-wrap">
+              {/* (bug 189) Chờ nạp xong tiến trình từ IndexedDB rồi mới cho bấm — bấm sớm khi
+                  chưa thấy tiến trình cũ là vô tình "Chạy lại từ đầu" đè lên nó. */}
               {!deepRunning && (
-                <button onClick={() => void runDeep(false)}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-md font-semibold text-white"
-                  style={{ background: '#7c6af0', border: 'none', cursor: 'pointer' }}>
+                <button onClick={() => void runDeep(false)} disabled={!deepLoaded}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-md font-semibold text-white disabled:opacity-50"
+                  style={{ background: '#7c6af0', border: 'none', cursor: deepLoaded ? 'pointer' : 'wait' }}>
                   <Microscope className="w-4 h-4" /> {deep && deep.status !== 'idle' ? ui.s2cdRestart : ui.s2cdStart}
                 </button>
               )}
@@ -563,7 +592,7 @@ export function StoryToCardPage() {
               </div>
               <ul className="space-y-1.5 text-sm">
                 {deep.passes.map((p) => (
-                  <li key={p.id} className="flex items-center gap-2">
+                  <li key={p.id} className="flex items-center gap-2 group">
                     {p.status === 'done'
                       ? <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />
                       : p.status === 'running'
@@ -573,12 +602,26 @@ export function StoryToCardPage() {
                       {PASS_LABELS[p.id]()}
                       {p.id === 'verify' && p.round ? ` — ${fmt(ui.s2cdRound, { r: p.round })}` : ''}
                     </span>
-                    {p.total > 0 && p.status !== 'pending' && (
-                      <span className="ml-auto text-[11px] text-muted-foreground tabular-nums">{p.done}/{p.total}</span>
-                    )}
+                    {/* (bug 189) Reroll đúng lượt này — chủ động call lại khi một bước hỏng,
+                        thay vì "Chạy lại từ đầu" đốt lại cả chục giờ + nghìn call phía trước. */}
+                    <span className="ml-auto flex items-center gap-2">
+                      {p.total > 0 && p.status !== 'pending' && (
+                        <span className="text-[11px] text-muted-foreground tabular-nums">{p.done}/{p.total}</span>
+                      )}
+                      {rerollable && p.status === 'done' && (
+                        <button onClick={() => rerollPass(p.id)}
+                          title={ui.s2cdRerollTip}
+                          className="inline-flex items-center gap-1 text-[11px] text-amber-400/70 hover:text-amber-300 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <RotateCcw className="w-3 h-3" /> {ui.s2cdReroll}
+                        </button>
+                      )}
+                    </span>
                   </li>
                 ))}
               </ul>
+              {rerollable && deep.passes.some((p) => p.status === 'pending') && (
+                <div className="text-[11px] text-muted-foreground">{ui.s2cdRerollHint}</div>
+              )}
               {deepRunning && deepLog && <div className="text-[11px] text-muted-foreground truncate">▸ {deepLog}</div>}
               {deep.memory.mainCharacter && (
                 <div className="text-xs text-muted-foreground">{fmt(ui.s2cdMain, { name: deep.memory.mainCharacter })}</div>

@@ -29,7 +29,11 @@ import {
   styleNotesToRulesBlock, applyStyleRules,
 } from '../../lib/ai/styleLearner';
 import { extractCharaFromPng } from '../../lib/converters/pngMetadata';
-import type { StyleLearnScope } from '../../types/autoCreator.types';
+import { CUSTOM_UI_ID, type StyleLearnScope } from '../../types/autoCreator.types';
+import { generateOrchestrated } from '../../lib/mvuzod/orchestratedGenerator';
+import { OPENING_FORM_ANCHOR, STATUS_BAR_ANCHOR } from '../../lib/mvuzod/regexAnchors';
+import { validateRegexDraft, collectSchemaVarNames, type DraftScript } from '../../lib/mvuzod/gameUiValidator';
+import { styleProfileToDesignBrief, checkRedesignLeaks } from '../../lib/ai/styleLearner';
 import type { MVUZODField, MVUZODSchema } from '../../types/mvuzod.types';
 import { SchemaVarTable, type VarRow } from './SchemaVarTable';
 import { withPreviewData, toIframeHtml } from '../../lib/ai/schemaPreviewData';
@@ -111,7 +115,10 @@ export function PreviewTunerModal({ open, onClose, onStart }: Props) {
   const store = useAutoCreatorStore();
   const settings = useSettingsStore();
   const tuning = store.config.tuning;
-  const [busy, setBusy] = useState<'analyze' | 'copilot' | 'theme' | 'style' | null>(null);
+  const [busy, setBusy] = useState<'analyze' | 'copilot' | 'theme' | 'style' | 'redesign' | null>(null);
+  // (bug 188) Tiến độ + cảnh báo của lượt "tái thiết kế giao diện riêng".
+  const [redesignProg, setRedesignProg] = useState('');
+  const [redesignWarns, setRedesignWarns] = useState<string[]>([]);
   const [copilotAsk, setCopilotAsk] = useState('');
   // (bugNeedFix/145) Bước 2 — "Nhờ AI tạo giao diện". Giữ NGUYÊN spec đang có để lượt chỉnh sau
   // gửi lại cho AI, nhờ đó nó sửa đúng chỗ bị chê thay vì vẽ lại từ đầu.
@@ -282,6 +289,9 @@ export function PreviewTunerModal({ open, onClose, onStart }: Props) {
       // 4. Parse + CHỐT MÁY: lọc mọi ghi chú còn dính tên biến của mẫu
       const parsed = parseStyleProfile(res.text, styleScope);
       const { profile, removed } = sanitizeStyleProfile(parsed, sampleVars);
+      // (bug 188) Giữ danh sách cấm trong profile (persist) — lượt "tái thiết kế" chạy sau
+      // (kể cả sau F5) vẫn soi được bản HTML sinh ra có rò biến của card mẫu hay không.
+      profile.bannedVars = [...sampleVars].slice(0, 400);
       setStyleRemoved(removed);
 
       // 5. Áp: phần thị giác → theme đè lên khung dựng từ schema Bước 1 (preview đổi ngay);
@@ -317,6 +327,79 @@ export function PreviewTunerModal({ open, onClose, onStart }: Props) {
       setBusy(null);
     }
   }, [activeProfile, styleScope, settings.generationParams]);
+
+  /**
+   * (bug 188) TÁI THIẾT KẾ GIAO DIỆN RIÊNG — trả lời thẳng lời chê "chỉ đổi màu 3 template":
+   * máy sinh UI thật (generateOrchestrated: Blueprint → từng section → ráp) nhận BẢN THIẾT KẾ
+   * đúc từ Style Profile (bố cục, tỷ lệ, component, phân cấp, spacing, typography, icon,
+   * animation, trạng thái tương tác, UX) và dựng một giao diện MỚI từ chính schema Bước 1.
+   * Hai chốt máy trước khi nhận kết quả:
+   *   1. soi RÒ TÊN BIẾN của card mẫu (bannedVars) — rò là loại thẳng, vì đó là chép ruột mẫu;
+   *   2. validator 4 tầng của Game UI (regex compile, script parse, biến phải thuộc schema).
+   */
+  const handleRedesign = useCallback(async () => {
+    const toast = useToastStore.getState();
+    const t = useAutoCreatorStore.getState().config.tuning;
+    const sp = t?.styleProfile;
+    if (!activeProfile) { toast.warning('Chưa cấu hình API.'); return; }
+    if (!t || !sp) { toast.warning('Học phong cách từ card mẫu trước — bản thiết kế lấy từ đó.'); return; }
+    setBusy('redesign');
+    setRedesignWarns([]);
+    setRedesignProg('');
+    try {
+      const res = await generateOrchestrated({
+        schema: t.schema,
+        component: 'full_set',
+        profile: activeProfile,
+        params: settings.generationParams,
+        gameName: ideaHeadline,
+        themeHint: styleProfileToDesignBrief(sp),
+        onProgress: (p) => setRedesignProg(p.message),
+      });
+      // Chốt 1 — rò biến mẫu là clone trá hình, loại không thương.
+      const leaks = checkRedesignLeaks(res.scripts, sp.bannedVars);
+      if (leaks.length) {
+        throw new Error(
+          `Bản tái thiết kế RÒ ${leaks.length} tên biến của card mẫu (${leaks.slice(0, 5).join(', ')}${leaks.length > 5 ? '…' : ''}) `
+          + '— máy loại để không chép ruột mẫu. Bấm tạo lại.',
+        );
+      }
+      // Chốt 2 — validator Game UI: lỗi cứng thì loại; cảnh báo thì hiện cho user cân nhắc.
+      const report = validateRegexDraft(
+        res.scripts as DraftScript[],
+        `${STATUS_BAR_ANCHOR}\n${OPENING_FORM_ANCHOR}`,
+        collectSchemaVarNames(t.schema),
+      );
+      const errs = report.issues.filter((i) => i.level === 'error').map((i) => i.message);
+      if (errs.length) {
+        throw new Error(`Bản tái thiết kế không qua được kiểm máy: ${errs.slice(0, 3).join(' · ')}${errs.length > 3 ? ' …' : ''} — bấm tạo lại.`);
+      }
+      setRedesignWarns(report.issues.filter((i) => i.level !== 'error').map((i) => i.message));
+      useAutoCreatorStore.getState().setTuning({
+        customScripts: res.scripts as Array<Record<string, unknown>>,
+        themeId: CUSTOM_UI_ID,
+        confirmed: false,
+      });
+      toast.success(`Đã tái thiết kế giao diện riêng: ${res.scripts.length} script, ${res.fieldsRendered} field, ${Math.round(res.totalSize / 1024)}KB (${res.totalCalls} call AI).`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+      setRedesignProg('');
+    }
+  }, [activeProfile, settings.generationParams, ideaHeadline]);
+
+  /** (bug 188) HTML preview của giao diện tái thiết kế — bóc từ chính bộ script đã lưu. */
+  const customUi = useMemo(() => {
+    const scripts = (tuning?.customScripts ?? []) as Array<Record<string, unknown>>;
+    if (!scripts.length) return null;
+    const pick = (anchor: string) => {
+      const s = scripts.find(x => String(x.findRegex ?? '').includes(anchor)
+        && !((x.promptOnly as boolean) && !(x.markdownOnly as boolean)));
+      return s ? String(s.replaceString ?? '') : '';
+    };
+    return { form: pick('OpeningFormImpl'), status: pick('StatusPlaceHolderImpl') };
+  }, [tuning]);
 
   /** Bước 1 — gọi AI sinh schema từ ý tưởng (chỉ khi chưa có hoặc ý tưởng đã đổi). */
   const handleAnalyze = useCallback(async () => {
@@ -536,6 +619,33 @@ export function PreviewTunerModal({ open, onClose, onStart }: Props) {
                           ))}
                       </div>
                     )}
+                    {/* (bug 188) TÁI THIẾT KẾ RIÊNG — không chỉ đổi màu template nữa: AI dựng
+                        giao diện MỚI (bố cục/component/spacing/typography/animation/UX) từ chính
+                        schema Bước 1 theo tinh thần mẫu, qua 2 chốt máy (rò biến mẫu + validator). */}
+                    {styleProfile && (
+                      <div className="space-y-1">
+                        <button
+                          onClick={() => void handleRedesign()}
+                          disabled={busy !== null}
+                          className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-[11px] font-semibold bg-pink-600/80 text-white hover:bg-pink-600 disabled:opacity-50"
+                        >
+                          {busy === 'redesign'
+                            ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {redesignProg || 'Đang tái thiết kế giao diện riêng…'}</>
+                            : <>🏗️ {tuning.customScripts?.length ? 'Tái thiết kế lại (bản mới thay bản cũ)' : 'Tái thiết kế giao diện RIÊNG theo phong cách này'} — nhiều call AI</>}
+                        </button>
+                        <p className="text-[9px] text-muted-foreground leading-snug">
+                          Khác nút học ở trên (chỉ áp màu/hiệu ứng lên khung sẵn): nút này để AI <b>thiết kế mới
+                          hoàn toàn</b> bố cục, component, phân cấp thông tin, spacing, typography, animation, UX —
+                          mang tinh thần card mẫu nhưng không clone, và chỉ dùng biến của schema hiện tại
+                          (máy soi rò biến mẫu + kiểm 4 tầng trước khi nhận).
+                        </p>
+                        {redesignWarns.length > 0 && (
+                          <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-1.5 space-y-0.5">
+                            {redesignWarns.slice(0, 4).map((w, i) => <p key={i} className="text-[9px] text-amber-400">⚠️ {w}</p>)}
+                          </div>
+                        )}
+                      </div>
+                    )}
                     {styleRemoved.length > 0 && (
                       <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-1.5">
                         <p className="text-[9px] text-amber-400">
@@ -599,6 +709,44 @@ export function PreviewTunerModal({ open, onClose, onStart }: Props) {
                     giao diện bên trong chết cứng: không bấm, không kéo, không mở rộng được — chỉ
                     còn là ảnh chụp. Nay tách đôi: THANH TIÊU ĐỀ là nút chọn mẫu, còn iframe sống
                     bình thường để bạn thử đúng những nút mà card thật sẽ có. */}
+                {/* (bug 188) Giao diện TÁI THIẾT KẾ riêng — đứng đầu danh sách, preview bóc từ
+                    chính bộ script sẽ đi vào card (không phải bản dựng lại), nên thấy gì áp nấy. */}
+                {customUi && (
+                  <div key={CUSTOM_UI_ID}
+                    className={`rounded-xl border-2 overflow-hidden transition-colors ${tuning.themeId === CUSTOM_UI_ID ? 'border-pink-500' : 'border-border hover:border-pink-500/40'}`}>
+                    <button type="button"
+                      onClick={() => useAutoCreatorStore.getState().setTuning({ themeId: CUSTOM_UI_ID, confirmed: false })}
+                      className={`w-full px-2 py-1.5 text-[11px] font-medium flex items-center gap-1.5 text-left ${tuning.themeId === CUSTOM_UI_ID ? 'bg-pink-500/15 text-pink-300' : 'bg-muted/20 hover:bg-muted/40'}`}>
+                      {tuning.themeId === CUSTOM_UI_ID ? <Check className="w-3 h-3 shrink-0" /> : <span className="w-3 h-3 shrink-0 rounded-full border border-current opacity-40" />}
+                      <span className="truncate">🏗️ Thiết kế riêng{tuning.styleProfile ? ` — ${tuning.styleProfile.icon} ${tuning.styleProfile.name}` : ''}</span>
+                      <span className="ml-auto opacity-60">{tuning.themeId === CUSTOM_UI_ID ? 'đang chọn' : 'chọn'}</span>
+                    </button>
+                    {customUi.form && (
+                      <div className="border-b border-border">
+                        <div className="px-2 py-1 text-[10px] text-muted-foreground bg-muted/10">
+                          Opening Form — điền thử rồi bấm Xác nhận, Status Bar bên dưới sẽ cập nhật theo
+                        </div>
+                        <iframe title={`${CUSTOM_UI_ID}-form`} sandbox="allow-scripts"
+                          data-preview-role="form" data-preview-theme={CUSTOM_UI_ID}
+                          srcDoc={withData
+                            ? withPreviewData(toIframeHtml(customUi.form), tuning.schema, 'form')
+                            : toIframeHtml(customUi.form)}
+                          className={`w-full bg-white ${bigPreview ? 'h-[45vh]' : 'h-64'}`} />
+                      </div>
+                    )}
+                    {customUi.status && (
+                      <>
+                        {customUi.form && <div className="px-2 py-1 text-[10px] text-muted-foreground bg-muted/10">Status Bar</div>}
+                        <iframe title={CUSTOM_UI_ID} sandbox="allow-scripts"
+                          data-preview-role="status" data-preview-theme={CUSTOM_UI_ID}
+                          srcDoc={withData
+                            ? withPreviewData(toIframeHtml(customUi.status), tuning.schema, customUi.form ? 'status' : 'solo')
+                            : toIframeHtml(customUi.status)}
+                          className={`w-full bg-white ${bigPreview ? 'h-[45vh]' : 'h-64'}`} />
+                      </>
+                    )}
+                  </div>
+                )}
                 {themeChoices.map(c => (
                   <div key={c.themeId}
                     className={`rounded-xl border-2 overflow-hidden transition-colors ${tuning.themeId === c.themeId ? 'border-primary' : 'border-border hover:border-primary/40'}`}>

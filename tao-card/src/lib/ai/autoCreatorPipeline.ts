@@ -12,6 +12,7 @@ import { buildSchemaContextForBatch } from '../mvuzod/schemaContextBuilder';
 import { normalizeMVUZODSchema } from '../mvuzod/normalizeSchema';
 import { auditCardQuality } from '../mvuzod/cardQualityAudit';
 import { tuningUsable, applyLockedSchema } from './cardTuning';
+import { CUSTOM_UI_ID } from '../../types/autoCreator.types';
 import { buildOutputFormatContent, buildEmphasisContent } from '../mvuzod/systemEntriesBuilder';
 import { nestFlatInitvarKeys } from '../mvuzod/nestFlatInitvar';
 import { quoteAmbiguousInitVarScalars } from '../mvuzod/yamlScalars';
@@ -740,8 +741,30 @@ ${response.text}`;
         throw new Error('Chưa có schema MVU — bật bước "MVUZOD Schema" chạy trước để sinh Game UI.');
       }
       const uiCfg = config.stepConfigs.game_ui;
+      // (bug 188) User đã TÁI THIẾT KẾ giao diện riêng ở "Xem trước & Tinh chỉnh" (AI dựng từ
+      // schema + phong cách học, đã qua chốt rò-biến-mẫu + validator) → dùng ĐÚNG bộ script đó,
+      // không dựng lại từ template. Anchor findRegex y hệt đường programmatic nên apply/dedupe
+      // phía dưới hoạt động nguyên xi.
+      const tunedForUi = tuningUsable(config.tuning, config.idea) ? config.tuning : undefined;
+      if (tunedForUi?.themeId === CUSTOM_UI_ID && tunedForUi.customScripts?.length) {
+        const scripts = tunedForUi.customScripts;
+        store.addLog({ step, level: 'info', message: `🏗️ Dùng giao diện TÁI THIẾT KẾ riêng đã chốt ở "Xem trước & Tinh chỉnh" (${scripts.length} script).` });
+        const preview: StepPreview = {
+          rawOutput: `Giao diện tái thiết kế riêng (bug 188) — ${scripts.length} regex script`,
+          parsedData: scripts,
+          tokenEstimate: 0,
+        };
+        store.setStepPreview(step, preview);
+        if (config.autoApplyAll) {
+          applyParsedDataToCard(step, scripts, config, cardStore);
+        } else {
+          store.addLog({ step, level: 'info', message: '📋 Preview Game UI sẵn sàng. Nhấn Apply để áp dụng.' });
+        }
+        store.setStepResult(step, `${scripts.length} UI script (thiết kế riêng từ phong cách học)`);
+        break;
+      }
       // (bug 141) Theme user đã chọn ở Bước 2 của "Xem trước & Tinh chỉnh" thắng cấu hình bước.
-      const tunedTheme = tuningUsable(config.tuning, config.idea) ? config.tuning?.themeId : undefined;
+      const tunedTheme = tunedForUi?.themeId;
       if (tunedTheme) {
         store.addLog({ step, level: 'info', message: `🔒 Dùng giao diện đã chọn ở "Xem trước & Tinh chỉnh": ${tunedTheme}.` });
       }

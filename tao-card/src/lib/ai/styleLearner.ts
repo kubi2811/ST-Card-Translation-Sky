@@ -262,6 +262,60 @@ export function sanitizeStyleProfile(
   };
 }
 
+/* ═══════════════ 4b. (bug 188) TÁI THIẾT KẾ GIAO DIỆN RIÊNG ═══════════════ */
+
+/**
+ * (bug 188) Biến Style Profile thành BẢN THIẾT KẾ (design brief) cho máy sinh UI thật
+ * (generateOrchestrated). Khác bug 186 (chỉ đổi màu template): brief này yêu cầu AI TÁI THIẾT
+ * KẾ một giao diện MỚI — bố cục, tỷ lệ, cấu trúc component, phân cấp thông tin, khoảng cách,
+ * typography, icon, animation, trạng thái tương tác, UX — mang tinh thần mẫu nhưng không clone.
+ */
+export function styleProfileToDesignBrief(profile: StyleProfile): string {
+  const lines: string[] = [
+    'BẢN THIẾT KẾ — TÁI THIẾT KẾ GIAO DIỆN THEO PHONG CÁCH ĐÃ HỌC TỪ MỘT CARD MẪU.',
+    'LUẬT SẮT (vi phạm là kết quả bị máy loại):',
+    '1. Đây là THIẾT KẾ MỚI của riêng bạn — TUYỆT ĐỐI KHÔNG chép lại giao diện mẫu, không dùng lại nguyên khối HTML/CSS nào của bất kỳ template nào. Học tinh thần, không chép hình hài.',
+    '2. CHỈ dùng các biến trong schema hiện tại (danh sách allowed variables bên dưới). Không bịa biến, không dùng tên biến của card mẫu.',
+    '3. Ưu tiên KHẢ NĂNG SỬ DỤNG THẬT: dễ đọc, tương phản đủ, phân cấp thông tin rõ, nhất quán giữa Opening Form và Status Bar, hợp với dữ liệu của thẻ.',
+    '',
+    `Tinh thần mẫu: ${profile.icon} ${profile.name} — ${profile.description}.`,
+  ];
+  const tokens = [...Object.entries(profile.colors), ...Object.entries(profile.extras)];
+  if (tokens.length) {
+    lines.push(`Bảng phong cách thị giác (dùng làm cảm hứng, được phép biến tấu): ${tokens.map(([k, v]) => `${k}=${v}`).join('; ')}.`);
+  }
+  if (profile.fontFamily) lines.push(`Typography: font chính ${profile.fontFamily}${profile.headingFont ? `, heading ${profile.headingFont}` : ''}${profile.fontImport ? ` (import: ${profile.fontImport})` : ''}.`);
+  const sec = (title: string, notes: string[]) => {
+    if (notes.length) lines.push(`${title}:`, ...notes.map(n => `- ${n}`));
+  };
+  sec('Ghi chú Opening Form (bố cục, luồng bước, ô nhập)', profile.openingForm);
+  sec('Ghi chú Status Bar (cấu trúc component, phân cấp, tab/nhóm)', profile.statusBar);
+  sec('Trang trí & animation (hiệu ứng, trạng thái hover/active)', profile.decorations);
+  sec('UX (tổ chức thông tin, khoảng cách, tỷ lệ)', profile.ux);
+  return lines.join('\n');
+}
+
+/** So MỘT tên biến với một khối văn bản — CJK: chứa là dính; ASCII: theo ranh giới từ. */
+export function nameHitsText(text: string, name: string): boolean {
+  if (/[一-鿿]/.test(name)) return text.includes(name);
+  if (name.length < 2) return false;
+  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').toLowerCase();
+  return new RegExp(`(?<![\\p{L}\\p{N}])${esc}(?![\\p{L}\\p{N}])`, 'u').test(text.toLowerCase());
+}
+
+/**
+ * (bug 188) CHỐT MÁY chống clone: soi bộ script tái thiết kế xem có RÒ tên biến của card mẫu
+ * không. AI dùng biến mẫu = nó đang chép ruột mẫu chứ không tái thiết kế — loại, không thương.
+ */
+export function checkRedesignLeaks(
+  scripts: Array<{ replaceString?: unknown; findRegex?: unknown }>,
+  bannedVars: string[] | undefined,
+): string[] {
+  if (!bannedVars?.length) return [];
+  const body = scripts.map(s => `${String(s.findRegex ?? '')}\n${String(s.replaceString ?? '')}`).join('\n');
+  return bannedVars.filter(v => nameHitsText(body, v));
+}
+
 /* ═══════════════ 5. ÁP PROFILE ═══════════════ */
 
 /** Phần thị giác của profile → AiThemeSpec, để registerAiTheme cắm vào chung đường với bug 145. */

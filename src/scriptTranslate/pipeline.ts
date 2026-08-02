@@ -12,6 +12,7 @@ import {
 import { runWorkerPool } from '../utils/runWorkerPool';
 import { packTokens, buildTokenBatchPrompt, parseTokenBatchResponse, isTranslatableToken } from './tokenBatcher';
 import { applyRegexAlternation } from './regexAlternation';
+import { checkDictCoverage } from './astExtract';
 import type {
   ScriptPipelineDeps,
   ScriptProgress,
@@ -60,14 +61,19 @@ function callWorker<T>(op: string, payload: Record<string, unknown>): Promise<T>
 export interface WorkerStats { chars: number; cjkChars: number; lines: number; looksMinified: boolean }
 export const scanStats = (code: string): Promise<WorkerStats> => callWorker('stats', { code });
 export const beautifyInWorker = (code: string): Promise<string> => callWorker('beautify', { code });
-export const extractInWorker = async (
+/** (bug 187 — Hạng mục A) Trích token: AST trước, regex-lookback chỉ là lưới dự phòng. */
+export const extractInWorker = (
   code: string,
   dict?: Record<string, string>,
-): Promise<{ tokens: CJKToken[]; parseFailed: boolean }> => {
-  const pz = await callWorker<{ zones: unknown[]; parseFailed: boolean }>('protectZones', { code });
-  const tokens = await callWorker<CJKToken[]>('extract', { code, zones: pz.zones, dict });
-  return { tokens, parseFailed: pz.parseFailed };
-};
+): Promise<import('./scriptPipeline.worker').ExtractResult> =>
+  callWorker('extract', { code, dict });
+/** (bug 187 — Hạng mục F) 4 phép kiểm AST trên cặp (gốc, dịch) — chạy trong worker. */
+export const astVerifyInWorker = (
+  original: string,
+  translated: string,
+  dict?: Record<string, string>,
+): Promise<import('./astVerifier').AstVerifyReport> =>
+  callWorker('astVerify', { original, code: translated, dict });
 
 const throwIfAborted = (signal?: AbortSignal) => {
   if (signal?.aborted) throw new Error('Cancelled');
@@ -104,17 +110,42 @@ export async function runScriptTranslation(
   const preValidate = await callWorker<{ parseOk: boolean; cjkChars: number }>('validate', { code: working, original: working });
   const cjkCharsIn = preValidate.cjkChars;
 
-  // 2) Extract token CJK (kèm zone bảo vệ: regex literal + sourcemap)
+  // 2) Extract token CJK — AST trước (bug 187), regex chỉ khi code không parse được.
   // (bug 151) Từ điển đi cùng ngay từ đây: khoá dữ liệu MVU (`t.人际网络`, `{身份:…}`) nằm
   // ngoài mọi đường dịch qua AI, chỉ từ điển mới đổi được — và phải đổi, vì card đã dịch biến
   // thì script đọc khoá Hán sẽ ra `undefined` mà không báo lỗi gì.
+  // (bug 187 — Hạng mục B) keyMode 'keep' = user chốt GIỮ khoá tiếng Trung (card chưa đổi
+  // biến) → không đưa từ điển vào đường đổi khoá; glossary vẫn dùng cho văn xuôi + alternation.
   cb({ stage: 'extract' });
   const glossaryDict: Record<string, string> = {};
   for (const g of deps.glossary) {
     const s = g.source.trim(), t = g.target.trim();
     if (s && t && s !== t) glossaryDict[s] = t;
   }
-  const { tokens } = await extractInWorker(working, glossaryDict);
+  // keyDict GIỮ CẢ mục identity (nguồn = đích): user chốt giữ nguyên khoá đó có chủ đích —
+  // coverage tính là phủ, verifier xếp trung tính. Lọc s !== t ở đây là ba nơi ba luật,
+  // user thêm mục identity xong vẫn bị chặn export với lời khuyên họ đã làm rồi (review 187).
+  let keyDict: Record<string, string> | undefined;
+  if (opts.keyMode !== 'keep') {
+    keyDict = {};
+    for (const g of deps.glossary) {
+      const s = g.source.trim(), t = g.target.trim();
+      if (s && t) keyDict[s] = t;
+    }
+  }
+  const extracted = await extractInWorker(working, keyDict);
+  const { tokens, extractMode, dataKeys } = extracted;
+  const dictCoverage = opts.keyMode === 'keep' ? undefined : checkDictCoverage(dataKeys, deps.glossary);
+  // (review 187) Cổng chặn coverage nằm TRONG pipeline chứ không chỉ ở nút UI — nút "Dịch lại
+  // mục lỗi", khoảnh khắc chưa phân tích xong, hay bất kỳ caller nào cũng đập vào cùng bức
+  // tường này, TRƯỚC khi tốn một call API nào (extract đứng trước mọi lô dịch).
+  if (opts.enforceDictCoverage && dictCoverage && dictCoverage.missing.length > 0) {
+    const names = dictCoverage.missing.slice(0, 8).map((m) => m.name).join(', ');
+    const more = dictCoverage.missing.length > 8 ? ', …' : '';
+    throw new Error(
+      `Từ Điển thiếu ${dictCoverage.missing.length} khoá dữ liệu (${names}${more}) — bổ sung vào bảng hoặc chuyển sang chế độ "Giữ nguyên tiếng Trung".`,
+    );
+  }
   throwIfAborted(ctl.signal);
 
   // Resume: áp bản dịch đã lưu từ lần chạy trước. Hai dây an toàn chống áp nhầm:
@@ -139,10 +170,22 @@ export async function runScriptTranslation(
     fandomName: deps.fandomName,
   };
 
+  // (bug 187 — Hạng mục D) Nhật ký retry: lỗi/miss nào cũng phải để lại dấu vết đọc được,
+  // không được âm thầm trả về bản gốc chưa dịch. Trần 300 dòng để report không phình MB.
+  const retryLog: string[] = [];
+  const logRetry = (line: string): void => {
+    if (retryLog.length < 300) retryLog.push(line);
+    else if (retryLog.length === 300) retryLog.push('… (quá 300 dòng, cắt bớt)');
+  };
+
   let round = 0;
   for (;;) {
     const batches = packTokens(tokens);
     if (!batches.length || round > 2) break;
+    if (round > 0) {
+      const left = batches.reduce((s, b) => s + b.batch.length, 0);
+      logRetry(`🔁 Vòng retry ${round}: còn ${left} chuỗi chưa dịch được, chia ${batches.length} lô thử lại`);
+    }
     let done = 0;
     cb({ stage: 'translate', done: 0, total: batches.length, note: round ? `retry-${round}` : undefined });
 
@@ -162,14 +205,22 @@ export async function runScriptTranslation(
             signal: ctl.signal,
             meta: { label: `script-batch-${round}-${i + 1}`, charCount: user.length, preferSecondary },
           });
-          const { translations } = parseTokenBatchResponse(resp, batch);
+          const { translations, failedIds } = parseTokenBatchResponse(resp, batch);
           for (const item of batch) {
             const tr = translations.get(item.token.id);
             if (tr) item.token.translated = tr;
           }
+          if (failedIds.length > 0) {
+            // AI trả thiếu marker/echo lệch id — nói rõ CHUỖI NÀO chưa về, vòng sau nhặt lại.
+            const sample = failedIds.slice(0, 3)
+              .map((id) => batch.find((b) => b.token.id === id)?.token.text.slice(0, 24) ?? `#${id}`)
+              .join(' · ');
+            logRetry(`⚠️ Vòng ${round}, lô ${i + 1}: AI trả thiếu ${failedIds.length}/${batch.length} chuỗi (vd: ${sample}) — chờ vòng retry`);
+          }
         } catch (e) {
           if ((e as Error)?.message === 'Cancelled' || ctl.signal.aborted) throw new Error('Cancelled');
-          // Lô lỗi → token của nó còn trống, vòng retry sau nhặt lại.
+          // Lô lỗi → token của nó còn trống, vòng retry sau nhặt lại — nhưng phải GHI SỔ.
+          logRetry(`❌ Vòng ${round}, lô ${i + 1} (${batch.length} chuỗi): lỗi API "${(e as Error)?.message || String(e)}" — chờ vòng retry`);
         }
       },
       onSettled: () => {
@@ -246,8 +297,17 @@ export async function runScriptTranslation(
     { code: output, original: working, bracketPairs },
   );
 
+  // 7) (bug 187 — Hạng mục F) 4 phép kiểm AST gốc↔dịch — cổng QA tự động trước export,
+  // không đợi user report. Chạy trong worker (parse 2 file MB là long-task).
+  cb({ stage: 'verify' });
+  const astVerify = await astVerifyInWorker(working, output, keyDict);
+  throwIfAborted(ctl.signal);
+
   const translatable = tokens.filter(isTranslatableToken);
   const residual = translatable.filter((t) => !t.translated);
+  if (residual.length > 0) {
+    logRetry(`⛔ Hết ${round} vòng: ${residual.length} chuỗi vẫn chưa dịch được (giữ nguyên văn) — xem danh sách ở mục kết quả`);
+  }
   // (bug 151) Token giữ nguyên = khoá dữ liệu chưa có trong Từ Điển. Trước đây chỉ đếm số
   // lượng nên user thấy "0/82 chưa dịch" mà file vẫn còn 247 chữ Hán — hai con số đếm hai tập
   // khác nhau, trông như tool nói dối. Nay nói rõ: còn bao nhiêu chữ Hán, nằm ở tên nào.
@@ -277,6 +337,11 @@ export async function runScriptTranslation(
     linesIn: linesBefore,
     linesOut: linesAfter,
     durationMs: Date.now() - t0,
+    extractMode,
+    dictCoverage,
+    keyMode: opts.keyMode,
+    astVerify,
+    retryLog,
   };
   cb({ stage: 'done' });
   return { output, report, tokens };

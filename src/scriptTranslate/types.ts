@@ -14,16 +14,32 @@ export interface ScriptTranslateOptions {
    * /秋青子/ → /(?:秋青子|Thu Thanh Tử)/ — vì regex đó phải khớp CẢ output cũ lẫn mới.
    */
   regexAlternation: boolean;
+  /**
+   * (bug 187 — Hạng mục B) Số phận KHOÁ DỮ LIỆU (object key / dot-notation / đường dẫn):
+   *   'rename' — đổi theo Từ Điển (card đã dịch biến → script PHẢI đổi theo, thiếu khoá nào
+   *              trong Từ Điển là chặn, vì sót một khoá là đọc ra undefined không ai báo);
+   *   'keep'   — giữ nguyên tiếng Trung (card CHƯA đổi biến → đổi khoá mới là hỏng).
+   * Đây là quyết định user phải chọn TRƯỚC khi dịch — tool không đoán được card của họ.
+   */
+  keyMode: 'rename' | 'keep';
+  /**
+   * (review 187) Cổng chặn coverage nằm TRONG pipeline: keyMode 'rename' mà Từ Điển thiếu
+   * khoá → ném lỗi TRƯỚC mọi call API. Mặc định bật (tab Dịch Script); Dịch Preset tắt vì
+   * hợp đồng của nó xưa nay là đổi-được-thì-đổi (bug 151), khoá thiếu giữ Hán không phải lỗi.
+   */
+  enforceDictCoverage: boolean;
 }
 
 export const DEFAULT_SCRIPT_OPTIONS: ScriptTranslateOptions = {
   beautify: true,
   nsfw: false,
   regexAlternation: true,
+  keyMode: 'rename',
+  enforceDictCoverage: true,
 };
 
 export type ScriptStage =
-  | 'idle' | 'beautify' | 'extract' | 'translate' | 'reinsert' | 'regex' | 'validate' | 'done' | 'error';
+  | 'idle' | 'beautify' | 'extract' | 'translate' | 'reinsert' | 'regex' | 'validate' | 'verify' | 'done' | 'error';
 
 export interface ScriptProgress {
   stage: ScriptStage;
@@ -63,6 +79,16 @@ export interface ScriptTranslateReport {
   linesIn?: number;
   linesOut?: number;
   durationMs: number;
+  /** (bug 187 — Hạng mục A) Cơ chế trích token: 'ast' (chuẩn) hay 'regex' (dự phòng khi không parse được). */
+  extractMode?: 'ast' | 'regex';
+  /** (bug 187 — Hạng mục B) Coverage Từ Điển khoá tại thời điểm chạy (chỉ có ở keyMode 'rename'). */
+  dictCoverage?: import('./astExtract').DictCoverage;
+  /** (bug 187 — Hạng mục B) Chế độ khoá user đã chọn cho lần chạy này. */
+  keyMode?: 'rename' | 'keep';
+  /** (bug 187 — Hạng mục F) 4 phép kiểm AST sau dịch — cổng QA trước khi cho export. */
+  astVerify?: import('./astVerifier').AstVerifyReport;
+  /** (bug 187 — Hạng mục D) Nhật ký retry/lỗi từng lô — lỗi không được nuốt âm thầm nữa. */
+  retryLog?: string[];
 }
 
 export interface ScriptPipelineDeps {

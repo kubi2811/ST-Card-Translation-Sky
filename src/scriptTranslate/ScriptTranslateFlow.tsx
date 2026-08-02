@@ -17,6 +17,7 @@ import {
 } from './persist';
 import { parseGlossaryJson, mergeGlossaries, countUsable, hasNewEntries, glossaryToJson } from '../utils/glossaryIO';
 import { onGlossaryPush } from '../utils/glossaryBridge';
+import { checkDictCoverage, type DataKeyInfo } from './astExtract';
 
 export default function ScriptTranslateFlow() {
   const ui = useUi();
@@ -40,6 +41,10 @@ export default function ScriptTranslateFlow() {
   const [paused, setPaused] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [resumeInfo, setResumeInfo] = useState<number>(0); // số token khôi phục từ cache
+  /** (bug 187 — Hạng mục B) Khoá dữ liệu CJK của script hiện tại — nền của cổng chặn Từ Điển. */
+  const [analysis, setAnalysis] = useState<{ mode: 'ast' | 'regex'; dataKeys: DataKeyInfo[] } | null>(null);
+  /** (bug 187 — Hạng mục F) User chủ động vượt chặn export sau khi verifier báo đỏ. */
+  const [forceExport, setForceExport] = useState(false);
   /** Kết quả lần nhập/mượn từ điển gần nhất — hiện ngay dưới hàng nút, tự tắt sau 6s */
   const [glsNote, setGlsNote] = useState<{ text: string; ok: boolean } | null>(null);
   useEffect(() => {
@@ -86,6 +91,8 @@ export default function ScriptTranslateFlow() {
     setOutput('');
     setErrorMsg('');
     setResumeInfo(0);
+    setAnalysis(null);
+    setForceExport(false);
     // Gõ/dán liên tục → chỉ lần quét CUỐI được ghi kết quả (chống dội worker + fetch mỗi phím)
     const seq = ++scanSeq.current;
     await new Promise((r) => setTimeout(r, 350));
@@ -96,8 +103,34 @@ export default function ScriptTranslateFlow() {
       setStats(st);
       const saved = await loadTokenMap(runSig(text, beautifyRef.current));
       if (seq === scanSeq.current && saved) setResumeInfo(Object.keys(saved).length);
+      // (bug 187 — Hạng mục B) Quét khoá dữ liệu NGAY khi nạp — cổng chặn cần biết trước khi
+      // user bấm Dịch. Chạy trong worker nên file MB không đơ trang. Danh sách khoá không phụ
+      // thuộc cờ beautify (prettier không đổi ngữ nghĩa AST) nên quét trên bản gốc là đủ.
+      if (text.trim()) {
+        const ex = await extractInWorker(text);
+        if (seq === scanSeq.current) setAnalysis({ mode: ex.extractMode, dataKeys: ex.dataKeys });
+      }
     } catch { setStats(null); }
   }, []);
+
+  // (bug 187 — Hạng mục B) Coverage Từ Điển: tính lại mỗi khi bảng tên đổi. Rẻ — danh sách
+  // khoá đã gọn, không đụng lại file nguồn.
+  const coverage = useMemo(
+    () => (analysis && opts.keyMode === 'rename' ? checkDictCoverage(analysis.dataKeys, glossary) : null),
+    [analysis, glossary, opts.keyMode],
+  );
+  const keyGateBlocked = opts.keyMode === 'rename' && !!coverage && coverage.missing.length > 0;
+
+  /** Đổ các khoá còn thiếu vào bảng (target trống) — user điền tay hoặc để Pha 0 AI đề xuất. */
+  const addMissingKeys = useCallback(() => {
+    if (!coverage) return;
+    const have = new Set(glossaryRef.current.map((g) => g.source.trim()));
+    const rows = coverage.missing.filter((m) => !have.has(m.name)).map((m) => ({ source: m.name, target: '' }));
+    if (rows.length) {
+      glossaryRef.current = [...glossaryRef.current, ...rows];
+      setGlossary(glossaryRef.current);
+    }
+  }, [coverage]);
 
   // ─── Nhập / mượn từ điển ───
   /**
@@ -205,6 +238,7 @@ export default function ScriptTranslateFlow() {
     setErrorMsg('');
     setReport(null);
     setOutput('');
+    setForceExport(false);
     tokensRef.current = [];
     const ctl = new AbortController();
     abortRef.current = ctl;
@@ -258,8 +292,16 @@ export default function ScriptTranslateFlow() {
   const stageLabel: Record<string, string> = {
     idle: '', beautify: ui.scrTrStBeautify, extract: ui.scrTrStExtract, translate: ui.scrTrStTranslate,
     reinsert: ui.scrTrStReinsert, regex: ui.scrTrStRegex, validate: ui.scrTrStValidate,
-    done: ui.scrTrStDone, error: ui.scrTrStError,
+    verify: ui.scrTrStVerify, done: ui.scrTrStDone, error: ui.scrTrStError,
   };
+
+  // (bug 187 — Hạng mục F/C) Cổng export: kiểm AST đỏ, hoặc còn khoá Hán ở chế độ đổi-theo-dict
+  // → chặn nút tải chính; user vẫn có đường vượt TƯỜNG MINH (không bao giờ chặn chết).
+  const vf = report?.astVerify;
+  const exportBlockReason = !report ? '' :
+    vf?.hardFail ? ui.scrTrExportBlockedHard :
+    (report.keyMode === 'rename' && (vf?.cjkGroups.dataKey.length ?? 0) > 0) ? ui.scrTrExportBlockedKeys : '';
+  const exportBlocked = !!exportBlockReason && !forceExport;
 
   return (
     <div style={{ maxWidth: 1100, margin: '0 auto', padding: '20px 22px 60px', display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -336,6 +378,62 @@ export default function ScriptTranslateFlow() {
       <section style={card}>
         <h3 style={cardTitle}>3 · {ui.scrTrPha0Title}</h3>
         <p style={{ margin: '0 0 10px', fontSize: '0.8rem', color: 'var(--text-muted, #b6b2c9)' }}>{ui.scrTrPha0Desc}</p>
+
+        {/* (bug 187 — Hạng mục B) Số phận khoá dữ liệu: user PHẢI chọn, tool không đoán được
+            card của họ đã đổi biến hay chưa — và chọn sai hướng nào cũng hỏng theo hướng đó. */}
+        {source && (
+          <div style={{
+            marginBottom: 12, padding: '10px 12px', borderRadius: 8,
+            border: `1px solid ${keyGateBlocked ? 'rgba(239,68,68,0.45)' : 'var(--border-subtle, #2a2a3e)'}`,
+            background: keyGateBlocked ? 'rgba(239,68,68,0.07)' : 'var(--bg-primary, #0f0f14)',
+          }}>
+            <div style={{ fontSize: '0.84rem', fontWeight: 700, marginBottom: 6 }}>🔑 {ui.scrTrKeyModeTitle}</div>
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 6 }}>
+              <label title={ui.scrTrKeyModeRenameTip} style={checkLabel}>
+                <input type="radio" name="keyMode" checked={opts.keyMode === 'rename'}
+                  onChange={() => setOpts({ ...opts, keyMode: 'rename' })} />
+                📖 {ui.scrTrKeyModeRename}
+              </label>
+              <label title={ui.scrTrKeyModeKeepTip} style={checkLabel}>
+                <input type="radio" name="keyMode" checked={opts.keyMode === 'keep'}
+                  onChange={() => setOpts({ ...opts, keyMode: 'keep' })} />
+                🈶 {ui.scrTrKeyModeKeep}
+              </label>
+            </div>
+            {!analysis ? (
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-muted, #b6b2c9)' }}>⏳ {ui.scrTrAnalyzing}</div>
+            ) : analysis.dataKeys.length === 0 ? (
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-muted, #b6b2c9)' }}>✅ {ui.scrTrKeyCoverageNone}</div>
+            ) : opts.keyMode === 'rename' && coverage ? (
+              <>
+                <div style={{ fontSize: '0.8rem' }}>
+                  {fmt(ui.scrTrKeyCoverage, { total: coverage.total, covered: coverage.covered, missing: coverage.missing.length })}
+                </div>
+                {coverage.missing.length > 0 && (
+                  <div style={{ marginTop: 6 }}>
+                    <div style={{ fontSize: '0.76rem', color: '#ffb4a6' }}>{ui.scrTrKeyMissingTitle}</div>
+                    <div style={{ ...mono, maxHeight: 90, overflow: 'auto', marginTop: 4, fontSize: '0.74rem' }}>
+                      {coverage.missing.map((m) => `${m.name} (×${m.count})`).join(' · ')}
+                    </div>
+                    <button onClick={addMissingKeys} style={{ ...tint(C.import), marginTop: 6, fontSize: '0.76rem', padding: '4px 10px' }}>
+                      ➕ {fmt(ui.scrTrKeyAddMissing, { n: coverage.missing.length })}
+                    </button>
+                  </div>
+                )}
+                {coverage.collisions.map((c, i) => (
+                  <div key={i} style={{ fontSize: '0.76rem', color: '#fbbf24', marginTop: 4 }}>
+                    {fmt(ui.scrTrKeyCollision, { sources: c.sources.join(' + '), target: c.target })}
+                  </div>
+                ))}
+              </>
+            ) : (
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-muted, #b6b2c9)' }}>
+                🈶 {fmt(ui.scrTrKeyKeepCount, { n: analysis.dataKeys.length })}
+              </div>
+            )}
+          </div>
+        )}
+
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           {/* Hành động chính của khối — vàng vì có tốn lượt AI */}
           <button
@@ -406,7 +504,16 @@ export default function ScriptTranslateFlow() {
         <h3 style={cardTitle}>4 · {ui.scrTrRunTitle}</h3>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           {!running ? (
-            <button onClick={() => void handleRun()} disabled={!source || glossaryBusy} title={glossaryBusy ? ui.scrTrPha0Running : undefined} style={{ ...tint(C.import, true), opacity: (!source || glossaryBusy) ? 0.45 : 1 }}>
+            // (review 187) Chặn thêm lúc CHƯA phân tích xong khoá (analysis null) — không thì
+            // trong cửa sổ vài giây quét file lớn, nút mở toang và cổng Từ Điển bị lách.
+            <button
+              onClick={() => void handleRun()}
+              disabled={!source || glossaryBusy || keyGateBlocked || (!!source && !analysis)}
+              title={glossaryBusy ? ui.scrTrPha0Running
+                : keyGateBlocked && coverage ? fmt(ui.scrTrKeyGateBlocked, { n: coverage.missing.length })
+                : source && !analysis ? ui.scrTrAnalyzing : undefined}
+              style={{ ...tint(C.import, true), opacity: (!source || glossaryBusy || keyGateBlocked || !analysis) ? 0.45 : 1 }}
+            >
               ▶️ {ui.scrTrRunBtn}
             </button>
           ) : (
@@ -423,6 +530,11 @@ export default function ScriptTranslateFlow() {
             </span>
           )}
         </div>
+        {keyGateBlocked && coverage && !running && (
+          <div style={{ marginTop: 8, color: '#ffb4a6', fontSize: '0.8rem' }}>
+            ⛔ {fmt(ui.scrTrKeyGateBlocked, { n: coverage.missing.length })}
+          </div>
+        )}
         {errorMsg && <div style={{ marginTop: 8, color: '#ffb4a6', fontSize: '0.85rem' }}>❌ {errorMsg}</div>}
         {running && <div style={{ marginTop: 12 }}><ActiveCallsPanel /></div>}
       </section>
@@ -457,6 +569,111 @@ export default function ScriptTranslateFlow() {
               <li>📖 {fmt(ui.scrTrRepDictRenamed, { n: report.dictRenamed })}</li>
             )}
             <li>🧩 {fmt(ui.scrTrRepRegex, { changed: report.regexChanged, reverted: report.regexReverted })}</li>
+            {/* (bug 187 — Hạng mục A) Cơ chế trích token đã dùng — fallback regex phải NÓI RA. */}
+            {report.extractMode && (
+              <li>{report.extractMode === 'ast' ? `🌳 ${ui.scrTrExtractAst}` : `⚠️ ${ui.scrTrExtractRegex}`}</li>
+            )}
+            {/* (bug 187 — Hạng mục F) 4 phép kiểm AST gốc ↔ dịch. */}
+            {vf && (
+              <li>
+                {vf.hardFail ? (
+                  <div style={{ color: '#ffb4a6' }}>
+                    ❌ {ui.scrTrVfFailTitle}
+                    <ul style={{ margin: '4px 0 0', paddingLeft: 16 }}>
+                      {vf.hardFailReasons.map((r, i) => <li key={i}>{r}</li>)}
+                    </ul>
+                    {(vf.identDiffs.length > 0 || vf.literalDiffs.length > 0 || vf.regexDiffs.length > 0 || vf.structuralDiffs.length > 0) && (
+                      <details style={{ marginTop: 4 }}>
+                        <summary style={{ cursor: 'pointer', fontSize: '0.78rem' }}>{ui.scrTrVfDetailList}</summary>
+                        <pre style={{ ...mono, maxHeight: 160, overflow: 'auto' }}>
+                          {[...vf.structuralDiffs, ...vf.identDiffs, ...vf.literalDiffs, ...vf.regexDiffs]
+                            .slice(0, 40)
+                            .map((d) => fmt(ui.scrTrCjkDetailLine, { line: d.line, ctx: `${d.before} → ${d.after}` }))
+                            .join('\n')}
+                        </pre>
+                      </details>
+                    )}
+                  </div>
+                ) : (
+                  <>✅ {fmt(ui.scrTrVfPass, { up: vf.regexUpgrades > 0 ? fmt(ui.scrTrVfUpgrades, { n: vf.regexUpgrades }) : '' })}
+                    {vf.mode === 'text-only' && <span style={{ color: '#fbbf24' }}> — {ui.scrTrVfTextOnly}</span>}
+                  </>
+                )}
+              </li>
+            )}
+            {vf && vf.renamesOffDict > 0 && (
+              <li style={{ color: '#fbbf24' }}>
+                ⚠️ {fmt(ui.scrTrVfOffDict, { n: vf.renamesOffDict })}
+                <details style={{ marginTop: 4 }}>
+                  <summary style={{ cursor: 'pointer', fontSize: '0.78rem' }}>{ui.scrTrVfOffDictList}</summary>
+                  <pre style={{ ...mono, maxHeight: 120, overflow: 'auto' }}>
+                    {vf.keyRenames.filter((k) => !k.inDict).slice(0, 40).map((k) => `${k.from} → ${k.to} (×${k.count})`).join('\n')}
+                  </pre>
+                </details>
+              </li>
+            )}
+            {/* (bug 187 — Hạng mục C) CJK còn lại tách theo BẢN CHẤT — hết thời một con số gộp. */}
+            {vf && (
+              <li>
+                🈶 {ui.scrTrCjkTitle}
+                <ul style={{ margin: '4px 0 0', paddingLeft: 16 }}>
+                  {vf.cjkGroups.alternationChars === 0 && vf.cjkGroups.dataKey.length === 0 &&
+                    vf.cjkGroups.prose.length === 0 && vf.cjkGroups.regexNoAlt.length === 0 &&
+                    vf.cjkGroups.keptIdentifiers === 0 && <li>✅ {ui.scrTrCjkClean}</li>}
+                  {vf.cjkGroups.alternationChars > 0 && (
+                    <li style={{ opacity: 0.75 }}>{fmt(ui.scrTrCjkAlt, { n: vf.cjkGroups.alternationChars })}</li>
+                  )}
+                  {vf.cjkGroups.keptIdentifiers > 0 && (
+                    <li style={{ opacity: 0.75 }}>{fmt(ui.scrTrCjkKept, { n: vf.cjkGroups.keptIdentifiers })}</li>
+                  )}
+                  {vf.cjkGroups.dataKey.length > 0 && (
+                    // Chế độ 'keep': user CHỦ ĐỘNG giữ khoá Hán — hiện trung tính, đừng dọa đỏ.
+                    <li style={report.keyMode === 'keep' ? { opacity: 0.75 } : { color: '#ffb4a6' }}>
+                      {report.keyMode === 'keep'
+                        ? `🔒 ${fmt(ui.scrTrCjkDataKeyKept, { n: vf.cjkGroups.dataKey.length })}`
+                        : `🔴 ${fmt(ui.scrTrCjkDataKey, { n: vf.cjkGroups.dataKey.length })}`}
+                      <details style={{ marginTop: 2 }}>
+                        <summary style={{ cursor: 'pointer', fontSize: '0.78rem' }}>{ui.scrTrCjkList}</summary>
+                        <pre style={{ ...mono, maxHeight: 140, overflow: 'auto' }}>
+                          {vf.cjkGroups.dataKey.map((d) => fmt(ui.scrTrCjkDetailLine, { line: d.line, ctx: `${d.text} — ${d.context}` })).join('\n')}
+                        </pre>
+                      </details>
+                    </li>
+                  )}
+                  {vf.cjkGroups.prose.length > 0 && (
+                    <li style={{ color: '#fbbf24' }}>
+                      🟡 {fmt(ui.scrTrCjkProse, { n: vf.cjkGroups.prose.length })}
+                      <details style={{ marginTop: 2 }}>
+                        <summary style={{ cursor: 'pointer', fontSize: '0.78rem' }}>{ui.scrTrCjkList}</summary>
+                        <pre style={{ ...mono, maxHeight: 140, overflow: 'auto' }}>
+                          {vf.cjkGroups.prose.map((d) => fmt(ui.scrTrCjkDetailLine, { line: d.line, ctx: `${d.text} — ${d.context}` })).join('\n')}
+                        </pre>
+                      </details>
+                    </li>
+                  )}
+                  {vf.cjkGroups.regexNoAlt.length > 0 && (
+                    <li style={{ color: '#fbbf24' }}>
+                      🟠 {fmt(ui.scrTrCjkRegexNoAlt, { n: vf.cjkGroups.regexNoAlt.length })}
+                      <details style={{ marginTop: 2 }}>
+                        <summary style={{ cursor: 'pointer', fontSize: '0.78rem' }}>{ui.scrTrCjkList}</summary>
+                        <pre style={{ ...mono, maxHeight: 140, overflow: 'auto' }}>
+                          {vf.cjkGroups.regexNoAlt.map((d) => fmt(ui.scrTrCjkDetailLine, { line: d.line, ctx: `${d.text} — ${d.context}` })).join('\n')}
+                        </pre>
+                      </details>
+                    </li>
+                  )}
+                </ul>
+              </li>
+            )}
+            {/* (bug 187 — Hạng mục D) Nhật ký retry — lỗi API/echo thiếu không bị nuốt nữa. */}
+            {report.retryLog && report.retryLog.length > 0 && (
+              <li>
+                <details>
+                  <summary style={{ cursor: 'pointer' }}>📋 {fmt(ui.scrTrRetryLogTitle, { n: report.retryLog.length })}</summary>
+                  <pre style={{ ...mono, maxHeight: 180, overflow: 'auto', marginTop: 4 }}>{report.retryLog.join('\n')}</pre>
+                </details>
+              </li>
+            )}
             <li>🈶 {fmt(ui.scrTrRepCjk, { in: report.cjkCharsIn.toLocaleString(), out: report.cjkCharsOut.toLocaleString() })}</li>
             {/* (bug 160) Số dòng phình ra = có xuống dòng bị chèn vào giữa chuỗi JS. Nói thẳng
                 nguyên nhân, đừng để user chỉ thấy "Unterminated string constant". */}
@@ -465,12 +682,29 @@ export default function ScriptTranslateFlow() {
             )}
             <li>⏱️ {fmt(ui.scrTrRepTime, { s: Math.round(report.durationMs / 1000) })} · {Math.round(report.bytesIn / 1024)}KB → {Math.round(report.bytesOut / 1024)}KB</li>
           </ul>
+          {/* (bug 187 — Hạng mục C/F) Kiểm đỏ thì chặn export — nhưng chặn TƯỜNG MINH kèm đường
+              vượt có chủ đích, không chặn chết (verifier cũng có thể sai ở mẫu chưa lường). */}
+          {!!exportBlockReason && (
+            <div style={{
+              marginTop: 12, padding: '8px 12px', borderRadius: 8, fontSize: '0.8rem',
+              border: '1px solid rgba(239,68,68,0.45)', background: 'rgba(239,68,68,0.07)', color: '#ffb4a6',
+            }}>
+              ⛔ {exportBlockReason}
+              {!forceExport && (
+                <button onClick={() => setForceExport(true)} style={{ ...btn, marginLeft: 10, fontSize: '0.72rem', padding: '3px 8px' }}>
+                  {ui.scrTrExportForce}
+                </button>
+              )}
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
-            <button onClick={handleDownload} disabled={!output} style={{ ...tint(C.export, true), opacity: output ? 1 : 0.45 }}>
+            <button onClick={handleDownload} disabled={!output || exportBlocked} style={{ ...tint(C.export, true), opacity: output && !exportBlocked ? 1 : 0.45 }}>
               💾 {ui.scrTrDownload}
             </button>
-            <button onClick={() => { void navigator.clipboard.writeText(output); }} disabled={!output} style={btn}>📋 {ui.scrTrCopy}</button>
-            {report.residualTokens > 0 && !running && (
+            <button onClick={() => { void navigator.clipboard.writeText(output); }} disabled={!output || exportBlocked} style={btn}>📋 {ui.scrTrCopy}</button>
+            {/* (review 187) Nút Dịch lại cũng phải tôn trọng cổng Từ Điển — pipeline có tường
+                chặn riêng rồi, nhưng nút mở toang trong khi nút Chạy xám là đánh đố user. */}
+            {report.residualTokens > 0 && !running && !keyGateBlocked && (
               <button onClick={() => void handleRun()} style={tint(C.ai)}>🔁 {ui.scrTrRetryFailed}</button>
             )}
           </div>

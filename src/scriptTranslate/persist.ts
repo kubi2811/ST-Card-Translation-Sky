@@ -16,9 +16,11 @@ export const sourceSig = (s: string): string => `${s.length}:${s.slice(0, 64)}:$
 /**
  * Sig của 1 LẦN CHẠY = sig nguồn + cờ beautify. Id token sinh theo thứ tự offset trên văn bản
  * SAU beautify — đổi cờ là id lệch hết, map cũ mà áp bừa là bản dịch gắn nhầm chuỗi (lỗi câm).
+ * (bug 187) Hậu tố :v2 — bộ trích AST đánh id khác hệ regex cũ, map cũ phải vô hiệu sạch sẽ
+ * (lớp đối chiếu `o === token.text` vẫn là dây an toàn thứ hai).
  */
 export const runSig = (source: string, beautify: boolean): string =>
-  `${sourceSig(source)}:b${beautify ? 1 : 0}`;
+  `${sourceSig(source)}:b${beautify ? 1 : 0}:v2`;
 
 export function loadOpts(): ScriptTranslateOptions {
   try {

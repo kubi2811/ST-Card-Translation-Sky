@@ -11,6 +11,8 @@ import {
   verifyCodeStructureParity,
   type CJKToken,
 } from '../utils/surgical';
+import { extractTokensAst, type DataKeyInfo } from './astExtract';
+import { verifyTranslationAst } from './astVerifier';
 import { jsParseErrorAny } from '../utils/scriptSafety';
 import { countCjk } from '../utils/langDetect';
 
@@ -18,7 +20,7 @@ interface Zone { start: number; end: number; reason: string }
 
 interface Req {
   id: number;
-  op: 'beautify' | 'protectZones' | 'extract' | 'reinsert' | 'validate' | 'stats';
+  op: 'beautify' | 'protectZones' | 'extract' | 'reinsert' | 'validate' | 'stats' | 'astVerify';
   code?: string;
   original?: string;
   zones?: Zone[];
@@ -27,6 +29,15 @@ interface Req {
   dict?: Record<string, string>;
   /** (bug 154) Số cặp [ ] thêm hợp lệ do bracket-wrap khoá — để parity không báo động giả. */
   bracketPairs?: number;
+}
+
+/** Kết quả op 'extract' bản mới — AST trước, regex-lookback chỉ còn là lưới dự phòng. */
+export interface ExtractResult {
+  tokens: CJKToken[];
+  /** 'ast' = phân loại theo cây cú pháp (bug 187); 'regex' = fallback khi code không parse được. */
+  extractMode: 'ast' | 'regex';
+  dataKeys: DataKeyInfo[];
+  keptIdentifiers: Array<{ name: string; count: number }>;
 }
 
 interface Res {
@@ -129,15 +140,54 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
         return;
       }
       case 'extract': {
+        // (bug 187 — Hạng mục A) AST TRƯỚC: phân loại token theo loại node acorn — hết thời
+        // "soi regex vài ký tự lân cận" từng đẻ ra chuỗi vá #151→#154→#160→#161→#171.
+        // Code không parse được (vỡ sẵn/không phải JS thuần) mới rơi về bộ trích regex cũ,
+        // và caller PHẢI nói rõ điều đó trong report thay vì im lặng.
+        const code = ev.data.code || '';
+        const ast = extractTokensAst(code, ev.data.dict);
+        if (ast) {
+          reply({
+            ok: true,
+            result: {
+              tokens: ast.tokens,
+              extractMode: 'ast',
+              dataKeys: ast.dataKeys,
+              keptIdentifiers: ast.keptIdentifiers.map((k) => ({ name: k.name, count: k.count })),
+            } satisfies ExtractResult,
+          });
+          return;
+        }
         // (bug 151) Tham số 4 trước đây bỏ trống → Dịch Script KHÔNG BAO GIỜ thấy từ điển,
         // nên "có hay không có Từ Điển đều bỏ sót" y như nhau. Nay truyền vào đầy đủ.
-        const tokens = extractCJKTokens(
-          ev.data.code || '',
-          (ev.data.zones || []) as never,
-          'preserve',
-          ev.data.dict,
-        );
-        reply({ ok: true, result: tokens });
+        // Zone bảo vệ tự tính tại đây (caller không cần gọi 'protectZones' riêng nữa).
+        const zones = ev.data.zones ?? collectProtectZones(code).zones;
+        const tokens = extractCJKTokens(code, zones as never, 'preserve', ev.data.dict);
+        // Xấp xỉ dataKeys từ token cũ — đủ cho coverage check khi rơi về đường regex.
+        const seen = new Map<string, DataKeyInfo>();
+        for (const t of tokens) {
+          if (!(t.isObjectKey || t.isDotNotation || t.isIdentifier)) continue;
+          const core = t.text.replace(/^[\w$]+/, '').replace(/[\w$]+$/, '');
+          if (!/[一-鿿㐀-䶿぀-ヿ가-힯]/.test(core)) continue;
+          const cur = seen.get(core);
+          if (cur) cur.count++;
+          else seen.set(core, { name: core, kind: t.isObjectKey ? 'objectKey' : 'dotNotation', count: 1, firstAt: t.start });
+        }
+        reply({
+          ok: true,
+          result: {
+            tokens, extractMode: 'regex', dataKeys: [...seen.values()], keptIdentifiers: [],
+          } satisfies ExtractResult,
+        });
+        return;
+      }
+      case 'astVerify': {
+        // (bug 187 — Hạng mục F) 4 phép kiểm AST trên cặp (gốc, dịch) — chạy trong worker vì
+        // parse + duyệt song song file MB là long-task, đưa lên main thread là treo trang.
+        reply({
+          ok: true,
+          result: verifyTranslationAst(ev.data.original || '', ev.data.code || '', ev.data.dict),
+        });
         return;
       }
       case 'reinsert': {

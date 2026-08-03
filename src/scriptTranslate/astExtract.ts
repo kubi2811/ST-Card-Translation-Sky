@@ -95,8 +95,6 @@ const HAS_IDEOGRAPH = /[一-鿿㐀-䶿぀-ヿ가-힯]/;
 const CJK_LETTER = /[一-鿿㐀-䶿぀-ヿ가-힯]/;
 /** Run văn xuôi: cụm CJK nối qua dấu câu toàn giác/số — y hệt bộ gom của surgical. */
 const PROSE_RUN_RE = new RegExp(`[${CJK}]+(?:[${CPUNCT} \\t0-9.\\-_%]+[${CJK}]+)*`, 'g');
-/** Một đoạn của đường dẫn dữ liệu: cho tiền/hậu tố ASCII, PHẢI có chữ Hán, không khoảng trắng. */
-const PATH_SEG_RE = /^[\w$]*[一-鿿㐀-䶿぀-ヿ가-힯][\w$一-鿿㐀-䶿぀-ヿ가-힯]*$/;
 /** URL/data-URI bên trong chuỗi — CJK trong đường dẫn file tuyệt đối không được dịch. */
 const URL_RE = /(?:https?|ftp):\/\/[^\s'"<>(){}\]]+|data:[a-zA-Z0-9+/.-]+;[^\s'"<>)]+|(?:\.\.?\/)[^\s'"<>(){}\]]+/g;
 
@@ -104,17 +102,29 @@ const URL_RE = /(?:https?|ftp):\/\/[^\s'"<>(){}\]]+|data:[a-zA-Z0-9+/.-]+;[^\s'"
 export const stripAsciiAffixes = (name: string): string =>
   name.replace(/^[\w$]+/, '').replace(/[\w$]+$/, '');
 
+/** Một đoạn đường dẫn HỢP LỆ về hình dạng: chữ/số/CJK/_$, không khoảng trắng — CJK KHÔNG bắt buộc. */
+const PATH_SEG_LOOSE_RE = /^[\w$一-鿿㐀-䶿぀-ヿ가-힯]+$/;
+
 /**
- * Chuỗi có PHẢI đường dẫn dữ liệu không ('世界运转.天气', '军事.各营._编制').
- * Chuẩn kế thừa từ bug 151/154: 2-6 đoạn, mỗi đoạn ≤14 ký tự có chữ Hán, không bắt đầu bằng số
+ * Chuỗi có PHẢI đường dẫn dữ liệu không ('世界运转.天气', 'stat_data.世界运转.当前日期').
+ * Chuẩn kế thừa từ bug 151/154: 2-6 đoạn, mỗi đoạn ≤14 ký tự, không bắt đầu bằng số
  * — đủ hẹp để văn xuôi "3.5 mét" hay "1. Mục lục" không lọt.
+ *
+ * (bug 200 — Mục 1.2) TỪNG ĐOẠN không còn bắt buộc chứa CJK — chỉ cần CẢ CHUỖI có CJK ở đâu đó.
+ * Bản cũ đòi `every(PATH_SEG_RE)` mà PATH_SEG_RE bắt CJK trong mỗi đoạn, nên đúng dạng phổ biến
+ * nhất của hệ TavernHelper/MVU — `stat_data.世界运转.当前日期` (gốc ASCII + đoạn Hán) — trượt ngay
+ * đoạn đầu. Đo trên fixture Status Bar 1.7.5: 7/14 đường dẫn _.get/_.set khác nhau còn nguyên
+ * tiếng Trung byte-for-byte sau dịch, TẤT CẢ đều mang tiền tố `stat_data.` — không dịch, không
+ * báo, không vào Pha 0, vô hình với mọi lớp kiểm. Mục đích hàm này là "có đáng coi là đường dẫn
+ * dữ liệu cần dịch không", không phải "mọi đoạn đều là tiếng Trung".
  */
 export function looksLikeDataPath(s: string): boolean {
   if (!s.includes('.')) return false;
   const seg = s.split('.');
   return (
     seg.length >= 2 && seg.length <= 6 &&
-    seg.every((p) => p.length >= 1 && p.length <= 14 && PATH_SEG_RE.test(p) && !/^[0-9]/.test(p))
+    seg.every((p) => p.length >= 1 && p.length <= 14 && PATH_SEG_LOOSE_RE.test(p) && !/^[0-9]/.test(p)) &&
+    seg.some((p) => CJK_LETTER.test(p))
   );
 }
 
@@ -124,7 +134,7 @@ export function looksLikeDataPath(s: string): boolean {
  * ở arg 0, nên chính dạng phổ biến nhất lại lọt lưới và bị coi là văn xuôi gửi AI.
  * Trả về chỉ số arg chứa khoá, hoặc null nếu không phải hàm dữ liệu.
  */
-function dataCallKeyArgIndex(callee: AnyNode | undefined): number | null {
+export function dataCallKeyArgIndex(callee: AnyNode | undefined): number | null {
   if (!callee) return null;
   const VAR_FN = /^(?:get|set|add|inc|dec|insert)(?:Global|Local|Message)?[Vv]ar(?:iables?)?$/;
   if (callee.type === 'MemberExpression') {
@@ -146,7 +156,7 @@ function dataCallKeyArgIndex(callee: AnyNode | undefined): number | null {
 
 const SKIP_KEYS = new Set(['type', 'start', 'end', 'loc', 'range', 'regex']);
 
-function walkWithParent(node: AnyNode, parent: AnyNode | null, cb: (n: AnyNode, p: AnyNode | null) => void): void {
+export function walkWithParent(node: AnyNode, parent: AnyNode | null, cb: (n: AnyNode, p: AnyNode | null) => void): void {
   cb(node, parent);
   for (const k of Object.keys(node)) {
     if (SKIP_KEYS.has(k)) continue;
@@ -389,7 +399,12 @@ export function extractTokensAst(
         ? dataCallKeyArgIndex(parent.callee as AnyNode)
         : null;
       const inDataCall = keyArgIdx !== null && (parent!.arguments as AnyNode[]).indexOf(node) === keyArgIdx;
-      if (looksLikeDataPath(value) || (inDataCall && PATH_SEG_RE.test(value))) {
+      // (bug 200 — Mục 1.2) inDataCall = ĐÃ BIẾT CHẮC đây là đối số khoá của _.get/_.set/getvar…
+      // — tự nó là tín hiệu đủ mạnh, chỉ cần chuỗi có CJK là giao cho pushPathTokens (nó tách
+      // theo dấu chấm, đoạn ASCII giữ nguyên, đoạn Hán đổi theo Từ Điển). Bản cũ tái dùng
+      // PATH_SEG_RE (viết cho MỘT đoạn, không cho phép dấu chấm) để test CẢ chuỗi nhiều đoạn
+      // → luôn fail với mọi path có dấu chấm — nhánh cứu vãn chết đúng với ca nó sinh ra để cứu.
+      if (looksLikeDataPath(value) || (inDataCall && CJK_LETTER.test(value))) {
         pushPathTokens(content, contentStart, quote);
         return;
       }

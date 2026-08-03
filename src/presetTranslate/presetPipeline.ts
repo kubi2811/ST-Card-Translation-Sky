@@ -340,7 +340,7 @@ export async function runPresetTranslation(
       try {
         const res = await runScriptTranslation(
           String(r.replaceString),
-          { beautify: false, nsfw: opts.nsfw, regexAlternation: true, keyMode: 'rename', enforceDictCoverage: false },
+          { beautify: false, nsfw: opts.nsfw, regexAlternation: true, keyMode: 'rename', enforceDictCoverage: false, punctNormalize: true },
           scriptDeps,
           {
             signal: ctl.signal,
@@ -377,7 +377,7 @@ export async function runPresetTranslation(
       const savedTokens = (await loadScriptTokenMap(scriptSig)) || undefined;
       const r = await runScriptTranslation(
         h.content!,
-        { beautify: false, nsfw: opts.nsfw, regexAlternation: true, keyMode: 'rename', enforceDictCoverage: false },
+        { beautify: false, nsfw: opts.nsfw, regexAlternation: true, keyMode: 'rename', enforceDictCoverage: false, punctNormalize: true },
         scriptDeps,
         {
           signal: ctl.signal,

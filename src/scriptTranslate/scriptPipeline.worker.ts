@@ -13,6 +13,7 @@ import {
 } from '../utils/surgical';
 import { extractTokensAst, type DataKeyInfo } from './astExtract';
 import { verifyTranslationAst } from './astVerifier';
+import { normalizeCjkPunctuation } from './punctNormalize';
 import { jsParseErrorAny } from '../utils/scriptSafety';
 import { countCjk } from '../utils/langDetect';
 
@@ -20,7 +21,7 @@ interface Zone { start: number; end: number; reason: string }
 
 interface Req {
   id: number;
-  op: 'beautify' | 'protectZones' | 'extract' | 'reinsert' | 'validate' | 'stats' | 'astVerify';
+  op: 'beautify' | 'protectZones' | 'extract' | 'reinsert' | 'validate' | 'stats' | 'astVerify' | 'punctNormalize';
   code?: string;
   original?: string;
   zones?: Zone[];
@@ -188,6 +189,11 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
           ok: true,
           result: verifyTranslationAst(ev.data.original || '', ev.data.code || '', ev.data.dict),
         });
+        return;
+      }
+      case 'punctNormalize': {
+        // (bug 200 — Hạng mục G) Quét chuỗi MB → chạy ở worker như mọi phép biến đổi khác.
+        reply({ ok: true, result: normalizeCjkPunctuation(ev.data.code || '') });
         return;
       }
       case 'reinsert': {

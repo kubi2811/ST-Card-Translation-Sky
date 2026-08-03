@@ -28,6 +28,12 @@ export interface ScriptTranslateOptions {
    * hợp đồng của nó xưa nay là đổi-được-thì-đổi (bug 151), khoá thiếu giữ Hán không phải lỗi.
    */
   enforceDictCoverage: boolean;
+  /**
+   * (bug 200 — Hạng mục G) Chuẩn hoá dấu câu CJK cosmetic trong văn xuôi/comment của bản dịch.
+   * Theo TỪNG VỊ TRÍ qua AST — delimiter chức năng (.split('、')…), khoá, đường dẫn, regex
+   * không bao giờ bị đụng. Mặc định bật; tắt được khi user muốn giữ nguyên văn phong gốc.
+   */
+  punctNormalize: boolean;
 }
 
 export const DEFAULT_SCRIPT_OPTIONS: ScriptTranslateOptions = {
@@ -36,10 +42,11 @@ export const DEFAULT_SCRIPT_OPTIONS: ScriptTranslateOptions = {
   regexAlternation: true,
   keyMode: 'rename',
   enforceDictCoverage: true,
+  punctNormalize: true,
 };
 
 export type ScriptStage =
-  | 'idle' | 'beautify' | 'extract' | 'translate' | 'reinsert' | 'regex' | 'validate' | 'verify' | 'done' | 'error';
+  | 'idle' | 'beautify' | 'extract' | 'translate' | 'reinsert' | 'regex' | 'punct' | 'validate' | 'verify' | 'done' | 'error';
 
 export interface ScriptProgress {
   stage: ScriptStage;
@@ -73,6 +80,17 @@ export interface ScriptTranslateReport {
   cjkCharsOut: number;
   regexChanged: number;
   regexReverted: number;
+  /**
+   * (bug 200 — Mục 1.3/1.4) Cụm CJK nằm trong character class của regex — pass alternation
+   * CHỦ ĐỘNG không đụng (đúng), nhưng phải BÁO ra kèm truy nguồn Từ Điển: trùng khoá đã dịch
+   * là rủi ro cao (trường dữ liệu regex này soi có thể đã bị dịch ⇒ .test() luôn false).
+   * Cảnh báo để người review quyết — KHÔNG tự viết lại class.
+   */
+  regexSkippedInClass?: import('./regexAlternation').SkippedInClassAnalysis[];
+  /** (bug 200 — Hạng mục G) Số vị trí dấu câu CJK cosmetic đã chuẩn hoá trong văn xuôi/comment. */
+  punctNormalized?: number;
+  /** (bug 200 — Hạng mục G) Số vị trí giữ nguyên vì là delimiter chức năng / vị trí rủi ro. */
+  punctKeptFunctional?: number;
   bytesIn: number;
   bytesOut: number;
   /** (bug 160) Số dòng trước/sau — phình ra là có xuống dòng bị chèn vào giữa chuỗi JS. */

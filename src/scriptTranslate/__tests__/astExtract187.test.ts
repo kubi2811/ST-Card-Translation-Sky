@@ -164,9 +164,12 @@ describe('(review 187) các ca bộ review đối kháng bắt được', () => 
     const src = 'obj.魔力值2 = 5;\nconst a = { 魔力值2: 1, 魔力值: 2 };';
     const { tokens } = ex(src, { 魔力值: 'Mana' });
     const out = reinsertTranslations(src, tokens);
-    expect(out).toContain('obj.Mana2 = 5');          // hậu tố 2 còn nguyên
-    expect(out).toContain('Mana2: 1');
-    expect(out).toContain('Mana: 2');                 // hai khoá KHÁC NHAU không sập làm một
+    // (bug 200 — Hạng mục H) Khoá đã dịch nay LUÔN thành chuỗi có nháy — kể cả khi bản dịch
+    // tình cờ hợp lệ làm identifier ("Mana2"). Điều test này canh — hậu tố `2` sống sót và
+    // hai khoá không sập làm một — vẫn nguyên; chỉ có hình thức là bracket/quote vô điều kiện.
+    expect(out).toContain("obj['Mana2'] = 5");        // hậu tố 2 còn nguyên
+    expect(out).toContain("'Mana2': 1");
+    expect(out).toContain("'Mana': 2");               // hai khoá KHÁC NHAU không sập làm một
     expect(jsParseErrorAny(out)).toBeNull();
   });
 

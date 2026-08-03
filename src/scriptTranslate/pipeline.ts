@@ -11,7 +11,7 @@ import {
 } from '../utils/apiClient';
 import { runWorkerPool } from '../utils/runWorkerPool';
 import { packTokens, buildTokenBatchPrompt, parseTokenBatchResponse, isTranslatableToken } from './tokenBatcher';
-import { applyRegexAlternation } from './regexAlternation';
+import { applyRegexAlternation, analyzeSkippedInClass } from './regexAlternation';
 import { checkDictCoverage } from './astExtract';
 import type {
   ScriptPipelineDeps,
@@ -261,6 +261,7 @@ export async function runScriptTranslation(
   // 5) Regex alternation (giữ Hán + thêm nhánh Việt); thuật ngữ lạ → 1 lô AI bổ sung dict
   let regexChanged = 0;
   let regexReverted = 0;
+  let regexSkippedInClass: import('./regexAlternation').SkippedInClassAnalysis[] | undefined;
   if (opts.regexAlternation) {
     cb({ stage: 'regex' });
     const dict: Record<string, string> = {};
@@ -288,6 +289,31 @@ export async function runScriptTranslation(
     output = r.code;
     regexChanged = r.changed;
     regexReverted = r.reverted;
+    // (bug 200 — Mục 1.3/1.4) Cụm CJK trong character class được TÍNH từ trước nhưng bị vứt
+    // trên đường về — nay nối vào report kèm truy nguồn Từ Điển. Trùng khoá đã dịch nghĩa là
+    // trường dữ liệu regex này soi nhiều khả năng ĐÃ thành tiếng Việt ⇒ mọi nhánh .test()
+    // vĩnh viễn false (ca hàm phân loại quân chủng của fixture Status Bar). Chỉ BÁO, không tự
+    // viết lại — hiểu sai nghĩa một ký tự là phân loại hỏng theo hướng khác.
+    if (r.skippedInClassTerms.length) {
+      regexSkippedInClass = analyzeSkippedInClass(r.skippedInClassTerms, dict);
+    }
+  }
+
+  // 5b) (bug 200 — Hạng mục G) Chuẩn hoá dấu câu CJK cosmetic — thứ user cuối NHÌN THẤY nhiều
+  // nhất trên file lớn (fixture Status Bar: 1108 dấu 。 sót). Theo từng vị trí qua AST; chạy
+  // SAU alternation (regex literal đã chốt, pass này không đụng regex) và TRƯỚC validate cuối
+  // để mọi phép kiểm chạy trên đúng bản sẽ xuất ra.
+  let punctNormalized = 0;
+  let punctKeptFunctional = 0;
+  if (opts.punctNormalize) {
+    cb({ stage: 'punct' });
+    const pn = await callWorker<{ code: string; normalized: number; keptFunctional: number }>(
+      'punctNormalize', { code: output },
+    );
+    output = pn.code;
+    punctNormalized = pn.normalized;
+    punctKeptFunctional = pn.keptFunctional;
+    throwIfAborted(ctl.signal);
   }
 
   // 6) Validate cuối
@@ -332,6 +358,8 @@ export async function runScriptTranslation(
     cjkCharsOut: v.cjkChars,
     regexChanged,
     regexReverted,
+    ...(regexSkippedInClass ? { regexSkippedInClass } : {}),
+    ...(opts.punctNormalize ? { punctNormalized, punctKeptFunctional } : {}),
     bytesIn,
     bytesOut: output.length,
     linesIn: linesBefore,

@@ -156,6 +156,16 @@ export interface ApplyAlternationResult {
   reverted: number;
   /** Cụm CJK chưa có trong từ điển (gom từ mọi literal) */
   unknownTerms: string[];
+  /**
+   * (bug 200 — Mục 1.3) Cụm CJK nằm TRONG character class `[...]` — CHỦ ĐỘNG không đụng
+   * (chèn `(?:a|b)` vào trong class là thành ký tự literal, phá ngữ nghĩa regex; quyết định
+   * đó ĐÚNG). Nhưng bản cũ tính ra `skippedInClass` cho từng literal rồi... vứt: hàm này chỉ
+   * gom `unknown`, dữ liệu không bao giờ tới pipeline hay báo cáo. Hệ quả trên fixture Status
+   * Bar: `[家丁亲兵内丁]` `[骑马骡驼]`… — cả bộ phân loại quân chủng soi những trường ĐÃ dịch
+   * — bị bỏ sót 100% mà không một dòng cảnh báo. Người dùng không thể quyết định thứ họ
+   * không nhìn thấy.
+   */
+  skippedInClassTerms: string[];
 }
 
 /** Áp alternation lên toàn bộ regex literal chứa CJK trong code. Ghép phải-sang-trái để offset không lệch. */
@@ -165,11 +175,13 @@ export function applyRegexAlternation(code: string, dict: Record<string, string>
   let changed = 0;
   let reverted = 0;
   const unknown = new Set<string>();
+  const skippedInClass = new Set<string>();
 
   for (let i = literals.length - 1; i >= 0; i--) {
     const lit = literals[i];
     const r = alternateRegexBody(lit.body, dict);
     r.unknown.forEach((u) => unknown.add(u));
+    r.skippedInClass.forEach((u) => skippedInClass.add(u));
     if (!r.changed) continue;
     try {
       // Compile thử đúng như engine sẽ chạy — vỡ là hoàn nguyên, không "để rồi tính".
@@ -181,5 +193,36 @@ export function applyRegexAlternation(code: string, dict: Record<string, string>
     out = out.slice(0, lit.start) + `/${r.body}/${lit.flags}` + out.slice(lit.end);
     changed++;
   }
-  return { code: out, changed, reverted, unknownTerms: [...unknown] };
+  return { code: out, changed, reverted, unknownTerms: [...unknown], skippedInClassTerms: [...skippedInClass] };
+}
+
+/** (bug 200 — Mục 1.4) Một cụm CJK bị bỏ qua trong character class, kèm kết quả truy nguồn. */
+export interface SkippedInClassAnalysis {
+  term: string;
+  /**
+   * Các mục Từ Điển (nguồn) TRÙNG vào cụm này. Trùng là dấu hiệu MẠNH rằng trường dữ liệu mà
+   * regex này soi đã bị dịch ở nơi khác trong cùng file — như hàm phân loại quân chủng của
+   * fixture Status Bar: 3 trường input đã thành khoá tiếng Việt, mà 5 character class vẫn thử
+   * khớp ký tự Hán đơn lẻ ⇒ mọi nhánh .test() vĩnh viễn false, cả tính năng chết lặng lẽ.
+   */
+  dictMatches: string[];
+  /** true = rủi ro cao, cần người review — KHÔNG tự viết lại (hiểu sai một ký tự là phân loại hỏng theo hướng khác). */
+  risky: boolean;
+}
+
+/**
+ * Truy nguồn từng cụm bị bỏ qua: cụm (hoặc ký tự đơn trong đó) có trùng khoá Từ Điển không.
+ * Ca B của đề bài (bảng số `[一二三四五六七八九十]` parse ngày tháng dạng số Hán) thường KHÔNG
+ * trùng từ điển khoá → risky=false, giữ nguyên là đúng. Không có quy tắc "luôn giữ"/"luôn dịch"
+ * chung cho cả hai — nên đây chỉ PHÂN TÍCH và BÁO, quyết định là của con người.
+ */
+export function analyzeSkippedInClass(
+  terms: string[],
+  dict: Record<string, string>,
+): SkippedInClassAnalysis[] {
+  const sources = Object.keys(dict).filter((k) => k.trim() && dict[k]?.trim());
+  return terms.map((term) => {
+    const dictMatches = sources.filter((s) => term.includes(s) || (s.length > 1 && [...term].some((ch) => s.includes(ch))));
+    return { term, dictMatches: dictMatches.slice(0, 8), risky: dictMatches.length > 0 };
+  });
 }

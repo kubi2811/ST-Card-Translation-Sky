@@ -953,7 +953,15 @@ export function reinsertTranslations(original: string, tokens: CJKToken[]): stri
         (charBefore === "'" && charAfter === "'") ||
         (charBefore === '"' && charAfter === '"');
 
-      if (token.isDotNotation && (finalTranslation.includes(' ') || /[À-ỹĐđ]/.test(finalTranslation))) {
+      // ═══ (bug 200 — Hạng mục H) BỌC NHÁY VÔ ĐIỀU KIỆN CHO KHOÁ ĐÃ DỊCH ═══
+      // Trước đây chỉ bọc khi bản dịch "có dấu cách hoặc dấu tiếng Việt" — tức là quyết định
+      // theo việc bản dịch có TÌNH CỜ hợp lệ làm identifier hay không. 700/704 ca trót lọt vì
+      // tiếng Việt có dấu, nhưng khoá dịch ra từ ngắn không dấu thì lộ ngay trên fixture thật:
+      // `{一:1}` → `{'Một':1}` mà `{二:2}` → `{Hai:2}`, `安娜:{…}` → `Anna:{…}` — cùng một bảng,
+      // nửa có nháy nửa không. Tệ hơn: bản dịch kiểu "Anna-Maria" sẽ thành `obj.Anna-Maria`
+      // = PHÉP TRỪ — parse được, chạy sai âm thầm. Khoá đã dịch LUÔN thành chuỗi có nháy,
+      // không có nhánh "nếu trông ổn thì thôi" — an toàn không được dựa vào may rủi cú pháp.
+      if (token.isDotNotation) {
         // JS Dot notation: rewrite to bracket notation
         if (!alreadyQuoted) {
           const dotIndex = original.lastIndexOf('.', replaceStart);
@@ -974,8 +982,8 @@ export function reinsertTranslations(original: string, tokens: CJKToken[]): stri
             }
           }
         }
-      } else if (token.isObjectKey && (finalTranslation.includes(' ') || /[À-ỹ]/.test(finalTranslation))) {
-        // JS Object Key: wrap in quotes
+      } else if (token.isObjectKey) {
+        // JS Object Key: wrap in quotes — vô điều kiện (bug 200, xem khối chú thích trên).
         if (!alreadyQuoted) {
           // (bug 154) Nháy phải ÔM CẢ tiền tố ASCII: `_开场标识` → `'_Định danh khởi đầu'`.
           // Bọc mỗi phần Hán sẽ ra `_'Định danh khởi đầu'` — vẫn vỡ, mà còn khó nhìn ra hơn.

@@ -569,6 +569,34 @@ export default function ScriptTranslateFlow() {
               <li>📖 {fmt(ui.scrTrRepDictRenamed, { n: report.dictRenamed })}</li>
             )}
             <li>🧩 {fmt(ui.scrTrRepRegex, { changed: report.regexChanged, reverted: report.regexReverted })}</li>
+            {/* (bug 200 — Mục 1.3/1.4) Cụm CJK trong character class: trước đây được TÍNH rồi vứt,
+                user không thể quyết định thứ họ không nhìn thấy. Trùng Từ Điển = rủi ro cao. */}
+            {report.regexSkippedInClass && report.regexSkippedInClass.length > 0 && (() => {
+              const risky = report.regexSkippedInClass.filter((x) => x.risky);
+              return (
+                <li>
+                  🔎 {fmt(ui.scrTrRepSkippedClass, { n: report.regexSkippedInClass.length })}
+                  {risky.length > 0 && (
+                    <div style={{ color: '#fbbf24', fontSize: '0.8rem', marginTop: 2 }}>
+                      {fmt(ui.scrTrRepSkippedRisky, { n: risky.length, total: report.regexSkippedInClass.length })}
+                    </div>
+                  )}
+                  <details style={{ marginTop: 4 }}>
+                    <summary style={{ cursor: 'pointer', fontSize: '0.78rem' }}>{ui.scrTrVfDetailList}</summary>
+                    <pre style={{ ...mono, maxHeight: 140, overflow: 'auto' }}>
+                      {report.regexSkippedInClass
+                        .map((x) => `[${x.term}]${x.dictMatches.length ? `  ⚠ trùng Từ Điển: ${x.dictMatches.join(', ')}` : '  (không trùng khoá nào — nhiều khả năng giữ nguyên là đúng)'}`)
+                        .join('\n')}
+                    </pre>
+                  </details>
+                </li>
+              );
+            })()}
+            {/* (bug 200 — Hạng mục G) Chuẩn hoá dấu câu cosmetic — báo cả phần GIỮ để không ai
+                tưởng "0 lỗi" nghĩa là hoàn thiện 100%. */}
+            {report.punctNormalized !== undefined && (report.punctNormalized > 0 || (report.punctKeptFunctional ?? 0) > 0) && (
+              <li>✒️ {fmt(ui.scrTrRepPunct, { n: report.punctNormalized, kept: report.punctKeptFunctional ?? 0 })}</li>
+            )}
             {/* (bug 187 — Hạng mục A) Cơ chế trích token đã dùng — fallback regex phải NÓI RA. */}
             {report.extractMode && (
               <li>{report.extractMode === 'ast' ? `🌳 ${ui.scrTrExtractAst}` : `⚠️ ${ui.scrTrExtractRegex}`}</li>

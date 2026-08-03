@@ -89,6 +89,13 @@ export interface AstVerifyReport {
   regexUpgrades: number;
   /** Khoá dữ liệu đã đổi tên (qua mọi dạng: dot→bracket, quote-wrap, thay nội dung chuỗi). */
   keyRenames: KeyRename[];
+  /**
+   * (bug 200 — Mục 1.1) Khoá đổi tên NHƯNG VẪN LÀ IDENTIFIER TRẦN (`{二:1}` → `{Hai:2}` thay vì
+   * `{'Hai':2}`) — vi phạm bất biến Hạng mục H "khoá đã dịch luôn là chuỗi có nháy". Khác hẳn
+   * Identifier→Literal (an toàn tuyệt đối): dạng này chỉ sống khi bản dịch TÌNH CỜ hợp lệ làm
+   * identifier, dựa vào may rủi cú pháp. Có phần tử ở đây là CHẶN CỨNG, không phải rename thường.
+   */
+  unsafeKeyRenames: DiffEntry[];
   /** Số khoá đổi tên KHÔNG khớp Từ Điển — dấu hiệu đổi ngoài kiểm soát. */
   renamesOffDict: number;
   /** Kiểm 3 — lệch số lần join/split theo ký tự phân tách CJK. */
@@ -218,6 +225,8 @@ interface ParallelDiffs {
   regexDiffs: DiffEntry[];
   regexUpgrades: number;
   renames: Map<string, { to: Map<string, number> }>;
+  /** (bug 200) Identifier→Identifier ở thế khoá — xem AstVerifyReport.unsafeKeyRenames. */
+  unsafeKeyRenames: DiffEntry[];
 }
 
 /** Vị trí node có phải "thế khoá" không (đổi tên ở đó là biến đổi khoá, không phải đổi định danh). */
@@ -229,7 +238,7 @@ export function walkParallelDiff(astA: AnyNode, astB: AnyNode, srcA: string): Pa
   const lineIdx = new LineIndex(srcA);
   const d: ParallelDiffs = {
     structuralDiffs: [], identDiffs: [], literalDiffs: [], regexDiffs: [],
-    regexUpgrades: 0, renames: new Map(),
+    regexUpgrades: 0, renames: new Map(), unsafeKeyRenames: [],
   };
   const rename = (from: string, to: string): void => {
     const cur = d.renames.get(from) ?? { to: new Map<string, number>() };
@@ -270,7 +279,15 @@ export function walkParallelDiff(astA: AnyNode, astB: AnyNode, srcA: string): Pa
       }
       case 'Identifier': {
         if (a.name !== b.name) {
-          if (inKeyPos(pa, a)) rename(String(a.name), String(b.name));
+          if (inKeyPos(pa, a)) {
+            // (bug 200 — Mục 1.1) KHÔNG tương đương với Identifier→Literal ở nhánh a.type !==
+            // b.type phía trên: ở đây bản dịch vẫn là identifier TRẦN — reinsert đã quên bọc
+            // nháy. `{Hai:2}` tình cờ parse được, nhưng "Anna-Maria" hay "2Xu" thì vỡ/đổi nghĩa
+            // — cùng một lỗi gốc, chỉ khác độ may. Vẫn ghi rename (để đối chiếu Từ Điển) NHƯNG
+            // đồng thời báo unsafe để hardFail — trước đây gộp chung nên bug thật lọt cổng QA.
+            rename(String(a.name), String(b.name));
+            push(d.unsafeKeyRenames, String(a.name), String(b.name), a.start);
+          }
           else push(d.identDiffs, String(a.name), String(b.name), a.start);
         }
         return; // lá
@@ -455,7 +472,7 @@ export function verifyTranslationAst(
   const report: AstVerifyReport = {
     mode: pa && pb ? 'ast' : 'text-only',
     nodeCountDiffs: [], structuralDiffs: [], identDiffs: [], literalDiffs: [], regexDiffs: [],
-    regexUpgrades: 0, keyRenames: [], renamesOffDict: 0,
+    regexUpgrades: 0, keyRenames: [], renamesOffDict: 0, unsafeKeyRenames: [],
     delimiterDiffs: diffDelimiterUsage(original, translated),
     cjkGroups: { alternationChars: 0, regexNoAlt: [], dataKey: [], prose: [], keptIdentifiers: 0 },
     hardFail: false, hardFailReasons: [],
@@ -471,6 +488,7 @@ export function verifyTranslationAst(
     report.literalDiffs = d.literalDiffs;
     report.regexDiffs = d.regexDiffs;
     report.regexUpgrades = d.regexUpgrades;
+    report.unsafeKeyRenames = d.unsafeKeyRenames;
 
     // Đối chiếu rename với Từ Điển — dùng ĐÚNG phép tra của extractor (astExtract.pushKeyToken):
     // tên đầy đủ thắng trước, tra core thì ghép lại hậu tố ASCII, tiền tố do reinsert tự ghép.
@@ -513,6 +531,7 @@ export function verifyTranslationAst(
   if (report.structuralDiffs.length) R.push(`Cấu trúc code bị đổi tại ${report.structuralDiffs.length} vị trí (thêm/bớt/đổi loại node)`);
   if (report.nodeCountDiffs.length) R.push(`Số lượng node theo loại lệch ở ${report.nodeCountDiffs.length} loại (${report.nodeCountDiffs.slice(0, 3).map((x) => `${x.type}: ${x.before}→${x.after}`).join(', ')}${report.nodeCountDiffs.length > 3 ? ', …' : ''})`);
   if (report.identDiffs.length) R.push(`${report.identDiffs.length} định danh (tên biến/hàm) bị đổi tên — tuyệt đối cấm`);
+  if (report.unsafeKeyRenames.length) R.push(`${report.unsafeKeyRenames.length} khoá dịch KHÔNG được bọc nháy (vẫn là identifier trần, vd ${report.unsafeKeyRenames.slice(0, 3).map((x) => `${x.before}→${x.after}`).join(', ')}) — vi phạm bất biến "khoá đã dịch luôn là chuỗi có nháy"`);
   if (report.literalDiffs.length) R.push(`${report.literalDiffs.length} literal số/boolean bị đổi giá trị`);
   if (report.regexDiffs.length) R.push(`${report.regexDiffs.length} regex bị đổi KHÔNG theo kiểu bọc (?:trung|việt) hợp lệ`);
   if (report.delimiterDiffs.length) R.push(`Ký tự phân tách dữ liệu trong .join()/.split() bị lệch (${report.delimiterDiffs.map((x) => x.delimiter).join(' ')})`);

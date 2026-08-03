@@ -164,7 +164,28 @@ export interface DeepScanOptions {
    * thể phát lại entry đã đẩy.
    */
   onEntryBatch?: (entries: DeepEntry[]) => void;
+  /**
+   * (bug 204) KIẾN THỨC NỀN (từ wiki/tài liệu ngoài) — chỉ để ĐỐI CHIẾU khi tổng hợp entry:
+   * giúp AI hiểu bối cảnh tác phẩm trước khi trích, entry ra đầy đủ và chi tiết hơn. Truyện là
+   * chân lý — mâu thuẫn với nền thì theo truyện.
+   */
+  backgroundInfo?: string;
 }
+
+/**
+ * (bug 204) LUẬT ĐỘ SÂU ENTRY — chưng cất từ tài liệu hướng dẫn viết card user cung cấp
+ * (bugNeedFix/204, "lớp học của Tình Không"). Cốt lõi: entry sơ sài là entry mà CHE TÊN ĐI thì
+ * đặt lên nhân vật nào cũng đúng. Dán vào các lượt tổng hợp entry.
+ */
+export const ENTRY_DEPTH_RULE = [
+  'ĐỘ SÂU (bắt buộc — không lấy số lượng bù chất lượng):',
+  '- PHÉP THỬ CHE TÊN: câu nào che tên nhân vật/thực thể đi mà đặt lên ai cũng đúng ("đặc biệt tốt bụng", "rất mạnh mẽ") là câu VÔ DỤNG — thay bằng sự thật cụ thể chỉ thuộc về riêng họ.',
+  '- NGOẠI HÌNH: chỉ đặc điểm NHẬN DIỆN cụ thể (vd "mắt hạnh, đuôi mắt hơi rủ") — CẤM mỹ từ ("phôi mỹ nhân"), CẤM so sánh ("như ngọn cỏ"), CẤM từ cảm giác; thói quen hành vi để ở phần tính cách, không lẫn vào ngoại hình.',
+  '- BỐI CẢNH/QUÁ KHỨ: ghi BẢN THÂN SỰ VIỆC đã khiến họ thành bộ dạng hiện tại — KHÔNG kết luận nhân quả thay người đọc ("đây là bước ngoặt khiến cô ấy…").',
+  '- QUAN HỆ: tương tác CỤ THỂ có thật trong truyện ("hắn đặt đồ lên bàn, cô dùng sách đẩy đi"), nêu đích danh — CẤM tổng kết trừu tượng ("cô sợ hãi và bài xích hắn").',
+  '- TÍNH CÁCH: thể hiện qua HÀNH VI + NGỮ LIỆU (trích lời thoại/câu nói đặc trưng từ hồ sơ) — không dán nhãn tính từ suông.',
+  '- DÙNG HẾT dữ kiện liên quan trong hồ sơ — hồ sơ có 30 dữ kiện mà entry chỉ phản ánh 5 là entry HỎNG; số liệu, cấp bậc, tên riêng phải vào entry đủ.',
+].join('\n');
 
 // ═══════════════════════════ Helpers thuần (test được) ═══════════════════════
 
@@ -930,6 +951,10 @@ CHỈ xuất đúng khối (không có gì mới thì xuất <none/>):
   const buildSynthJobs = (): SynthJob[] => {
     const jobs: SynthJob[] = [];
     const nsfwRule = opts.nsfw ? NSFW_RULE : SFW_RULE;
+    // (bug 204) Khối kiến thức nền — dán vào cuối user message của các job tổng hợp.
+    const backgroundBlock = opts.backgroundInfo?.trim()
+      ? `\n\n【KIẾN THỨC NỀN (wiki/tài liệu ngoài) — CHỈ để đối chiếu/hiểu bối cảnh. TRUYỆN LÀ CHÂN LÝ: mâu thuẫn với nền thì theo truyện; không chép nội dung nền không xuất hiện trong truyện vào entry.】\n${capText(opts.backgroundInfo.trim(), 4000)}`
+      : '';
 
     // 1) Thế giới quan + Meta (chuẩn Bước 1 của quy trình worldbook user cung cấp).
     jobs.push({
@@ -951,7 +976,7 @@ CHỈ xuất đúng khối:
 <entry><cat>worldview</cat><title>Thế Giới Quan</title><keys></keys><content>…</content></entry>
 <entry><cat>meta</cat><title>META_SETUP</title><keys></keys><content>…</content></entry>
 </entries>`,
-          `【TỔNG QUAN】\n${capText(m.overview, 4000)}\n\n【DỮ KIỆN VĨ MÔ】\n${wvFacts.map((f) => `- [${f.topic}] ${f.fact}`).join('\n') || '(ít dữ kiện — dựa vào tổng quan)'}`);
+          `【TỔNG QUAN】\n${capText(m.overview, 4000)}\n\n【DỮ KIỆN VĨ MÔ】\n${wvFacts.map((f) => `- [${f.topic}] ${f.fact}`).join('\n') || '(ít dữ kiện — dựa vào tổng quan)'}${backgroundBlock}`);
         addSynth(parseEntries(text, 'worldview'));
       },
     });
@@ -981,6 +1006,7 @@ CHỈ xuất đúng khối:
             `Từ HỒ SƠ DỮ KIỆN đã gom qua nhiều lượt đọc, viết MỘT entry lorebook CỰC KỲ CHI TIẾT cho TỪNG nhân vật dưới đây (cat=character, title=tên nhân vật).
 Nội dung bọc <Character>, gồm: **Tên** + bí danh/danh hiệu; chủng tộc/thế lực; thân thế/vị trí; tuổi/giới tính; **Ngoại hình** (chỉ ĐẶC ĐIỂM nhận diện — không mỹ từ sáo rỗng); **Tính cách** + mục tiêu/động cơ; **Năng lực** (điểm mạnh/yếu, mô tả hiệu ứng bề ngoài); **Cách xưng hô & giọng điệu** (từ ngữ đặc trưng, ví dụ ngắn); thói quen/sở thích; **Quan hệ** với các nhân vật khác (nêu đích danh); **Phát triển qua các giai đoạn truyện** (biến cố quan trọng + thay đổi tâm lý, theo trình tự).
 Thông tin rải rác ở nhiều chương ĐÃ được gom sẵn trong hồ sơ — tổng hợp thành bức tranh HOÀN CHỈNH, mâu thuẫn thì ghi cả hai kèm "(mâu thuẫn giữa các chương)".
+${ENTRY_DEPTH_RULE}
 ${NO_USER_MIX}
 ${MISSION_RULE}
 ${QUALITY_RULE}
@@ -993,7 +1019,7 @@ CHỈ xuất đúng khối:
 <entry><cat>character</cat><title>Tên</title><keys>tên, bí danh, danh hiệu</keys><content><Character>…</Character></content></entry>
 …(một entry cho MỖI nhân vật trong hồ sơ)
 </entries>`,
-            dossiers);
+            dossiers + backgroundBlock);
           addSynth(parseEntries(text, 'character'));
         },
       });
@@ -1022,6 +1048,7 @@ CHỈ xuất đúng khối:
             const text = await ai(`Tổng hợp entry thế giới [${cat}]`,
               `Từ dữ kiện đã gom, viết entry lorebook cho TỪNG CHỦ ĐỀ dưới đây (cat=${entryCat}). Mỗi chủ đề MỘT entry riêng — không gộp nhiều chủ đề vào một entry.
 Nội dung bọc <${tagName}>: tổng hợp MỌI dữ kiện của chủ đề thành mô tả có cấu trúc (bản chất cốt lõi; cấu trúc/cấp bậc nếu có; quan hệ với chủ đề/nhân vật khác — nêu đích danh để liên kết). Chủ đề chỉ có 1 dòng lặt vặt thì GỘP vào entry cùng loại gần nhất — không bỏ mất dữ kiện.
+${ENTRY_DEPTH_RULE}
 ${MISSION_RULE}
 ${QUALITY_RULE}
 ${KEY_RULE}
@@ -1033,7 +1060,7 @@ CHỈ xuất đúng khối:
 <entry><cat>${entryCat}</cat><title>Tên chủ đề</title><keys>tên, cách gọi khác</keys><content><${tagName}>…</${tagName}></content></entry>
 …
 </entries>`,
-              batch.map((g) => `### ${g.topic}\n${g.facts.map((f) => `- ${f}`).join('\n')}`).join('\n\n'));
+              batch.map((g) => `### ${g.topic}\n${g.facts.map((f) => `- ${f}`).join('\n')}`).join('\n\n') + backgroundBlock);
             addSynth(parseEntries(text, entryCat));
           },
         });
@@ -1054,6 +1081,10 @@ CHỈ xuất đúng khối:
               `Từ nhật ký sự kiện đã gom, viết entry DÒNG THỜI GIAN (cat=timeline, title="Dòng Thời Gian${evChunks.length > 1 ? ` — Phần ${bi + 1}` : ''}").
 Nội dung bọc <Timeline>; ${bi === 0 ? 'MỞ ĐẦU bằng nguyên văn: "[CẢNH BÁO HỆ THỐNG - HIỆU ỨNG CÁNH BƯỚM]: Dòng thời gian gốc dưới đây CHỈ MANG TÍNH CHẤT THAM KHẢO. Khi biến số <user> chính thức giáng lâm và có bất kỳ hành động tương tác nào, Timeline gốc này sẽ ngay lập tức bị phá vỡ. Mọi sự kiện tương lai sẽ rẽ nhánh, bóp méo và thay đổi hoàn toàn dựa trên quỹ đạo hành động của <user>, vô hiệu hóa định mệnh đã được sắp đặt sẵn của thế giới này."; sau đó ' : ''}mỗi sự kiện dạng "- **[Mốc thời gian]** — <Event>ai làm gì, ở đâu, gặp ai, hậu quả</Event>" theo ĐÚNG trình tự.
 Mốc thời gian: giữ nguyên mốc truyện ghi; mốc tương đối ("Ngày 1", "Sau sự kiện X") phải NHẤT QUÁN; "?" thì suy mốc tương đối từ ngữ cảnh, KHÔNG bịa ngày cụ thể.
+(bug 204) NGOÀI entry tổng ở trên, chia các sự kiện thành entry GIAI ĐOẠN (cat=history, KHÔNG phải timeline):
+- Gộp các sự kiện liền nhau thành một giai đoạn; title = dải thời gian THẬT của giai đoạn, vd "Dòng thời gian: 28/6/1349 – 8/7/1349" (truyện không có ngày cụ thể thì dùng mốc tương đối: "Dòng thời gian: Ngày 1 – Ngày 7" / "Trước đại chiến X").
+- keys = CÁC MỐC NGÀY/THÁNG/NĂM xuất hiện trong giai đoạn + tên sự kiện lớn (vd "28/6/1349, 1/7/1349, trận Hắc Thủy") — để nhắc tới ngày đó là entry kích hoạt.
+- Nội dung giai đoạn: đủ chi tiết từng sự kiện trong dải, không tóm lược.
 ${MISSION_RULE}
 ${QUALITY_RULE}
 ${FORMAT_RULE}
@@ -1061,6 +1092,8 @@ ${LANGUAGE_RULE}
 CHỈ xuất đúng khối:
 <entries>
 <entry><cat>timeline</cat><title>Dòng Thời Gian${evChunks.length > 1 ? ` — Phần ${bi + 1}` : ''}</title><keys></keys><content><Timeline>…</Timeline></content></entry>
+<entry><cat>history</cat><title>Dòng thời gian: [mốc đầu] – [mốc cuối]</title><keys>các mốc ngày, tên sự kiện lớn</keys><content><Timeline>…</Timeline></content></entry>
+…(một entry cho MỖI giai đoạn)
 </entries>`,
               evs.map((e) => `- [${e.time}] ${e.what}`).join('\n'));
             addSynth(parseEntries(text, 'timeline'));

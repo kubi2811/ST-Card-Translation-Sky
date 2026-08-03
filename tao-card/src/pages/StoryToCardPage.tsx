@@ -17,6 +17,7 @@ import {
 import { useIdbState } from '../lib/idbState';
 import { isSameAsUserPersona } from '../lib/ai/userPersonaSwap';
 import { adviseChunks, adviceText, type ChunkAdvice } from '../lib/ai/chunkAdvice';
+import { cascadeSearch } from '../lib/ai/webScraper';
 import { SingleThreadToggle } from '../components/shared/SingleThreadToggle';
 import { t as ui, fmt } from '../i18n';
 
@@ -40,6 +41,9 @@ interface DeepUiOpts {
   userReplaceName: string;
   userSetup: string;
   extraNotes: string;
+  /** (bug 204) Kiến thức nền từ wiki/tài liệu — đối chiếu khi tổng hợp entry. */
+  background?: string;
+  wikiQuery?: string;
 }
 
 const PASS_LABELS: Record<DeepPassId, () => string> = {
@@ -126,6 +130,25 @@ export function StoryToCardPage() {
   });
   const [deepRunning, setDeepRunning] = useState(false);
   const [deepLog, setDeepLog] = useState('');
+  // (bug 204) Tra wiki lấy kiến thức nền trước khi quét — entry trích ra đầy đủ hơn.
+  const [wikiLoading, setWikiLoading] = useState(false);
+  const fetchWikiBackground = async () => {
+    const q = (deepOpts.wikiQuery ?? '').trim();
+    if (!q) { toast.error(ui.s2cdWikiNeedQuery); return; }
+    setWikiLoading(true);
+    try {
+      const results = await cascadeSearch(q);
+      if (results.length === 0) { toast.error(ui.s2cdWikiEmpty); return; }
+      const digest = results.map(r => `【${r.source}】${r.content}`).join('\n\n').slice(0, 6000);
+      setD({ background: digest });
+      toast.success(fmt(ui.s2cdWikiDone, { n: results.length }));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setWikiLoading(false);
+    }
+  };
+
   // (bug 190) Add entry vào Lorebook NGAY khi từng lượt tổng hợp sinh xong — mặc định BẬT.
   // Chờ đến cuối nghĩa là mọi lỗi/lag/F5 sau đó đều có thể nuốt những entry ĐÃ sinh xong.
   const [liveAdd, setLiveAdd] = usePersistedState('s2c.liveAdd', true);
@@ -163,6 +186,7 @@ export function StoryToCardPage() {
     userReplaceName: deepOpts.userReplaceName.trim() || undefined,
     userSetup: deepOpts.userSetup.trim() || undefined,
     extraNotes: deepOpts.extraNotes.trim() || undefined,
+    backgroundInfo: (deepOpts.background ?? '').trim() || undefined,
     signal,
     onState: (s) => setDeep(s),
     onLog: (m) => setDeepLog(m),
@@ -563,6 +587,21 @@ export function StoryToCardPage() {
             <label className="text-xs block">{ui.s2cExtraNotes}
               <input value={deepOpts.extraNotes} onChange={(e) => setD({ extraNotes: e.target.value })} className="settings-input text-xs mt-1 w-full" placeholder={ui.s2cExtraNotesPh} />
             </label>
+            {/* (bug 204) Kiến thức nền wiki — entry trích ra đầy đủ/chi tiết hơn */}
+            <div className="text-xs space-y-1.5">
+              <div className="flex items-center gap-2">
+                <span title={ui.s2cdBackgroundTip}>{ui.s2cdBackground}</span>
+                <input value={deepOpts.wikiQuery ?? ''} onChange={(e) => setD({ wikiQuery: e.target.value })}
+                  className="settings-input text-xs flex-1" placeholder={ui.s2cdWikiQueryPh} />
+                <button onClick={() => void fetchWikiBackground()} disabled={wikiLoading || deepRunning}
+                  className="px-2.5 py-1.5 rounded-md text-xs font-semibold border border-border hover:bg-muted disabled:opacity-50"
+                  style={{ cursor: wikiLoading ? 'wait' : 'pointer' }}>
+                  {wikiLoading ? ui.s2cdWikiLoading : ui.s2cdWikiBtn}
+                </button>
+              </div>
+              <textarea value={deepOpts.background ?? ''} onChange={(e) => setD({ background: e.target.value })} rows={3}
+                className="settings-input text-xs w-full resize-y" placeholder={ui.s2cdBackgroundPh} />
+            </div>
             <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs">
               <label className="flex items-center gap-1.5"><input type="checkbox" checked={deepOpts.nsfw} onChange={(e) => setD({ nsfw: e.target.checked })} /> NSFW</label>
               <label className="flex items-center gap-1.5"><input type="checkbox" checked={deepOpts.learnStyle} onChange={(e) => setD({ learnStyle: e.target.checked })} /> {ui.s2cAnalyzeStyle}</label>

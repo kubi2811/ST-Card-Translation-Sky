@@ -1149,17 +1149,26 @@ export function useTranslation() {
           const why = invented.length > 0
             ? `thêm khai báo lạ [${invented.slice(0, 3).join(', ')}${invented.length > 3 ? '…' : ''}]` + (parity.reason ? ` + ${parity.reason}` : '')
             : (parity.reason || 'cấu trúc code lệch');
-          // (bug 197/198) Vân tay là CHÍNH LÝ DO: phẫu thuật gần như tất định nên dịch lại ra đúng
-          // cùng lý do — quay vòng vô ích, đúng cảnh user thấy ở bug 197.
-          if (softGate(`halluc:${why}`,
-            `⚠️ Nghi AI BỊA CODE (${field.label}): ${why} → dịch lại (chỉ dịch chữ, không thêm code)…`,
+          // (bug 199) Nói đúng bệnh: parity tự nhận ra nó đang MÙ vì một dấu nháy vỡ — đây là
+          // AI làm HỎNG code (thiếu/thừa dấu nháy khi dịch chuỗi), không phải AI bịa thêm code.
+          // Nhãn khác nhau để user biết phải nhìn vào dấu nháy chứ không đi soi hàm lạ.
+          const label199 = parity.quoteCollapse ? 'Nghi AI LÀM VỠ DẤU NHÁY' : 'Nghi AI BỊA CODE';
+          // (bug 197/198/199) Vân tay là LOẠI lý do, KHÔNG kèm số đo: "BỚT 1015 → dịch 3" với
+          // "BỚT 1013 → dịch 5" là CÙNG một bệnh, nhưng AI mỗi lượt ra số hơi khác nên vân tay
+          // chứa số không bao giờ trùng → chốt "trùng lý do thì dừng" bị vô hiệu → lặp đúng như
+          // user thấy ở bug 199. Số vẫn nằm nguyên trong log cho người đọc; chỉ vân tay là bỏ số.
+          if (softGate(`halluc:${why.replace(/\d+/g, '#')}`,
+            `⚠️ ${label199} (${field.label}): ${why} → dịch lại (chỉ dịch chữ, không thêm code)…`,
             `vẫn ${why}`)) {
             await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
             return 'retry';
           }
           store.addLog('warning',
-            `⚠️ Chống bịa code: ${field.label} vẫn ${why} sau retry → GIỮ NGUYÊN bản gốc để KHÔNG nhét ` +
-            `code AI tự chế vào card. Hãy dịch lại riêng entry này (hoặc bật Dịch phẫu thuật).`
+            parity.quoteCollapse
+              ? `⚠️ ${field.label}: bản dịch vẫn có chuỗi không đóng đúng chỗ sau retry → GIỮ NGUYÊN bản gốc ` +
+                `để script KHÔNG liệt. Hãy dịch lại riêng entry này và soi các chuỗi có dấu nháy trong bản dịch.`
+              : `⚠️ Chống bịa code: ${field.label} vẫn ${why} sau retry → GIỮ NGUYÊN bản gốc để KHÔNG nhét ` +
+                `code AI tự chế vào card. Hãy dịch lại riêng entry này (hoặc bật Dịch phẫu thuật).`
           );
           translated = field.original;
         }

@@ -1171,7 +1171,11 @@ export function verifyCodeStructureParity(
    * Báo động giả kiểu này nguy hiểm ở chỗ nó dạy người ta bỏ qua cảnh báo thật.
    */
   expectedBracketPairs = 0,
-): { ok: boolean; reason?: string; maxDiff: number } {
+): { ok: boolean; reason?: string; maxDiff: number; quoteCollapse?: boolean } {
+  // (bug 199) Giữ bản THÔ để so chéo: nếu đếm thô cân mà đếm sau-lột-chuỗi lệch khổng lồ thì
+  // thứ hỏng là RANH GIỚI CHUỖI (một dấu nháy vỡ làm stripper mù), không phải ai thêm bớt ngoặc.
+  const rawOriginal = String(original ?? '');
+  const rawTranslated = String(translated ?? '');
   // Đếm 1 lớp ngoặc gồm biến thể ASCII + fullwidth + CJP tương ĐƯƠNG (để KHÔNG báo nhầm khi comment
   // tiếng Trung đổi （→( , 【→[ , 〔→[ … sang ASCII lúc dịch — chúng cùng lớp nên tổng giữ nguyên).
   // KHÔNG gộp ngoặc-nháy CJK 「」『』《》〈〉 vì chúng thường đổi thành "…"/'…' (không phải ngoặc ASCII
@@ -1205,7 +1209,7 @@ export function verifyCodeStructureParity(
   // nên nó quay vòng dịch lại mãi. Đo thẳng từ hai bản văn thì cả đường phẫu thuật lẫn đường dịch
   // thường đều được tha đúng phần đáng tha, mà không phải nối dây qua mấy tầng gọi.
   const autoAllowance = Math.max(expectedBracketPairs, countBracketKeyRewrites(original, translated));
-  let worst: { name: string; o: number; t: number; diff: number } | null = null;
+  let worst: { name: string; o: number; t: number; diff: number; chars: string } | null = null;
   for (const c of checks) {
     const o = countClass(original, c.chars);
     const t = countClass(translated, c.chars);
@@ -1213,10 +1217,28 @@ export function verifyCodeStructureParity(
     // (bớt ngoặc thì vẫn là bất thường, không có lý do gì tha).
     const allowance = (c.name === '[' || c.name === ']') && t > o ? autoAllowance : 0;
     const diff = Math.max(0, Math.abs(t - o) - allowance);
-    if (!worst || diff > worst.diff) worst = { name: c.name, o, t, diff };
+    if (!worst || diff > worst.diff) worst = { name: c.name, o, t, diff, chars: c.chars };
   }
   const maxDiff = worst ? worst.diff : 0;
   if (worst && worst.diff > tolerance) {
+    // (bug 199) BỘ ĐẾM CÓ THỂ ĐANG MÙ, PHẢI TỰ BIẾT ĐIỀU ĐÓ.
+    // Ca thật: AI dịch làm vỡ MỘT dấu nháy ở đầu file ⇒ stripper coi cả phần còn lại là ruột
+    // chuỗi ⇒ đếm ra "dấu ( BỚT 1015 (gốc 1018 → dịch 3)" — nghe như AI xoá cả nghìn ngoặc,
+    // kỳ thực code chỉ hỏng đúng một ký tự. Nhận diện: đếm trên văn bản THÔ (chưa lột chuỗi)
+    // thì hai bản gần bằng nhau, mà đếm sau-lột lại lệch khổng lồ ⇒ thứ thay đổi không phải
+    // NGOẶC mà là RANH GIỚI CHUỖI. Báo đúng bệnh (kèm cờ) để caller đổi cách xử lý + thông
+    // điệp; ngưỡng 20 đủ xa mọi ca "AI bịa thêm một hàm" thật (cỡ vài ngoặc là nhiều).
+    if (worst.diff >= 20) {
+      const rawO = countClass(rawOriginal, worst.chars);
+      const rawT = countClass(rawTranslated, worst.chars);
+      if (Math.abs(rawT - rawO) <= Math.max(2, autoAllowance)) {
+        return {
+          ok: false, maxDiff, quoteCollapse: true,
+          reason: `nghi VỠ DẤU NHÁY/chuỗi trong bản dịch — tổng ngoặc thô không đổi (${rawO} → ${rawT}) `
+            + `nhưng sau khi lột chuỗi thì lệch ${worst.diff}, tức có chuỗi không được đóng đúng chỗ`,
+        };
+      }
+    }
     const verb = worst.t > worst.o ? 'THÊM' : 'BỚT';
     return { ok: false, maxDiff, reason: `dấu "${worst.name}" ${verb} ${worst.diff} (gốc ${worst.o} → dịch ${worst.t})` };
   }

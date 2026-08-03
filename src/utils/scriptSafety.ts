@@ -43,14 +43,18 @@ export function isJsSyntaxOk(code: string): boolean {
  *
  * Chỉ thay khi ký tự đứng TRƯỚC `<` không phải [\w$)\]] — cùng luật với regexCanStartHere: ở đó
  * `<` không thể là phép so sánh (so sánh cần vế trái), nên chắc chắn là macro. `a<user>b` (so
- * sánh biến tên user thật) đứng sau ký tự từ nên được giữ nguyên. Macro không chứa xuống dòng
- * nên SỐ DÒNG của lỗi giữ nguyên — thông báo lỗi vẫn chỉ đúng chỗ.
+ * sánh biến tên user thật) đứng sau ký tự từ nên được giữ nguyên.
+ *
+ * (bug 203) GIỮ NGUYÊN ĐỘ DÀI: đổi hai dấu ngoặc nhọn thành `$` (ký tự định danh hợp lệ trong
+ * JS) thay vì bọc hai gạch dưới mỗi bên. Bản cũ làm chuỗi DÀI RA 2 ký tự mỗi macro, nên VỊ TRÍ
+ * lỗi acorn trả về không còn trỏ đúng vào chuỗi gốc — vô hại với ai chỉ đọc số dòng, nhưng bộ
+ * vá khoá object (repairObjectKeys) cắt chuỗi THEO VỊ TRÍ nên lệch là vá nhầm chỗ.
  */
 export function neutralizeStMacros(code: string): string {
   if (typeof code !== 'string' || code.indexOf('<') === -1) return code;
   return code.replace(
     /(^|[^\w$)\]])<(user|char|bot|charname|group|persona)>/gi,
-    (_m, pre: string, name: string) => `${pre}__${name.toLowerCase()}__`,
+    (_m, pre: string, name: string) => `${pre}$${name.toLowerCase()}$`,
   );
 }
 
@@ -63,23 +67,42 @@ export function neutralizeStMacros(code: string): string {
  * (bug 199) Macro SillyTavern (`<user>`…) được trung hoà trước khi parse — xem neutralizeStMacros.
  */
 export function jsParseErrorAny(rawCode: string): { line: number; msg: string } | null {
+  const e = jsParseErrorPosAny(rawCode);
+  return e ? { line: e.line, msg: e.msg } : null;
+}
+
+/**
+ * (bug 203) Bản đầy đủ của `jsParseErrorAny`: trả thêm VỊ TRÍ ký tự.
+ *
+ * Vì sao cần: bộ vá khoá object mất nháy (repairObjectKeys) phải cắt chuỗi ngay tại chỗ lỗi,
+ * mà nó vốn gọi `jsParseError` — hàm này chỉ parse mode SCRIPT. Script 酒馆助手 chuẩn là ES
+ * MODULE (dòng đầu `import … from 'https://…'`), nên với MỌI schema MVU nó luôn báo lỗi ở
+ * dòng 1 ("'import' and 'export' may appear only with 'sourceType: module'"). Bộ vá lấy vị trí
+ * đó, không nhận ra dạng hỏng nào, rồi dừng ⇒ CẢ BỘ VÁ CHƯA TỪNG CHẠY trên schema. Đó là lý do
+ * lỗi "khoá dịch ra có khoảng trắng" (vd `Số Lượng: safeNum`) vẫn thoát ra tới tận bản xuất,
+ * dù đã có bản vá riêng cho nó từ bugNeedFix/109.
+ *
+ * Vị trí trả về là vị trí trong CHUỖI GỐC: neutralizeStMacros giữ nguyên độ dài (xem trên).
+ */
+export function jsParseErrorPosAny(rawCode: string): { pos: number; line: number; msg: string } | null {
   const code = neutralizeStMacros(rawCode);
-  let scriptErr: { line: number; msg: string } | null = null;
-  try {
-    acornParse(code, { ecmaVersion: 'latest', locations: true, allowReturnOutsideFunction: true });
-    return null;
-  } catch (e: unknown) {
-    const err = e as { loc?: { line?: number }; message?: string };
-    scriptErr = { line: err?.loc?.line ?? -1, msg: String(err?.message || e) };
-  }
-  let moduleErr: { line: number; msg: string } | null = null;
-  try {
-    acornParse(code, { ecmaVersion: 'latest', sourceType: 'module', locations: true });
-    return null;
-  } catch (e: unknown) {
-    const err = e as { loc?: { line?: number }; message?: string };
-    moduleErr = { line: err?.loc?.line ?? -1, msg: String(err?.message || e) };
-  }
+  const attempt = (opts: Parameters<typeof acornParse>[1]): { pos: number; line: number; msg: string } | null => {
+    try {
+      acornParse(code, opts);
+      return null;
+    } catch (e: unknown) {
+      const err = e as { pos?: number; loc?: { line?: number }; message?: string };
+      return {
+        pos: typeof err?.pos === 'number' ? err.pos : -1,
+        line: err?.loc?.line ?? -1,
+        msg: String(err?.message || e),
+      };
+    }
+  };
+  const scriptErr = attempt({ ecmaVersion: 'latest', locations: true, allowReturnOutsideFunction: true });
+  if (!scriptErr) return null;
+  const moduleErr = attempt({ ecmaVersion: 'latest', sourceType: 'module', locations: true });
+  if (!moduleErr) return null;
   // (bugNeedFix/95) CẢ HAI mode đều fail ⇒ phải chọn thông điệp NÓI ĐÚNG chỗ hỏng.
   // Script 酒馆助手 là ES module (mở đầu `import 'https://…'`). Trước đây luôn trả lỗi mode
   // SCRIPT, nên user chỉ thấy "'import' and 'export' may appear only with 'sourceType: module'"

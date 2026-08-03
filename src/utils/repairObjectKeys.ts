@@ -16,11 +16,16 @@
  *      được chỗ đó. Không tiến ⇒ trả nguyên bản. Lặp tối đa MAX_ROUNDS chỗ hỏng.
  * Nhờ (4), dù đoán sai chỗ nào thì kết quả cũng không bao giờ tệ hơn đầu vào.
  */
-import { jsParseError, jsParseErrorAny, extractScriptBodies } from './scriptSafety';
+import { jsParseErrorPosAny, jsParseErrorAny, extractScriptBodies } from './scriptSafety';
 
 /** Ký tự hợp lệ để làm định danh JS (gồm cả CJK/Unicode chữ). */
 const IDENT_CHAR = /[\p{L}\p{N}$_]/u;
-const MAX_ROUNDS = 40;
+/**
+ * (bug 203) 40 → 400. Một schema MVU có hàng trăm khoá chữ Hán; AI dịch cả loạt ra tiếng Việt
+ * CÓ DẤU CÁCH thì số chỗ hỏng vượt xa 40, vá dở dang là vẫn vỡ ⇒ guard bắt dịch lại ⇒ đúng vòng
+ * lặp user gặp. Mỗi vòng chỉ là một lần parse (~5ms cho file 30K) nên trần cao vẫn rẻ.
+ */
+const MAX_ROUNDS = 400;
 
 export interface KeyRepairResult {
   code: string;
@@ -105,7 +110,9 @@ export function repairUnquotedObjectKeys(code: string): KeyRepairResult {
   let lastPos = -1;
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
-    const err = jsParseError(cur);
+    // (bug 203) PHẢI dùng bản parse hiểu CẢ module: script 酒馆助手 mở đầu bằng `import`, mà
+    // bản cũ chỉ parse mode script nên lỗi luôn rơi về dòng 1 và bộ vá thoát ngay ở vòng đầu.
+    const err = jsParseErrorPosAny(cur);
     if (!err) break;                       // hết lỗi ⇒ xong
     if (err.pos <= lastPos) break;         // không tiến lên ⇒ dừng, tránh lặp vô ích
     lastPos = err.pos;
@@ -113,7 +120,7 @@ export function repairUnquotedObjectKeys(code: string): KeyRepairResult {
     const r = repairAt(cur, err.pos);
     if (!r) break;                         // lỗi không thuộc dạng này ⇒ để nguyên phần còn lại
 
-    const after = jsParseError(r.code);
+    const after = jsParseErrorPosAny(r.code);
     // Chỉ nhận khi thật sự tiến bộ: hết lỗi, hoặc lỗi tiếp theo nằm XA HƠN chỗ vừa sửa.
     if (after && after.pos <= err.pos) break;
     cur = r.code;

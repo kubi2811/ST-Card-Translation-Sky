@@ -3,6 +3,7 @@
 // Tách khỏi apiClient.ts (Đợt tách monolith): đây là cụm THUẦN (chỉ xử lý chuỗi, không
 // gọi API/không đụng store) → dễ test + tái dùng. chunkText có test riêng (chunkText.test.ts).
 // ═══════════════════════════════════════════════════════════════════════════════
+import { planJsChunkCuts, sliceAtCuts } from './jsChunkBoundaries';
 
 /* ─── Chunk long text (CJK-aware / Unlimited Context) ─── */
 /**
@@ -308,6 +309,22 @@ export function chunkText(text: string, maxChars?: number, _maxTokens?: number):
   maxChars = Math.min(maxChars, HARD_CAP);
 
   if (text.length <= maxChars) return [text];
+
+  // ═══ (bug 203) FIELD JAVASCRIPT: CẮT THEO CÂY CÚ PHÁP, KHÔNG ĐẾM NGOẶC ═══
+  // Đo trên schema Zod 29.700 ký tự user gửi: đường cắt cũ dừng ngay sau `const escapeRegExp
+  // = text =>` và giữa một object literal — mảnh nào cũng là JS cụt, AI đoán bừa, ghép lại vỡ
+  // cú pháp, dịch lại vẫn cắt y chỗ đó nên vỡ y hệt. Hỏi thẳng bộ phân tích cú pháp thì chỉ
+  // cắt ở ranh giới giữa hai nút anh em. Không parse được / không phải JS thật → rơi xuống
+  // đúng thuật toán cũ bên dưới, văn xuôi và HTML không đổi hành vi.
+  const jsPlan = planJsChunkCuts(text, maxChars);
+  if (jsPlan) {
+    const pieces = sliceAtCuts(text, jsPlan.cuts);
+    if (pieces.length > 1 && pieces.join('') === text) {
+      console.log(`[chunkText] JS: cắt ${pieces.length} phần tại ranh giới cú pháp `
+        + `(mảnh dài nhất ${jsPlan.maxPieceLen} ký tự)`);
+      return pieces;
+    }
+  }
 
   // Smart splitting states
   const isHtml = /<[a-z][^>]*>/i.test(text) && /<\/[a-z]+>/i.test(text);

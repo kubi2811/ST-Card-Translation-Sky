@@ -33,7 +33,10 @@ describe('(bug 199) neutralizeStMacros — macro SillyTavern không được là
   it('`val === <user>` trở thành JS parse được, và số dòng giữ nguyên', () => {
     const code = 'const f = (val) => (val === <user> || val === undefined ? 100 : Number(val));';
     const n = neutralizeStMacros(code);
-    expect(n).toContain('__user__');
+    // (bug 203) Dạng thay thế đổi từ `__user__` sang `$user$` để GIỮ NGUYÊN ĐỘ DÀI: bộ vá khoá
+    // object cắt chuỗi theo VỊ TRÍ acorn trả về, lệch một ký tự là vá nhầm chỗ.
+    expect(n).toContain('$user$');
+    expect(n.length).toBe(code.length);
     expect(jsParseErrorAny(code)).toBeNull();
     expect(neutralizeStMacros('a\n<user>\nb').split('\n').length).toBe(3);
   });

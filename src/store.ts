@@ -68,6 +68,10 @@ export function buildProgressSnapshot(cur: AppState) {
     // `card.data.extensions.regex_scripts`. Nửa sau trước giờ KHÔNG được lưu ở đâu cả, nên nhập
     // lại thẻ là quay về nguyên bản. Chụp cùng lúc với `fields` để hai nửa luôn cùng một mốc.
     regexScripts: cur.card?.data?.extensions?.regex_scripts ?? null,
+    // (bug 205) Chụp CẢ CARD vào snapshot. Trước đây snapshot chỉ có fields — tab bị Edge cho
+    // ngủ/tắt là mở lại trắng trơn ("tự out card"), cache chỉ hồi được khi user tự import lại
+    // đúng file. Có card trong snapshot thì restoreLastSession dựng lại được cả phiên làm việc.
+    card: cur.card,
     dicts: {
       mvuDictionary: cur.translationConfig.mvuDictionary,
       ejsEntryNameDict: cur.translationConfig.ejsEntryNameDict,
@@ -90,7 +94,22 @@ export function flushProgressBeacon() {
       cur.fields.some(f => f.status === 'done' || (f.translated ?? '').length > 0);
     if (!worthSaving) return;
     const payload = JSON.stringify({ key: cur.cardFileName, data: buildProgressSnapshot(cur) });
-    navigator.sendBeacon?.('/api/progress/save', new Blob([payload], { type: 'application/json' }));
+    // (bug 205) sendBeacon có TRẦN ~64KB — snapshot card thật nặng hàng MB nên cú chốt này
+    // trước giờ LUÔN fail trong im lặng, đúng ca "Edge tắt tab nền là mất sạch". Payload nhỏ
+    // vẫn đi sendBeacon (sống sót qua unload); payload lớn chuyển sang fetch thường — lúc tab
+    // mới bị ẨN (visibilitychange, thời điểm Edge sắp cho tab ngủ) fetch chạy bình thường.
+    let sent = false;
+    if (payload.length < 60_000) {
+      sent = navigator.sendBeacon?.('/api/progress/save', new Blob([payload], { type: 'application/json' })) ?? false;
+    }
+    if (!sent) {
+      void fetch('/api/progress/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+        keepalive: payload.length < 60_000,
+      }).catch(() => { /* best-effort */ });
+    }
   } catch { /* best-effort */ }
 }
 
@@ -221,6 +240,8 @@ interface AppState {
   // Per-file translation cache
   saveTranslationCache: () => void;
   loadTranslationCache: (fileName: string) => Promise<boolean>;
+  /** (bug 205) Dựng lại phiên làm việc gần nhất (card + tiến trình) sau khi tab bị đóng/ngủ. */
+  restoreLastSession: () => Promise<string | null>;
   /** Card mới không có cache trùng tên → quét cache các card CŨ, bê bản dịch của field
    *  trùng hệt nội dung sang (update phiên bản chỉ cần dịch phần thay đổi). */
   reuseFromVersionCache: () => Promise<{ reused: number; source: string; total: number } | null>;
@@ -589,7 +610,7 @@ export const useStore = create<AppState>((set) => ({
     modPreset: LS.get('st-translator-mod-preset', 'none') as ModPreset,
     enableModThinking: LS.get('st-translator-mod-thinking', false),
     enableEjsThinking: LS.get('st-translator-ejs-thinking', false),
-    enableEjsSync: false,
+    enableEjsSync: LS.get('st-translator-ejs-sync-enabled', false),
     ejsEntryNameDict: LS.get('st-translator-ejs-entry-dict', {}) as Record<string, string>,
     ejsKeywordDict: LS.get('st-translator-ejs-keyword-dict', {}) as Record<string, string>,
     ejsDecoratorPreserve: LS.get('st-translator-ejs-decorator-preserve', true),
@@ -662,6 +683,11 @@ export const useStore = create<AppState>((set) => ({
       }
       if ('enableMvuSync' in partial) {
         LS.set('st-translator-mvu-sync-enabled', next.enableMvuSync);
+      }
+      // (bug 205) Chiến lược C trước giờ KHÔNG được persist — F5/tab ngủ là tự tắt về false,
+      // đúng lời user "tự reset lại setting chiến lược C". B (enableMvuSync) đã persist sẵn.
+      if ('enableEjsSync' in partial) {
+        LS.set('st-translator-ejs-sync-enabled', next.enableEjsSync);
       }
       if ('mvuDictLocked' in partial) {
         LS.set('st-translator-mvu-dict-locked', next.mvuDictLocked);
@@ -1074,6 +1100,33 @@ export const useStore = create<AppState>((set) => ({
       if (!cur.cardFileName || cur.fields.length === 0) return;
       FsCache.save(cur.cardFileName, buildProgressSnapshot(cur)).catch(() => { /* best-effort */ });
     }, FS_SAVE_DEBOUNCE_MS);
+  },
+  /**
+   * (bug 205) KHÔI PHỤC PHIÊN GẦN NHẤT — cho ca "Edge tự tắt tab chạy nền, mở lại trắng trơn".
+   * Chỉ chạy khi CHƯA có card nào được nạp (không đè lên việc user đang làm), chỉ nhận snapshot
+   * trong 3 ngày gần đây (không đào mộ phiên cũ), và snapshot phải có card + fields thật.
+   */
+  restoreLastSession: async (): Promise<string | null> => {
+    const s = useStore.getState();
+    if (s.card) return null;
+    try {
+      const list = await FsCache.list();
+      if (!list.length) return null;
+      const newest = [...list].sort((a, b) => b.savedAt - a.savedAt)[0];
+      if (Date.now() - newest.savedAt > 3 * 24 * 3600 * 1000) return null;
+      const entry = await FsCache.load<any>(newest.key);
+      const snap = entry?.data;
+      if (!snap?.card || !Array.isArray(snap.fields) || snap.fields.length === 0) return null;
+      set({
+        card: snap.card as CharacterCard,
+        cardFileName: newest.key,
+        contentType: snap.contentType || 'card',
+      });
+      await useStore.getState().loadTranslationCache(newest.key);
+      return newest.key;
+    } catch {
+      return null;
+    }
   },
   loadTranslationCache: async (fileName: string): Promise<boolean> => {
     const entry = await FsCache.load<any>(fileName);

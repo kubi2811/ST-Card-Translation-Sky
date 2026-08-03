@@ -34,6 +34,23 @@ import { isEjsProseField, maskEjsCode, unmaskEjsCode, countEjsBlocks } from '../
 import { isLikelyJsScript, jsParseErrorAny, isImportOnlyScript, hasRealJsSignal, jsErrorFingerprint } from '../utils/scriptSafety';
 import { planTargetedChunkRetry, mergeChunkProgress } from '../utils/chunkRetryPlan';
 import { chunkCharsForField } from '../utils/chunking';
+
+/* ─── (bug 205) Wake lock trong lúc dịch ───
+ * Edge/Chrome cho tab nền "ngủ" rất hăng khi máy tắt màn hình — user để tool chạy ngầm vài chục
+ * phút là tab bị đóng băng/tắt, mọi call đang bay chết lặng. Screen wake lock giữ màn hình thức
+ * suốt lượt dịch (trình duyệt không hỗ trợ thì bỏ qua, không ảnh hưởng gì). Không chống được
+ * "memory saver" chủ động của Edge — phần đó do khôi phục phiên (restoreLastSession) đỡ. */
+let _wakeLock: WakeLockSentinel | null = null;
+async function acquireWakeLock(): Promise<void> {
+  try {
+    if (!navigator.wakeLock) return;
+    _wakeLock = await navigator.wakeLock.request('screen');
+  } catch { /* không hỗ trợ / bị từ chối — thôi */ }
+}
+function releaseWakeLock(): void {
+  try { void _wakeLock?.release(); } catch { /* đã nhả sẵn */ }
+  _wakeLock = null;
+}
 import { getActivePresetPromptContent } from '../utils/presetParser';
 import { CallMonitor } from '../utils/callMonitor';
 import { runWorkerPool } from '../utils/runWorkerPool';
@@ -629,6 +646,8 @@ export function useTranslation() {
               completedChunks: updatedChunks,
               totalChunks,
             });
+            // (bug 205) Chốt xuống đĩa theo TỪNG chunk (debounce sẵn 1.5s) — tab bị kill giữa entry lớn không mất phần đã dịch.
+            useStore.getState().saveTranslationCache();
           },
           // parallelChunks
           computePoolConcurrency(store.proxy),
@@ -1969,6 +1988,10 @@ export function useTranslation() {
     // Release any field locks held by a previous (now-superseded) run
     inFlightPaths.current.clear();
 
+    // (bug 205) Giữ màn hình thức suốt lượt dịch — tab nền + màn hình tắt là combo bị Edge cho
+    // ngủ nhiều nhất. Nhả ở pause/cancel/kết thúc.
+    void acquireWakeLock();
+
     // Bump the run token: any older loop still alive will see runIdRef change and bail
     // out at its next checkpoint, so two loops can never run concurrently.
     const myRunId = ++runIdRef.current;
@@ -3184,6 +3207,7 @@ export function useTranslation() {
     } catch { /* ép mốc chỉ tăng cường — lỗi thì bỏ qua */ }
 
     runningRef.current = false;
+    releaseWakeLock();   // (bug 205) hết lượt dịch thì trả màn hình về bình thường
     store.setPhase('done');
     store.saveTranslationCache();
     // `store` là snapshot lúc render → store.fields còn status CŨ (pending). Phải đọc
@@ -3382,6 +3406,7 @@ export function useTranslation() {
   }, [store]);
 
   const pauseTranslation = useCallback(() => {
+    releaseWakeLock();   // (bug 205) dung tay thi tra man hinh ve binh thuong
     // ═══ HARD, RESUMABLE PAUSE ═══
     // The user usually pauses to EDIT an entry. A cooperative pause would let the
     // in-flight entry (and concurrent batches) finish and advance first — that was the
@@ -3430,6 +3455,7 @@ export function useTranslation() {
   }, [store, startTranslation]);
 
   const cancelTranslation = useCallback(() => {
+    releaseWakeLock();   // (bug 205) dung tay thi tra man hinh ve binh thuong
     // Invalidate any running loop so it bails at its next checkpoint
     runIdRef.current++;
     abortRef.current?.abort();
@@ -3598,6 +3624,8 @@ export function useTranslation() {
             completedChunks: updatedChunks,
             totalChunks,
           });
+          // (bug 205) Chốt xuống đĩa theo TỪNG chunk (debounce sẵn 1.5s) — tab bị kill giữa entry lớn không mất phần đã dịch.
+          useStore.getState().saveTranslationCache();
         },
         computePoolConcurrency(store.proxy),
         store.translationConfig.enableChunkVerification,
@@ -3965,6 +3993,8 @@ export function useTranslation() {
                 completedChunks: updatedChunks,
                 totalChunks,
               });
+              // (bug 205) Chốt xuống đĩa theo TỪNG chunk (debounce sẵn 1.5s) — tab bị kill giữa entry lớn không mất phần đã dịch.
+              useStore.getState().saveTranslationCache();
             },
             computePoolConcurrency(store.proxy),
             store.translationConfig.enableChunkVerification,

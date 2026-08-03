@@ -99,6 +99,22 @@ export default function App() {
   // trống giữa hàng chục call LLM (bug "quay quài" của user).
   useEffect(() => { warmupLazyChunks(); }, []);
 
+  // (bug 205) KHÔI PHỤC PHIÊN GẦN NHẤT khi mở app mà chưa có card — cho ca Edge tự tắt tab
+  // chạy nền: mở lại là trắng trơn dù tiến trình vẫn nằm trong translation-progress/. Snapshot
+  // giờ chứa cả CARD nên dựng lại được nguyên phiên (card + fields + chunk + từ điển).
+  useEffect(() => {
+    const t = setTimeout(() => {
+      void useStore.getState().restoreLastSession?.().then((key) => {
+        if (key) {
+          useStore.getState().addLog('info',
+            `🔄 Đã khôi phục phiên làm việc trước ("${key}") — tab trước đó bị đóng/cho ngủ. ` +
+            `Muốn bắt đầu card khác thì cứ Import như thường; muốn xuất PNG thì import lại ảnh gốc.`);
+        }
+      });
+    }, 300); // nhường useEffect nạp card từ đường khác (nếu có) chạy trước
+    return () => clearTimeout(t);
+  }, []);
+
   // Flush translation progress to the project folder when the tab is closed/hidden, so an
   // accidental close within the auto-save window doesn't lose the last few seconds of work.
   useEffect(() => {

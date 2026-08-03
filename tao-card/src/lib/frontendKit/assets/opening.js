@@ -209,8 +209,9 @@
           should_scan: true,
         }],
         onStream: function (txt) {
-          var peek = String(txt).slice(-220);
-          el('fe-veil-peek').textContent = peek;
+          // Chỉ hé phần lời kể ĐÃ DỌN. Bản đầu hé nguyên văn, nên khối tư duy của preset
+          // chạy thẳng lên màn chờ cho người chơi đọc.
+          el('fe-veil-peek').textContent = S.splitReply(txt).narrative.slice(-220);
         },
       });
 
@@ -218,9 +219,8 @@
       veil(true, 'Đang ghi biến khởi đầu…');
       await S.applyUpdate(reply);
 
-      var parts = S.splitReply(reply);
       S.state.started = true;
-      S.state.log = [{ role: 'assistant', text: reply, view: parts.narrative, at: S.nowStamp() }];
+      S.state.log = [S.logEntryOf(reply, S.nowStamp())];
       // Giữ lại bản nháp biểu mẫu: bấm "Chơi lại từ đầu" thì hồ sơ cũ hiện sẵn, khỏi gõ lại.
       S.state.ui = { chatOpen: true, tab: 'chat', draft: { form: form, scenarioId: scenarioId } };
       S.state.snapshots = [];

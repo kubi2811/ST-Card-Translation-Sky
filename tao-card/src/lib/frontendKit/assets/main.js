@@ -157,9 +157,17 @@
   function msgHtml(entry, idx) {
     var cls = entry.role === 'user' ? 'is-user' : (entry.role === 'system' ? 'is-sys' : '');
     var who = entry.role === 'user' ? 'Bạn' : (entry.role === 'system' ? 'Hệ thống' : 'Quản Trò');
-    var body = entry.role === 'user' || entry.role === 'system'
-      ? '<p>' + S.esc(entry.text).replace(/\n/g, '<br>') + '</p>'
-      : S.mdLite(entry.view || S.splitReply(entry.text).narrative);
+    var body;
+    if (entry.role === 'user' || entry.role === 'system') {
+      body = '<p>' + S.esc(entry.text).replace(/\n/g, '<br>') + '</p>';
+    } else if (entry.pending) {
+      // Bong bóng đang chờ chữ đầu tiên: chỉ một chấm nhấp nháy. Trước đây chỗ này nhét
+      // sẵn thẻ span rồi cho qua mdLite — mà mdLite thì ESCAPE, nên người chơi đọc được
+      // đúng cái thẻ span đó bằng chữ.
+      body = '<span class="fe-typing"></span>';
+    } else {
+      body = S.mdLite(S.viewOf(entry));
+    }
     return '<div class="fe-msg ' + cls + '" data-idx="' + idx + '">'
       + '<div class="fe-msg-meta">' + who + (entry.at ? ' · ' + S.esc(entry.at) : '') + '</div>'
       + '<div class="fe-msg-body">' + body + '</div></div>';
@@ -343,7 +351,7 @@
       S.saveState();
     }
 
-    streamingNode = appendMsg({ role: 'assistant', text: '', view: '<span class="fe-typing"></span>', at: S.nowStamp() });
+    streamingNode = appendMsg({ role: 'assistant', text: '', pending: true, at: S.nowStamp() });
     S.state.log.pop(); // bong bóng đang chạy chưa vào nhật ký thật
 
     try {
@@ -357,18 +365,19 @@
           should_scan: true,
         }],
         onStream: function (full) {
-          var parts = S.splitReply(full);
+          // KHÔNG có lối lùi "rỗng thì hiện nguyên văn". Lúc AI mới nhả khối tư duy mà chưa
+          // tới lời kể, phần sạch đúng là rỗng — hiện nguyên văn chính là hiện ruột gan nó.
           streamingNode.querySelector('.fe-msg-body').innerHTML =
-            S.mdLite(parts.narrative || full) + '<span class="fe-typing"></span>';
+            S.mdLite(S.splitReply(full).narrative) + '<span class="fe-typing"></span>';
           scrollLog();
         },
       });
 
       reply = ensureUpdateBlock(reply);
-      var parts2 = S.splitReply(reply);
-      streamingNode.querySelector('.fe-msg-body').innerHTML = S.mdLite(parts2.narrative);
+      var entry = S.logEntryOf(reply, S.nowStamp());
+      streamingNode.querySelector('.fe-msg-body').innerHTML = S.mdLite(entry.view);
 
-      S.state.log.push({ role: 'assistant', text: reply, view: parts2.narrative, at: S.nowStamp() });
+      S.state.log.push(entry);
 
       var res = await S.applyUpdate(reply);
       if (!res.ok && res.reason !== 'no-command') {
@@ -471,8 +480,7 @@
         var msgs = getChatMessages(S.gameMessageId());
         var raw = msgs && msgs[0] ? msgs[0].message : '';
         if (raw && new RegExp('<\\/' + (CFG.updateTag || 'UpdateVariable') + '>').test(raw)) {
-          var p = S.splitReply(raw);
-          S.state.log = [{ role: 'assistant', text: raw, view: p.narrative, at: '' }];
+          S.state.log = [S.logEntryOf(raw, '')];
           S.state.started = true;
           S.saveState();
         }

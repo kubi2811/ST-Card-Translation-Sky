@@ -239,14 +239,17 @@ describe('(bug 192) vá khối cập nhật biến khi AI xuất sai định d�
 });
 
 describe('(bug 192) tách lời kể / khối biến — logic runtime dùng lại được', () => {
-  const splitReply = (raw: string, tag = 'UpdateVariable') => {
-    const reBlock = new RegExp('<' + tag + '>[\\s\\S]*?<\\/' + tag + '>', 'i');
-    const m = raw.match(reBlock);
-    const narrative = raw.replace(reBlock, '')
-      .replace(/<(thinking|think|reasoning|Analysis|Analyze)>[\s\S]*?<\/\1>/gi, '')
-      .trim();
-    return { narrative, updateBlock: m ? m[0] : '' };
-  };
+  // Trước đây chỗ này chép tay lại splitReply. Bản chép đứng im trong khi bản thật đổi
+  // (bug 202 viết lại toàn bộ bộ lọc), nên test xanh mà quán rượu vẫn lộ khối tư duy.
+  // Nay gọi thẳng hàm thật trong runtime.js.
+  type Split = { splitReply: (t: string) => { narrative: string; updateBlock: string } };
+  let RT: Split;
+  beforeAll(() => {
+    const win: Record<string, unknown> = {};
+    new Function('window', kit.buildRuntimeOnlyJs())(win);
+    RT = win.STFE as Split;
+  });
+  const splitReply = (raw: string) => RT.splitReply(raw);
 
   it('bóc đúng khối biến và không để sót chữ nào của nó trong lời kể', () => {
     const raw = '<thinking>ngẫm</thinking>\nBạn bước vào.\n<UpdateVariable>\n<Analysis>x</Analysis>\n<JSONPatch>\n[]\n</JSONPatch>\n</UpdateVariable>';

@@ -34,12 +34,22 @@ html, body {
   line-height: 1.6;
 }
 
+/*
+ * (bug 201) Chặn tràn chữ — `overflow-wrap: anywhere` đặt ở gốc và ĐƯỢC THỪA KẾ xuống mọi
+ * thứ bên trong. Đo trên bàn thử: chỉ một cụm chữ không thể ngắt (một đường dẫn, một liên
+ * kết, một chuỗi mã do AI trả về) là đủ nong cột lưới rộng ra 590px; mà .fe-root lại cắt
+ * phần thừa, nên chữ không "tràn ra ngoài" cho ai thấy — nó BIẾN MẤT. Chọn `anywhere` chứ
+ * không phải `break-word` vì chỉ `anywhere` mới hạ được bề rộng tối thiểu của khối, tức là
+ * mới cho phép lưới/flex co lại thật.
+ */
 .fe-root {
   background: linear-gradient(160deg, var(--fe-bg) 0%, var(--fe-bg-soft) 100%);
   border: 1px solid var(--fe-line);
   border-radius: var(--fe-radius);
   overflow: hidden;
   box-shadow: 0 10px 30px rgba(0, 0, 0, .35);
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 /* ── thanh đầu ─────────────────────────────────────────────────────────── */
@@ -64,12 +74,15 @@ html, body {
   letter-spacing: .3px;
   color: var(--fe-accent);
   margin: 0;
+  min-width: 0;
 }
 
-.fe-sub { color: var(--fe-text-dim); font-size: .85rem; }
+.fe-sub { color: var(--fe-text-dim); font-size: .85rem; min-width: 0; }
 
 .fe-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 
+/* Chip dài hơn bề ngang thẻ (tên khu vực, tên phả hệ) thì phải xuống dòng TRONG chip —
+   `nowrap` ở đây từng đẩy nguyên viên thuốc ra khỏi mép thẻ trên màn điện thoại. */
 .fe-chip {
   display: inline-flex;
   align-items: center;
@@ -80,17 +93,19 @@ html, body {
   background: rgba(255, 255, 255, .03);
   font-size: .78rem;
   color: var(--fe-text-dim);
-  white-space: nowrap;
+  white-space: normal;
+  max-width: 100%;
 }
 
 .fe-chip b { color: var(--fe-text); font-weight: 600; }
 
 .fe-bars { margin-top: 10px; display: grid; gap: 7px; }
 
-.fe-bar-row { display: flex; align-items: center; gap: 8px; font-size: .78rem; }
+.fe-bar-row { display: flex; align-items: center; gap: 8px; font-size: .78rem; min-width: 0; }
 .fe-bar-label { min-width: 62px; color: var(--fe-text-dim); }
 .fe-bar-track {
   flex: 1;
+  min-width: 0;
   height: 9px;
   border-radius: 999px;
   background: rgba(0, 0, 0, .38);
@@ -134,13 +149,16 @@ html, body {
 
 /* ── bảng dữ liệu ─────────────────────────────────────────────────────── */
 
-.fe-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+/* `min(190px, 100%)`: trong khung hẹp hơn 190px thì cột phải co theo khung, chứ minmax cứng
+   190px là cả lưới rộng hơn thẻ. Cùng lý do cho .fe-cards và .fe-form-grid bên dưới. */
+.fe-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr)); gap: 8px; }
 
 .fe-cell {
   background: rgba(255, 255, 255, .025);
   border: 1px solid var(--fe-line);
   border-radius: 9px;
   padding: 8px 10px;
+  min-width: 0;
 }
 
 .fe-cell-k { font-size: .74rem; color: var(--fe-text-dim); text-transform: uppercase; letter-spacing: .5px; }
@@ -154,10 +172,11 @@ html, body {
   border-radius: 9px;
   padding: 9px 11px;
   background: rgba(255, 255, 255, .025);
+  min-width: 0;
 }
 
-.fe-item-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
-.fe-item-name { font-weight: 600; }
+.fe-item-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.fe-item-name { font-weight: 600; min-width: 0; }
 .fe-item-tag { font-size: .74rem; color: var(--fe-text-dim); }
 .fe-item-desc { font-size: .85rem; color: var(--fe-text-dim); margin-top: 3px; }
 
@@ -186,17 +205,22 @@ html, body {
 .fe-chat-box { display: block; }
 .fe-chat.is-closed .fe-chat-box { display: none; }
 
+/* `minmax(0, 1fr)` là chốt chặn chính của bug 201: lưới mặc định lấy bề rộng theo nội dung
+   RỘNG NHẤT và không cho co, nên một dòng dài trong MỘT bong bóng kéo TẤT CẢ bong bóng còn
+   lại tràn theo. */
 .fe-log {
   max-height: 46vh;
   min-height: 160px;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 10px 12px;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
   scroll-behavior: smooth;
 }
 
-.fe-msg { display: grid; gap: 3px; }
+.fe-msg { display: grid; gap: 3px; min-width: 0; }
 .fe-msg-meta { font-size: .72rem; color: var(--fe-text-dim); }
 
 .fe-msg-body {
@@ -204,7 +228,11 @@ html, body {
   border-radius: 10px;
   border: 1px solid var(--fe-line);
   background: rgba(255, 255, 255, .03);
+  min-width: 0;
+  max-width: 100%;
 }
+
+.fe-msg-body img { max-width: 100%; height: auto; }
 
 .fe-msg.is-user .fe-msg-body {
   background: rgba(122, 162, 255, .10);
@@ -230,10 +258,11 @@ html, body {
 .fe-typing { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--fe-accent); animation: fe-blink 1s infinite; }
 @keyframes fe-blink { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
 
-.fe-compose { display: flex; gap: 8px; padding: 10px 12px 12px; border-top: 1px solid var(--fe-line); align-items: flex-end; }
+.fe-compose { display: flex; gap: 8px; padding: 10px 12px 12px; border-top: 1px solid var(--fe-line); align-items: flex-end; flex-wrap: wrap; }
 
 .fe-input {
   flex: 1;
+  min-width: 0;
   resize: vertical;
   min-height: 44px;
   max-height: 190px;
@@ -262,8 +291,13 @@ html, body {
   font-size: .88rem;
   cursor: pointer;
   white-space: nowrap;
+  max-width: 100%;
   transition: filter .15s ease, opacity .15s ease;
 }
+
+/* Nút hành động nhanh mang nguyên một câu do thẻ tự đặt, dài ngắn không đoán được — ở đây
+   cho xuống dòng, chứ `nowrap` thì câu dài chọc thẳng ra khỏi mép thẻ. */
+.fe-toolbar .fe-btn { white-space: normal; text-align: left; }
 
 .fe-btn:hover:not(:disabled) { filter: brightness(1.22); }
 .fe-btn:disabled { opacity: .45; cursor: not-allowed; }
@@ -278,9 +312,9 @@ html, body {
 /* ── biểu mẫu khởi tạo ────────────────────────────────────────────────── */
 
 .fe-form { display: grid; gap: 12px; }
-.fe-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+.fe-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr)); gap: 10px; }
 
-.fe-field { display: grid; gap: 4px; }
+.fe-field { display: grid; gap: 4px; min-width: 0; }
 .fe-field > label { font-size: .8rem; color: var(--fe-text-dim); }
 .fe-field .fe-hint { font-size: .72rem; color: var(--fe-text-dim); opacity: .8; }
 
@@ -301,7 +335,7 @@ html, body {
 .fe-field textarea { min-height: 72px; resize: vertical; }
 .fe-field input:focus, .fe-field select:focus, .fe-field textarea:focus { outline: none; border-color: var(--fe-accent); }
 
-.fe-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.fe-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 10px; }
 
 .fe-card {
   border: 1px solid var(--fe-line);

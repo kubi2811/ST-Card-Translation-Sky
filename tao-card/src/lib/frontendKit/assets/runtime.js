@@ -428,27 +428,198 @@
 
   function updateTag() { return CFG.updateTag || 'UpdateVariable'; }
 
+  /* ── lọc khối kỹ thuật / khối tư duy khỏi phần hiển thị (bug 202) ─────── */
+
+  /**
+   * Đo trên máy người chơi: khung chat in NGUYÊN SI ba thứ lẽ ra không ai được thấy —
+   * khối <tableThink> kèm chú thích HTML của tiện ích bảng trí nhớ, khối [metacognition]
+   * của preset, và cả bảng trạng thái HTML mà thẻ tự vẽ (thứ mà chat gốc vốn dựng thành
+   * giao diện, còn ở đây thì hiện ra dạng thẻ trần).
+   *
+   * Bản đầu chỉ lọc đúng năm cái tên thẻ đoán sẵn. Sai ngay từ giả định: rác đến từ PRESET
+   * và TIỆN ÍCH của người dùng, không đoán trước được. Nên đổi cách nghĩ — khung chat chỉ
+   * hiển thị VĂN XUÔI; mọi thứ mang hình dạng đánh dấu hay khối kỹ thuật đều bị cắt, và
+   * thẻ nào cần thêm thì tự khai qua CFG.hideTags / CFG.hideBracketTags.
+   */
+
+  /** Thẻ mà NỘI DUNG bên trong không phải lời kể — cắt trọn cả khối. */
+  var HIDDEN_TAGS = [
+    'thinking', 'think', 'thought', 'thoughts', 'reasoning', 'reason', 'analysis', 'analyze',
+    'plan', 'planning', 'outline', 'scratchpad', 'metacognition', 'cot', 'chain_of_thought',
+    'tablethink', 'tableedit', 'tablerule', 'statusblock', 'status_block', 'statusbar',
+    'mvu', 'mvuupdate', 'variableupdate', 'update_variable', 'system_note',
+  ];
+
+  /** Khối HTML dựng giao diện — luôn là thứ để vẽ, không bao giờ là lời kể. */
+  var HTML_BLOCK_TAGS = [
+    'div', 'table', 'style', 'script', 'details', 'svg', 'form', 'template',
+    'iframe', 'button', 'canvas',
+  ];
+
+  /** Thẻ HTML còn sót: bỏ THẺ nhưng GIỮ chữ, vì chữ trong đó vẫn có thể là lời kể. */
+  var HTML_INLINE_TAGS = [
+    'p', 'span', 'b', 'strong', 'i', 'em', 'u', 's', 'small', 'big', 'font', 'a', 'img',
+    'code', 'pre', 'blockquote', 'q', 'mark', 'sub', 'sup', 'center', 'label', 'summary',
+    'del', 'ins', 'abbr', 'figcaption', 'figure', 'time', 'ul', 'ol', 'thead', 'tbody',
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'br', 'hr', 'tr', 'td', 'th',
+  ];
+  /** Trong nhóm trên, những thẻ vốn NGẮT DÒNG — bỏ đi mà không để lại gì thì chữ dính nhau. */
+  var HTML_BREAK_TAGS = ['p', 'br', 'hr', 'li', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote'];
+
+  /** Nhãn kiểu [metacognition] — preset hay dùng, và thường KHÔNG có thẻ đóng. */
+  var HIDDEN_BRACKETS = ['metacognition', 'thinking', 'think', 'reasoning', 'analysis', 'plan', 'cot', 'scratchpad'];
+
+  /** Chỉ nhận tên thẻ an toàn để ghép vào regex — tên lạ do config đưa vào thì bỏ qua. */
+  function safeNames(list, extra) {
+    var all = (list || []).concat(Array.isArray(extra) ? extra : []);
+    var seen = {};
+    var out = [];
+    all.forEach(function (n) {
+      var k = String(n == null ? '' : n).trim().toLowerCase();
+      if (!k || !/^[a-z][a-z0-9_-]*$/.test(k) || seen[k]) return;
+      seen[k] = 1;
+      out.push(k);
+    });
+    return out;
+  }
+
+  /**
+   * Cắt trọn một khối thẻ, kể cả khi nó LỒNG NHAU (bảng trạng thái toàn div lồng div) và kể
+   * cả khi thẻ đóng CHƯA VỀ — lúc đang nhả từng chữ thì khối luôn ở trạng thái mở dở, và đó
+   * chính là lúc người chơi nhìn thấy ruột gan của nó chạy qua màn hình.
+   */
+  function stripBalancedTag(text, tag) {
+    var s = String(text);
+    var openRe = new RegExp('<' + tag + '(?![a-z0-9_-])[^>]*>', 'i');
+    var closeRe = new RegExp('<\\/' + tag + '\\s*>', 'i');
+    var guard = 0;
+    while (guard++ < 400) {
+      var mo = s.match(openRe);
+      if (!mo) break;
+      var start = mo.index;
+      // Thẻ tự đóng: gỡ đúng nó, đừng nuốt phần sau.
+      if (/\/>$/.test(mo[0])) {
+        s = s.slice(0, start) + s.slice(start + mo[0].length);
+        continue;
+      }
+      var i = start + mo[0].length;
+      var depth = 1;
+      var end = -1;
+      while (depth > 0) {
+        var rest = s.slice(i);
+        var mc = rest.match(closeRe);
+        if (!mc) { end = s.length; break; }
+        var mn = rest.match(openRe);
+        if (mn && mn.index < mc.index) {
+          depth += /\/>$/.test(mn[0]) ? 0 : 1;
+          i += mn.index + mn[0].length;
+          continue;
+        }
+        depth--;
+        i += mc.index + mc[0].length;
+        if (depth === 0) end = i;
+      }
+      if (end < 0) end = s.length;
+      s = s.slice(0, start) + s.slice(end);
+    }
+    return s;
+  }
+
+  /**
+   * Nhãn ngoặc vuông. Có thẻ đóng thì cắt trọn; KHÔNG có thẻ đóng thì chỉ cắt hết đoạn văn
+   * chứa nó (tới dòng trống đầu tiên). Cắt tham hơn là ăn nhầm lời kể — mà lời kể thì luôn
+   * cách khối kỹ thuật bằng một dòng trống.
+   */
+  function stripBracketBlock(text, name) {
+    var s = String(text);
+    s = s.replace(new RegExp('^[ \\t]*\\[' + name + '\\][\\s\\S]*?\\[\\/' + name + '\\][ \\t]*', 'gim'), '');
+    s = s.replace(new RegExp('^[ \\t]*\\[' + name + '\\][^\\n]*(?:\\n(?![ \\t]*\\n)[^\\n]*)*', 'gim'), '');
+    return s;
+  }
+
+  /**
+   * Dọn mọi khối không phải văn xuôi.
+   * @param {string} text
+   * @param {boolean} dropUpdate  có cắt luôn khối cập nhật biến của thẻ hay không
+   */
+  function stripHidden(text, dropUpdate) {
+    var s = String(text == null ? '' : text);
+    var tag = updateTag();
+
+    if (dropUpdate) {
+      s = stripBalancedTag(s, tag);
+      // Đang stream thì khối mở ra mà chưa đóng — cắt từ chỗ mở tới hết, đừng để JSONPatch
+      // chạy qua màn hình từng chữ một.
+      s = s.replace(new RegExp('<' + tag + '(?![a-z0-9_-])[\\s\\S]*', 'i'), '');
+    }
+
+    safeNames(HIDDEN_TAGS, CFG.hideTags).forEach(function (t) {
+      if (t === String(tag).toLowerCase()) return;
+      s = stripBalancedTag(s, t);
+    });
+    HTML_BLOCK_TAGS.forEach(function (t) { s = stripBalancedTag(s, t); });
+
+    // Chú thích HTML: tiện ích bảng trí nhớ gói cả bài toán của nó trong đây.
+    s = s.replace(/<!--[\s\S]*?-->/g, '').replace(/<!--[\s\S]*/, '');
+
+    safeNames(HIDDEN_BRACKETS, CFG.hideBracketTags).forEach(function (n) { s = stripBracketBlock(s, n); });
+
+    var breakRe = new RegExp('<\\/?(?:' + HTML_BREAK_TAGS.join('|') + ')(?:\\s[^>]*)?\\/?>', 'gi');
+    var inlineRe = new RegExp('<\\/?(?:' + HTML_INLINE_TAGS.join('|') + ')(?:\\s[^>]*)?\\/?>', 'gi');
+    s = s.replace(breakRe, '\n').replace(inlineRe, '');
+    s = s.replace(/<\/?(gametxt|content|action)>/gi, '');
+
+    // Ba dấu huyền phải dựng bằng mã ký tự: viết thẳng vào đây là ĐÓNG SỚM khối code bọc cả
+    // giao diện, và mọi thứ phía sau bị SillyTavern bọc <q> quanh từng cặp nháy kép.
+    var fence = String.fromCharCode(96, 96, 96);
+    s = s.replace(new RegExp('^\\s*' + fence + '[a-zA-Z]*\\s*$', 'gm'), '');
+
+    // Thẻ mới ra được một nửa (đang stream): chưa có dấu đóng thì không luật nào ở trên khớp,
+    // và người chơi đọc được đúng mảnh vụn đó — đo được: `<div class="mvu` hiện ra rồi mới
+    // biến mất. Chỉ cắt khi mảnh cuối THẬT SỰ có dạng mở thẻ, để "5 < 6" không bị đụng.
+    s = s.replace(/<\/?[a-zA-Z][^>]*$/, '');
+
+    return s.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+
   function splitReply(text) {
     var raw = String(text || '');
     var tag = updateTag();
     var block = '';
-    var reBlock = new RegExp('<' + tag + '>[\\s\\S]*?<\\/' + tag + '>', 'i');
-    var m = raw.match(reBlock);
+    var m = raw.match(new RegExp('<' + tag + '>[\\s\\S]*?<\\/' + tag + '>', 'i'));
     if (m) block = m[0];
-    var narrative = raw.replace(reBlock, '');
-    // Bỏ các khối tư duy / khối kỹ thuật khỏi phần hiển thị.
-    // Ba dấu huyền phải dựng bằng mã ký tự: viết thẳng vào đây là ĐÓNG SỚM khối code
-    // bọc cả giao diện, và mọi thứ phía sau bị SillyTavern bọc <q> quanh từng cặp nháy kép.
-    var fence = String.fromCharCode(96, 96, 96);
-    narrative = narrative
-      .replace(/<(thinking|think|reasoning|Analysis|Analyze)>[\s\S]*?<\/\1>/gi, '')
-      .replace(/<\/?(gametxt|content|action)>/gi, '')
-      .replace(new RegExp('^\\s*' + fence + '[a-zA-Z]*\\s*$', 'gm'), '')
-      .trim();
-    return { narrative: narrative, updateBlock: block, raw: raw };
+    var narrative = stripHidden(raw, true);
+    // Nhật ký gửi lại cho AI: sạch khối tư duy (đọc lại rác của chính mình thì lượt sau nó
+    // càng nhả rác) nhưng GIỮ khối cập nhật biến, vì đó là mẫu định dạng duy nhất nó có.
+    return {
+      narrative: narrative,
+      updateBlock: block,
+      raw: raw,
+      history: block ? narrative + '\n\n' + block : narrative,
+    };
   }
 
   /* ── nhật ký hội thoại ────────────────────────────────────────────────── */
+
+  /**
+   * Phần hiển thị của một lượt đã nằm trong nhật ký.
+   * `view` chỉ được TIN khi nó do chính bản này ghi ra: nhật ký lưu trước bản vá 202 còn
+   * nguyên khối tư duy trong đó, mà nhật ký thì sống trong biến chat, mở lại là hiện lại.
+   */
+  var VIEW_VERSION = 2;
+
+  function viewOf(entry) {
+    if (!entry) return '';
+    if (entry.role === 'user' || entry.role === 'system') return String(entry.text || '');
+    if (entry.vc === VIEW_VERSION && typeof entry.view === 'string') return entry.view;
+    return splitReply(entry.text).narrative;
+  }
+
+  /** Một lượt của AI đã dọn sạch, sẵn sàng đẩy vào nhật ký. */
+  function logEntryOf(rawReply, at) {
+    var parts = splitReply(rawReply);
+    return { role: 'assistant', text: rawReply, view: parts.narrative, vc: VIEW_VERSION, at: at || '' };
+  }
 
   function historyPrompts(state) {
     var keep = CFG.historyTurns || 12;
@@ -457,7 +628,13 @@
     for (var i = 0; i < log.length; i++) {
       var e = log[i];
       if (!e || !e.text) continue;
-      out.push({ role: e.role === 'user' ? 'user' : 'assistant', content: String(e.text) });
+      var isUser = e.role === 'user';
+      // Tính lại từ `text` chứ không đọc trường đã lưu: nhật ký cũ ghi trước bản vá này vẫn
+      // còn nguyên rác trong đó, mà lịch sử thì được gửi lại mỗi lượt.
+      out.push({
+        role: isUser ? 'user' : 'assistant',
+        content: isUser ? String(e.text) : splitReply(e.text).history,
+      });
     }
     return out;
   }
@@ -708,6 +885,9 @@
     applyUpdate: applyUpdate,
     normalizeUpdateBlock: normalizeUpdateBlock,
     splitReply: splitReply,
+    stripHidden: stripHidden,
+    viewOf: viewOf,
+    logEntryOf: logEntryOf,
     gameMessageId: gameMessageId,
 
     sendTurn: sendTurn,

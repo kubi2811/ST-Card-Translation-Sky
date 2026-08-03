@@ -48,3 +48,7 @@ bugNeedFix/
 # Bang chung bug do user gui (anh, card that, script that) — chi nam tren may local,
 # khong day len remote: dung luong lon va co the chua noi dung rieng tu cua nguoi bao bug.
 bug/
+
+# Bàn thử front-end: đoạn script lấy ngược từ iframe SillyTavern để so từng dòng.
+# Chỉ có nghĩa lúc đang gỡ lỗi trên một máy, không phải mã nguồn.
+frontend-kit/harness/dump-from-st.txt

@@ -1,0 +1,370 @@
+/**
+ * STFE theme — khung giao diện chung (bug 192)
+ * Bố cục bám theo card mẫu "Sân Khấu Quỷ Bí": thanh đầu có chỉ số, dải tab, thân
+ * nội dung, và khung chat nhúng đóng/mở được ở dưới. Bảng màu để từng card tự đổi
+ * qua các biến --fe-* trong config, nên cùng một khung dùng lại được cho card khác.
+ */
+
+:root {
+  --fe-bg: #0b1220;
+  --fe-bg-soft: #121c2e;
+  --fe-panel: #16223a;
+  --fe-panel-2: #1c2b47;
+  --fe-line: #2a3d63;
+  --fe-text: #dde7f7;
+  --fe-text-dim: #93a6c4;
+  --fe-accent: #4dd6c1;
+  --fe-accent-2: #7aa2ff;
+  --fe-warn: #f0b862;
+  --fe-danger: #ef6b6b;
+  --fe-radius: 12px;
+  --fe-font: 'Segoe UI', system-ui, -apple-system, 'Noto Sans', sans-serif;
+  --fe-font-title: 'Segoe UI Semibold', system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--fe-text);
+  font-family: var(--fe-font);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.fe-root {
+  background: linear-gradient(160deg, var(--fe-bg) 0%, var(--fe-bg-soft) 100%);
+  border: 1px solid var(--fe-line);
+  border-radius: var(--fe-radius);
+  overflow: hidden;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .35);
+}
+
+/* ── thanh đầu ─────────────────────────────────────────────────────────── */
+
+.fe-head {
+  padding: 14px 16px 10px;
+  background: linear-gradient(180deg, var(--fe-panel-2), var(--fe-panel));
+  border-bottom: 1px solid var(--fe-line);
+}
+
+.fe-head-top {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.fe-title {
+  font-family: var(--fe-font-title);
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: .3px;
+  color: var(--fe-accent);
+  margin: 0;
+}
+
+.fe-sub { color: var(--fe-text-dim); font-size: .85rem; }
+
+.fe-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+
+.fe-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: 1px solid var(--fe-line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .03);
+  font-size: .78rem;
+  color: var(--fe-text-dim);
+  white-space: nowrap;
+}
+
+.fe-chip b { color: var(--fe-text); font-weight: 600; }
+
+.fe-bars { margin-top: 10px; display: grid; gap: 7px; }
+
+.fe-bar-row { display: flex; align-items: center; gap: 8px; font-size: .78rem; }
+.fe-bar-label { min-width: 62px; color: var(--fe-text-dim); }
+.fe-bar-track {
+  flex: 1;
+  height: 9px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, .38);
+  border: 1px solid var(--fe-line);
+  overflow: hidden;
+}
+.fe-bar-fill { height: 100%; border-radius: 999px; transition: width .4s ease; }
+.fe-bar-num { min-width: 74px; text-align: right; color: var(--fe-text); font-variant-numeric: tabular-nums; }
+
+/* ── tab ──────────────────────────────────────────────────────────────── */
+
+.fe-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 8px;
+  background: var(--fe-panel);
+  border-bottom: 1px solid var(--fe-line);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.fe-tab {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--fe-text-dim);
+  padding: 9px 13px;
+  font-size: .85rem;
+  font-family: inherit;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+}
+
+.fe-tab:hover { color: var(--fe-text); }
+.fe-tab.is-on { color: var(--fe-accent); border-bottom-color: var(--fe-accent); }
+
+.fe-body { padding: 14px 16px; min-height: 120px; }
+.fe-pane { display: none; }
+.fe-pane.is-on { display: block; }
+
+/* ── bảng dữ liệu ─────────────────────────────────────────────────────── */
+
+.fe-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+
+.fe-cell {
+  background: rgba(255, 255, 255, .025);
+  border: 1px solid var(--fe-line);
+  border-radius: 9px;
+  padding: 8px 10px;
+}
+
+.fe-cell-k { font-size: .74rem; color: var(--fe-text-dim); text-transform: uppercase; letter-spacing: .5px; }
+.fe-cell-v { font-size: .95rem; margin-top: 2px; word-break: break-word; }
+
+.fe-list { display: grid; gap: 8px; }
+
+.fe-item {
+  border: 1px solid var(--fe-line);
+  border-left: 3px solid var(--fe-accent-2);
+  border-radius: 9px;
+  padding: 9px 11px;
+  background: rgba(255, 255, 255, .025);
+}
+
+.fe-item-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+.fe-item-name { font-weight: 600; }
+.fe-item-tag { font-size: .74rem; color: var(--fe-text-dim); }
+.fe-item-desc { font-size: .85rem; color: var(--fe-text-dim); margin-top: 3px; }
+
+.fe-empty { color: var(--fe-text-dim); font-style: italic; padding: 10px 2px; font-size: .88rem; }
+
+/* ── khung chat nhúng ─────────────────────────────────────────────────── */
+
+.fe-chat {
+  border-top: 1px solid var(--fe-line);
+  background: var(--fe-panel);
+}
+
+.fe-chat-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.fe-chat-head:hover { background: rgba(255, 255, 255, .03); }
+.fe-chat-head .fe-title { font-size: .95rem; }
+.fe-chat-caret { margin-left: auto; color: var(--fe-text-dim); font-size: .8rem; }
+
+.fe-chat-box { display: block; }
+.fe-chat.is-closed .fe-chat-box { display: none; }
+
+.fe-log {
+  max-height: 46vh;
+  min-height: 160px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  display: grid;
+  gap: 10px;
+  scroll-behavior: smooth;
+}
+
+.fe-msg { display: grid; gap: 3px; }
+.fe-msg-meta { font-size: .72rem; color: var(--fe-text-dim); }
+
+.fe-msg-body {
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--fe-line);
+  background: rgba(255, 255, 255, .03);
+}
+
+.fe-msg.is-user .fe-msg-body {
+  background: rgba(122, 162, 255, .10);
+  border-color: rgba(122, 162, 255, .35);
+}
+
+.fe-msg.is-sys .fe-msg-body {
+  background: rgba(240, 184, 98, .09);
+  border-color: rgba(240, 184, 98, .32);
+  font-size: .85rem;
+}
+
+.fe-msg-body p { margin: 0 0 .6em; }
+.fe-msg-body p:last-child { margin-bottom: 0; }
+.fe-msg-body q { color: var(--fe-accent); font-style: normal; }
+.fe-msg-body blockquote {
+  margin: .4em 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--fe-accent-2);
+  color: var(--fe-text-dim);
+}
+
+.fe-typing { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--fe-accent); animation: fe-blink 1s infinite; }
+@keyframes fe-blink { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+
+.fe-compose { display: flex; gap: 8px; padding: 10px 12px 12px; border-top: 1px solid var(--fe-line); align-items: flex-end; }
+
+.fe-input {
+  flex: 1;
+  resize: vertical;
+  min-height: 44px;
+  max-height: 190px;
+  padding: 9px 11px;
+  border-radius: 9px;
+  border: 1px solid var(--fe-line);
+  background: rgba(0, 0, 0, .28);
+  color: var(--fe-text);
+  font-family: inherit;
+  font-size: .92rem;
+  line-height: 1.5;
+}
+
+.fe-input:focus { outline: none; border-color: var(--fe-accent); }
+
+/* ── nút ──────────────────────────────────────────────────────────────── */
+
+.fe-btn {
+  appearance: none;
+  border: 1px solid var(--fe-line);
+  background: var(--fe-panel-2);
+  color: var(--fe-text);
+  padding: 9px 14px;
+  border-radius: 9px;
+  font-family: inherit;
+  font-size: .88rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: filter .15s ease, opacity .15s ease;
+}
+
+.fe-btn:hover:not(:disabled) { filter: brightness(1.22); }
+.fe-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+.fe-btn-main { background: linear-gradient(135deg, var(--fe-accent), var(--fe-accent-2)); color: #07121f; border-color: transparent; font-weight: 600; }
+.fe-btn-ghost { background: transparent; color: var(--fe-text-dim); }
+.fe-btn-sm { padding: 5px 10px; font-size: .78rem; }
+.fe-btn-danger { border-color: rgba(239, 107, 107, .5); color: var(--fe-danger); }
+
+.fe-toolbar { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 10px; }
+
+/* ── biểu mẫu khởi tạo ────────────────────────────────────────────────── */
+
+.fe-form { display: grid; gap: 12px; }
+.fe-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+
+.fe-field { display: grid; gap: 4px; }
+.fe-field > label { font-size: .8rem; color: var(--fe-text-dim); }
+.fe-field .fe-hint { font-size: .72rem; color: var(--fe-text-dim); opacity: .8; }
+
+.fe-field input[type=text],
+.fe-field input[type=number],
+.fe-field select,
+.fe-field textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--fe-line);
+  background: rgba(0, 0, 0, .28);
+  color: var(--fe-text);
+  font-family: inherit;
+  font-size: .9rem;
+}
+
+.fe-field textarea { min-height: 72px; resize: vertical; }
+.fe-field input:focus, .fe-field select:focus, .fe-field textarea:focus { outline: none; border-color: var(--fe-accent); }
+
+.fe-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+
+.fe-card {
+  border: 1px solid var(--fe-line);
+  border-radius: 10px;
+  padding: 11px 13px;
+  background: rgba(255, 255, 255, .025);
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease;
+}
+
+.fe-card:hover { border-color: var(--fe-accent-2); }
+.fe-card.is-on { border-color: var(--fe-accent); background: rgba(77, 214, 193, .10); }
+.fe-card-title { font-weight: 600; margin-bottom: 3px; }
+.fe-card-desc { font-size: .82rem; color: var(--fe-text-dim); }
+
+/* ── phủ chờ + báo lỗi ────────────────────────────────────────────────── */
+
+.fe-note {
+  border: 1px solid var(--fe-line);
+  border-left: 3px solid var(--fe-warn);
+  background: rgba(240, 184, 98, .08);
+  border-radius: 8px;
+  padding: 9px 11px;
+  font-size: .85rem;
+  color: var(--fe-text-dim);
+}
+
+.fe-note.is-bad { border-left-color: var(--fe-danger); background: rgba(239, 107, 107, .08); }
+.fe-note code { color: var(--fe-warn); }
+
+.fe-veil {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  background: rgba(6, 12, 22, .82);
+  backdrop-filter: blur(2px);
+  z-index: 40;
+  border-radius: var(--fe-radius);
+}
+
+.fe-veil.is-on { display: flex; }
+.fe-veil-text { color: var(--fe-accent); font-size: .92rem; }
+
+.fe-spin {
+  width: 30px; height: 30px;
+  border: 3px solid var(--fe-line);
+  border-top-color: var(--fe-accent);
+  border-radius: 50%;
+  animation: fe-spin 1s linear infinite;
+}
+
+@keyframes fe-spin { to { transform: rotate(360deg); } }
+
+.fe-wrap { position: relative; }
+
+@media (max-width: 560px) {
+  html, body { font-size: 14px; }
+  .fe-body { padding: 12px; }
+  .fe-log { max-height: 52vh; }
+  .fe-compose { flex-wrap: wrap; }
+  .fe-compose .fe-btn { flex: 1; }
+}

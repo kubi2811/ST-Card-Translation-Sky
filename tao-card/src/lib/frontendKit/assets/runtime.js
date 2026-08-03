@@ -551,11 +551,142 @@
     }
   }
 
+  /* ── bản TỔNG QUÁT chạy bằng dữ liệu ──────────────────────────────────── */
+  /**
+   * Bốn hàm dưới đây vốn phải viết tay cho từng thẻ. Nay runtime tự làm được từ mô tả
+   * khai báo trong config, nên app Tạo Card SINH RA config chỉ gồm dữ liệu — an toàn hơn
+   * hẳn so với sinh mã. Thẻ viết tay vẫn được ưu tiên: có hàm thì dùng hàm.
+   */
+
+  /** Thay mọi `{đường.dẫn}` trong mẫu bằng giá trị thật. Một ngoặc nhọn, không phải hai. */
+  function fillTemplate(tpl, stat) {
+    return String(tpl == null ? '' : tpl).replace(/\{([^{}]+)\}/g, function (m, p) {
+      var v = dig(stat, p.trim(), '');
+      return v === '' || v === null || v === undefined ? '—' : String(v);
+    });
+  }
+
+  function headerOf(stat) {
+    if (typeof CFG.header === 'function') return CFG.header(stat);
+    var spec = CFG.headerSpec || {};
+    return {
+      name: dig(stat, spec.namePath || '', CFG.title || '—'),
+      chips: (spec.chips || []).map(function (c) { return { k: c.k, v: fillTemplate(c.tpl, stat) }; }),
+      money: (spec.money || []).map(function (c) { return { k: c.k, v: dig(stat, c.p, 0) }; }),
+      bars: (spec.bars || []).map(function (b) {
+        return {
+          label: b.label,
+          cur: Number(dig(stat, b.cur, 0)) || 0,
+          max: Number(dig(stat, b.max, 0)) || 1,
+          color: b.color || 'var(--fe-accent)',
+        };
+      }),
+    };
+  }
+
+  /**
+   * Ảnh chụp trạng thái gửi kèm mỗi lượt. Tự dựng từ chính danh sách tab, cộng BẢNG ĐƯỜNG
+   * DẪN HỢP LỆ — đo được khi chạy thật: không đưa bảng đó thì mô hình bịa ra đường dẫn
+   * (`/Thời gian`), MVU lặng lẽ bỏ qua, và người chơi chỉ thấy chỉ số không nhúc nhích.
+   */
+  function stateBriefOf(stat) {
+    if (typeof CFG.buildStateBrief === 'function') return CFG.buildStateBrief(stat);
+    var out = ['[TRẠNG THÁI HIỆN TẠI — nguồn sự thật, ưu tiên hơn mọi thứ trong nhật ký]'];
+
+    (CFG.panels || []).forEach(function (p) {
+      if (p.type === 'chat') return;
+      if (p.type === 'fields') {
+        var parts = (p.fields || []).map(function (f) {
+          var v = dig(stat, f.p, '');
+          if (f.suffix === 'p2') v = v + '/' + dig(stat, f.p2, '');
+          return f.k + ': ' + (v === '' ? '(trống)' : v);
+        });
+        if (parts.length) out.push(String(p.label).replace(/^[^\p{L}]+/u, '') + ' — ' + parts.join(' · '));
+      } else if (p.type === 'list') {
+        var rows = dig(stat, p.path, []) || [];
+        var label = String(p.label).replace(/^[^\p{L}]+/u, '');
+        out.push(label + ' (' + rows.length + '): ' + (rows.length
+          ? rows.map(function (r) {
+            return r[p.name] + (p.tag && r[p.tag] !== undefined ? ' [' + r[p.tag] + ']' : '');
+          }).join(', ')
+          : 'trống'));
+      }
+    });
+
+    var table = CFG.pathTable || [];
+    if (table.length) {
+      out.push('');
+      out.push('[ĐƯỜNG DẪN HỢP LỆ — chép đúng từng chữ hoa và dấu, không có đường nào khác]');
+      table.forEach(function (line) { out.push(line); });
+      out.push('Bịa ra đường dẫn ngoài bảng này thì lệnh bị bỏ qua, chỉ số sẽ đứng yên.');
+    }
+    return out.join('\n');
+  }
+
+  /** Ghi thẳng giá trị biểu mẫu vào stat_data — không nhờ AI đặt hộ (bài học bug 116). */
+  function applyFormOf(stat, form, scenario) {
+    if (typeof CFG.applyForm === 'function') return CFG.applyForm(stat, form, scenario);
+
+    (CFG.form || []).forEach(function (f) {
+      if (!f.path) return;
+      var v = form[f.key];
+      if (f.showIf && String(form[f.showIf.key]) !== String(f.showIf.equals)) v = f.emptyValue !== undefined ? f.emptyValue : '';
+      if (f.type === 'number') v = Number(v) || 0;
+      setDeep(stat, f.path, v === undefined ? '' : v);
+    });
+
+    // Suy ra vài trường từ lựa chọn khác (VD thiên phú → thể lực tối đa).
+    (CFG.derive || []).forEach(function (d) {
+      var key = form[d.fromKey];
+      var val = d.map && Object.prototype.hasOwnProperty.call(d.map, key) ? d.map[key] : d.fallback;
+      if (val === undefined) return;
+      (d.targets || []).forEach(function (t) { setDeep(stat, t, val); });
+    });
+
+    if (CFG.scenarioPath) setDeep(stat, CFG.scenarioPath, (scenario && scenario.seed) || form.note || '');
+    return stat;
+  }
+
+  function openingPromptOf(form, scenario, stat) {
+    if (typeof CFG.buildOpeningPrompt === 'function') return CFG.buildOpeningPrompt(form, scenario, stat);
+    var lines = [];
+    lines.push('[HỆ THỐNG] Người chơi vừa hoàn tất bảng khởi tạo. Hồ sơ dưới đây ĐÃ được ghi'
+      + ' thẳng vào biến, đúng nguyên văn — tuyệt đối không sửa lại, không đặt tên khác.');
+    lines.push('');
+    lines.push('HỒ SƠ NHÂN VẬT');
+    (CFG.form || []).forEach(function (f) {
+      if (f.showIf && String(form[f.showIf.key]) !== String(f.showIf.equals)) return;
+      var v = form[f.key];
+      if (v === '' || v === undefined || v === null) return;
+      lines.push('- ' + f.label + ': ' + v);
+    });
+    lines.push('');
+    lines.push('BỐI CẢNH MỞ MÀN: ' + ((scenario && scenario.seed) || form.note || 'Người chơi tự do lựa chọn hướng đi.'));
+    if (form.note && scenario && scenario.seed) lines.push('YÊU CẦU RIÊNG CỦA NGƯỜI CHƠI: ' + form.note);
+    lines.push('');
+    lines.push('VIỆC CẦN LÀM TRONG LƯỢT NÀY');
+    lines.push('1. Viết cảnh mở màn đặt nhân vật vào đúng bối cảnh trên: có không khí, có ít nhất'
+      + ' một NPC có tên, và một việc đang xảy ra ngay lúc này chứ không phải sắp xảy ra.');
+    lines.push('2. Kết cảnh bằng một tình huống mở. KHÔNG hành động hay suy nghĩ thay người chơi.');
+    lines.push('3. Sau phần kể, xuất khối cập nhật biến theo đúng định dạng bắt buộc, trong đó'
+      + ' thêm trang bị/kỹ năng/NPC khởi đầu hợp lý vào các danh sách tương ứng.');
+    lines.push('4. TUYỆT ĐỐI không ghi đè những trường do bảng khởi tạo quyết định — nếu thấy chúng'
+      + ' chưa hợp lý thì hãy để thế giới phản ứng với chúng, đừng sửa chúng.');
+    if (CFG.openingExtra) { lines.push(''); lines.push(CFG.openingExtra); }
+    return lines.join('\n');
+  }
+
   /* ── xuất ra ngoài ────────────────────────────────────────────────────── */
 
   var STFE = {
     cfg: CFG,
     state: blankState(),
+
+    headerOf: headerOf,
+    stateBriefOf: stateBriefOf,
+    applyFormOf: applyFormOf,
+    openingPromptOf: openingPromptOf,
+    fillTemplate: fillTemplate,
 
     ready: ready,
     readyMvu: readyMvu,

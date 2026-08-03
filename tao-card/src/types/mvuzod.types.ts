@@ -239,6 +239,7 @@ export type MVUZODStudioTab =
   | 'patch'
   | 'script'
   | 'game'
+  | 'frontend'
   | 'playground';
 
 export interface MVUZODStudioState {

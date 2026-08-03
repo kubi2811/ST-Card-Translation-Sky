@@ -83,6 +83,8 @@ const t: CardUiKeys = {
   mzTabUpdateDesc: '生成 update rules + 输出格式',
   mzTabScriptDesc: '预览输出脚本',
   mzTabGameDesc: '预览游戏界面',
+  mzTabFrontend: '前端',
+  mzTabFrontendDesc: '整局游戏在一条消息内 + 内嵌聊天框',
   mzTabPlaygroundDesc: '测试变量 + JSON Patch',
   mzNeedSchema: '需要先创建 Schema',
 

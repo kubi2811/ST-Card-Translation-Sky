@@ -85,6 +85,8 @@ const t: CardUiKeys = {
   mzTabUpdateDesc: 'Tạo update rules + output format',
   mzTabScriptDesc: 'Preview scripts đầu ra',
   mzTabGameDesc: 'Preview giao diện game',
+  mzTabFrontend: 'Front-End',
+  mzTabFrontendDesc: 'Cả ván chơi trong 1 tin nhắn + khung chat nhúng',
   mzTabPlaygroundDesc: 'Test biến + JSON Patch',
   mzNeedSchema: 'Cần tạo Schema trước',
 

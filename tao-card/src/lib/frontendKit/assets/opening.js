@@ -192,18 +192,18 @@
       if (!(await S.readyMvu())) throw new Error(S.mvuWarning());
       // Lấp bộ mặc định TRƯỚC rồi mới đè hồ sơ lên — xem chú thích defaultStat trong config.
       var stat = S.deepDefaults(CFG.defaultStat || {}, S.getStat());
-      CFG.applyForm(stat, form, scenario);
+      S.applyFormOf(stat, form, scenario);
       await S.setStat(stat);
 
       veil(true, 'Quản Trò đang dựng cảnh mở màn…');
-      var prompt = CFG.buildOpeningPrompt(form, scenario, stat);
+      var prompt = S.openingPromptOf(form, scenario, stat);
 
       var reply = await S.sendTurn({
         userText: prompt,
         historyOverride: [],
         systemInjects: [{
           role: 'system',
-          content: CFG.buildStateBrief(stat),
+          content: S.stateBriefOf(stat),
           position: 'in_chat',
           depth: 0,
           should_scan: true,

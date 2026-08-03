@@ -14,7 +14,7 @@
 import { useState, useMemo } from 'react';
 import {
   Wrench, Wand2, FlaskConical, Database, ListTree,
-  FileCode, Gamepad2, Sparkles, TestTube2,
+  FileCode, Gamepad2, Sparkles, TestTube2, MonitorSmartphone,
 } from 'lucide-react';
 import { useCardStore } from '../store/cardStore';
 import { SchemaBuilder } from '../components/mvuzod/SchemaBuilder';
@@ -24,6 +24,7 @@ import { VariableListGenerator } from '../components/mvuzod/VariableListGenerato
 import { UpdateRulesEditor } from '../components/mvuzod/UpdateRulesEditor';
 import { ScriptOutput } from '../components/mvuzod/ScriptOutput';
 import { GameUiStudio } from '../components/mvuzod/GameUiStudio';
+import { FrontendStudio } from '../components/mvuzod/FrontendStudio';
 import { VariablePlayground } from '../components/mvuzod/VariablePlayground';
 import type { MVUZODSchema, MVUZODStudioTab, InitVarConfig } from '../types/mvuzod.types';
 import { t as ui } from '../i18n';
@@ -36,6 +37,7 @@ const TABS: Array<{ id: MVUZODStudioTab; label: string; icon: typeof Wand2; desc
   { id: 'patch', label: 'Patch', icon: FlaskConical, description: 'Test JSON Patch operations' },
   { id: 'script', label: 'Scripts', icon: FileCode, description: ui.mzTabScriptDesc },
   { id: 'game', label: 'Game UI', icon: Gamepad2, description: ui.mzTabGameDesc },
+  { id: 'frontend', label: ui.mzTabFrontend, icon: MonitorSmartphone, description: ui.mzTabFrontendDesc },
   { id: 'playground', label: 'Playground', icon: TestTube2, description: ui.mzTabPlaygroundDesc },
 ];
 
@@ -164,6 +166,10 @@ export function MVUZODPage() {
         <div className="max-w-6xl mx-auto px-6 py-5 h-full">
           <GameUiStudio schema={existingSchema} initVarConfig={existingInitVar} />
         </div>
+      </div>
+
+      <div className="flex-1 overflow-hidden" style={{ display: tab === 'frontend' ? undefined : 'none' }}>
+        <FrontendStudio schema={existingSchema} initVarConfig={existingInitVar} />
       </div>
 
       <div className="flex-1 overflow-y-auto scrollbar-thin" style={{ display: tab === 'playground' ? undefined : 'none' }}>

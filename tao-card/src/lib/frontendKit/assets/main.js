@@ -34,7 +34,7 @@
   /* ── thanh đầu ────────────────────────────────────────────────────────── */
 
   function headHtml() {
-    var h = CFG.header(stat);
+    var h = S.headerOf(stat);
     var out = '<div class="fe-head"><div class="fe-head-top">'
       + '<h2 class="fe-title">' + S.esc(h.name) + '</h2>'
       + '<span class="fe-sub">' + S.esc(CFG.title) + '</span></div>';
@@ -351,7 +351,7 @@
         userText: userText,
         systemInjects: [{
           role: 'system',
-          content: CFG.buildStateBrief(stat),
+          content: S.stateBriefOf(stat),
           position: 'in_chat',
           depth: 0,
           should_scan: true,

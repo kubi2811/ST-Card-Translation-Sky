@@ -7,6 +7,15 @@ chơi không đụng tới khung chat gốc.
 Cơ chế rút từ card mẫu "Sân Khấu Quỷ Bí", nhưng viết lại gọn hơn 45 lần (58 KB so với
 2,66 MB) và tách hẳn phần chung khỏi phần riêng của từng card.
 
+## Đã có sẵn trong app
+
+Từ bug 192 (phần tích hợp), cơ chế này là một **tab trong Tạo Card**:
+`MVUZOD Studio → Front-End`. Tab đó suy toàn bộ cấu hình từ schema + InitVar của thẻ đang
+mở, xem trước được, và bấm một nút là gắn hai regex script vào thẻ.
+
+Thư mục `frontend-kit/` này giờ chỉ còn là **đường dòng lệnh** cho thẻ mẫu Eldran và cho
+việc gỡ lỗi. Nguồn thật nằm trong app: `tao-card/src/lib/frontendKit/`.
+
 ## Dùng
 
 ```bash
@@ -24,23 +33,37 @@ Bàn thử chạy **chính** payload vừa nhét vào card, kèm bộ giả lậ
 
 ## Cấu trúc
 
+Nguồn DUY NHẤT nằm trong app (Vite nạp bằng `?raw`, Node đọc bằng `fs` — một bản, không chép):
+
 ```
-src/runtime.js          lõi CHUNG: lưu trạng thái, gọi generate, áp biến MVU, vá khối cập nhật
-src/theme.css           khung giao diện chung
-src/opening.js          màn khởi tạo, dựng từ config
-src/main.js             màn chính: thanh chỉ số + tab + khung chat nhúng
-src/eldran.config.js    ⟵ FILE DUY NHẤT dính tới card. Port sang card khác = viết lại file này
-lib.mjs                 ghép trang, quét luật payload, mô phỏng đường giao hàng của ST
-presets.mjs             2 preset Chat Completion
-build.mjs               dựng + gắn vào card
-harness/                bàn thử ngoài SillyTavern
-prompts/                prompt tái sử dụng cho card khác + giải thích cơ chế
+tao-card/src/lib/frontendKit/
+  assets/runtime.js       lõi CHUNG: lưu trạng thái, gọi generate, áp biến MVU, vá khối cập nhật
+  assets/theme.css        khung giao diện chung
+  assets/opening.js       màn khởi tạo, dựng từ cấu hình
+  assets/main.js          màn chính: thanh chỉ số + tab + khung chat nhúng
+  assets/examples/eldran.config.js   cấu hình viết tay của thẻ mẫu (đường dòng lệnh)
+  payloadRules.js         5 luật payload + mô phỏng đường giao hàng của SillyTavern
+  presetBuilder.js        2 preset Chat Completion
+  schemaToConfig.ts       suy cấu hình từ schema MVUZOD  ⟵ phần tích hợp
+  buildPayload.ts         ghép payload + kiểm + dựng regex script
+  types.ts                hợp đồng giữa app và bộ front-end
+tao-card/src/components/mvuzod/FrontendStudio.tsx   tab Front-End
+
+frontend-kit/
+  lib.mjs      lớp vỏ Node, import thẳng từ app
+  presets.mjs  lớp vỏ Node
+  build.mjs    dựng thẻ mẫu Eldran ra file
+  harness/     bàn thử ngoài SillyTavern
+  prompts/     prompt tái sử dụng cho thẻ khác + giải thích cơ chế
 ```
 
 ## Kiểm
 
 - `tao-card/src/lib/regexEngine/__tests__/frontendKit192.test.ts` — 22 phép kiểm, nạp
   **chính** `runtime.js` vào một `window` giả rồi gọi hàm thật (không chép tay logic).
+- `tao-card/src/lib/frontendKit/__tests__/frontendKit.test.ts` — 33 phép kiểm cho phần
+  tích hợp: suy tab/biểu mẫu/bảng đường dẫn từ schema, và payload sống sót qua đường giao
+  hàng của SillyTavern.
 - Đã chạy thật trên SillyTavern ở `G:/SillyTavern`: mở màn bằng API thật, chơi một lượt
   trong khung chat nhúng, F5 toàn bộ ST, thoát thẻ rồi vào lại — nhật ký, tab đang mở, chữ
   gõ dở, kho đồ, kỹ năng đều còn nguyên, và chat gốc vẫn đúng **1 tin nhắn**.

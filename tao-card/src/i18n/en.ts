@@ -84,6 +84,8 @@ const t = {
   mzTabUpdateDesc: 'Create the update rules + output format',
   mzTabScriptDesc: 'Preview the output scripts',
   mzTabGameDesc: 'Preview the game UI',
+  mzTabFrontend: 'Front-End',
+  mzTabFrontendDesc: 'Whole run inside one message + embedded chat',
   mzTabPlaygroundDesc: 'Test variables + JSON Patch',
   mzNeedSchema: 'You need to create a Schema first',
 

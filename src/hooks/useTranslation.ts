@@ -1174,8 +1174,17 @@ export function useTranslation() {
         }
       }
 
-      // Keep chunk progress for export, clear failed index only
-      store.updateField(field.path, { status: 'done', translated, failedChunkIndex: undefined });
+      // Keep chunk progress for export, clear failed index only.
+      // (bug 203) Đánh dấu khi ta CỐ Ý trả về bản gốc: các chốt ở trên đã quyết "thà giữ code
+      // tiếng Trung chạy được còn hơn nhét bản dịch làm vỡ script". Không đánh dấu thì bộ quét
+      // chữ Trung sót lôi đúng field đó đi dịch lại 2 lượt nữa, trên một đường KHÔNG có chốt
+      // cú pháp — vừa đốt token vừa có thể ghi code vỡ vào thẻ.
+      store.updateField(field.path, {
+        status: 'done',
+        translated,
+        failedChunkIndex: undefined,
+        keptOriginalOnPurpose: translated === field.original ? true : undefined,
+      });
       store.addLog('success', `✅ Đã dịch: ${field.label} (${translated.length} ký tự)`);
       // Store to Translation Memory (non-blocking)
       if (store.translationConfig.enableTranslationMemory) {
@@ -3597,6 +3606,9 @@ export function useTranslation() {
         status: 'done',
         translated,
         failedChunkIndex: undefined,
+        // (bug 203) Dịch lại thành công thì gỡ cờ "cố ý giữ gốc" — nếu không, một lần bị chốt
+        // an toàn chặn là field đó bị bộ quét bỏ qua vĩnh viễn.
+        keptOriginalOnPurpose: undefined,
       });
       store.addLog('success', `Re-translated: ${field.label}`);
       // (bug 132) GHI TIẾN TRÌNH XUỐNG ĐĨA. Vòng dịch chính vẫn tự lưu sau mỗi đợt, nhưng dịch
@@ -3652,7 +3664,18 @@ export function useTranslation() {
     for (let round = 1; round <= maxRounds; round++) {
       if (checkAbort()) return totalFixed;
 
-      const hits = scanFieldsForResidualCjk(useStore.getState().fields, { cssCjkHandling: cssMode });
+      const allFields = useStore.getState().fields;
+      // (bug 203) BỎ QUA field mà chốt an toàn đã CỐ Ý giữ nguyên bản gốc. Nó toàn chữ Hán nên
+      // bộ quét luôn thấy, nhưng dịch lại ở đây thì đi đường KHÔNG có chốt cú pháp — tức là
+      // lấy đúng thứ vừa được cứu ra đốt tiếp 2 lượt, và có thể ghi code vỡ vào thẻ.
+      const kept = new Set(allFields.filter(f => f.keptOriginalOnPurpose).map(f => f.path));
+      const hits = scanFieldsForResidualCjk(allFields, { cssCjkHandling: cssMode })
+        .filter(h => !kept.has(h.path));
+      if (kept.size > 0 && round === 1) {
+        store.addLog('info',
+          `🔒 Bỏ qua ${kept.size} mục đã cố ý giữ nguyên bản gốc (dịch ra là vỡ script) — `
+          + `chúng còn tiếng Trung là ĐÚNG, sửa tay nếu muốn dịch.`);
+      }
       if (hits.length === 0) {
         if (round === 1) store.addLog('success', '🔍 Quét chữ Trung sót: sạch, không mục nào còn tiếng Trung (link không tính).');
         return totalFixed;
@@ -3905,6 +3928,12 @@ export function useTranslation() {
             },
             // cssCjkHandling
             store.translationConfig.cssCjkHandling,
+            // (bug 203) HAI ĐỐI SỐ CUỐI TỪNG BỊ BỎ QUÊN Ở RIÊNG ĐƯỜNG NÀY. Nút "Thử lại tất cả
+            // lỗi" đi qua đây, mà không truyền field.rawChunks thì chốt bugNeedFix/144 mù: nó
+            // không biết nhịp cắt đã đổi và ghép bản dịch cũ vào nhịp mới — đúng triệu chứng
+            // "ghép xong thiếu/sai chunk". Hai đường kia (dịch mới, dịch lại 1 field) đều có đủ.
+            false,
+            field.rawChunks,
           );
 
           // Keep chunk progress for export, clear failed index only

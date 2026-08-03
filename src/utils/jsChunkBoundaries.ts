@@ -87,43 +87,102 @@ function splittableChildren(node: Node): Node[] | null {
   }
 }
 
-/** Nút "một con duy nhất" — đi xuyên qua để tới chỗ thật sự chia được (vd `const X = z.object({…})`). */
-function passThrough(node: Node): Node | null {
+/**
+ * Nút "đi xuyên qua" — nơi tiếp theo đáng nhìn khi bản thân nút này không chia được.
+ *
+ * (bug 203, vòng 2) PHẢI có CallExpression → callee. Thiếu nó thì cả họ thẻ Zod bị bỏ sót:
+ * `export const Schema = z.object({…53K…}).prefault({});` có nút ngoài cùng là lời gọi
+ * `.prefault({})` với đối số là object RỖNG. Đi vào đối số là vào ngõ cụt, còn 53K nằm trong
+ * CALLEE thì không bao giờ được ngó tới. Đo trên samples/Europe_1351_Card: kế hoạch cắt ra
+ * đúng một mảnh 53.038 ký tự — gấp 5,9 lần hạn mức thật của field code (9.000) ⇒ chắc chắn
+ * chạm trần token, AI cắt cụt, vỡ cú pháp. Tức là còn tệ hơn đường cắt cũ.
+ */
+function passThrough(node: Node): Node[] {
   switch (node.type) {
-    case 'ExpressionStatement': return asNode(node.expression);
-    case 'VariableDeclarator': return asNode(node.init);
-    case 'Property': return asNode(node.value);
-    case 'MemberExpression': return asNode(node.object);
+    case 'ExpressionStatement': return [asNode(node.expression)].filter(Boolean) as Node[];
+    case 'VariableDeclarator': return [asNode(node.init)].filter(Boolean) as Node[];
+    case 'Property': return [asNode(node.value)].filter(Boolean) as Node[];
+    case 'MemberExpression': return [asNode(node.object)].filter(Boolean) as Node[];
+    case 'CallExpression':
+    case 'NewExpression':
+      return [asNode(node.callee)].filter(Boolean) as Node[];
     case 'AwaitExpression':
     case 'UnaryExpression':
     case 'SpreadElement':
     case 'ReturnStatement':
-      return asNode(node.argument);
+      return [asNode(node.argument)].filter(Boolean) as Node[];
     case 'ArrowFunctionExpression':
     case 'FunctionExpression':
     case 'FunctionDeclaration':
-      return asNode(node.body);
+      return [asNode(node.body)].filter(Boolean) as Node[];
     case 'ExportNamedDeclaration':
     case 'ExportDefaultDeclaration':
-      return asNode(node.declaration);
+      return [asNode(node.declaration)].filter(Boolean) as Node[];
     case 'ChainExpression':
-      return asNode(node.expression);
     case 'TSAsExpression':
-      return asNode(node.expression);
+      return [asNode(node.expression)].filter(Boolean) as Node[];
+    case 'ClassDeclaration':
+    case 'ClassExpression':
+      return [asNode(node.body)].filter(Boolean) as Node[];
+    case 'IfStatement':
+      return [asNode(node.consequent), asNode(node.alternate)].filter(Boolean) as Node[];
+    case 'ForStatement':
+    case 'ForOfStatement':
+    case 'ForInStatement':
+    case 'WhileStatement':
+    case 'DoWhileStatement':
+    case 'LabeledStatement':
+      return [asNode(node.body)].filter(Boolean) as Node[];
+    case 'TryStatement':
+      return [asNode(node.block), asNode(node.handler), asNode(node.finalizer)].filter(Boolean) as Node[];
+    case 'CatchClause':
+      return [asNode(node.body)].filter(Boolean) as Node[];
+    case 'AssignmentExpression':
+      return [asNode(node.right)].filter(Boolean) as Node[];
+    case 'LogicalExpression':
+    case 'BinaryExpression':
+      return [asNode(node.left), asNode(node.right)].filter(Boolean) as Node[];
+    case 'ConditionalExpression':
+      return [asNode(node.consequent), asNode(node.alternate)].filter(Boolean) as Node[];
     default:
-      return null;
+      return [];
   }
 }
 
-/** Tìm danh sách con chia được gần nhất, đi xuyên qua các nút một-con. */
+const span = (n: Node): number => n.end - n.start;
+const coverage = (list: Node[]): number => list.reduce((s, n) => s + span(n), 0);
+
+/**
+ * Tìm danh sách con chia được gần nhất.
+ *
+ * (bug 203, vòng 2) Luôn ĐI THEO NHÁNH LỚN NHẤT, không theo nhánh đầu tiên. Bản đầu lấy "con
+ * duy nhất" nên với `.prefault({})` nó đi vào cái object rỗng rồi bó tay; và khi có ≥2 con thì
+ * nó nhận ngay, nên `z.object({…30K…}).refine(fn, msg)` chỉ thu được mốc cắt giữa hai đối số
+ * tí hon, còn khối 30K vẫn nguyên khối.
+ */
 function resolveChildren(node: Node, guard = 0): Node[] | null {
   if (guard > 24) return null;
-  const direct = splittableChildren(node);
-  if (direct && direct.length >= 2) return direct;
-  // Một con duy nhất (VD `z.object({...})` → đối số duy nhất là object) → đi tiếp xuống.
-  const only = direct && direct.length === 1 ? direct[0] : passThrough(node);
-  if (only) return resolveChildren(only, guard + 1);
-  return null;
+  const direct = splittableChildren(node) || [];
+  const alts = passThrough(node);
+
+  // Danh sách con phủ được phần lớn nút ⇒ cắt giữa chúng là hợp lý nhất.
+  if (direct.length >= 2 && coverage(direct) >= span(node) * 0.5) return direct;
+
+  const biggestAlt = alts.length ? alts.reduce((a, b) => (span(b) > span(a) ? b : a)) : null;
+  if (direct.length >= 2) {
+    // Con thì nhiều nhưng bé tí (đối số của .refine…): nhánh xuyên qua lớn hơn thì đi tiếp.
+    if (biggestAlt && span(biggestAlt) > coverage(direct)) {
+      const deeper = resolveChildren(biggestAlt, guard + 1);
+      if (deeper) return deeper;
+    }
+    return direct;
+  }
+
+  const cands = [...direct, ...alts];
+  if (!cands.length) return null;
+  const best = cands.reduce((a, b) => (span(b) > span(a) ? b : a));
+  if (span(best) === 0 || (best.start === node.start && best.end === node.end && best.type === node.type)) return null;
+  return resolveChildren(best, guard + 1);
 }
 
 /**
@@ -190,6 +249,18 @@ export function planJsChunkCuts(code: string, maxChars: number): JsCutPlan | nul
     last = pos;
     best = -1;
   }
+  // (bug 203, vòng 2) XẢ nốt mốc còn treo. Thiếu dòng này thì phần ĐUÔI gộp cả đoạn đáng lẽ
+  // phải cắt: đo được một mảnh 18.071 ký tự với hạn mức 15.000.
+  if (best > last) cuts.push(best);
+  if (!cuts.length) return null;
+
+  // Đuôi vụn thì nhập lại vào mảnh trước — mỗi mảnh là MỘT LƯỢT GỌI API, không việc gì phải
+  // tốn một lượt cho 46 ký tự (đo được đúng con số đó ở lần chạy thật). Chỉ nhập khi mảnh
+  // gộp vẫn nằm trong hạn mức.
+  const TINY = Math.max(500, Math.floor(maxChars * 0.05));
+  const lastCut = cuts[cuts.length - 1];
+  const prevCut = cuts.length >= 2 ? cuts[cuts.length - 2] : 0;
+  if (code.length - lastCut < TINY && code.length - prevCut <= maxChars) cuts.pop();
   if (!cuts.length) return null;
 
   let maxPieceLen = 0;

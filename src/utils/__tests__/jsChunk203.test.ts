@@ -17,6 +17,8 @@ import { planJsChunkCuts, sliceAtCuts } from '../jsChunkBoundaries';
 import { chunkText } from '../chunking';
 
 const FIXTURE = path.resolve(__dirname, '../../..', 'bug', '203', 'message.txt');
+/** Thẻ THẬT trong kho — ca `z.object({…53K…}).prefault({})` làm lộ hồi quy của vòng 1. */
+const CARD_EUROPE = path.resolve(__dirname, '../../..', 'samples', 'Europe_1351_Card (1).json');
 
 /** Mọi nút trong cây, phẳng ra. */
 function allNodes(code: string): Array<{ type: string; start: number; end: number }> {
@@ -97,6 +99,61 @@ describe('(bug 203) mốc cắt phải ở ranh giới cú pháp', () => {
     for (const c of plan.cuts) expect(code.slice(0, c).trimEnd().endsWith('=>')).toBe(false);
   });
 
+  /*
+   * (vòng 2 — do bộ soi phản biện bắt được) Họ thẻ Zod luôn kết thúc bằng một lời gọi ĐUÔI:
+   *   export const Schema = z.object({ …53.000 ký tự… }).prefault({});
+   * Nút ngoài cùng là `.prefault({})` với đối số là object RỖNG. Bản đầu đi vào "con duy nhất"
+   * nên rơi vào cái object rỗng đó rồi bó tay, còn 53K nằm trong CALLEE thì không bao giờ được
+   * ngó tới ⇒ trả về nguyên một mảnh 53K, gấp 5,9 lần hạn mức thật ⇒ chạm trần token, AI cắt
+   * cụt. Tức là TỆ HƠN đường cắt cũ. Phải luôn đi theo nhánh LỚN NHẤT.
+   */
+  const zodBody = (n: number) => `z.object({\n${Array.from({ length: n }, (_, i) => `  truong${i}: z.string().prefault('giá trị mặc định số ${i} cho trường này'),`).join('\n')}\n})`;
+
+  for (const tail of ['', '.prefault({})', '.optional()', '.nullable()', '.refine(fn, "thông điệp")']) {
+    it(`lời gọi đuôi "${tail || '(không có)'}" không được che khuất khối lớn bên trong`, () => {
+      const code = `export const Schema = ${zodBody(300)}${tail};\n`;
+      expect(code.length).toBeGreaterThan(15000);
+      const plan = planJsChunkCuts(code, 8000);
+      expect(plan, 'phải lập được kế hoạch cắt').not.toBeNull();
+      const pieces = sliceAtCuts(code, plan!.cuts);
+      expect(pieces.join('')).toBe(code);
+      expect(cutsInsideLeaves(code, plan!.cuts)).toEqual([]);
+      expect(plan!.maxPieceLen, 'không mảnh nào được vượt hạn mức').toBeLessThanOrEqual(8000);
+    });
+  }
+
+  it('mốc cắt cuối cùng không bị bỏ quên — mảnh ĐUÔI cũng phải trong hạn mức', () => {
+    // Thiếu bước "xả mốc còn treo" thì đuôi gộp cả đoạn: đo được 18.071 ký tự với hạn mức 15.000.
+    const code = `const x = {\n${Array.from({ length: 900 }, (_, i) => `  k${i}: 'giá trị ${i}',`).join('\n')}\n};\n`;
+    const pieces = chunkText(code, 6000);
+    expect(pieces.join('')).toBe(code);
+    for (const p of pieces) expect(p.length).toBeLessThanOrEqual(6000);
+  });
+
+  it('đuôi vụn được nhập lại — mỗi mảnh là một lượt gọi API, không tốn lượt cho vài chục ký tự', () => {
+    // Đo ở lần chạy thật: mảnh cuối chỉ 46 ký tự ⇒ thừa nguyên một lượt gọi.
+    const code = `const a = {\n${Array.from({ length: 400 }, (_, i) => `  k${i}: 'v${i}',`).join('\n')}\n};\nconst z = 1;\n`;
+    for (const size of [3000, 5000]) {
+      const pieces = chunkText(code, size);
+      expect(pieces.join('')).toBe(code);
+      const tail = pieces[pieces.length - 1].length;
+      const prev = pieces.length >= 2 ? pieces[pieces.length - 2].length : 0;
+      const tiny = Math.max(500, Math.floor(size * 0.05));
+      // Hoặc đuôi đủ lớn để đáng một lượt gọi, hoặc nhập vào mảnh trước thì vỡ hạn mức.
+      expect(tail >= tiny || tail + prev > size,
+        `maxChars=${size}, các mảnh: ${pieces.map((p) => p.length).join(',')}`).toBe(true);
+    }
+  });
+
+  it('mảnh mà cây cú pháp không chia nhỏ được nữa vẫn phải qua lưới đỡ của thuật toán cũ', () => {
+    // Một chuỗi khổng lồ là nút LÁ: không thể cắt trong nó. Nhưng cũng không được phép gửi
+    // nguyên khối cho AI — trần 15.000 sinh ra để chống cắt cụt đầu ra.
+    const code = `const a = 1;\nconst t = '${'nội dung dài. '.repeat(3000)}';\nconst b = 2;\n`;
+    const pieces = chunkText(code, 9000);
+    expect(pieces.join('')).toBe(code);
+    expect(pieces.every((p) => p.length <= 9000 * 1.5), pieces.map((p) => p.length).join(',')).toBe(true);
+  });
+
   it('văn xuôi và nội dung không phải JS thì KHÔNG đi đường này (giữ nguyên hành vi cũ)', () => {
     const prose = ('Đây là một đoạn văn xuôi rất dài kể chuyện. '.repeat(500));
     expect(planJsChunkCuts(prose, 4000)).toBeNull();
@@ -142,12 +199,38 @@ describe.skipIf(!fs.existsSync(FIXTURE))('(bug 203) chính schema user gửi', (
     });
   }
 
+  it('không mảnh nào vượt hạn mức — trần này sinh ra để chống cắt cụt đầu ra AI', () => {
+    for (const size of [9000, 12000, 15000]) {
+      for (const p of chunkText(code, size)) {
+        expect(p.length, `maxChars=${size}`).toBeLessThanOrEqual(size * 1.5);
+      }
+    }
+  });
+
   it('mọi mốc cắt đều đứng ở đầu một dòng mới (đọc log là thấy ngay chỗ nối)', () => {
     const pieces = chunkText(code, 9000);
     let acc = 0;
     for (const p of pieces.slice(0, -1)) {
       acc += p.length;
       expect(/\s/.test(code[acc - 1]), `ký tự trước mốc ${acc}: ${JSON.stringify(code[acc - 1])}`).toBe(true);
+    }
+  });
+});
+
+describe.skipIf(!fs.existsSync(CARD_EUROPE))('(bug 203) thẻ THẬT trong kho — ca lời gọi đuôi', () => {
+  it('field 53K của Europe_1351 không còn ra mảnh khổng lồ', () => {
+    const card = JSON.parse(fs.readFileSync(CARD_EUROPE, 'utf8'));
+    const js = card?.data?.extensions?.tavern_helper?.[0]?.[1]?.[1]?.content as string;
+    expect(typeof js, 'cấu trúc thẻ mẫu đổi rồi thì test này vô nghĩa').toBe('string');
+    expect(js.length).toBeGreaterThan(50000);
+
+    for (const size of [9000, 15000]) {
+      const pieces = chunkText(js, size);
+      expect(pieces.join(''), `maxChars=${size}`).toBe(js);
+      const longest = pieces.reduce((m, p) => Math.max(m, p.length), 0);
+      // Vòng 1 trả về đúng một mảnh 53.038 ký tự ở đây — 5,9 lần hạn mức của field code.
+      expect(longest, `maxChars=${size}, các mảnh: ${pieces.map((p) => p.length).join(',')}`)
+        .toBeLessThanOrEqual(size * 1.5);
     }
   });
 });

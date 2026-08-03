@@ -320,12 +320,29 @@ export function chunkText(text: string, maxChars?: number, _maxTokens?: number):
   if (jsPlan) {
     const pieces = sliceAtCuts(text, jsPlan.cuts);
     if (pieces.length > 1 && pieces.join('') === text) {
-      console.log(`[chunkText] JS: cắt ${pieces.length} phần tại ranh giới cú pháp `
-        + `(mảnh dài nhất ${jsPlan.maxPieceLen} ký tự)`);
-      return pieces;
+      // (bug 203, vòng 2) Mảnh nào VẪN quá khổ (một nút đơn lẻ không chia nhỏ hơn được) thì
+      // phải cắt tiếp bằng thuật toán cũ. Bỏ qua bước này là hồi quy nặng: đo trên
+      // samples/Europe_1351_Card, kế hoạch cắt trả về một mảnh 53.038 ký tự — gấp 5,9 lần
+      // hạn mức thật của field code, chạm trần token output ⇒ AI cắt cụt ⇒ vỡ cú pháp. Trần
+      // 15.000 ở trên sinh ra chính là để tránh chuyện đó, không được phép có ngoại lệ.
+      const out = pieces.flatMap((p) => (p.length > maxChars! ? chunkTextLegacy(p, maxChars!) : [p]));
+      if (out.join('') === text) {
+        const longest = out.reduce((m, p) => Math.max(m, p.length), 0);
+        console.log(`[chunkText] JS: cắt ${out.length} phần tại ranh giới cú pháp (mảnh dài nhất ${longest} ký tự)`);
+        return out;
+      }
     }
   }
 
+  return chunkTextLegacy(text, maxChars);
+}
+
+/**
+ * Thuật toán cắt CŨ (dò ranh giới an toàn bằng đếm ngoặc + một loạt phương án dự phòng).
+ * Giữ NGUYÊN VẸN: đây vẫn là đường đi của văn xuôi, HTML, EJS, và là lưới đỡ cho những mảnh
+ * JS mà cây cú pháp không chia nhỏ hơn được nữa.
+ */
+function chunkTextLegacy(text: string, maxChars: number): string[] {
   // Smart splitting states
   const isHtml = /<[a-z][^>]*>/i.test(text) && /<\/[a-z]+>/i.test(text);
   const hasTable = isHtml && /<table[\s>]/i.test(text);

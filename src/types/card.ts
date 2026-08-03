@@ -149,6 +149,15 @@ export interface TranslationField {
   lastJsErrorFingerprint?: string;
   /** (bug 198) Vân tay LÝ DO của cổng mềm gần nhất — cùng lý do hai lượt liền thì thôi dịch lại. */
   lastSoftGateFingerprint?: string;
+  /**
+   * (bug 203) Field này GIỮ NGUYÊN BẢN GỐC LÀ CÓ CHỦ Ý — chốt an toàn đã quyết định thà để
+   * code tiếng Trung chạy được còn hơn nhét bản dịch làm vỡ script.
+   *
+   * Có cờ này vì bộ quét "chữ Trung sót" nhìn thấy một field toàn chữ Hán thì lôi đi dịch lại
+   * thêm 2 lượt nữa — mà đường dịch lại đó KHÔNG có chốt cú pháp. Tức là chính cái chốt vừa
+   * cứu script lại bị bước sau vô hiệu hoá, vừa đốt token vừa có thể ghi code vỡ vào thẻ.
+   */
+  keptOriginalOnPurpose?: boolean;
   /** Previous translation for updating/merging */
   previousTranslation?: string;
   /** MVU entry classification for per-type translation strategy */

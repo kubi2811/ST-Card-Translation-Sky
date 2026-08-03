@@ -85,6 +85,44 @@ describe.skipIf(process.env.LIVE203 !== '1')('bug 203 — chạy thật', () => 
     expect(anyOk, lines.join('\n')).toBe(true);
   });
 
+  /** Thẻ THẬT trong kho: `z.object({…53K…}).prefault({})` — ca mà bản vá vòng 1 làm hỏng nặng. */
+  const EUROPE = path.join(ROOT, 'samples', 'Europe_1351_Card (1).json');
+  const europeJs = (): string => {
+    const card = JSON.parse(fs.readFileSync(EUROPE, 'utf8'));
+    return card?.data?.extensions?.tavern_helper?.[0]?.[1]?.[1]?.content as string;
+  };
+
+  it.skipIf(!fs.existsSync(EUROPE))('field 53K của thẻ Europe_1351 cũng phải ra JS parse được', { timeout: 2_400_000 }, async () => {
+    const provs = readProviders();
+    const cfg = baseConfig(provs[0].url.replace(/\/+$/, ''), provs[0].keys, MODEL);
+    resetProviderPool();
+    const text = europeJs();
+    expect(jsParseErrorAny(text)).toBeNull();
+
+    const sizes: number[] = [];
+    const raw = await translateText(
+      text, 'tavernHelper[0].content (ZOD)', cfg, 'Tiếng Việt', '中文',
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      fieldGroupToFieldType('tavern_helper'), undefined, undefined, undefined, undefined,
+      computePoolConcurrency(cfg), false,
+      (chunks) => { sizes.push(...chunks.map((c) => c.length)); }, 'preserve', false, undefined,
+    );
+    const fix = repairUnquotedObjectKeys(raw);
+    const final = fix.repaired ? fix.code : raw;
+    const err = jsParseErrorAny(final);
+    const report = [
+      `Europe_1351: gốc ${text.length} → dịch ${final.length}`,
+      `số phần=${sizes.length} (${sizes.join(', ')}) — mảnh dài nhất ${Math.max(...sizes)}`,
+      `AI trả về: ${jsParseErrorAny(raw) ? `vỡ dòng ${jsParseErrorAny(raw)!.line}` : 'sạch sẵn'}`,
+      `vá khoá: ${fix.fixed.length}`,
+      `parse KẾT QUẢ CUỐI: ${err ? `VỠ dòng ${err.line}: ${err.msg}` : 'SẠCH ✓'}`,
+    ].join('\n');
+    fs.writeFileSync(path.join(OUTDIR, 'live203-europe.txt'), report, 'utf8');
+    console.log(report);
+    expect(Math.max(...sizes), 'không mảnh nào được vượt trần chống cắt cụt').toBeLessThanOrEqual(15000);
+    expect(err, report).toBeNull();
+  });
+
   it('dịch nguyên entry schema và bản dịch PHẢI parse được', { timeout: 1_800_000 }, async () => {
     const provs = readProviders();
     const url = process.env.LIVE203_URL || provs[0].url.replace(/\/+$/, '');

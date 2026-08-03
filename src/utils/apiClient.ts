@@ -3333,15 +3333,18 @@ export async function translateText(
   }
   const chunks = chunkText(maskedText, effectiveChunkSize, config.maxTokens);
 
-  if (onChunksReady) {
-    const unmaskedChunks = chunks.map(chunk => {
-      let unmasked = unmaskUrls(chunk, urlMap);
-      unmasked = unmaskSecrets(unmasked, secretMap);
-      unmasked = unmaskCodeBlocks(unmasked, codeMap);
-      return unmasked;
-    });
-    onChunksReady(unmaskedChunks);
-  }
+  // (bug 203) Bản ĐÃ GỠ CHE của từng mảnh — dùng cho CẢ hai việc: báo lên UI, và so nhịp cắt
+  // với lần trước. Trước đây chỉ tính trong nhánh callback, còn phép so nhịp cắt lại lấy mảnh
+  // CÒN CHE; mọi field có URL (schema MVU nào cũng mở đầu bằng `import … from 'https://…'`)
+  // đều bị coi là "nhịp cắt đã đổi" ⇒ KHÔNG BAO GIỜ dùng lại được phần đã dịch, cứ dịch lại
+  // từ đầu. Với người đang trả tiền theo token thì đó là tiền vứt đi, im lặng.
+  const unmaskedChunks = chunks.map(chunk => {
+    let unmasked = unmaskUrls(chunk, urlMap);
+    unmasked = unmaskSecrets(unmasked, secretMap);
+    unmasked = unmaskCodeBlocks(unmasked, codeMap);
+    return unmasked;
+  });
+  if (onChunksReady) onChunksReady(unmaskedChunks);
 
   // ═══ SINGLE CHUNK — fast path (no parallelism needed) ═══
   if (chunks.length === 1) {
@@ -3413,9 +3416,12 @@ export async function translateText(
   // đoạn văn số 3 nữa — ghép vào là dán nhầm chỗ, và nếu mảng cũ dài hơn thì vòng prefill còn
   // ghi TRÀN qua chunks.length, kéo theo cả đoạn thừa vào bản ghép. Đây chính là ca "đã dịch
   // xong mà ghép lại bị thiếu hụt / sai" user báo. Lệch nhịp thì thà dịch lại từ đầu.
+  // (bug 203) So với bản ĐÃ GỠ CHE — vì `previousRawChunks` được lưu ở dạng đã gỡ che (xem
+  // onChunksReady). So với `chunks` (còn che) thì mọi field có URL đều lệch ⇒ guard luôn kêu
+  // "nhịp cắt đổi" ⇒ resume chết hẳn, mỗi lần thử lại là dịch lại từ đầu.
   const chunkingChanged = !!(previouslyCompletedChunks?.length)
     && (previouslyCompletedChunks.length > chunks.length
-      || (!!previousRawChunks?.length && previousRawChunks.some((rc, i) => i < chunks.length && rc !== chunks[i])));
+      || (!!previousRawChunks?.length && previousRawChunks.some((rc, i) => i < chunks.length && rc !== unmaskedChunks[i])));
   if (chunkingChanged) {
     console.warn(`[translateText] ${fieldName}: nhịp cắt chunk đã đổi (${previouslyCompletedChunks!.length} → ${chunks.length}) — BỎ bản dịch cũ, dịch lại từ đầu để không ghép nhầm đoạn.`);
   }
@@ -3799,9 +3805,12 @@ export async function translateText(
         if (signal?.aborted || err?.message === 'Cancelled') {
           throw new Error('Cancelled');
         }
-        // Save completed chunks for resume
-        const completedForResume = translatedChunks.filter((c): c is string => c !== undefined);
-        if (completedForResume.length > 0) {
+        // Save completed chunks for resume.
+        // (bug 203) GIỮ CHỈ SỐ, không nén mảng — y như nhánh song song ở trên. Nén lại thì mảnh
+        // số 2 tụt xuống ô số 1, và lượt chạy tiếp ghép bản dịch của đoạn này vào chỗ đoạn kia:
+        // hỏng âm thầm, không lỗi đỏ nào. Xảy ra bất cứ khi nào mảng vào có lỗ (resume dở dang).
+        const completedForResume = translatedChunks.map(c => c || '') as string[];
+        if (completedForResume.some(c => c)) {
           throw new ChunkError(
             `Chunk ${idx + 1}/${chunks.length} failed: ${err?.message || String(err)}`,
             completedForResume,

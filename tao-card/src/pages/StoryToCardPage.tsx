@@ -126,6 +126,10 @@ export function StoryToCardPage() {
   });
   const [deepRunning, setDeepRunning] = useState(false);
   const [deepLog, setDeepLog] = useState('');
+  // (bug 190) Add entry vào Lorebook NGAY khi từng lượt tổng hợp sinh xong — mặc định BẬT.
+  // Chờ đến cuối nghĩa là mọi lỗi/lag/F5 sau đó đều có thể nuốt những entry ĐÃ sinh xong.
+  const [liveAdd, setLiveAdd] = usePersistedState('s2c.liveAdd', true);
+  const [liveAdded, setLiveAdded] = useState(0);
 
   const profile = settings.profiles.find((p) => p.id === settings.activeProfileId);
   const set = (patch: Partial<StoryCardOptions>) => setOpts((o) => ({ ...o, ...patch }));
@@ -162,6 +166,11 @@ export function StoryToCardPage() {
     signal,
     onState: (s) => setDeep(s),
     onLog: (m) => setDeepLog(m),
+    // (bug 190) Mỗi lượt tổng hợp xong là entry vào Lorebook luôn — có khử trùng theo tên nên
+    // resume/reroll phát lại cũng không nhân đôi.
+    onEntryBatch: liveAdd
+      ? (batch) => { const { added } = addEntriesDedup(batch); if (added > 0) setLiveAdded((n) => n + added); }
+      : undefined,
   });
 
   /** `override` (bug 189): state vừa được reroll — React chưa kịp commit nên không đọc qua `deep`. */
@@ -171,6 +180,7 @@ export function StoryToCardPage() {
     abortRef.current = new AbortController();
     setDeepRunning(true);
     setDeepLog('');
+    if (!resume) setLiveAdded(0);
     try {
       const o = buildDeepOptions(abortRef.current.signal);
       const prev = override ?? (resume ? deep : null);
@@ -195,9 +205,29 @@ export function StoryToCardPage() {
     setDeep(null);
   };
 
+  /**
+   * (bug 190) CỔNG CHUNG add entry quét sâu vào Lorebook — KHỬ TRÙNG theo tên (comment).
+   * Cần thiết vì giờ entry có thể vào Lorebook qua HAI đường (stream ngay khi sinh + nút áp
+   * cuối), và resume/reroll có thể phát lại entry đã đẩy — không khử thì nhân đôi.
+   * Đọc store qua getState() từng entry để luôn thấy entry vừa add (không dính closure cũ).
+   */
+  const addEntriesDedup = (entries: DeepEntry[]): { added: number; skipped: number } => {
+    const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+    let added = 0, skipped = 0;
+    for (const e of entries) {
+      const store = useCardStore.getState();
+      const existing = store.card.data.character_book?.entries ?? [];
+      if (existing.some((x) => norm(x.comment || '') === norm(e.title))) { skipped++; continue; }
+      store.addEntry(toLorebookEntry(e, store.getNextEntryId()));
+      added++;
+    }
+    return { added, skipped };
+  };
+
   const applyDeepEntries = (entries: DeepEntry[]) => {
-    entries.forEach((e) => addEntry(toLorebookEntry(e, getNextEntryId())));
-    toast.success(fmt(ui.s2cEntriesAdded, { count: entries.length }));
+    const { added, skipped } = addEntriesDedup(entries);
+    if (skipped > 0) toast.success(fmt(ui.s2cdEntriesAddedDedup, { added, skipped }));
+    else toast.success(fmt(ui.s2cEntriesAdded, { count: added }));
   };
 
   const resumable = !deepRunning && deep != null && (deep.status === 'paused' || deep.status === 'error')
@@ -537,6 +567,10 @@ export function StoryToCardPage() {
               <label className="flex items-center gap-1.5"><input type="checkbox" checked={deepOpts.nsfw} onChange={(e) => setD({ nsfw: e.target.checked })} /> NSFW</label>
               <label className="flex items-center gap-1.5"><input type="checkbox" checked={deepOpts.learnStyle} onChange={(e) => setD({ learnStyle: e.target.checked })} /> {ui.s2cAnalyzeStyle}</label>
               <label className="flex items-center gap-1.5"><input type="checkbox" checked={deepOpts.makeCard} onChange={(e) => setD({ makeCard: e.target.checked })} /> {ui.s2cdMakeCard}</label>
+              {/* (bug 190) Stream entry vào Lorebook ngay khi sinh — chống mất entry khi lỗi/lag ở các bước sau. */}
+              <label className="flex items-center gap-1.5" title={ui.s2cdLiveAddTip}>
+                <input type="checkbox" checked={liveAdd} onChange={(e) => setLiveAdd(e.target.checked)} /> {ui.s2cdLiveAdd}
+              </label>
             </div>
 
             <div className="flex items-center gap-2 flex-wrap">
@@ -587,7 +621,7 @@ export function StoryToCardPage() {
                   {deep.status === 'error' && <span className="text-xs text-red-400">({deep.error})</span>}
                 </span>
                 <span className="text-[11px] text-muted-foreground font-normal">
-                  🤖 {deep.stats.aiCalls} {ui.s2cdStatCalls} · 🧠 {deep.stats.facts} {ui.s2cdStatFacts} · 📚 {deep.stats.entries} {ui.s2cdStatEntries} · 📄 {fmt(ui.s2cdStatChunks, { n: deep.chunkCount })}
+                  🤖 {deep.stats.aiCalls} {ui.s2cdStatCalls} · 🧠 {deep.stats.facts} {ui.s2cdStatFacts} · 📚 {deep.stats.entries} {ui.s2cdStatEntries}{liveAdded > 0 ? ` · 📥 ${fmt(ui.s2cdLiveAddedStat, { n: liveAdded })}` : ''} · 📄 {fmt(ui.s2cdStatChunks, { n: deep.chunkCount })}
                 </span>
               </div>
               <ul className="space-y-1.5 text-sm">

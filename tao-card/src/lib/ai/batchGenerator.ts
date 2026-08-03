@@ -13,8 +13,9 @@ import { checkAntiSummarization } from '../completionVerifier/antiSummarization'
 import { buildCoherenceContext } from './coherenceManager';
 import type { EntryCategory, CardType } from '../worldbook/worldbookConfig';
 import { getPreset, ENTRY_CATEGORY_LABELS } from '../worldbook/worldbookConfig';
-import { cascadeSearch } from './webScraper';
+import { cascadeSearch, searchFailureReasons } from './webScraper';
 import { getProfileExtractionContext } from './worldbuildingDefaults';
+import { tag, allTags } from './storyToCard';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONFIG
@@ -390,6 +391,8 @@ function buildBatchUserMessage(
   previouslyCreatedEntries: Array<{ comment: string; keys: string[]; content: string; constant?: boolean; selective?: boolean }>,
   /** (việc 90) Luồng thứ mấy trong vòng chạy song song — để chia phần, tránh các luồng đụng nhau. */
   lane?: { index: number; total: number },
+  /** (bug 191) Danh sách chủ đề ĐƯỢC GIAO từ kế hoạch chung — chia phần tất định, thay lane-modulo. */
+  assignedTitles?: string[],
 ): string {
   const parts: string[] = [];
 
@@ -449,12 +452,26 @@ ${webInjection ? `\n[KIẾN THỨC TỪ WEB (LIVE)]:\n<web_search_results>\n${we
 
 [SỐ LƯỢNG YÊU CẦU LẦN NÀY]: Hãy sinh ra đúng ${countThisBatch} entries hợp lệ (batch ${batchIndex}/${totalBatches}).`);
 
+  // (bug 191) CHIA PHẦN THEO KẾ HOẠCH — cách chống trùng mạnh nhất: mỗi batch nhận một danh
+  // sách chủ đề RIÊNG đã được lượt lập kế hoạch chia sẵn, không batch nào được viết ngoài phần
+  // của mình → hai luồng song song không thể cùng viết một thực thể. Lane-modulo bên dưới chỉ
+  // còn là lưới dự phòng khi lượt lập kế hoạch hỏng.
+  if (assignedTitles && assignedTitles.length > 0) {
+    parts.push(`### 📌 PHẦN VIỆC ĐƯỢC GIAO CHO BATCH NÀY (từ kế hoạch chung — BẮT BUỘC)
+Kế hoạch tổng đã chia chủ đề cho từng batch để các luồng song song không giẫm nhau.
+Batch này CHỈ được viết entry cho ĐÚNG các chủ đề sau, mỗi chủ đề MỘT entry:
+${assignedTitles.map((t, i) => `${i + 1}. ${t}`).join('\n')}
+TUYỆT ĐỐI không viết chủ đề ngoài danh sách. Chủ đề nào vi phạm quy tắc của người dùng thì BỎ QUA
+(không thay bằng chủ đề tự nghĩ). Tên entry (comment) đặt đúng theo chủ đề được giao.`);
+  }
+
   // (việc 90) CHỐNG TRÙNG TỪ GỐC. Các batch trong cùng một vòng chạy SONG SONG và đều nhận
   // ngữ cảnh y hệt nhau (trạng thái thẻ TRƯỚC vòng) — không luồng nào thấy anh em đang viết gì,
   // nên ba luồng cùng chọn một nhân vật là chuyện tất nhiên. Bộ lọc trùng chỉ dọn được phần
   // ngọn (và dọn xong thì phí trắng lượt gọi API đó). Chia phần TRƯỚC bằng một quy tắc tất định
   // mà model theo được: mỗi luồng chỉ nhận các mục cách nhau đúng `lane.total` trong danh sách.
-  if (lane && lane.total > 1) {
+  // (bug 191) Đã có kế hoạch chia phần thì bỏ đoạn này — hai lệnh chia phần chồng nhau chỉ gây nhiễu.
+  if (!assignedTitles?.length && lane && lane.total > 1) {
     parts.push(`### 🚦 BẠN LÀ LUỒNG ${lane.index}/${lane.total} ĐANG CHẠY SONG SONG
 Có ${lane.total} luồng cùng sinh entry CÙNG LÚC trên cùng ngữ cảnh này. Các luồng kia KHÔNG nhìn
 thấy kết quả của bạn và bạn cũng không thấy của họ — nếu ai cũng chọn thực thể "nổi bật nhất"
@@ -794,6 +811,81 @@ function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// (bug 191) LƯỢT LẬP KẾ HOẠCH CHỦ ĐỀ — chống trùng TỪ GỐC cho batch song song
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Bóc danh sách tiêu đề từ output lượt lập kế hoạch (tag <t> chuẩn; rớt tag thì đọc theo dòng). */
+export function parsePlannedTitles(text: string): string[] {
+  const block = tag(text, 'titles') || text;
+  let titles = allTags(block, 't').map(s => s.trim()).filter(Boolean);
+  if (titles.length === 0) {
+    titles = block.split('\n')
+      .map(s => s.replace(/^[\s\d.\-•+*)]+/, '').trim())
+      .filter(s => s.length > 1 && s.length <= 120 && !s.startsWith('<'));
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const t of titles) {
+    const k = t.toLowerCase().replace(/\s+/g, ' ');
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(t);
+  }
+  return out;
+}
+
+/**
+ * MỘT lượt AI (model phụ nếu có — việc máy móc) lập DANH SÁCH TIÊU ĐỀ entry cho cả kế hoạch,
+ * để vòng chạy chia phần cho từng batch. Vì sao đáng một lượt gọi: các batch song song không
+ * nhìn thấy nhau, cùng nhận ngữ cảnh y hệt → cùng chọn thực thể "nổi bật nhất" là tất nhiên;
+ * bộ lọc trùng chỉ dọn phần ngọn và mỗi entry bị loại là một phần lượt gọi phí trắng. Chia đề
+ * TRƯỚC thì trùng không thể xảy ra theo thiết kế, và danh sách còn giúp entry "tuân theo thiết
+ * lập" hơn (đúng category, đúng chủ đề user yêu cầu, né thứ user cấm ngay từ kế hoạch).
+ */
+async function planEntryTitles(
+  config: BatchGenConfig,
+  ctx: BatchRunContext,
+  profile: ProxyProfile,
+): Promise<string[]> {
+  const spare = Math.ceil(config.totalEntries * 0.25); // dư 25% để bù entry bị loại/sơ sài
+  const want = Math.min(400, config.totalEntries + spare);
+  const catLabel = config.category && config.category !== 'custom'
+    ? ENTRY_CATEGORY_LABELS[config.category]?.label ?? '' : '';
+  const existing = (ctx.card.data.character_book?.entries ?? []).map(e => e.comment).filter(Boolean);
+  const sys = `Bạn là kiến trúc sư Lorebook cho SillyTavern. Nhiệm vụ DUY NHẤT: lập DANH SÁCH TIÊU ĐỀ entry (chưa viết nội dung) cho kế hoạch sinh lorebook.
+QUY TẮC:
+1. Đúng ${want} tiêu đề, mỗi tiêu đề là MỘT thực thể/chủ đề riêng biệt, cụ thể (tên riêng khi có thể), KHÔNG trùng nhau, KHÔNG trùng danh sách "Entry đã có".
+2. ${catLabel ? `Mọi tiêu đề phải thuộc đúng loại nội dung: ${catLabel}.` : 'Bám sát yêu cầu nội dung của người dùng.'}
+3. Phủ RỘNG và ĐỀU: từ thực thể trung tâm tới chi tiết phụ, không dồn hết vào vài chủ đề nổi bật nhất.
+4. Tiêu đề bằng cùng ngôn ngữ với thẻ (thẻ tiếng Việt → tiêu đề tiếng Việt), ngắn gọn (≤ 60 ký tự).
+${config.userRules?.trim() ? `5. QUY TẮC BẮT BUỘC từ người dùng (thắng mọi điều trên): ${config.userRules.trim()} — chủ đề vi phạm thì KHÔNG đưa vào danh sách.` : ''}
+CHỈ xuất đúng khối sau, không viết gì ngoài:
+<titles>
+<t>tiêu đề 1</t>
+<t>tiêu đề 2</t>
+…
+</titles>`;
+  const userParts: string[] = [];
+  if (config.useCardContext) {
+    userParts.push(`### Ngữ cảnh thẻ\nTên: ${ctx.card.data.name}\n${ctx.card.data.description.slice(0, 800)}`);
+  }
+  if (config.schemaContext) userParts.push(`### Schema biến (MVUZOD)\n${config.schemaContext.slice(0, 1500)}`);
+  userParts.push(`### Yêu cầu nội dung\n${config.topicPrompt}`);
+  if (existing.length) userParts.push(`### Entry đã có (KHÔNG lập lại)\n${existing.map(t => `- ${t}`).join('\n')}`);
+  userParts.push(`Hãy lập đúng ${want} tiêu đề.`);
+  const raw = await callAI({
+    profile,
+    params: { ...ctx.generationParams, useJsonResponseFormat: false },
+    messages: [{ role: 'system', content: sys }, { role: 'user', content: userParts.join('\n\n') }],
+    signal: ctx.signal,
+    useSecondary: true,
+  });
+  const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+  const existingSet = new Set(existing.map(norm));
+  return parsePlannedTitles(raw.text).filter(t => !existingSet.has(norm(t))).slice(0, want);
+}
+
 export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunContext) {
   if (!ctx.card.data.character_book) {
     ctx.card.data.character_book = { name: ctx.card.data.name, entries: [] };
@@ -809,7 +901,13 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
   const wantMin = Math.max(0, Math.min(config.minEntries ?? 0, config.totalEntries));
   // #11 — Số luồng song song = tổng ngân sách RPM toàn pool (mỗi provider × key × RPM chính+phụ).
   // RPM limiter (chốt-giờ-bắt-đầu) ở client.ts đảm bảo không vượt trần 429 dù luồng cao.
-  const concurrency = Math.max(1, Math.min(computePoolConcurrency(ctx.profile), totalBatches));
+  // (bug 191) "Số batch song song" của user TRƯỚC ĐÂY BỊ BỎ QUA hoàn toàn ở đây — đặt 2 hay 24
+  // đều chạy theo ngân sách pool, tức thiết lập là đồ trang trí. Nay nó là TRẦN user tự đặt
+  // (đặt thấp khi muốn entry mạch lạc nối tiếp nhau, đặt cao để chạy nhanh); trần thực tế vẫn
+  // không vượt ngân sách RPM của pool.
+  const userCap = config.concurrentBatches && config.concurrentBatches > 0
+    ? config.concurrentBatches : Number.POSITIVE_INFINITY;
+  const concurrency = Math.max(1, Math.min(computePoolConcurrency(ctx.profile), totalBatches, userCap));
   let created = 0;
   // (bug 71) Entry bị dedup loại trước đây MẤT TRẮNG: số batch cố định nên không sinh bù,
   // kế hoạch 20 entry thực tế còn 6-10. Nay đếm để nối batch bù đúng phần đã rơi.
@@ -834,6 +932,27 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
   ctx.log(`📊 RAG index: ${ragIndex.size} entries đã index`);
   let entriesSinceLastRebuild = 0;
 
+  // (bug 191) LẬP KẾ HOẠCH TIÊU ĐỀ trước khi sinh — mỗi batch nhận phần đề riêng, các luồng
+  // song song không thể cùng viết một thực thể. Kế hoạch hỏng thì rơi về lane-modulo như cũ.
+  let pendingTitles: string[] = [];
+  if (totalBatches > 1 && !ctx.stopped) {
+    try {
+      ctx.log('🧭 Lập kế hoạch chủ đề (1 lượt AI) để chia phần cho các batch — chống trùng từ gốc...');
+      pendingTitles = await planEntryTitles(config, ctx, profile);
+      if (pendingTitles.length > 0) {
+        ctx.log(`🧭 Kế hoạch: ${pendingTitles.length} chủ đề. Ví dụ: ${pendingTitles.slice(0, 5).join(' · ')}${pendingTitles.length > 5 ? ' …' : ''}`);
+      } else {
+        ctx.log('⚠️ Lượt lập kế hoạch không ra chủ đề nào — dùng cách chia phần dự phòng (đánh số theo luồng).');
+      }
+    } catch (err) {
+      if (ctx.stopped || (err instanceof DOMException && err.name === 'AbortError')) {
+        ctx.onProgress({ batch: 0, totalBatches, created, total: config.totalEntries, status: 'stopped' });
+        return;
+      }
+      ctx.log(`⚠️ Lập kế hoạch lỗi (${err instanceof Error ? err.message : String(err)}) — dùng cách chia phần dự phòng.`);
+    }
+  }
+
   // Process batches in rounds of `concurrency`
   for (let roundStart = 1; roundStart <= totalBatches; roundStart += concurrency) {
     if (ctx.stopped) { ctx.log('⏹ Đã dừng.'); break; }
@@ -847,6 +966,9 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
     const tasks = (await Promise.all(batchIndices.map(async i => {
       const countThisBatch = Math.min(config.entriesPerBatch, config.totalEntries - created - (i - roundStart) * config.entriesPerBatch);
       if (countThisBatch <= 0) return null;
+      // (bug 191) Nhận phần đề từ kế hoạch chung — splice chạy ĐỒNG BỘ (trước await đầu tiên
+      // của callback) nên các batch trong vòng không giành trùng đề của nhau.
+      const assignedTitles = pendingTitles.length > 0 ? pendingTitles.splice(0, countThisBatch) : undefined;
 
       const ragCtx = buildRAGContext(config.topicPrompt, ragIndex, { topK: 8, includeNegatives: true });
       const coherenceCtx = buildCoherenceContext(ctx.card.data.character_book?.entries ?? []);
@@ -883,7 +1005,11 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
             webInjection = searchResults.map(r => `[${r.source}] ${r.url}\n${r.content}`).join('\n\n---\n\n');
             ctx.log(`✅ [Batch ${i}] Web Search: ${searchResults.length} nguồn — ${searchResults.map(r => r.source).join(', ')}`);
           } else {
-            ctx.log(`⚠️ [Batch ${i}] Web Search: Không tìm thấy dữ liệu liên quan (đã thử cả query nới rộng).`);
+            // (bug 191) Nói rõ VÌ SAO không có kết quả — "không tìm thấy" và "mọi đường fetch
+            // đều bị chặn CORS" là hai chuyện khác hẳn nhau, user cần biết mình đang gặp cái nào.
+            const why = searchFailureReasons();
+            ctx.log(`⚠️ [Batch ${i}] Web Search: Không tìm thấy dữ liệu liên quan (đã thử cả query nới rộng).`
+              + (why.length ? ` Đường fetch cuối: ${why.slice(0, 4).join(' · ')}` : ''));
           }
         } catch (webErr) {
           ctx.log(`⚠️ [Batch ${i}] Web Search lỗi: ${webErr instanceof Error ? webErr.message : String(webErr)}`);
@@ -891,7 +1017,7 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
       }
 
       const userMessage = buildBatchUserMessage(config, ctx.card, seen, ragCtx.injectionText, coherenceCtx, webInjection, countThisBatch, i, totalBatches, createdEntries,
-        { index: i - roundStart + 1, total: batchIndices.length });
+        { index: i - roundStart + 1, total: batchIndices.length }, assignedTitles);
       const schemaAddon = config.schemaContext
         ? '\n\n--- SCHEMA-AWARE MODE (BẮT BUỘC) ---\nCard này có hệ biến MVU-ZOD (xem "### Schema biến" ở trên). Entry mô tả NHÂN VẬT/NPC PHẢI gán giá trị cụ thể cho các chỉ số của nhân vật có trong schema (vd võ lực/trí lực/thể lực… → ghi rõ từng con số). Entry địa điểm/vật phẩm/thế lực thì đề cập các biến liên quan tương ứng. Dùng ĐÚNG TÊN biến trong schema, KHÔNG bịa biến ngoài schema, KHÔNG viết code EJS/getvar trong content (chỉ ghi giá trị bằng ngôn ngữ tự nhiên).'
         : '';
@@ -904,7 +1030,7 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
         { role: 'user', content: userMessage + '\n\n[LỆNH CUỐI CÙNG]: TUYỆT ĐỐI CHỈ TRẢ VỀ MẢNG JSON. KHÔNG markdown, KHÔNG text giải thích, KHÔNG code block. Xoá mọi format Markdown đi, chỉ xuất đúng chuẩn mảng JSON (Bắt đầu bằng `[` và kết thúc bằng `]`).' },
       ];
 
-      return { batchIndex: i, countThisBatch, messages };
+      return { batchIndex: i, countThisBatch, messages, assignedTitles };
     }))).filter((t): t is NonNullable<typeof t> => t !== null);
 
     if (tasks.length === 0) break;
@@ -959,14 +1085,17 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
           ctx.log(`⚠️ Batch ${task.batchIndex} — lỗi: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
-      return { batchIndex: task.batchIndex, entries: result };
+      return { batchIndex: task.batchIndex, entries: result, assignedTitles: task.assignedTitles };
     }));
 
     // Process results sequentially (for dedup ordering safety)
-    for (const { batchIndex, entries: result } of results) {
+    for (const { batchIndex, entries: result, assignedTitles } of results) {
       if (ctx.stopped) break;
 
       if (!result) {
+        // (bug 191) Batch hỏng thì TRẢ phần đề được giao về pool — batch bù sau này nhận lại,
+        // không thì các chủ đề đó biến mất khỏi kế hoạch trong im lặng.
+        if (assignedTitles?.length) pendingTitles.push(...assignedTitles);
         ctx.log(`❌ Batch ${batchIndex} thất bại sau ${config.maxRetriesPerBatch + 1} lần thử.`);
         consecutiveErrors++;
         if (consecutiveErrors >= config.maxConsecutiveErrors) {

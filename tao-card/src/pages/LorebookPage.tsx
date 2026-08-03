@@ -22,8 +22,7 @@ import { LorebookAgentPanel } from '../components/lorebook/LorebookAgentPanel';
 import { DocExtractPanel } from '../components/lorebook/DocExtractPanel';
 import { WikiImportPanel } from '../components/lorebook/WikiImportPanel';
 import { RAGDebugPanel } from '../components/lorebook/RAGDebugPanel';
-import { LorebookCategorizationPanel } from '../components/lorebook/LorebookCategorizationPanel';
-import { QualityHubPanel } from '../components/lorebook/QualityHubPanel';
+import { LorebookDoctorPanel } from '../components/lorebook/LorebookDoctorPanel';
 import { LorebookRefinerPanel } from '../components/lorebook/LorebookRefinerPanel';
 import { TokenBudgetWizard } from '../components/tokenBudget/TokenBudgetWizard';
 import {
@@ -60,17 +59,19 @@ const estimateTokens = (text: string) => Math.ceil((text || '').length / 4);
 // ─── Main Page ──────────────────────────────────────────────────────────────
 
 export function LorebookPage() {
-  const [activeTab, setActiveTab] = useState<'entries' | 'agent' | 'batch' | 'refiner' | 'doc' | 'wiki' | 'analysis' | 'quality' | 'tctrl'>('entries');
+  const [activeTab, setActiveTab] = useState<'entries' | 'agent' | 'batch' | 'refiner' | 'doc' | 'wiki' | 'analysis' | 'tctrl'>('entries');
 
   // (Goal 102.1) Gộp phân mảnh: 2 tầng — tầng 1 chỉ còn [Entries] + [Tạo tự động (AI)];
-  // 7 panel chỉnh tay cũ dồn vào MỘT menu "Nâng cao" thay vì 8 tab dàn hàng ngang.
+  // các panel chỉnh tay cũ dồn vào MỘT menu "Nâng cao" thay vì 8 tab dàn hàng ngang.
+  // (bug 191) "Phân tích" + "Phân tích & Chất lượng" HỢP NHẤT thành một tab duy nhất
+  // (LorebookDoctorPanel): máy + AI dò lỗi chung một danh sách, mỗi lỗi có nút Sửa bằng AI —
+  // hết cảnh hai tab chồng lấn mà tab nào cũng bắt user tự đọc rồi tự sửa tay.
   const ADV_TABS = [
     { id: 'batch' as const, label: ui.lbTabBatch },
     { id: 'refiner' as const, label: ui.lbTabRefiner },
     { id: 'doc' as const, label: ui.lbTabDoc },
     { id: 'wiki' as const, label: ui.lbTabWiki },
-    { id: 'analysis' as const, label: ui.lbTabAnalysis },
-    { id: 'quality' as const, label: ui.lbTabQuality },
+    { id: 'analysis' as const, label: ui.lbTabQuality },
     { id: 'tctrl' as const, label: ui.lbTabTctrl },
   ];
   const isAdvTab = ADV_TABS.some(t => t.id === activeTab);
@@ -114,8 +115,7 @@ export function LorebookPage() {
       {activeTab === 'refiner' && <div className="flex-1 overflow-y-auto scrollbar-thin"><LorebookRefinerPanel /></div>}
       {activeTab === 'doc' && <div className="flex-1 overflow-y-auto scrollbar-thin"><DocExtractPanel /></div>}
       {activeTab === 'wiki' && <div className="flex-1 overflow-y-auto scrollbar-thin"><WikiImportPanel /></div>}
-      {activeTab === 'analysis' && <div className="flex-1 overflow-y-auto scrollbar-thin"><LorebookCategorizationPanel /></div>}
-      {activeTab === 'quality' && <div className="flex-1 overflow-y-auto scrollbar-thin"><QualityHubPanel /></div>}
+      {activeTab === 'analysis' && <div className="flex-1 overflow-y-auto scrollbar-thin"><LorebookDoctorPanel /></div>}
       {activeTab === 'tctrl' && <div className="flex-1 overflow-hidden"><TokenBudgetWizard /></div>}
     </div>
   );

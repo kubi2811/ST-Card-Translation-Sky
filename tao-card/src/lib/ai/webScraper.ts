@@ -3,6 +3,7 @@
  * DuckDuckGo Lite → Wikipedia (Search API → Extract) → Fandom Wiki → Wiktionary
  * Tất cả requests có timeout, retry, fallback proxy tự động
  */
+import { FetchClient } from '../wikiImport/fetchClient';
 
 export interface ScraperResult {
   source: string;
@@ -15,13 +16,21 @@ export interface ScraperResult {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Danh sách CORS proxy fallback — tự động thử proxy tiếp theo nếu proxy trước fail
+ * (bug 191) HỢP NHẤT hệ chống-CORS về FetchClient của Wiki Importer.
+ *
+ * Trước đây web search đi hệ riêng: 3 proxy công cộng + proxy dev, KHÔNG có đường MediaWiki
+ * `origin=*` (đường DUY NHẤT trình duyệt gọi thẳng được không cần proxy), không nhớ đường nào
+ * vừa sống (mỗi request lại đốt timeout lần lượt từng proxy chết), và hỏng thì im lặng — user
+ * chỉ thấy "Không tìm thấy dữ liệu" mà không biết là do CORS. FetchClient (bug 133/135) đã giải
+ * đủ các bài đó: 8 đường đi ưu tiên theo độ tin cậy, nhớ đường thành công, throttle theo host,
+ * ghi lý do hỏng từng đường. Dùng chung một hệ — sửa một chỗ, cả wiki import lẫn web search hưởng.
  */
-const CORS_PROXIES = [
-  (url: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-  (url: string) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-  (url: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
-];
+const searchClient = new FetchClient({ timeoutMs: 15000, minHostIntervalMs: 250 });
+
+/** Lý do hỏng của lượt fetch gần nhất — để UI/log nói được "vì sao không có kết quả". */
+export function searchFailureReasons(): string[] {
+  return searchClient.failureReasons();
+}
 
 async function fetchWithTimeout(url: string, timeoutMs: number = 30000): Promise<Response> {
   const controller = new AbortController();
@@ -35,46 +44,24 @@ async function fetchWithTimeout(url: string, timeoutMs: number = 30000): Promise
 }
 
 /**
- * Fetch qua proxy với fallback tự động
- * Thử proxy trong customProxy trước, rồi đến danh sách mặc định
+ * Fetch chống CORS: custom proxy của user thử trước (họ chủ động đặt thì tôn trọng),
+ * rồi giao cho FetchClient chạy chuỗi 8 đường đi.
  */
-async function fetchViaProxy(targetUrl: string, customProxy?: string, timeoutMs: number = 30000): Promise<string | null> {
-  const proxies: Array<(url: string) => string> = [];
-
-  // Custom proxy đầu tiên
+async function fetchViaProxy(targetUrl: string, customProxy?: string, timeoutMs: number = 15000): Promise<string | null> {
   if (customProxy && customProxy.trim()) {
-    proxies.push((url: string) => `${customProxy.trim()}${encodeURIComponent(url)}`);
-  }
-
-  // Vite dev proxy là ƯU TIÊN SỐ 1 khi chạy dev: server-side, KHÔNG dính CORS, ổn định.
-  // (Chạy qua start.bat = luôn ở chế độ dev nên proxy này luôn có.)
-  const hasLocalProxy = Boolean(import.meta.env && !import.meta.env.PROD);
-  if (hasLocalProxy) {
-    proxies.push((url: string) => `/api/cors-proxy/${encodeURIComponent(url)}`);
-  }
-
-  // Proxy công cộng để dự phòng (hay chết/đổi API → chỉ dùng khi không có proxy local)
-  proxies.push(...CORS_PROXIES);
-
-  // Chỉ thử fetch TRỰC TIẾP khi KHÔNG có proxy local (bản build prod). Ở dev, fetch trực
-  // tiếp tới API cross-origin (DuckDuckGo/Fandom...) chỉ tổ đổ CORS đỏ đầy Console mà luôn
-  // fail → bỏ qua, đi thẳng qua proxy local cho sạch & nhanh.
-  if (!hasLocalProxy) {
     try {
-      const res = await fetchWithTimeout(targetUrl, timeoutMs);
-      if (res.ok) return await res.text();
-    } catch { /* direct failed, try proxies */ }
+      const res = await fetchWithTimeout(`${customProxy.trim()}${encodeURIComponent(targetUrl)}`, timeoutMs);
+      if (res.ok) {
+        const text = await res.text();
+        if (text && text.trim().length >= 50) return text;
+      }
+    } catch { /* custom proxy hỏng → rơi xuống FetchClient */ }
   }
-
-  for (const makeUrl of proxies) {
-    try {
-      const proxyUrl = makeUrl(targetUrl);
-      const res = await fetchWithTimeout(proxyUrl, timeoutMs);
-      if (res.ok) return await res.text();
-    } catch { /* proxy failed, try next */ }
+  try {
+    return await searchClient.get(targetUrl);
+  } catch {
+    return null; // 'Cancelled' — caller không truyền signal vào đây nên coi như không có kết quả
   }
-
-  return null;
 }
 
 async function fetchJsonViaProxy<T = unknown>(targetUrl: string, customProxy?: string, timeoutMs?: number): Promise<T | null> {

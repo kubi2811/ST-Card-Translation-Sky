@@ -420,9 +420,11 @@ export function BatchGeneratorPanel() {
             title={ui.bgTokensPerEntry} />
         </div>
         <div>
-          <label className="settings-label">Batch song song (Pro ~5, Flash ~17)</label>
+          {/* (bug 191) Thiết lập này giờ được TÔN TRỌNG thật: là trần số batch chạy cùng lúc
+              (trước đây engine bỏ qua nó và luôn chạy hết ngân sách RPM của pool). */}
+          <label className="settings-label" title={ui.bgConcurrentTip}>{ui.bgConcurrentLabel}</label>
           <input type="number" value={concurrentBatches} onChange={e => setConcurrentBatches(Math.max(1, Math.min(24, parseInt(e.target.value) || 1)))}
-            className="settings-input" min={1} max={24} disabled={isRunning} />
+            className="settings-input" min={1} max={24} disabled={isRunning} title={ui.bgConcurrentTip} />
         </div>
       </div>
 

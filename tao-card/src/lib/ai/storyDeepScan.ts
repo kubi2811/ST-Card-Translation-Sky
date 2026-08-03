@@ -157,6 +157,13 @@ export interface DeepScanOptions {
   signal?: AbortSignal;
   onState?: (s: DeepScanState) => void;
   onLog?: (msg: string) => void;
+  /**
+   * (bug 190) Gọi NGAY khi một lượt tổng hợp sinh xong entry — để UI add thẳng vào Lorebook
+   * thay vì chờ đến cuối. Chờ đến cuối nghĩa là: lỗi/lag/F5 ở bất kỳ đâu sau đó đều có thể làm
+   * user mất những entry ĐÃ SINH XONG. Bên nhận tự lo khử trùng (theo tên) vì resume/reroll có
+   * thể phát lại entry đã đẩy.
+   */
+  onEntryBatch?: (entries: DeepEntry[]) => void;
 }
 
 // ═══════════════════════════ Helpers thuần (test được) ═══════════════════════
@@ -909,6 +916,17 @@ CHỈ xuất đúng khối (không có gì mới thì xuất <none/>):
   const synthEntries: DeepEntry[] = [];
   const synthCards: DeepCardResult[] = [];
 
+  /**
+   * (bug 190) CỔNG VÀO duy nhất của entry tổng hợp: vừa gom vào mảng, vừa BÁO RA NGOÀI ngay
+   * để UI add thẳng vào Lorebook — không bắt user chờ tới cuối mới nhận được thứ đã sinh xong.
+   * Lỗi phía nhận (UI) không được phép giết pipeline.
+   */
+  const addSynth = (entries: DeepEntry[]) => {
+    if (!entries.length) return;
+    synthEntries.push(...entries);
+    try { opts.onEntryBatch?.(entries.map((e) => ({ ...e, keys: [...e.keys] }))); } catch { /* bên nhận tự lo */ }
+  };
+
   const buildSynthJobs = (): SynthJob[] => {
     const jobs: SynthJob[] = [];
     const nsfwRule = opts.nsfw ? NSFW_RULE : SFW_RULE;
@@ -934,7 +952,7 @@ CHỈ xuất đúng khối:
 <entry><cat>meta</cat><title>META_SETUP</title><keys></keys><content>…</content></entry>
 </entries>`,
           `【TỔNG QUAN】\n${capText(m.overview, 4000)}\n\n【DỮ KIỆN VĨ MÔ】\n${wvFacts.map((f) => `- [${f.topic}] ${f.fact}`).join('\n') || '(ít dữ kiện — dựa vào tổng quan)'}`);
-        synthEntries.push(...parseEntries(text, 'worldview'));
+        addSynth(parseEntries(text, 'worldview'));
       },
     });
 
@@ -976,7 +994,7 @@ CHỈ xuất đúng khối:
 …(một entry cho MỖI nhân vật trong hồ sơ)
 </entries>`,
             dossiers);
-          synthEntries.push(...parseEntries(text, 'character'));
+          addSynth(parseEntries(text, 'character'));
         },
       });
     }
@@ -1016,7 +1034,7 @@ CHỈ xuất đúng khối:
 …
 </entries>`,
               batch.map((g) => `### ${g.topic}\n${g.facts.map((f) => `- ${f}`).join('\n')}`).join('\n\n'));
-            synthEntries.push(...parseEntries(text, entryCat));
+            addSynth(parseEntries(text, entryCat));
           },
         });
       }
@@ -1045,7 +1063,7 @@ CHỈ xuất đúng khối:
 <entry><cat>timeline</cat><title>Dòng Thời Gian${evChunks.length > 1 ? ` — Phần ${bi + 1}` : ''}</title><keys></keys><content><Timeline>…</Timeline></content></entry>
 </entries>`,
               evs.map((e) => `- [${e.time}] ${e.what}`).join('\n'));
-            synthEntries.push(...parseEntries(text, 'timeline'));
+            addSynth(parseEntries(text, 'timeline'));
           },
         });
       });
@@ -1068,7 +1086,7 @@ CHỈ xuất đúng khối:
 <entry><cat>style</cat><title>Văn Phong Tác Giả</title><keys></keys><content>[Văn phong tác giả — bám theo khi kể chuyện]\n…</content></entry>
 </entries>`,
             m.styleNotes.map((s) => `- ${s}`).join('\n'));
-          synthEntries.push(...parseEntries(text, 'style'));
+          addSynth(parseEntries(text, 'style'));
         },
       });
     }
@@ -1103,7 +1121,7 @@ CHỈ xuất đúng khối:
 <entry><cat>character|location|faction|item|term|rule|other</cat><title>Tên</title><keys>…</keys><content><Term>…</Term></content></entry>
 </entries>`,
               batch.map((u) => `- ${u}`).join('\n'));
-            synthEntries.push(...parseEntries(text, 'term'));
+            addSynth(parseEntries(text, 'term'));
           },
         });
       }
@@ -1181,14 +1199,33 @@ CHỈ xuất đúng khối, mọi tag đóng, ngoài tag không viết gì:
   const passSynthesize = async () => {
     const jobs = buildSynthJobs();
     const p = pass();
+    // (bug 190) LƯỢT TỔNG HỢP RESUME THEO TỪNG JOB — trước đây crash/F5 ở job 40/54 là chạy
+    // lại cả 54 job. Danh sách job dựng thuần tuý từ bộ nhớ nghiên cứu (các lượt trước đã done
+    // nên bộ nhớ không đổi giữa hai lần resume) → chỉ số job ổn định, ghi vào chunkDone như
+    // mọi pass khác. Nếu tổng số job lệch (bộ nhớ đã bị reroll làm thay đổi) thì coi như hỏng
+    // khớp — chạy lại từ đầu cho an toàn.
+    const prevTotal = p.total;
+    let doneSet = new Set(st.chunkDone['synthesize'] ?? []);
+    if (doneSet.size > 0 && (prevTotal !== jobs.length || !st.synthCache)) {
+      doneSet = new Set();
+      delete st.chunkDone['synthesize'];
+      delete st.synthCache;
+    }
+    if (doneSet.size > 0 && st.synthCache) {
+      addSynth(st.synthCache.entries);
+      synthCards.push(...st.synthCache.cards);
+      log(`Tiếp tục lượt tổng hợp: ${doneSet.size}/${jobs.length} phần đã xong từ trước — dùng lại ${synthEntries.length} entry, không tốn lượt gọi nào.`);
+    }
     p.total = jobs.length;
-    p.done = 0;
+    p.done = doneSet.size;
+    st.stats.entries = synthEntries.length;
     emit();
     // (bug 158) Job KHÔNG ra entry nào thì KHÔNG phải thành công.
     // Bản cũ cứ `p.done++` bất kể job có sinh gì hay không, nên 54 job trả 0 entry vẫn hiện
     // "54/54 ✅" rồi kết thúc bằng "Thêm 0 entry vào Lorebook" — hỏng mà không ai biết hỏng ở đâu.
     // Chạy lại MỘT lần (lấy mẫu khác thường là ra), vẫn trắng thì ghi tên job vào báo cáo.
-    await runPool(jobs, Math.min(conc, jobs.length), async (job) => {
+    const todo = jobs.map((job, i) => ({ job, i })).filter(({ i }) => !doneSet.has(i));
+    await runPool(todo, Math.min(conc, Math.max(1, todo.length)), async ({ job, i }) => {
       checkAbort();
       log(job.label);
       const before = synthEntries.length;
@@ -1202,22 +1239,28 @@ CHỈ xuất đúng khối, mọi tag đóng, ngoài tag không viết gì:
           return false;
         }
       };
-      const ok = await tryRun();
+      let ok = await tryRun();
       if (job.kind === 'entries' && synthEntries.length === before) {
         log(`↻ ${job.label} — ${ok ? 'không ra entry nào' : 'lỗi'}, thử lại`);
         checkAbort();
-        await tryRun();
+        ok = await tryRun();
         if (synthEntries.length === before) {
           emptySynthJobs.push(job.label);
           log(`⚠️ ${job.label} — vẫn không ra entry sau khi thử lại`);
         }
       }
-      p.done++;
+      // Job lỗi hẳn thì KHÔNG đánh dấu xong — resume sau còn chạy bù, giống mapPass.
+      if (ok) {
+        doneSet.add(i);
+        st.chunkDone['synthesize'] = [...doneSet];
+      }
+      p.done = doneSet.size;
       st.stats.entries = synthEntries.length;
+      // (bug 189 + 190) Chốt kết quả vào STATE (được UI persist) SAU TỪNG JOB — trước đây chỉ
+      // chốt một lần ở cuối, nên crash giữa lượt tổng hợp vẫn vứt sạch mọi job đã xong.
+      st.synthCache = { entries: [...synthEntries], cards: [...synthCards] };
       emit();
     });
-    // (bug 189) Chốt kết quả tổng hợp vào STATE (được UI persist) — trước đây nó chỉ sống
-    // trong biến cục bộ, nên F5 sau lượt này là vứt hàng trăm call tổng hợp.
     st.synthCache = { entries: [...synthEntries], cards: [...synthCards] };
     emit();
   };

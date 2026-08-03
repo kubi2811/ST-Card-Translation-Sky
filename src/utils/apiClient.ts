@@ -36,6 +36,12 @@ interface TokenUsageSink { input?: number; output?: number; cached?: number }
 // để các file khác vẫn `import { chunkText } from './apiClient'` như cũ (không phải sửa importer).
 import { chunkText } from './chunking';
 import { hedgedRace } from './hedge';
+// (bug 193) Bác sĩ chunk: chẩn đoán 6 mặt + lượt SỬA có chẩn đoán + lọc/ép từ điển MVU theo chunk.
+import {
+  diagnoseChunk, buildChunkRepairInstruction, filterDictForChunk, applyDictCasing,
+  hasStructuralProblem, summarizeChunkProblems, hasEjsBlocks as docHasEjsBlocks,
+  looksLikeCodeChunk, type ChunkProblem,
+} from './chunkDoctor';
 export { chunkText };
 
 /* ─── Error types ─── */
@@ -3343,7 +3349,8 @@ export async function translateText(
       chunks[0], fieldName, targetLang, config.systemPromptPrefix,
       sourceLang, customPrompt, customSchema, contextHint, glossary, '',
       previousTranslationToUpdate,
-      fieldType, isExpert, mvuDictionary
+      // (bug 193) Cùng phép lọc như đường chunk: chỉ bơm biến thật sự có mặt trong entry.
+      fieldType, isExpert, filterDictForChunk(mvuDictionary, chunks[0])
     );
     const result = await translateChunk(
       chunks[0], 0, 1, fieldName, config, targetLang, sourceLang, system, user, signal, isModMode, preferSecondary
@@ -3443,6 +3450,67 @@ export async function translateText(
     if (!translatedChunks[i]) pendingIndices.push(i);
   }
 
+  // ═══ (bug 193) BÁC SĨ CHUNK — dùng chung cho cả nhánh song song lẫn tuần tự ═══
+  // Từ điển LỌC THEO CHUNK: chỉ đưa biến thật sự xuất hiện trong chunk — dict vài trăm dòng
+  // nhân N chunk vừa đốt token vừa loãng lệnh; lọc xong lệnh "dùng đúng các biến này" sắc hơn hẳn.
+  const dictForChunk = (idx: number) => filterDictForChunk(mvuDictionary, chunks[idx]);
+  const entryHeadForRepair = maskedText.slice(0, 400);
+  // Chunk code/EJS mà SAU SỬA vẫn lỗi cấu trúc → giữ NGUYÊN chunk gốc (card không bao giờ vỡ
+  // JS) — đúng hành vi an toàn cũ; lỗi phi cấu trúc (CJK sót, mất ký tự…) thì giữ bản tốt nhất.
+  const keepSafeChunk = (idx: number, out: string, problems: ChunkProblem[]): string =>
+    hasStructuralProblem(problems) && (docHasEjsBlocks(chunks[idx]) || looksLikeCodeChunk(chunks[idx]))
+      ? chunks[idx]
+      : out;
+  /**
+   * Lượt SỬA CÓ CHẨN ĐOÁN (yêu cầu 193): thay vì gửi lại y nguyên prompt cũ (sai lần một thì
+   * lần hai thường sai y hệt), gửi raw + bản dịch lỗi + danh sách lỗi máy đã đo + ngữ cảnh từ
+   * RAW LỚN (mở đầu entry, đuôi/đầu chunk lân cận) và lệnh SỬA ĐÚNG CHỖ. Nhận bản sửa chỉ khi
+   * nó THẬT SỰ khá hơn (ít lỗi hơn / hết lỗi cấu trúc) — không đổi ngang.
+   */
+  const repairChunkWithDiagnosis = async (
+    idx: number,
+    firstOut: string,
+    problems: ChunkProblem[],
+    callModel: (user: string) => Promise<string>,
+  ): Promise<string> => {
+    console.warn(`[translateText] ⚠️ Chunk ${idx + 1}/${chunks.length}: ${summarizeChunkProblems(problems)} — SỬA có chẩn đoán (không dịch lại máy móc)…`);
+    try {
+      const repairUser = buildChunkRepairInstruction({
+        rawChunk: chunks[idx],
+        flawed: firstOut,
+        problems,
+        partLabel: `${fieldName} [part ${idx + 1}/${chunks.length}]`,
+        entryHead: entryHeadForRepair,
+        prevRawTail: idx > 0 ? chunks[idx - 1].slice(-400) : undefined,
+        nextRawHead: idx + 1 < chunks.length ? chunks[idx + 1].slice(0, 400) : undefined,
+        dict: dictForChunk(idx),
+      });
+      const fixedRaw = await callModel(repairUser);
+      const fixed = cleanTranslationResponse(chunks[idx], fixedRaw, isExpert, true);
+      const fixedProblems = diagnoseChunk(chunks[idx], fixed, { dict: dictForChunk(idx) });
+      const better = fixedProblems.length < problems.length
+        || (!hasStructuralProblem(fixedProblems) && hasStructuralProblem(problems));
+      if (better) {
+        console.log(`[translateText] Chunk ${idx + 1}: bản sửa tốt hơn (${problems.length} → ${fixedProblems.length} lỗi)${fixedProblems.length ? ` — còn: ${summarizeChunkProblems(fixedProblems)}` : ' ✓ sạch 100%'}`);
+        return keepSafeChunk(idx, fixed, fixedProblems);
+      }
+      console.warn(`[translateText] Chunk ${idx + 1}: bản sửa không khá hơn (${summarizeChunkProblems(fixedProblems)}) — giữ bản đầu.`);
+      return keepSafeChunk(idx, firstOut, problems);
+    } catch (err: any) {
+      if (signal?.aborted || err?.message === 'Cancelled') throw err;
+      console.warn(`[translateText] Chunk ${idx + 1}: lượt sửa lỗi mạng — giữ bản hiện có.`);
+      return keepSafeChunk(idx, firstOut, problems);
+    }
+  };
+  /** Đồng biến 100% ngay từng chunk: máy ép hoa/thường theo từ điển (0 call AI). */
+  const enforceChunkDict = (idx: number, out: string): string => {
+    const dict = dictForChunk(idx);
+    if (!dict) return out;
+    const { text, fixes } = applyDictCasing(out, dict);
+    if (fixes > 0) console.log(`[translateText] Chunk ${idx + 1}: máy ép ${fixes} chỗ hoa/thường theo từ điển MVU.`);
+    return text;
+  };
+
   if (isParallel) {
     // ═══ PARALLEL PATH — concurrent chunk translation with semaphore ═══
     console.log(`[translateText] ${fieldName}: ${pendingIndices.length} chunks pending, concurrency=${concurrency}`);
@@ -3524,42 +3592,26 @@ export async function translateText(
           sourceLang, customPrompt, customSchema, contextHint, glossary,
           prevContext,
           idx === 0 && !hasResume ? previousTranslationToUpdate : undefined,
-          fieldType, isExpert, mvuDictionary
+          fieldType, isExpert, dictForChunk(idx)
         );
 
         try {
           const translated = await translateChunkHedged(idx, system, user);
           let chunkCleaned = cleanTranslationResponse(chunks[idx], translated, isExpert, true);
 
-          // ═══ (User 2026) GUARD TOÀN VẸN THEO CHUNK — deterministic, 0 call AI. Gồm 2 lớp:
-          //  a) EJS: rơi/đúp khối `<%…%>`/token mask;  b) CODE: cụt output / lệch cân bằng ngoặc /
-          // backtick lẻ (bug script 71K bị cắt cụt giữa regex mà vẫn "done"). Lệch → dịch lại ĐÚNG
-          // chunk này 1 lần; vẫn lệch → GIỮ NGUYÊN chunk gốc (card KHÔNG BAO GIỜ vỡ JS). ═══
+          // ═══ (bug 193) CHẨN ĐOÁN 6 MẶT + SỬA CÓ CHẨN ĐOÁN — nâng từ guard 2 lớp cũ (chỉ
+          // EJS + code, retry mù bằng prompt cũ). Nay soi cả CJK sót / mất ký tự / lặp thừa /
+          // vi phạm từ điển MVU, và lượt sửa nhận DANH SÁCH LỖI đích danh + ngữ cảnh raw lớn
+          // để SỬA đúng chỗ thay vì dịch lại 100%. ═══
           {
-            const chunkProblem = (t: string): string | null => {
-              if (hasEjsMarkers(chunks[idx]) && !ejsMarkersIntact(chunks[idx], t)) return 'EJS markers lệch';
-              if (isCodeChunk(chunks[idx])) return codeChunkBroken(chunks[idx], t);
-              return null;
-            };
-            const firstProblem = chunkProblem(chunkCleaned);
-            if (firstProblem) {
-              console.warn(`[translateText] ⚠️ Chunk ${idx + 1}/${chunks.length}: ${firstProblem} — thử lại chunk này…`);
-              try {
-                const retryRaw = await translateChunkHedged(idx, system, user);
-                const retryCleaned = cleanTranslationResponse(chunks[idx], retryRaw, isExpert, true);
-                const retryProblem = chunkProblem(retryCleaned);
-                if (!retryProblem) {
-                  chunkCleaned = retryCleaned;
-                  console.log(`[translateText] Chunk ${idx + 1}: retry giữ đủ cấu trúc ✓`);
-                } else {
-                  chunkCleaned = chunks[idx];
-                  console.warn(`[translateText] Chunk ${idx + 1}: retry vẫn lỗi (${retryProblem}) — GIỮ NGUYÊN chunk gốc (không vỡ JS).`);
-                }
-              } catch {
-                chunkCleaned = chunks[idx];
-                console.warn(`[translateText] Chunk ${idx + 1}: retry lỗi mạng — GIỮ NGUYÊN chunk gốc (không vỡ JS).`);
-              }
+            const problems = diagnoseChunk(chunks[idx], chunkCleaned, { dict: dictForChunk(idx) });
+            if (problems.length > 0) {
+              chunkCleaned = await repairChunkWithDiagnosis(
+                idx, chunkCleaned, problems,
+                (repairUser) => translateChunkHedged(idx, system, repairUser),
+              );
             }
+            chunkCleaned = enforceChunkDict(idx, chunkCleaned);
           }
           translatedChunks[idx] = chunkCleaned;
           // Structural integrity check for code-heavy chunks
@@ -3678,7 +3730,7 @@ export async function translateText(
         sourceLang, customPrompt, customSchema, contextHint, glossary,
         prevContext,
         idx === 0 && !hasResume ? previousTranslationToUpdate : undefined,
-        fieldType, isExpert, mvuDictionary
+        fieldType, isExpert, dictForChunk(idx)
       );
 
       try {
@@ -3687,36 +3739,18 @@ export async function translateText(
         );
         let chunkCleaned = cleanTranslationResponse(chunks[idx], translated, isExpert, true);
 
-        // ═══ (User 2026) GUARD TOÀN VẸN THEO CHUNK (đường tuần tự) — như đường song song:
-        // EJS lệch marker HOẶC code cụt/lệch ngoặc/backtick lẻ → dịch lại chunk 1 lần; vẫn lỗi →
-        // giữ nguyên chunk gốc, không vỡ JS. ═══
+        // ═══ (bug 193) CHẨN ĐOÁN 6 MẶT + SỬA CÓ CHẨN ĐOÁN (đường tuần tự) — như đường song song. ═══
         {
-          const chunkProblem = (t: string): string | null => {
-            if (hasEjsMarkers(chunks[idx]) && !ejsMarkersIntact(chunks[idx], t)) return 'EJS markers lệch';
-            if (isCodeChunk(chunks[idx])) return codeChunkBroken(chunks[idx], t);
-            return null;
-          };
-          const firstProblem = chunkProblem(chunkCleaned);
-          if (firstProblem) {
-            console.warn(`[translateText] ⚠️ Chunk ${idx + 1}/${chunks.length}: ${firstProblem} — thử lại chunk này…`);
-            try {
-              const retryRaw = await translateChunk(
-                chunks[idx], idx, chunks.length, fieldName, config, targetLang, sourceLang, system, user, signal, isModMode, preferSecondary
-              );
-              const retryCleaned = cleanTranslationResponse(chunks[idx], retryRaw, isExpert, true);
-              const retryProblem = chunkProblem(retryCleaned);
-              if (!retryProblem) {
-                chunkCleaned = retryCleaned;
-                console.log(`[translateText] Chunk ${idx + 1}: retry giữ đủ cấu trúc ✓`);
-              } else {
-                chunkCleaned = chunks[idx];
-                console.warn(`[translateText] Chunk ${idx + 1}: retry vẫn lỗi (${retryProblem}) — GIỮ NGUYÊN chunk gốc (không vỡ JS).`);
-              }
-            } catch {
-              chunkCleaned = chunks[idx];
-              console.warn(`[translateText] Chunk ${idx + 1}: retry lỗi mạng — GIỮ NGUYÊN chunk gốc (không vỡ JS).`);
-            }
+          const problems = diagnoseChunk(chunks[idx], chunkCleaned, { dict: dictForChunk(idx) });
+          if (problems.length > 0) {
+            chunkCleaned = await repairChunkWithDiagnosis(
+              idx, chunkCleaned, problems,
+              (repairUser) => translateChunk(
+                chunks[idx], idx, chunks.length, fieldName, config, targetLang, sourceLang, system, repairUser, signal, isModMode, preferSecondary,
+              ),
+            );
           }
+          chunkCleaned = enforceChunkDict(idx, chunkCleaned);
         }
         translatedChunks[idx] = chunkCleaned;
         // Structural integrity check for code-heavy chunks

@@ -3512,6 +3512,13 @@ export function useTranslation() {
         },
         // cssCjkHandling
         store.translationConfig.cssCjkHandling,
+        // preferSecondary — như translateSingleField: retry đi đúng model theo độ dài entry.
+        false,
+        // (bug 193, vá lỗ bugNeedFix/144) Chunk GỐC lần trước. Trước đây đường DỊCH LẠI/RESUME
+        // không truyền tham số này nên chốt "nhịp cắt đổi thì bỏ bản cũ" bị VÔ HIỆU đúng trên
+        // các nút hay dùng nhất (Dịch tiếp, Dịch lại 1 chunk) — đổi cấu hình lane xong resume
+        // là dán nhầm đoạn mà không ai cảnh báo.
+        field.rawChunks,
       );
 
       // Post-process regex HTML: font swap + underscore display

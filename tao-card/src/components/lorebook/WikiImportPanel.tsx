@@ -119,8 +119,8 @@ export function WikiImportPanel() {
           </div>
           <div>
             <label className="text-xs" title={ui.wiTokensTip}>{ui.wiTokens}</label>
-            <input type="number" min={0} max={2000} step={50} value={cfg.tokensPerEntry} disabled={running}
-              onChange={(e) => set({ tokensPerEntry: num(e.target.value, 0, 2000, 250) })}
+            <input type="number" min={0} max={6000} step={50} value={cfg.tokensPerEntry} disabled={running}
+              onChange={(e) => set({ tokensPerEntry: num(e.target.value, 0, 6000, 250) })}
               className="settings-input w-full text-sm mt-1" />
           </div>
           <div>

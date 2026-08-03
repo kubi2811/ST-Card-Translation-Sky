@@ -4,6 +4,7 @@
  */
 
 import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
+import { VI_CHARS_PER_TOKEN } from '../../lib/ai/tokenBudget';
 import { usePersistedState } from '../../lib/usePersistedState';
 import {
   Play, Pause, Square, ChevronDown, ChevronRight,
@@ -415,8 +416,9 @@ export function BatchGeneratorPanel() {
         </div>
         <div>
           <label className="settings-label">Tokens / Entry</label>
-          <input type="number" value={tokensPerEntry} onChange={e => setTokensPerEntry(Math.max(0, parseInt(e.target.value) || 0))}
-            className="settings-input" min={0} max={2000} disabled={isRunning}
+          {/* (bug 196) Trần cũ 2000 chặn thẳng yêu cầu 3000-5000 token/entry của user. */}
+          <input type="number" value={tokensPerEntry} onChange={e => setTokensPerEntry(Math.max(0, Math.min(6000, parseInt(e.target.value) || 0)))}
+            className="settings-input" min={0} max={6000} step={50} disabled={isRunning}
             title={ui.bgTokensPerEntry} />
         </div>
         <div>
@@ -432,10 +434,16 @@ export function BatchGeneratorPanel() {
       {tokensPerEntry > 0 && (
         <div className="px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-400/80">
           {ui.bgTokensLine}<span className="font-medium text-amber-400">{tokensPerEntry}</span>{ui.bgTokensLine2}
-          <span className="font-medium">{Math.round(tokensPerEntry * 3.5)}</span>{ui.bgTokensLine3}
+          <span className="font-medium">{Math.round(tokensPerEntry * VI_CHARS_PER_TOKEN)}</span>{ui.bgTokensLine3}
           {tokensPerEntry <= 100 && ui.bgTokensShort}
           {tokensPerEntry > 100 && tokensPerEntry <= 300 && ui.bgTokensMedium}
           {tokensPerEntry > 300 && ui.bgTokensLong}
+          {tokensPerEntry >= 1500 && (
+            <span className="block mt-1">
+              💡 Entry dài: tool sẽ tự rút số entry mỗi lô và nâng trần output cho vừa — số lượt gọi AI
+              sẽ tăng. Nếu vẫn hụt, nâng trần output của model trong Cài đặt.
+            </span>
+          )}
         </div>
       )}
 

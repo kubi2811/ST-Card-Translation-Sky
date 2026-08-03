@@ -58,7 +58,9 @@ export interface LorebookAgentContext {
 
 // ═══ Giới hạn an toàn ═════════════════════════════════════════════════════
 
-const MAX_TOTAL_ENTRIES = 200;
+// (bug 196) User: "ít nhất phải 100 entries". 200 vẫn đủ trần, nhưng lời nhắc cũ bảo AI "thường
+// 10-60" nên nó không bao giờ tự đề xuất tới 100 — trần rộng mà hướng dẫn hẹp thì cũng như không.
+const MAX_TOTAL_ENTRIES = 300;
 const MAX_DOC_CHARS_PLAN = 24000;   // pha kế hoạch đọc được nhiều hơn
 const MAX_DOC_CHARS_RUN = 12000;    // pha chạy nhúng vào MỖI batch nên phải gọn
 
@@ -78,10 +80,14 @@ QUY TẮC LẬP DANH SÁCH:
   sự kiện); chỉ bịa thêm khi user yêu cầu mở rộng.
 - Cân đối nhóm: thế giới quan/bối cảnh ít mà chất (1-4), nhân vật/NPC và địa danh/sự kiện là phần
   đông. Không tạo entry vô dụng chỉ để đủ số.
-- Tổng số entry: tự quyết theo độ giàu của yêu cầu/tài liệu (thường 10-60; tối đa ${MAX_TOTAL_ENTRIES}).
+- Tổng số entry: tự quyết theo độ giàu của yêu cầu/tài liệu (tối đa ${MAX_TOTAL_ENTRIES}).
+  Chủ đề lớn (thần thoại, lịch sử, thế giới nhiều phe phái) thì ĐỪNG ngại đề xuất 100+ entry —
+  thà nhiều entry gọn gàng còn hơn ít entry ôm đồm. Nếu user đã nêu con số thì PHẢI theo đúng.
 
 TỰ QUYẾT THÔNG SỐ (user không phải chỉnh gì):
-- tokensPerEntry: 150-400 tuỳ độ sâu yêu cầu (nhân vật chính sâu → cao; tra cứu nhanh → thấp).
+- tokensPerEntry: theo độ sâu user muốn. 150-400 cho lorebook tra cứu nhanh; 800-1500 cho entry
+  có chiều sâu; 3000-5000 khi user đòi CHI TIẾT ĐẦY ĐỦ (tiểu sử, biên niên, hồ sơ thế lực).
+  User đã nêu con số thì PHẢI theo đúng, không tự hạ xuống cho "an toàn".
 - cardType: 'single' nếu lorebook xoay quanh 1 nhân vật chính của thẻ, 'multi' nếu quần tượng.
 - entriesPerBatch: 4-8 (lô nhỏ chất lượng đều hơn).
 
@@ -163,8 +169,10 @@ export function parseLorebookPlan(raw: string): LorebookPlan {
     // Số entry chạy theo DANH SÁCH thật, không theo con số AI hứa suông.
     totalEntries: Math.min(Math.max(totalEntries, titleCount), MAX_TOTAL_ENTRIES),
     minEntries: clamp(p.config?.minEntries, 0, titleCount, Math.floor(titleCount * 0.8)),
-    entriesPerBatch: clamp(p.config?.entriesPerBatch, 2, 10, 6),
-    tokensPerEntry: clamp(p.config?.tokensPerEntry, 80, 800, 250),
+    entriesPerBatch: clamp(p.config?.entriesPerBatch, 1, 10, 6),
+    // (bug 196) Trần cũ 800 chặn thẳng yêu cầu 3000-5000 token/entry của user: nhập bao nhiêu cũng
+    // bị kẹp về 800, nên "đặt số token" trên giao diện gần như vô nghĩa với entry chi tiết.
+    tokensPerEntry: clamp(p.config?.tokensPerEntry, 80, 6000, 250),
     cardType: p.config?.cardType === 'multi' ? 'multi' : 'single',
     useWebSearch: p.config?.useWebSearch === true,
   };

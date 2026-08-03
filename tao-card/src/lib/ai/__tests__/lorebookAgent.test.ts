@@ -53,8 +53,21 @@ describe('parseLorebookPlan', () => {
     raw.config.totalEntries = 99999;
     raw.config.tokensPerEntry = 5;
     const p = parseLorebookPlan(JSON.stringify(raw));
-    expect(p.config.totalEntries).toBeLessThanOrEqual(200);
+    // (bug 196) Trần nâng 200 → 300 vì user đòi "ít nhất 100 entry"; vẫn phải kẹp, chỉ là kẹp rộng hơn.
+    expect(p.config.totalEntries).toBeLessThanOrEqual(300);
     expect(p.config.tokensPerEntry).toBeGreaterThanOrEqual(80);
+  });
+
+  it('(bug 196) ngân sách 3000-5000 token/entry KHÔNG còn bị kẹp về 800', () => {
+    const raw = JSON.parse(PLAN_JSON);
+    raw.config.tokensPerEntry = 4000;
+    expect(parseLorebookPlan(JSON.stringify(raw)).config.tokensPerEntry).toBe(4000);
+  });
+
+  it('(bug 196) nhưng vượt quá sức chịu thì vẫn kẹp', () => {
+    const raw = JSON.parse(PLAN_JSON);
+    raw.config.tokensPerEntry = 999999;
+    expect(parseLorebookPlan(JSON.stringify(raw)).config.tokensPerEntry).toBe(6000);
   });
 
   it('không có tiêu đề nào → báo lỗi rõ', () => {

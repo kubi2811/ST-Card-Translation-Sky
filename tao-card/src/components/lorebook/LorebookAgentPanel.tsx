@@ -277,12 +277,47 @@ export function LorebookAgentPanel() {
             </span>
           </div>
           <p className="text-xs text-muted-foreground">{plan.scope}</p>
-          <div className="flex flex-wrap gap-2 text-[10px] text-muted-foreground">
-            <span className="px-2 py-0.5 rounded bg-muted/40">~{plan.config.tokensPerEntry} token/entry</span>
+          {/* (bug 196) User: "cần cho người dùng có thể tự điều chỉnh". Trước đây mấy con số này
+              chỉ là nhãn CHỈ ĐỌC — AI quyết sao thì chịu vậy, muốn entry dài hơn hay nhiều entry
+              hơn thì không có đường nào ngoài viết lại lời yêu cầu rồi lập kế hoạch lại từ đầu. */}
+          <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+            <label className="px-2 py-0.5 rounded bg-muted/40 flex items-center gap-1">
+              token/entry
+              <input
+                type="number" min={80} max={6000} step={50}
+                value={plan.config.tokensPerEntry}
+                onChange={(e) => setPlan({
+                  ...plan,
+                  config: { ...plan.config, tokensPerEntry: Math.max(80, Math.min(6000, parseInt(e.target.value) || 250)) },
+                })}
+                disabled={phase === 'running'}
+                className="w-16 bg-transparent border-b border-border/60 text-right font-medium text-amber-400 focus:outline-none focus:border-primary"
+              />
+            </label>
+            <label className="px-2 py-0.5 rounded bg-muted/40 flex items-center gap-1">
+              tối thiểu
+              <input
+                type="number" min={0} max={300} step={5}
+                value={plan.config.minEntries}
+                onChange={(e) => setPlan({
+                  ...plan,
+                  config: { ...plan.config, minEntries: Math.max(0, Math.min(300, parseInt(e.target.value) || 0)) },
+                })}
+                disabled={phase === 'running'}
+                className="w-14 bg-transparent border-b border-border/60 text-right font-medium text-amber-400 focus:outline-none focus:border-primary"
+              />
+              entry
+            </label>
             <span className="px-2 py-0.5 rounded bg-muted/40">{plan.config.cardType === 'single' ? 'Thẻ đơn' : 'Nhiều nhân vật'}</span>
             <span className="px-2 py-0.5 rounded bg-muted/40">lô {plan.config.entriesPerBatch} entry</span>
-            <span className="px-2 py-0.5 rounded bg-muted/40">tối thiểu {plan.config.minEntries}</span>
           </div>
+          {plan.config.tokensPerEntry >= 1500 && (
+            <p className="text-[10px] text-amber-400/90">
+              💡 Entry dài {plan.config.tokensPerEntry} token: tool sẽ tự rút số entry mỗi lô và nâng trần
+              output cho vừa, nên số lượt gọi AI sẽ tăng lên. Nếu vẫn hụt độ dài, nâng trần output của
+              model trong Cài đặt.
+            </p>
+          )}
           <ol className="space-y-1.5">
             {plan.steps.map((s, i) => (
               <li key={s.id} className="flex items-start gap-2 text-xs">

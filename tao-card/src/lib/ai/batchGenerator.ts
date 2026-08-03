@@ -16,6 +16,9 @@ import { getPreset, ENTRY_CATEGORY_LABELS } from '../worldbook/worldbookConfig';
 import { cascadeSearch, searchFailureReasons } from './webScraper';
 import { getProfileExtractionContext } from './worldbuildingDefaults';
 import { tag, allTags } from './storyToCard';
+import {
+  countTokens, checkEntryBudget, planBatch, buildLengthDirective, buildExpandPrompt,
+} from './tokenBudget';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONFIG
@@ -117,13 +120,10 @@ CHỈ trả về MỘT MẢNG JSON hợp lệ. KHÔNG thêm giải thích, KHÔN
 // ─── TOKEN BUDGET ADDON (inject khi tokensPerEntry > 0) ──────────────────
 
 function buildTokenBudgetDirective(tokensPerEntry: number | undefined): string {
-  if (!tokensPerEntry || tokensPerEntry <= 0) return '';
-  return `\n\n--- NGÂN SÁCH TOKEN MỖI ENTRY (BẮT BUỘC TUÂN THỦ) ---
-Mỗi entry PHẢI có content dài KHOẢNG ${tokensPerEntry} tokens (≈ ${Math.round(tokensPerEntry * 3.5)} ký tự tiếng Việt).
-• Nếu ${tokensPerEntry} ≤ 100: Viết NGẮN GỌN, chỉ thông tin cốt lõi, dạng liệt kê.
-• Nếu ${tokensPerEntry} = 100–300: Viết VỪA PHẢI, đủ chi tiết chính + 1-2 chi tiết phụ.
-• Nếu ${tokensPerEntry} ≥ 300: Viết CHI TIẾT ĐẦY ĐỦ, bao gồm mô tả sâu, ví dụ cụ thể, quan hệ liên kết.
-[LỆNH]: Mỗi entry KHÔNG ĐƯỢC ngắn hơn ${Math.round(tokensPerEntry * 0.7)} tokens và KHÔNG ĐƯỢC dài hơn ${Math.round(tokensPerEntry * 1.3)} tokens.`;
+  // (bug 194) Bản cũ chỉ nói "khoảng N token" rồi cho phép tụt xuống 70%, mà bộ kiểm phía sau lại
+  // nhận tới tận 60% — nên kết quả dồn hết xuống sát sàn, user đo ra "một nửa". Nay nói bằng BA
+  // cách (token / ký tự / cấu trúc) và sàn cứng khớp đúng với bộ kiểm. Xem tokenBudget.ts.
+  return buildLengthDirective(tokensPerEntry ?? 0);
 }
 
 // ─── TIẾT KIỆM TOKEN KHI SINH SỐ LƯỢNG LỚN ──────────────────────────────
@@ -896,6 +896,26 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
   
   // (User 2026 — min/max entry) totalEntries là TRẦN; minEntries là SÀN — chưa đạt sàn thì nối batch
   // bù ở cuối (let vì có thể tăng). Trần an toàn 2× kế hoạch để không lặp vô hạn khi AI trả rỗng mãi.
+  // (bug 194-3 / 196) CỠ LÔ VÀ max_tokens PHẢI SUY TỪ NGÂN SÁCH, không để một con số cố định
+  // trong Settings quyết định hộ. Lô chạm trần output thì mô hình KHÔNG cắt, KHÔNG cảnh báo — nó
+  // TỰ NÉN mỗi entry cho vừa chỗ. Đó là kiểu hỏng im lặng, và là lý do "luôn chỉ ra một nửa".
+  // Với 3000-5000 token/entry (bug 196) thì một lô 6 entry cần ~30.000 token, gấp bảy lần trần
+  // mặc định 4096 — không đời nào ra đủ nếu không rút lô và nâng trần.
+  const budgetPlan = planBatch(
+    config.tokensPerEntry ?? 0,
+    config.entriesPerBatch,
+    Math.max(ctx.generationParams.max_tokens || 0, 8192),
+  );
+  if (config.tokensPerEntry && config.tokensPerEntry > 0) {
+    if (budgetPlan.reduced) {
+      ctx.log(
+        `📐 Ngân sách ${config.tokensPerEntry} token/entry → rút lô từ ${config.entriesPerBatch} xuống ` +
+        `${budgetPlan.entriesPerBatch} entry và nâng trần output lên ${budgetPlan.maxTokens} token. ` +
+        `Nhồi cả lô vào một lời gọi thì AI tự nén cho vừa, entry nào cũng ngắn.`,
+      );
+    }
+    config = { ...config, entriesPerBatch: budgetPlan.entriesPerBatch };
+  }
   let totalBatches = Math.ceil(config.totalEntries / config.entriesPerBatch);
   const plannedBatches = totalBatches;
   const wantMin = Math.max(0, Math.min(config.minEntries ?? 0, config.totalEntries));
@@ -912,6 +932,8 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
   // (bug 71) Entry bị dedup loại trước đây MẤT TRẮNG: số batch cố định nên không sinh bù,
   // kế hoạch 20 entry thực tế còn 6-10. Nay đếm để nối batch bù đúng phần đã rơi.
   let droppedDup = 0;
+  // (bug 194) Đo token THẬT của những entry đã nhận, để báo cho user con số thay vì lời hứa.
+  let tokenSum = 0, tokenCount = 0;
   let consecutiveErrors = 0;
   const seen: Array<{ comment: string; keys: string[] }> = (
     ctx.card.data.character_book?.entries ?? []
@@ -1051,7 +1073,12 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
             // (bugNeedFix/96) KHÔNG ép chế độ "chỉ trả JSON object": prompt ở đây đòi một
             // MẢNG entry, mà chế độ đó của provider CẤM mảng ở cấp cao nhất — model buộc phải
             // bọc lung tung hoặc trả một object, rồi tool báo "không phải JSON array" hàng loạt.
-            params: { ...ctx.generationParams, useJsonResponseFormat: false },
+            params: {
+              ...ctx.generationParams,
+              // (bug 194) Trần output đi theo ngân sách của lô này, không dùng con số chung.
+              max_tokens: Math.max(ctx.generationParams.max_tokens || 0, budgetPlan.maxTokens),
+              useJsonResponseFormat: false,
+            },
             messages,
             signal: ctx.signal,
           });
@@ -1122,14 +1149,38 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
         // sinh mới thì không có bản cũ để so, nên entry 40 ký tự vẫn lọt êm, chỉ ghi một dòng
         // cảnh báo rồi vẫn nhận. Thêm SÀN TUYỆT ĐỐI: dưới sàn thì LOẠI và ghi nợ để vòng sau
         // sinh bù (dùng chung cơ chế bù với entry bị loại vì trùng).
-        const minChars = config.tokensPerEntry && config.tokensPerEntry > 0
-          ? Math.round(config.tokensPerEntry * 3.5 * 0.6)   // 60% ngân sách đã hứa với user
-          : 200;                                            // không đặt ngân sách → sàn tối thiểu
-        const contentLen = (ai.content || '').trim().length;
-        if (contentLen < minChars) {
-          droppedDup++;
-          ctx.log(`⏭️ Bỏ qua "${ai.comment}" — nội dung quá sơ sài (${contentLen}/${minChars} ký tự), sẽ sinh bù.`);
-          continue;
+        // (bug 194) ĐO TOKEN THẬT chứ không ước theo ký tự, và sàn là 85% chứ không phải 60%.
+        // Ngắn vừa phải (≥45%) thì NỚI THÊM — rẻ và chắc hơn vứt đi sinh lại từ đầu, vì sinh lại
+        // cùng một lời nhắc thì gần như chắc chắn lại ra một bản ngắn y hệt.
+        if (config.tokensPerEntry && config.tokensPerEntry > 0) {
+          let chk = checkEntryBudget(ai.content || '', config.tokensPerEntry);
+          if (!chk.ok && chk.hopeless) {
+            droppedDup++;
+            ctx.log(`⏭️ Bỏ qua "${ai.comment}" — quá sơ sài (${chk.actual}/${chk.target} token), sẽ sinh bù.`);
+            continue;
+          }
+          for (let ex = 0; ex < 2 && !chk.ok && !ctx.stopped; ex++) {
+            ctx.log(`📏 "${ai.comment}" mới ${chk.actual}/${chk.target} token — yêu cầu AI viết đủ (lần ${ex + 1}/2)…`);
+            try {
+              const grown = await callAI({
+                profile,
+                params: { ...ctx.generationParams, max_tokens: Math.max(1024, Math.round(config.tokensPerEntry * 2)), useJsonResponseFormat: false },
+                messages: [
+                  { role: 'system', content: 'Bạn là người viết lore. Trả về DUY NHẤT phần nội dung, văn bản thuần.' },
+                  { role: 'user', content: buildExpandPrompt(ai.comment || '', ai.content || '', config.tokensPerEntry, chk.actual) },
+                ],
+                signal: ctx.signal,
+              });
+              const next = (grown.text || '').trim();
+              // Chỉ nhận nếu THẬT SỰ dài hơn — tránh nhận về một bản viết lại ngắn hơn.
+              if (countTokens(next) > chk.actual) { ai.content = next; chk = checkEntryBudget(next, config.tokensPerEntry); }
+              else break;
+            } catch { break; }
+          }
+          if (!chk.ok) {
+            ctx.log(`⚠️ "${ai.comment}" vẫn ${chk.actual}/${chk.target} token sau khi nới — vẫn nhận, nhưng đừng kỳ vọng đủ dài.`);
+          }
+          tokenSum += chk.actual; tokenCount++;
         }
 
         // Enhanced anti-summarization check
@@ -1205,4 +1256,16 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
 
   ctx.onProgress({ batch: totalBatches, totalBatches, created, total: config.totalEntries, status: ctx.stopped ? 'stopped' : 'done' });
   ctx.log(`\n🏁 Hoàn thành: ${created}/${config.totalEntries} entries đã tạo${wantMin > 0 ? ` (tối thiểu yêu cầu: ${wantMin})` : ''}.`);
+  // (bug 194) Báo con số ĐO ĐƯỢC, không phải lời hứa. Trước đây tool không hề đếm token thật, nên
+  // chuyện "luôn chỉ ra một nửa" là vô hình với chính nó — user phải tự phát hiện rồi đi báo bug.
+  if (tokenCount > 0 && config.tokensPerEntry) {
+    const avg = Math.round(tokenSum / tokenCount);
+    const pct = Math.round((avg / config.tokensPerEntry) * 100);
+    ctx.log(
+      `📏 Độ dài THỰC ĐO: trung bình ${avg} token/entry so với ngân sách ${config.tokensPerEntry} (${pct}%).`
+      + (pct < 85
+        ? ' Vẫn hụt — nâng trần output của model trong Cài đặt, hoặc giảm số entry mỗi lô rồi chạy lại.'
+        : ''),
+    );
+  }
 }

@@ -180,7 +180,9 @@ describe('(bug 203) mốc cắt phải ở ranh giới cú pháp', () => {
 });
 
 describe.skipIf(!fs.existsSync(FIXTURE))('(bug 203) chính schema user gửi', () => {
-  const code = fs.readFileSync(FIXTURE, 'utf8');
+  // skipIf chỉ skip các test, KHÔNG skip thân describe — fixture vắng mặt (bug/203 đã bị dọn)
+  // mà đọc thẳng ở đây là nổ cả suite lúc collect. Đọc có guard, skipIf lo phần còn lại.
+  const code = fs.existsSync(FIXTURE) ? fs.readFileSync(FIXTURE, 'utf8') : '';
 
   it('bản gốc parse sạch — nếu không thì phép thử vô nghĩa', () => {
     expect(() => acornParse(code, { ecmaVersion: 'latest', sourceType: 'module' })).not.toThrow();

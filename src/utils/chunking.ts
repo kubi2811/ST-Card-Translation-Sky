@@ -295,6 +295,19 @@ function findSafeBoundary(text: string, targetPos: number, minPos: number): numb
   return -1; // Failed to find safe boundary, trigger subsequent fallbacks
 }
 
+/**
+ * (bug 207/L4) Cỡ chunk MẶC ĐỊNH cho một field theo TÊN — dùng để ƯỚC LƯỢNG số phần trên UI.
+ * Trước đây UI hard-code 15000 trong khi engine dùng 12000 cho field code-heavy (tên chứa
+ * regex/code/script/helper) ⇒ log báo "chia ~16 phần" nhưng engine call 21 chunk — user tưởng
+ * app loạn số liệu. Bảng này phải KHỚP nhánh chọn effectiveChunkSize trong apiClient.translateText
+ * (nhánh thích ứng theo lane của văn xuôi không mô phỏng được — nên đây vẫn là "~", con số thật
+ * do engine báo về qua onChunksReady ngay khi cắt xong).
+ */
+export function chunkCharsForField(fieldLabel: string, userChunkSize?: number): number {
+  if (userChunkSize && userChunkSize >= 100) return Math.min(userChunkSize, 15000);
+  return /regex|code|script|helper/i.test(fieldLabel) ? 12000 : 15000;
+}
+
 export function chunkText(text: string, maxChars?: number, _maxTokens?: number): string[] {
   // Chunk size mặc định 15.000 ký tự (theo feedback user: 12–15k/lần call cho kết quả tốt nhất).
   // → entry ≤15k dịch 1 lần; entry lớn (vd 90k) cắt ~6 phần đều nhau tại ranh giới AN TOÀN

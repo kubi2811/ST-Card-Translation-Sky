@@ -795,6 +795,9 @@ ${fragmentList}${mvuBlock}`;
         }
       }
     } catch (err) {
+      // (bug 207) User bấm Dừng thì phải DỪNG THẬT — nuốt cả abort rồi chạy tiếp vòng sau là
+      // một nguồn của cảm giác "bấm huỷ không ăn" (mỗi call ở đây gửi TOÀN BỘ bản ghép, rất lâu).
+      if (signal?.aborted) throw new Error('Cancelled');
       console.warn(`[ResidualCheck] ${fieldName}: Cleanup retry failed:`, err);
       return currentResult;
     }
@@ -2932,6 +2935,8 @@ If code is corrupted at the seam, provide the fix that restores the original cod
     console.log(`[verifySeams] Fixed ${fixCount} seam(s)` + (hasStructuralIssues ? ' (including structural repairs)' : ''));
     return fixedChunks;
   } catch (err) {
+    // (bug 207) Abort phải thoát thật, không được coi là "verify thất bại" rồi đi tiếp.
+    if (signal?.aborted) throw new Error('Cancelled');
     // Verification failed — return originals (non-critical)
     console.warn('[verifySeams] Verification failed, using unverified seams:', err);
     return translatedChunks;

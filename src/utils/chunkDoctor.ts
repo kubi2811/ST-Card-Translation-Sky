@@ -153,6 +153,16 @@ export function filterDictForChunk(
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
+ * (bug 207/L6) Chỉ soi/ép hoa-thường những tên biến ĐỦ ĐẶC TRƯNG. Giá trị từ điển kiểu "Cấp",
+ * "Tiền" là từ tiếng Việt thường gặp trong văn xuôi — khớp case-insensitive vào chữ thường giữa
+ * câu rồi báo "sai hoa/thường" (hoặc tệ hơn: applyDictCasing SỬA cả văn xuôi thành "Cấp") là
+ * báo oan hàng loạt. Biến nhiều từ ("Hảo Cảm") hoặc một từ dài mới đáng tin để so.
+ */
+export function isDistinctiveVarName(viet: string): boolean {
+  return viet.includes(' ') ? viet.trim().length >= 5 : viet.length >= 6;
+}
+
+/**
  * Soi vi phạm từ điển trong MỘT chunk:
  *  - biến Hán (có trong raw + có trong dict) mà bản dịch VẪN còn nguyên → 'mvu-han';
  *  - bản dịch chứa tên biến ĐÚNG CHỮ nhưng SAI HOA/THƯỜNG so với từ điển → 'mvu-case'.
@@ -169,8 +179,8 @@ export function mvuChunkViolations(
   for (const [han, viet] of Object.entries(dict)) {
     if (!han || !viet || !rawChunk.includes(han)) continue;
     if (out.includes(han)) { hanLeft.push(`${han} → phải thành "${viet}"`); continue; }
-    // tìm mọi biến thể sai case của `viet` trong bản dịch
-    if (viet.toLowerCase() !== viet.toUpperCase()) { // có chữ cái để so case
+    // tìm mọi biến thể sai case của `viet` trong bản dịch — CHỈ với tên đủ đặc trưng (L6)
+    if (isDistinctiveVarName(viet) && viet.toLowerCase() !== viet.toUpperCase()) { // có chữ cái để so case
       const re = new RegExp(escapeRe(viet), 'gi');
       let m: RegExpExecArray | null;
       while ((m = re.exec(out)) !== null) {
@@ -210,6 +220,8 @@ export function applyDictCasing(
   let fixes = 0;
   for (const viet of Object.values(dict)) {
     if (!viet || viet.length < 2 || viet.toLowerCase() === viet.toUpperCase()) continue;
+    // (bug 207/L6) Từ ngắn thường gặp trong văn xuôi thì KHÔNG ép — ép là sửa nhầm cả câu văn.
+    if (!isDistinctiveVarName(viet)) continue;
     const re = new RegExp(escapeRe(viet), 'gi');
     text = text.replace(re, (m) => {
       if (m === viet) return m;
@@ -246,10 +258,24 @@ export function diagnoseChunk(rawChunk: string, out: string, opts: DiagnoseOptio
     if (broken) problems.push({ kind: 'code', detail: `Code vỡ sau dịch: ${broken}.` });
   }
 
-  // 2) CJK sót — chunk "còn chữ hán". Hai bậc: giữ-nguyên-cả-mảng (tỉ lệ) hoặc sót rải rác (tuyệt đối).
+  // 2) CJK sót — chunk "còn chữ hán".
+  // (bug 207/L6) Bản đầu dùng ngưỡng TUYỆT ĐỐI `outHan >= 10` — với chunk CODE 12k của script
+  // Trung (hàng trăm chữ Hán gốc), AI cố ý giữ 10 chữ hợp lệ (khoá getvar/getwi, tên entry
+  // lorebook, comment kỹ thuật) là đã "1,25% sót" mà vẫn bị chẩn "chưa dịch trọn" → MỌI chunk
+  // tốn 1 lượt sửa vô ích, nhân 21 chunk nhân số vòng retry = chính cơn "treo vô hạn" user báo.
+  // Nay chia hai lớp: giữ-nguyên-cả-mảng (tỉ lệ >30%, mọi loại chunk) và sót rải rác — chunk
+  // VĂN XUÔI siết chặt (≥10 chữ và >5%), chunk CODE/EJS nới hẳn (≥60 chữ VÀ >15%) vì chữ Hán
+  // hợp lệ trong code là chuyện thường.
   const srcHan = countHanNoUrl(rawChunk);
   const outHan = countHanNoUrl(out);
-  if (srcHan >= 10 && (outHan / srcHan > 0.3 || outHan >= 10)) {
+  const codeLike = looksLikeCodeChunk(rawChunk) || hasEjsBlocks(rawChunk);
+  const heavyResidue = outHan / srcHan > 0.3;
+  // Văn xuôi giữ ngưỡng tuyệt đối ≥10 (văn xuôi không có lý do chính đáng để giữ chữ Hán —
+  // URL đã miễn trừ); chỉ CODE mới được nới, vì chữ Hán trong code thường là khoá hợp lệ.
+  const scatteredResidue = codeLike
+    ? (outHan >= 60 && outHan / srcHan > 0.15)
+    : outHan >= 10;
+  if (srcHan >= 10 && (heavyResidue || scatteredResidue)) {
     problems.push({
       kind: 'cjk',
       detail: `Còn ${outHan} chữ Hán (gốc ${srcHan}) ngoài URL — chunk chưa được dịch trọn.`,

@@ -24,8 +24,18 @@ const IDENT_CHAR = /[\p{L}\p{N}$_]/u;
  * (bug 203) 40 → 400. Một schema MVU có hàng trăm khoá chữ Hán; AI dịch cả loạt ra tiếng Việt
  * CÓ DẤU CÁCH thì số chỗ hỏng vượt xa 40, vá dở dang là vẫn vỡ ⇒ guard bắt dịch lại ⇒ đúng vòng
  * lặp user gặp. Mỗi vòng chỉ là một lần parse (~5ms cho file 30K) nên trần cao vẫn rẻ.
+ *
+ * (bug 207/L5) NHƯNG "rẻ" chỉ đúng với file 30K. Bản ghép tavernHelper 340K thì MỖI vòng là
+ * 2-4 lần acorn parse cả 340K (~trăm ms/lần), 400 vòng ĐỒNG BỘ = khoá cứng main thread nhiều
+ * phút — trang "treo", bấm Tạm dừng/Huỷ không ăn. Thêm hai phanh: trần vòng CO THEO ĐỘ DÀI
+ * (file khổng lồ thì mỗi vòng đắt gấp chục lần nên trần phải thấp tương ứng) + NGÂN SÁCH THỜI
+ * GIAN tuyệt đối. Vá dở dang vẫn hơn treo trình duyệt — phần lỗi còn lại do guard cú pháp phía
+ * sau xử lý và báo đúng dòng như trước giờ.
  */
 const MAX_ROUNDS = 400;
+const TIME_BUDGET_MS = 3500;
+const roundsCapForLength = (len: number): number =>
+  len > 200_000 ? 40 : len > 80_000 ? 120 : MAX_ROUNDS;
 
 export interface KeyRepairResult {
   code: string;
@@ -108,8 +118,15 @@ export function repairUnquotedObjectKeys(code: string): KeyRepairResult {
   const fixed: string[] = [];
   let cur = code;
   let lastPos = -1;
+  const startedAt = Date.now();
+  const roundsCap = roundsCapForLength(code.length);
 
-  for (let round = 0; round < MAX_ROUNDS; round++) {
+  for (let round = 0; round < roundsCap; round++) {
+    // (bug 207/L5) Hết ngân sách thời gian → dừng với những gì đã vá được, trả UI lại cho user.
+    if (Date.now() - startedAt > TIME_BUDGET_MS) {
+      console.warn(`[repairUnquotedObjectKeys] hết ngân sách ${TIME_BUDGET_MS}ms sau ${round} vòng (file ${code.length} ký tự) — dừng để không khoá main thread.`);
+      break;
+    }
     // (bug 203) PHẢI dùng bản parse hiểu CẢ module: script 酒馆助手 mở đầu bằng `import`, mà
     // bản cũ chỉ parse mode script nên lỗi luôn rơi về dòng 1 và bộ vá thoát ngay ở vòng đầu.
     const err = jsParseErrorPosAny(cur);

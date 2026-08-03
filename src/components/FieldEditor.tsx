@@ -7,6 +7,7 @@ import { fmt } from '../i18n';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { FieldGroup, TranslationField, TranslationStatus } from '../types/card';
 import { auditChunks, joinChunks, summarizeAudit } from '../utils/chunkAudit';
+import { chunkCharsForField } from '../utils/chunking';
 import { RotateCcw, AlertTriangle, CheckCircle2, Clock, ArrowLeftRight, BarChart3, Ban, Search, X, Copy, Check, Eye, Wand2, Zap, Brain, Download, Filter } from 'lucide-react';
 import { countCjkText } from '../utils/cjk';
 import { TranslatedTextarea } from './TranslatedTextarea';
@@ -286,9 +287,11 @@ function ChunkStatusAndResume({
   const t = useT();
   const [expanded, setExpanded] = useState(false);
 
-  // Ngưỡng chia chunk THỰC TẾ = 15.000 ký tự (khớp chunkText ở apiClient). Nguồn tin cậy nhất là
-  // field.totalChunks do engine báo qua onChunkComplete; nếu chưa có thì ước lượng theo độ dài.
-  const CHUNK_CHARS = 15000;
+  // (bug 207/L4) Ước lượng phải theo ĐÚNG cỡ chunk engine dùng cho field này (code-heavy như
+  // tavernHelper là 12.000, không phải 15.000) — trước đây hai con số lệch nhau nên UI báo
+  // "0/16" trong khi engine call 21 chunk. Nguồn tin cậy nhất vẫn là field.totalChunks (giờ
+  // được engine báo NGAY khi cắt xong qua onChunksReady, không phải đợi chunk đầu dịch xong).
+  const CHUNK_CHARS = chunkCharsForField(field.label, useStore.getState().translationConfig.chunkSize);
   // completedChunks có thể là mảng thưa (song song hoàn thành lệch thứ tự) → đếm phần ĐÃ XONG (khác rỗng).
   const completedCount = field.completedChunks?.filter(Boolean).length || 0;
   const totalChunks = (field.totalChunks && field.totalChunks > 1)

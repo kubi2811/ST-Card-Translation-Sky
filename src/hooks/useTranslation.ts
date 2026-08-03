@@ -32,6 +32,8 @@ import { unifyCrossStrategyDicts } from '../utils/crossStrategySync';
 import { detectEjsCard, extractEjsEntryNames, extractEjsKeywords, aiTranslateEjsEntries, validateEjsSync, autoFixEjsEntryNames, autoFixEjsKeywords, enforceEjsEntryName, enforceEjsCovariance, enforceEjsKeywordCasing, autoFixEjsKeywordsExtended, enforceEjsDictConsistency } from '../utils/ejsSync';
 import { isEjsProseField, maskEjsCode, unmaskEjsCode, countEjsBlocks } from '../utils/ejsSegmenter';
 import { isLikelyJsScript, jsParseErrorAny, isImportOnlyScript, hasRealJsSignal, jsErrorFingerprint } from '../utils/scriptSafety';
+import { planTargetedChunkRetry, mergeChunkProgress } from '../utils/chunkRetryPlan';
+import { chunkCharsForField } from '../utils/chunking';
 import { getActivePresetPromptContent } from '../utils/presetParser';
 import { CallMonitor } from '../utils/callMonitor';
 import { runWorkerPool } from '../utils/runWorkerPool';
@@ -264,6 +266,23 @@ export function useTranslation() {
         if (existing && (existing.status === 'done' || existing.status === 'skipped' || existing.status === 'ignored')) {
           return existing;
         }
+        // (bug 207/L2) Field ĐANG DỞ ('pending'/'error') trước đây bị thay bằng bản trắng tinh
+        // ⇒ bấm Tạm dừng/Huỷ (status về 'pending') rồi bấm Tiếp tục là 21 chunk đã dịch + rawChunks
+        // + totalChunks bay sạch — ĐÚNG ca "reset 0/21, mất trắng phải dịch lại từ đầu" của user.
+        // Nay mang TIẾN TRÌNH sang field mới (chỉ khi bản gốc không đổi — gốc đổi thì tiến trình cũ
+        // vô nghĩa; nhịp cắt đổi thì chốt chunkingChanged trong engine tự vứt sau).
+        if (existing && existing.original === nf.original) {
+          return {
+            ...nf,
+            translated: existing.translated,
+            previousTranslation: existing.previousTranslation,
+            completedChunks: existing.completedChunks,
+            rawChunks: existing.rawChunks,
+            totalChunks: existing.totalChunks,
+            failedChunkIndex: existing.failedChunkIndex,
+            keptOriginalOnPurpose: existing.keptOriginalOnPurpose,
+          };
+        }
         return nf;
       });
       // Also keep done/skipped/ignored fields from groups not currently enabled
@@ -380,7 +399,8 @@ export function useTranslation() {
     const effectiveProxy = resolvedModel !== store.proxy.model ? { ...store.proxy, model: resolvedModel } : store.proxy;
 
     // Mục >15k ký tự sẽ được cắt ~15k/phần (chunkText) rồi dịch SONG SONG qua pool → log cho user rõ.
-    const estimatedChunks = Math.ceil(charCount / 15000);
+    // (bug 207/L4) Ước lượng theo ĐÚNG cỡ chunk engine sẽ dùng (code-heavy = 12000, không phải 15000).
+    const estimatedChunks = Math.ceil(charCount / chunkCharsForField(field.label, store.translationConfig.chunkSize));
     if (estimatedChunks > 1) {
       store.addLog('active', `🔗 Mục lớn "${field.label}" (${charCount.toLocaleString()} ký tự) → chia ~${estimatedChunks} phần, dịch SONG SONG${targetModel !== store.proxy.model ? ` [Model: ${targetModel}]` : ''}`);
     } else {
@@ -618,6 +638,7 @@ export function useTranslation() {
           (rawChunks) => {
             store.updateField(field.path, {
               rawChunks,
+              totalChunks: rawChunks.length,
             });
           },
           // cssCjkHandling
@@ -941,6 +962,27 @@ export function useTranslation() {
         return 'error';
       }
 
+      // ═══ (bug 207) DỊCH LẠI NHẮM ĐÍCH — gọi TRƯỚC khi trả 'retry' ở các cổng bên dưới. ═══
+      // Vấn đề gốc: field đủ 21/21 chunk thì đường resume coi là "không có gì để resume" ⇒ mỗi
+      // lượt 'retry' của cổng cú pháp/CJK là gọi AI lại TOÀN BỘ 21 chunk — hàng chục phút một
+      // vòng, đúng cơn "treo vô hạn" + "dịch lại từ đầu một cách máy móc" user báo. Nay: máy
+      // khoanh vùng ĐÚNG chunk hỏng (cell dịch vỡ cú pháp trong khi cell gốc parse sạch, hoặc
+      // cell còn nguyên tiếng Trung) rồi chỉ xoá các ô đó — lượt retry sau tự resume, chỉ tốn
+      // 1-2 call thay vì 21. Không khoanh được thì trả 0 và giữ nguyên hành vi cũ.
+      const clearSuspectChunksForRetry = (kind: 'syntax' | 'cjk'): number => {
+        const fresh = useStore.getState().fields.find(f => f.path === field.path);
+        if (!fresh) return 0;
+        const plan = planTargetedChunkRetry(fresh, kind);
+        if (!plan) return 0;
+        const cur = [...(fresh.completedChunks ?? [])];
+        for (const i of plan.suspects) cur[i] = '';
+        store.updateField(field.path, { completedChunks: cur, failedChunkIndex: undefined });
+        store.addLog('info',
+          `🎯 ${field.label}: khoanh được ${plan.reason} — chỉ dịch lại ${plan.suspects.length}/${cur.length} phần, ` +
+          `${cur.length - plan.suspects.length} phần đã dịch được giữ nguyên.`);
+        return plan.suspects.length;
+      };
+
       // Schema CJK Validation: Ensure schema doesn't have any Chinese
       // Strip URLs before checking — CJK in URL paths (e.g. 骰子系统 in import paths) is intentional
       const isTargetNonCJK = !(/chinese|中文|japanese|日本語|korean|한국어/i.test(store.translationConfig.targetLanguage));
@@ -957,6 +999,7 @@ export function useTranslation() {
             if (softGate('cjk-script',
               `⚠️ Script con ${transCjk}/${origCjk} chu Han (${(survival * 100).toFixed(0)}%) — nghi chua dich. Thu lai: ${field.label}…`,
               `vẫn còn ${transCjk}/${origCjk} chữ Hán`)) {
+              clearSuspectChunksForRetry('cjk');   // (bug 207) chỉ dịch lại cell chưa dịch
               await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
               return 'retry';
             }
@@ -1003,6 +1046,7 @@ export function useTranslation() {
           if (softGate(`cjk-text:${transCjk}/${origCjk}`,
             `⚠️ Nghi CHƯA DỊCH: còn ${(survival * 100).toFixed(0)}% chữ Hán (${transCjk}/${origCjk}) ở ${field.label}. AI có thể trả lại nguyên văn. Thử lại…`,
             `vẫn còn ${(survival * 100).toFixed(0)}% chữ Hán (${transCjk}/${origCjk})`)) {
+            clearSuspectChunksForRetry('cjk');   // (bug 207) entry lớn bị chunk: chỉ dịch lại cell chưa dịch
             await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
             return 'retry';
           }
@@ -1110,6 +1154,9 @@ export function useTranslation() {
           if (!sameErrorAgain && freshRetries() < (store.proxy.maxRetries || 3)) {
             store.updateField(field.path, { retries: freshRetries() + 1, lastJsErrorFingerprint: errFingerprint });
             store.addLog('retry', `⚠️ Script vỡ cú pháp sau dịch (${field.label}, dòng ~${jsErr.line}: ${jsErr.msg.slice(0, 60)}) → dịch lại…`);
+            // (bug 207) Khoanh đúng cell làm vỡ cú pháp (nhờ bug 203 cắt theo AST nên cell tự
+            // parse được) — lượt retry chỉ dịch lại cell đó thay vì cả 21 chunk.
+            clearSuspectChunksForRetry('syntax');
             await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
             return 'retry';
           }
@@ -1198,7 +1245,7 @@ export function useTranslation() {
         if (err instanceof ChunkError) {
           store.updateField(field.path, {
             status: 'pending',
-            completedChunks: err.completedChunks,
+            completedChunks: mergeChunkProgress(useStore.getState().fields.find(f => f.path === field.path)?.completedChunks, err.completedChunks),
             failedChunkIndex: err.failedChunkIndex,
             totalChunks: err.totalChunks,
           });
@@ -1216,7 +1263,7 @@ export function useTranslation() {
       if (err instanceof ChunkError) {
         // Save the progress first so we can resume
         store.updateField(field.path, {
-          completedChunks: err.completedChunks,
+          completedChunks: mergeChunkProgress(useStore.getState().fields.find(f => f.path === field.path)?.completedChunks, err.completedChunks),
           failedChunkIndex: err.failedChunkIndex,
           totalChunks: err.totalChunks,
         });
@@ -2660,7 +2707,7 @@ export function useTranslation() {
                 store.translationConfig.enableChunkVerification,
                 // onChunksReady
                 (rawChunks) => {
-                  store.updateField(rf.path, { rawChunks });
+                  store.updateField(rf.path, { rawChunks, totalChunks: rawChunks.length });
                 },
                 store.translationConfig.cssCjkHandling,
               );
@@ -3558,6 +3605,7 @@ export function useTranslation() {
         (rawChunks) => {
           store.updateField(field.path, {
             rawChunks,
+            totalChunks: rawChunks.length,
           });
         },
         // cssCjkHandling
@@ -3628,7 +3676,7 @@ export function useTranslation() {
         store.updateField(path, {
           status: 'error',
           error: msg,
-          completedChunks: err.completedChunks,
+          completedChunks: mergeChunkProgress(useStore.getState().fields.find(f => f.path === field.path)?.completedChunks, err.completedChunks),
           failedChunkIndex: err.failedChunkIndex,
           totalChunks: err.totalChunks,
         });
@@ -3924,6 +3972,7 @@ export function useTranslation() {
             (rawChunks) => {
               store.updateField(field.path, {
                 rawChunks,
+                totalChunks: rawChunks.length,
               });
             },
             // cssCjkHandling
@@ -3978,7 +4027,7 @@ export function useTranslation() {
           if (isChunked && attempts <= maxAttempts) {
             if (err instanceof ChunkError) {
               store.updateField(field.path, {
-                completedChunks: err.completedChunks,
+                completedChunks: mergeChunkProgress(useStore.getState().fields.find(f => f.path === field.path)?.completedChunks, err.completedChunks),
                 failedChunkIndex: err.failedChunkIndex,
                 totalChunks: err.totalChunks,
               });
@@ -3994,7 +4043,7 @@ export function useTranslation() {
           if (err instanceof ChunkError) {
             store.updateField(field.path, {
               status: 'error', error: msg, retries: field.retries + attempts,
-              completedChunks: err.completedChunks,
+              completedChunks: mergeChunkProgress(useStore.getState().fields.find(f => f.path === field.path)?.completedChunks, err.completedChunks),
               failedChunkIndex: err.failedChunkIndex,
               totalChunks: err.totalChunks,
             });

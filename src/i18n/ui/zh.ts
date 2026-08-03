@@ -525,6 +525,9 @@ const ui: UiKeys = {
   grpTranslateNeedCard: '请先载入卡片',
   grpTools: '其他工具',
   grpToolsHint: '正则 · 助手 · 对比',
+  // (bug 208) AI 助手已移到侧栏，位于更新按钮正上方
+  grpToolsAiMoved: '🔮 AI 助手已移到左侧栏，就在更新按钮上方——在任意标签页都能从那里打开。',
+  aiCompanionNeedCard: 'AI 助手需要已载入的卡片才能阅读。请先在第 2 步导入卡片，然后再点击。',
   tabFields: '字段',
   tabVerify: '检查',
   tabExport: '导出',

@@ -1,12 +1,13 @@
 import { useState, useRef, useCallback, useEffect, Suspense, lazy, type LazyExoticComponent, type ComponentType } from 'react';
 import App from './App';
 import { FLOWS, type FlowDef } from './flows';
-import { RotateCw, ExternalLink, Bug, Play, Square } from 'lucide-react';
+import { RotateCw, ExternalLink, Bug, Play, Square, Bot } from 'lucide-react';
 import HubUpdateButton from './components/HubUpdateButton';
 import { APP_VERSION } from './version';
 import { useUi } from './i18n/useLocale';
 import { getUiLang, setUiLang, UI_LANGS, fmt } from './i18n';
 import { useToolServers, ensureToolServerPolling } from './hub/useToolServers';
+import { requestOpenAiCompanion } from './hub/openAiCompanion';
 
 const RAIL_WIDTH = 78;
 const LS_KEY = 'hub-active-flow';
@@ -81,6 +82,11 @@ export default function AppHub() {
           ))}
           {/* Push the update button to the bottom of the rail */}
           <div style={{ flexGrow: 1 }} />
+          {/* (bug 208) Trợ Lý AI lên NGAY TRÊN nút Cập nhật. Trước đây nó nằm trong mục "Công cụ
+              khác" của sidebar Dịch Card — một mục thu gọn, nên mỗi lần cần hỏi Trợ Lý là phải mở
+              mục ra rồi mới bấm được, và ở tab khác thì không thấy nó đâu. Ở rail thì luôn nhìn
+              thấy từ mọi tab. */}
+          <RailAiCompanionButton onOpen={() => select('translate')} />
           <HubUpdateButton />
         </nav>
 
@@ -283,6 +289,49 @@ function GlobalHeader({ activeFlow }: { activeFlow?: FlowDef }) {
         <LangSwitcher />
       </div>
     </header>
+  );
+}
+
+/**
+ * (bug 208) Nút Trợ Lý AI trên rail, ngay trên nút Cập nhật.
+ *
+ * Trợ Lý AI là modal SỐNG TRONG app Dịch Card (state cục bộ của App.tsx), nên rail không mở
+ * thẳng được. Đường đi: chuyển flow về Dịch Card (modal của tab đang ẩn thì bấm cũng như không)
+ * rồi phát một sự kiện cửa sổ; App nghe sự kiện đó và mở panel. Một sự kiện gọn hơn hẳn việc
+ * kéo state của App lên tận Hub chỉ vì một cái nút.
+ */
+function RailAiCompanionButton({ onOpen }: { onOpen: () => void }) {
+  const ui = useUi();
+  const color = '#a855f7';
+  return (
+    <button
+      onClick={() => {
+        onOpen();
+        requestOpenAiCompanion();
+      }}
+      title={ui.appAiCompanion}
+      style={{
+        width: RAIL_WIDTH - 14,
+        padding: '9px 2px',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 4,
+        border: '1.5px solid ' + color,
+        borderRadius: 10,
+        background: 'rgba(168,85,247,0.10)',
+        color,
+        cursor: 'pointer',
+        transition: 'all 0.15s',
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(168,85,247,0.22)'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(168,85,247,0.10)'; }}
+    >
+      <Bot size={19} strokeWidth={2.2} />
+      <span style={{ fontSize: '0.66rem', fontWeight: 700, textAlign: 'center', lineHeight: 1.15 }}>
+        {ui.appAiCompanion}
+      </span>
+    </button>
   );
 }
 

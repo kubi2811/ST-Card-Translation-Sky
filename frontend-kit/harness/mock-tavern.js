@@ -58,6 +58,37 @@
     (listeners[type] || []).forEach(function (f) { try { f.apply(null, args); } catch (e) { console.error(e); } });
   }
 
+  /**
+   * (bug 206) Regex hiển thị của thẻ — cổng mà khung chat nhúng đọc để áp script làm đẹp
+   * của người chơi lên lời kể. Ba mẫu dưới đây bắt chước đúng ba kiểu hay gặp ngoài đời:
+   * tô màu lời thoại, đổi dấu sao thành chữ nghiêng, và một script chỉ-prompt (phải bị bỏ).
+   * Sửa nóng được từ bảng điều khiển bàn thử: window.__mockRegexes = [...] rồi Reset.
+   */
+  window.__mockRegexes = [
+    {
+      script_name: 'Tô màu lời thoại', enabled: true,
+      find_regex: '/"([^"]+)"/g',
+      replace_string: '<span style="color:#7fd6ff">"$1"</span>',
+      source: { ai_output: true, user_input: false },
+      destination: { display: true, prompt: false }, trim_strings: [],
+    },
+    {
+      script_name: 'Nhấn mạnh', enabled: true,
+      find_regex: '/\\*([^*]+)\\*/g',
+      replace_string: '<em style="color:#f0b862">{{match}}</em>',
+      source: { ai_output: true, user_input: false },
+      destination: { display: true, prompt: false }, trim_strings: ['*'],
+    },
+    {
+      script_name: 'Chỉ vào prompt — khung chat phải bỏ qua', enabled: true,
+      find_regex: '/[\\s\\S]+/',
+      replace_string: 'KHÔNG ĐƯỢC THẤY DÒNG NÀY',
+      source: { ai_output: true, user_input: false },
+      destination: { display: false, prompt: true }, trim_strings: [],
+    },
+  ];
+  window.getTavernRegexes = function () { return window.__mockRegexes; };
+
   window.getCurrentMessageId = function () { return 0; };
   window.getLastMessageId = function () { return MSG.length - 1; };
   window.waitGlobalInitialized = function () { return Promise.resolve(true); };

@@ -84,6 +84,136 @@
     return '<p>' + s + '</p>';
   }
 
+  /* ── (bug 206) REGEX HIỂN THỊ CỦA THẺ ÁP LÊN KHUNG CHAT NHÚNG ─────────── */
+  /**
+   * Khung chat này tự vẽ lời kể, nên nó nằm NGOÀI đường đi của regex hiển thị SillyTavern:
+   * mọi script làm đẹp mà người chơi đã cài (tô màu lời thoại, đổi ký hiệu, gắn nhãn nhân
+   * vật…) chạy cho chat gốc thì được, còn vào tới đây là mất sạch — cùng một lượt kể mà hai
+   * nơi hiện hai kiểu. Nay runtime tự đọc danh sách regex của thẻ rồi áp đúng thứ tự ấy.
+   *
+   * Ba chỗ phải cẩn thận:
+   *  • BỎ chính hai script [FE] — chúng thay cả tin nhắn bằng trang giao diện này, áp vào
+   *    lời kể là giao diện tự nuốt chính nó;
+   *  • chỉ lấy script chạy ở luồng HIỂN THỊ và nhận đầu ra của AI (đúng như chat gốc);
+   *  • regex của người dùng được phép sinh HTML (đó là mục đích của phần lớn script làm đẹp),
+   *    nên khi có HTML thì hiển thị thẳng thay vì escape — chỉ gỡ trước mấy thẻ/thuộc tính
+   *    có thể chạy mã.
+   */
+
+  var regexCache = null;
+  var regexCacheAt = 0;
+  var REGEX_TTL_MS = 5000;   // người chơi sửa regex trong quán rượu thì vài giây sau là thấy
+
+  /** Chuỗi "/mẫu/cờ" hoặc "mẫu" → RegExp có cờ g. Hỏng thì trả null, KHÔNG ném. */
+  function toRegExp(src) {
+    var s = String(src == null ? '' : src);
+    if (!s) return null;
+    try {
+      var m = s.match(/^\/(.+)\/([a-z]*)$/i);
+      if (m) return new RegExp(m[1], m[2].indexOf('g') >= 0 ? m[2] : m[2] + 'g');
+      return new RegExp(s, 'g');
+    } catch (e) { return null; }
+  }
+
+  function cardRegexes() {
+    if (CFG.skipCardRegexes) return [];
+    if (regexCache && Date.now() - regexCacheAt < REGEX_TTL_MS) return regexCache;
+    var list = [];
+    try {
+      if (typeof getTavernRegexes === 'function') list = getTavernRegexes() || [];
+    } catch (e) { list = []; }
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      var r = list[i] || {};
+      var name = String(r.script_name || r.scriptName || '');
+      if (name.indexOf('[FE] ') === 0) continue;
+      if (r.enabled === false || r.disabled === true) continue;
+      var dst = r.destination || {};
+      var from = r.source || {};
+      if (dst.display === false) continue;      // chỉ-prompt: không phải việc của khung chat
+      if (from.ai_output === false) continue;   // chỉ áp cho lời của người chơi thì bỏ qua
+      var re = toRegExp(r.find_regex || r.findRegex);
+      if (!re) continue;
+      out.push({
+        name: name,
+        re: re,
+        replace: String((r.replace_string !== undefined ? r.replace_string : r.replaceString) || ''),
+        trims: Array.isArray(r.trim_strings) ? r.trim_strings : (Array.isArray(r.trimStrings) ? r.trimStrings : []),
+      });
+    }
+    regexCache = out;
+    regexCacheAt = Date.now();
+    return out;
+  }
+
+  /** Áp MỘT script, xử lý chuỗi thay thế đúng như quán rượu (nhóm bắt + macro đoạn khớp). */
+  function applyOneRegex(text, rule) {
+    return String(text).replace(rule.re, function () {
+      var args = Array.prototype.slice.call(arguments);
+      // Đuôi của callback: [..., vị trí, chuỗi gốc] và có thể thêm object nhóm-có-tên.
+      if (args.length && args[args.length - 1] && typeof args[args.length - 1] === 'object') args.pop();
+      args.pop();
+      args.pop();
+      var whole = String(args[0] == null ? '' : args[0]);
+      var groups = args.slice(1);
+      for (var t = 0; t < rule.trims.length; t++) {
+        if (rule.trims[t]) whole = whole.split(rule.trims[t]).join('');
+      }
+      var rep = rule.replace;
+      rep = rep.replace(/\{\{match\}\}/gi, function () { return whole; });
+      rep = rep.replace(/\$(\d+)/g, function (m, n) {
+        var g = groups[Number(n) - 1];
+        return g === undefined || g === null ? '' : String(g);
+      });
+      return rep;
+    });
+  }
+
+  function applyCardRegexes(text) {
+    var rules = cardRegexes();
+    var out = String(text == null ? '' : text);
+    var changed = false;
+    for (var i = 0; i < rules.length; i++) {
+      var next;
+      try { next = applyOneRegex(out, rules[i]); } catch (e) { continue; }
+      if (next !== out) { out = next; changed = true; }
+    }
+    return { text: out, changed: changed };
+  }
+
+  // Tên thẻ nguy hiểm phải nối chuỗi: cả file này được nhét vào giữa một khối mã của trang,
+  // viết thẳng thì trình duyệt tưởng khối mã đóng ở đây và trang vỡ ngay từ đầu.
+  var CODE_TAG = 'scr' + 'ipt';
+  // Gỡ TRỌN khối (cả ruột) — gỡ mỗi cặp thẻ thì phần thân rơi ra thành chữ trần.
+  var UNSAFE_BLOCK_RE = new RegExp('<(' + CODE_TAG + '|iframe|object|embed)\\b[^>]*>[\\s\\S]*?<\\/\\1\\s*>', 'gi');
+  var UNSAFE_TAG_RE = new RegExp('<\\/?(?:' + CODE_TAG + '|iframe|object|embed|link|meta|base)\\b[^>]*>', 'gi');
+  var UNSAFE_ATTR_RE = /\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi;
+  var UNSAFE_URL_RE = /\s(?:href|src)\s*=\s*(?:"\s*javascript:[^"]*"|'\s*javascript:[^']*'|javascript:[^\s>]*)/gi;
+
+  /**
+   * Regex của thẻ được phép sinh HTML, nhưng KHÔNG được phép chạy mã.
+   * Giữ lại `style` — bảng trạng thái và phần lớn script làm đẹp sống nhờ nó, mà trang này
+   * đã nằm trong khung cách ly của Trợ Thủ Tavern rồi.
+   */
+  function sanitizeDisplayHtml(html) {
+    return String(html)
+      .replace(UNSAFE_BLOCK_RE, '')
+      .replace(UNSAFE_TAG_RE, '')
+      .replace(UNSAFE_ATTR_RE, '')
+      .replace(UNSAFE_URL_RE, '');
+  }
+
+  /**
+   * Dựng thân bong bóng chat: áp regex của thẻ trước, rồi mới quyết định cách hiển thị.
+   * Regex có sinh thẻ HTML ⇒ đó chính là ý đồ của script làm đẹp, hiện thẳng (đã lọc mã).
+   * Không thì đi đường cũ — markdown nhẹ, escape hết.
+   */
+  function renderBody(raw) {
+    var r = applyCardRegexes(raw);
+    if (r.changed && /<[a-zA-Z][^>]*>/.test(r.text)) return sanitizeDisplayHtml(r.text);
+    return mdLite(r.text);
+  }
+
   function clone(v) { try { return JSON.parse(JSON.stringify(v)); } catch (e) { return v; } }
 
   /**
@@ -871,6 +1001,11 @@
     mvuWarning: mvuWarning,
     esc: esc,
     mdLite: mdLite,
+    // (bug 206) Regex hiển thị của thẻ cũng chạm được vào khung chat nhúng.
+    renderBody: renderBody,
+    applyCardRegexes: applyCardRegexes,
+    cardRegexes: cardRegexes,
+    resetCardRegexes: function () { regexCache = null; regexCacheAt = 0; },
     clone: clone,
     deepDefaults: deepDefaults,
     nowStamp: nowStamp,

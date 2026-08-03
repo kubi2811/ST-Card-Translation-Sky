@@ -16,7 +16,7 @@
  * Test gọi thẳng runtime.js thật (nạp vào một `window` giả) chứ không chép tay lại logic:
  * chép tay thì chỉ kiểm được bản chép, không kiểm được thứ chạy trong quán rượu.
  */
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -32,6 +32,10 @@ interface Runtime {
   logEntryOf: (raw: string, at?: string) => LogEntry;
   historyPrompts: () => Array<{ role: string; content: string }>;
   state: { log: LogEntry[] };
+  // (bug 206)
+  applyCardRegexes: (t: string) => { text: string; changed: boolean };
+  renderBody: (t: string) => string;
+  resetCardRegexes: () => void;
 }
 
 let RT: Runtime;
@@ -291,5 +295,90 @@ describe('(bug 201) luật CSS chặn tràn chữ — mất một luật là ch�
   it('phần tử flex co được: thanh chỉ số và ô nhập', () => {
     expect(ruleOf('.fe-bar-track')).toMatch(/min-width:\s*0/);
     expect(ruleOf('.fe-input')).toMatch(/min-width:\s*0/);
+  });
+});
+
+/* ─────────────── 206 · regex hiển thị của thẻ áp lên khung chat ─────────────── */
+
+/**
+ * (bug 206) Khung chat nhúng tự vẽ lời kể, nên nó nằm ngoài đường đi của regex hiển thị
+ * SillyTavern: mọi script làm đẹp người chơi đã cài chạy cho chat gốc thì được, vào tới đây
+ * là mất sạch. Nay runtime tự đọc danh sách regex của thẻ và áp đúng thứ tự ấy.
+ *
+ * Test nạp regex giả qua đúng cái cổng mà quán rượu dùng — hàm toàn cục getTavernRegexes.
+ */
+describe('(bug 206) regex của thẻ chạm được vào khung chat nhúng', () => {
+  const g = globalThis as Record<string, unknown>;
+  const feed = (list: unknown[]) => {
+    g.getTavernRegexes = () => list;
+    (RT as unknown as { resetCardRegexes: () => void }).resetCardRegexes();
+  };
+  const script = (over: Record<string, unknown> = {}) => ({
+    script_name: 'Tô màu lời thoại',
+    enabled: true,
+    find_regex: '/"([^"]+)"/g',
+    replace_string: '<span class="thoai">$1</span>',
+    source: { ai_output: true, user_input: false },
+    destination: { display: true, prompt: false },
+    trim_strings: [],
+    ...over,
+  });
+
+  afterEach(() => { delete g.getTavernRegexes; (RT as unknown as { resetCardRegexes: () => void }).resetCardRegexes(); });
+
+  it('nhóm bắt $1 và macro đoạn khớp đều được thay đúng', () => {
+    feed([script()]);
+    const out = RT.applyCardRegexes('Lão nói "đi thôi" rồi quay lưng.');
+    expect(out.changed).toBe(true);
+    expect(out.text).toBe('Lão nói <span class="thoai">đi thôi</span> rồi quay lưng.');
+
+    feed([script({ replace_string: '[[{{match}}]]' })]);
+    expect(RT.applyCardRegexes('Lão nói "đi thôi".').text).toBe('Lão nói [["đi thôi"]].');
+  });
+
+  it('regex sinh HTML thì hiện thẳng, không escape — đó chính là việc của script làm đẹp', () => {
+    feed([script()]);
+    expect(RT.renderBody('Lão nói "đi thôi".')).toContain('<span class="thoai">đi thôi</span>');
+  });
+
+  it('KHÔNG áp hai script [FE] — chúng thay cả tin nhắn, áp vào là giao diện tự nuốt chính nó', () => {
+    feed([script({ script_name: '[FE] Màn Chính', find_regex: '/[\s\S]+/', replace_string: 'NUỐT' })]);
+    expect(RT.applyCardRegexes('Lời kể.').text).toBe('Lời kể.');
+  });
+
+  it('bỏ qua script đã tắt, script chỉ-prompt, và script chỉ nhận lời người chơi', () => {
+    for (const over of [
+      { enabled: false },
+      { destination: { display: false, prompt: true } },
+      { source: { ai_output: false, user_input: true } },
+    ]) {
+      feed([script(over)]);
+      expect(RT.applyCardRegexes('Lão nói "đi thôi".').changed, JSON.stringify(over)).toBe(false);
+    }
+  });
+
+  it('regex hỏng cú pháp bị bỏ qua lặng lẽ — một script sai không được làm câm cả khung chat', () => {
+    feed([script({ find_regex: '/([unclosed/g' }), script()]);
+    expect(RT.applyCardRegexes('Lão nói "đi thôi".').text)
+      .toBe('Lão nói <span class="thoai">đi thôi</span>.');
+  });
+
+  it('không có regex nào thì giữ nguyên đường cũ: markdown nhẹ, escape hết', () => {
+    feed([]);
+    expect(RT.renderBody('Nguy hiểm <script>alert(1)</script>')).not.toContain('<script>');
+  });
+
+  it('thẻ chạy mã bị gỡ khỏi HTML do regex sinh ra', () => {
+    feed([script({ find_regex: '/BOM/g', replace_string: '<div onclick="x()">ổn</div><script>hack()</script>' })]);
+    const html = RT.renderBody('BOM');
+    expect(html).toContain('<div>ổn</div>');
+    expect(html).not.toContain('onclick');
+    expect(html).not.toContain('hack()');
+  });
+
+  it('quán rượu không cho getTavernRegexes thì khung chat vẫn chạy như cũ', () => {
+    delete g.getTavernRegexes;
+    (RT as unknown as { resetCardRegexes: () => void }).resetCardRegexes();
+    expect(RT.renderBody('Lời kể bình thường.')).toContain('Lời kể bình thường.');
   });
 });

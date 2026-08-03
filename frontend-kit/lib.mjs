@@ -17,7 +17,7 @@ const rules = await import(url.pathToFileURL(path.join(APP_KIT_DIR, 'payloadRule
 
 export const {
   PAYLOAD_RULES, scanPayload, scanTriggers, simulateStDelivery,
-  fenceBlock, stableId, composePage,
+  fenceBlock, stableId, composePage, openingFindRegex, mainFindRegex,
 } = rules;
 
 /** Giữ tên cũ cho quen tay. */
@@ -84,8 +84,8 @@ export function makeDisplayScript(name, findRegex, replaceString) {
 export function buildEldranScripts() {
   const p = buildEldranPayloads();
   return [
-    makeDisplayScript('[FE] Màn Khởi Tạo', `<${ELDRAN.bootTag}\\s*/>`, fenceBlock(p.opening)),
-    makeDisplayScript('[FE] Màn Chính', `</${ELDRAN.updateTag}>`,
-      `</${ELDRAN.updateTag}>\n` + fenceBlock(p.main)),
+    // (bug 206) Mồi nuốt TRỌN tin nhắn — không thì lời kể của AI hiện ra ngoài giao diện.
+    makeDisplayScript('[FE] Màn Khởi Tạo', openingFindRegex(ELDRAN.bootTag), fenceBlock(p.opening)),
+    makeDisplayScript('[FE] Màn Chính', mainFindRegex(ELDRAN.updateTag), fenceBlock(p.main)),
   ];
 }

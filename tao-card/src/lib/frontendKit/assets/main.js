@@ -166,7 +166,9 @@
       // đúng cái thẻ span đó bằng chữ.
       body = '<span class="fe-typing"></span>';
     } else {
-      body = S.mdLite(S.viewOf(entry));
+      // (bug 206) Qua renderBody: regex hiển thị của thẻ (tô màu lời thoại, gắn nhãn…) được
+      // áp ở đây y như chat gốc, thay vì khung chat này hiện một kiểu còn chat gốc một kiểu.
+      body = S.renderBody(S.viewOf(entry));
     }
     return '<div class="fe-msg ' + cls + '" data-idx="' + idx + '">'
       + '<div class="fe-msg-meta">' + who + (entry.at ? ' · ' + S.esc(entry.at) : '') + '</div>'
@@ -375,7 +377,9 @@
 
       reply = ensureUpdateBlock(reply);
       var entry = S.logEntryOf(reply, S.nowStamp());
-      streamingNode.querySelector('.fe-msg-body').innerHTML = S.mdLite(entry.view);
+      // (bug 206) Regex của thẻ áp ở bản CHỐT, không áp lúc đang nhả từng chữ: chạy cả chuỗi
+      // regex trên mỗi token là bình phương số việc, mà nửa câu thì regex cũng khớp sai.
+      streamingNode.querySelector('.fe-msg-body').innerHTML = S.renderBody(entry.view);
 
       S.state.log.push(entry);
 

@@ -17,6 +17,7 @@ import CollapsibleSection from './components/ui/CollapsibleSection';
 import TabGroup from './components/ui/TabGroup';
 import ToolButton from './components/ui/ToolButton';
 import { onPanelRequest } from './components/ui/panelNav';
+import { OPEN_AI_COMPANION_EVENT } from './hub/openAiCompanion';
 
 /** (bug 165) Tab của cột nội dung chính. */
 type MainTabId = 'fields' | 'verify' | 'export' | 'glossary';
@@ -98,6 +99,21 @@ export default function App() {
   // mở Regex Manager / Trợ Lý AI / EJS Creator lúc đang dịch là tức thì, không phải chờ 1 khe kết nối
   // trống giữa hàng chục call LLM (bug "quay quài" của user).
   useEffect(() => { warmupLazyChunks(); }, []);
+
+  // (bug 208) Nút Trợ Lý AI nay nằm trên rail của Hub (ngay trên nút Cập nhật) nên nó phải mở
+  // được panel này từ bên ngoài App. Chưa nạp thẻ thì nói thẳng lý do — mở một Trợ Lý không có
+  // gì để đọc chỉ tổ làm user tưởng app hỏng.
+  useEffect(() => {
+    const open = () => {
+      if (!useStore.getState().card) {
+        useStore.getState().addToast('info', ui.aiCompanionNeedCard);
+        return;
+      }
+      setShowAiCompanion(true);
+    };
+    window.addEventListener(OPEN_AI_COMPANION_EVENT, open);
+    return () => window.removeEventListener(OPEN_AI_COMPANION_EVENT, open);
+  }, [ui]);
 
   // (bug 205) KHÔI PHỤC PHIÊN GẦN NHẤT khi mở app mà chưa có card — cho ca Edge tự tắt tab
   // chạy nền: mở lại là trắng trơn dù tiến trình vẫn nằm trong translation-progress/. Snapshot
@@ -274,10 +290,12 @@ export default function App() {
               label={ui.appRegexManager} accent="#f97316"
               onClick={() => setShowRegexManager(true)} disabled={!hasCard} title={!hasCard ? t.noCardTitle : undefined}
             />
-            <ToolButton
-              label={ui.appAiCompanion} accent="#a855f7"
-              onClick={() => setShowAiCompanion(true)} disabled={!hasCard} title={!hasCard ? t.noCardTitle : undefined}
-            />
+            {/* (bug 208) Nút Trợ Lý AI đã CHUYỂN lên rail bên trái, ngay trên nút Cập nhật —
+                luôn nhìn thấy, không phải mở mục này ra mới bấm được. Để hai nút cùng chức năng
+                ở hai chỗ chỉ tổ rối, nên ở đây chỉ còn một dòng chỉ đường. */}
+          </div>
+          <div style={{ padding: '0 20px 10px', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+            {ui.grpToolsAiMoved}
           </div>
         </CollapsibleSection>
 

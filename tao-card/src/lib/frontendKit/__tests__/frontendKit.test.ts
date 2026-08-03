@@ -258,9 +258,41 @@ describe('(bug 192) ghép payload trong app', () => {
 
   it('mồi của màn chính bám ĐÚNG thẻ cập nhật biến do người dùng chọn', () => {
     const main = r.scripts.find(s => s.scriptName === SCRIPT_NAME_MAIN)!;
-    expect(main.findRegex).toBe('</UpdateVariable>');
+    expect(main.findRegex).toBe('^[\\s\\S]*<\\/UpdateVariable>[\\s\\S]*$');
     const r2 = buildFrontend(SCHEMA, INITVAR, OPTS({ updateTag: 'StatusUpdate' }));
-    expect(r2.scripts.find(s => s.scriptName === SCRIPT_NAME_MAIN)!.findRegex).toBe('</StatusUpdate>');
+    expect(r2.scripts.find(s => s.scriptName === SCRIPT_NAME_MAIN)!.findRegex)
+      .toBe('^[\\s\\S]*<\\/StatusUpdate>[\\s\\S]*$');
+  });
+
+  // (bug 206) Đây là chính cái bệnh người chơi thấy: bấm Bắt đầu hành trình xong, lời kể của
+  // AI và khối JSON cập nhật biến vẫn nằm chình ình phía trên khung giao diện.
+  it('mồi nuốt TRỌN tin nhắn — lời kể và khối cập nhật biến không lọt ra ngoài giao diện', () => {
+    const msg = [
+      'Gió biển tạt vào mặt Tân Thuận khi con thuyền cập bến.',
+      '<UpdateVariable>',
+      '_.set("nhan_vat.the_luc", 12);',
+      '</UpdateVariable>',
+      'Phía xa, ngọn hải đăng bắt đầu sáng.',
+    ].join('\n');
+
+    for (const s of r.scripts) {
+      const re = new RegExp(s.findRegex);
+      if (!re.test(msg)) continue;
+      const out = msg.replace(re, s.replaceString);
+      expect(out).not.toContain('Gió biển tạt vào mặt');
+      expect(out).not.toContain('ngọn hải đăng');
+      expect(out).not.toContain('nhan_vat.the_luc');
+    }
+    // Ít nhất một trong hai màn phải khớp, không thì bài kiểm trên rỗng mà vẫn xanh.
+    expect(r.scripts.some(s => new RegExp(s.findRegex).test(msg))).toBe(true);
+  });
+
+  // Neo `^` là thứ giữ cho regex chạy tuyến tính; mất nó là treo cứng trên payload 60k ký tự.
+  it('mồi khớp trong tích tắc kể cả khi tin nhắn dài bằng cả một payload giao diện', () => {
+    const huge = 'x'.repeat(60_000) + '\nkhông có thẻ mồi nào ở đây\n' + 'y'.repeat(60_000);
+    const t0 = Date.now();
+    for (const s of r.scripts) expect(new RegExp(s.findRegex).test(huge)).toBe(false);
+    expect(Date.now() - t0).toBeLessThan(1000);
   });
 
   it('first_mes đúng thẻ mở màn', () => {

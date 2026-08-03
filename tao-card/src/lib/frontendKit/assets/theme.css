@@ -32,7 +32,14 @@ html, body {
   font-family: var(--fe-font);
   font-size: 15px;
   line-height: 1.6;
+  /* (bug 206) Chốt chặn NGOÀI CÙNG. `.fe-root` đã cắt phần thừa của chính nó, nhưng nếu có gì
+     lọt ra tới thân trang thì iframe sinh thanh cuộn ngang và người chơi thấy đúng cảnh "chữ
+     tràn ra ngoài thẻ". Khoá luôn ở đây cho hết đường. */
+  max-width: 100%;
+  overflow-x: hidden;
 }
+
+.fe-wrap { max-width: 100%; }
 
 /*
  * (bug 201) Chặn tràn chữ — `overflow-wrap: anywhere` đặt ở gốc và ĐƯỢC THỪA KẾ xuống mọi
@@ -233,6 +240,14 @@ html, body {
 }
 
 .fe-msg-body img { max-width: 100%; height: auto; }
+
+/* (bug 206) Từ nay regex hiển thị của thẻ được phép sinh HTML vào đây (bảng trạng thái, khối
+   mã, ảnh…). Nội dung ấy do người dùng viết nên không đoán được bề rộng — ép mọi thứ nằm gọn
+   trong bong bóng, riêng bảng thì cho cuộn NGANG trong lòng nó thay vì nong cả khung chat. */
+.fe-msg-body * { max-width: 100%; }
+.fe-msg-body table { display: block; width: 100%; overflow-x: auto; border-collapse: collapse; }
+.fe-msg-body pre,
+.fe-msg-body code { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .fe-msg.is-user .fe-msg-body {
   background: rgba(122, 162, 255, .10);

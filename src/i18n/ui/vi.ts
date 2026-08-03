@@ -537,6 +537,9 @@ const ui: UiKeys = {
   grpTranslateNeedCard: 'nạp thẻ trước',
   grpTools: 'Công cụ khác',
   grpToolsHint: 'regex · trợ lý · so sánh',
+  // (bug 208) Tro Ly AI chuyen len rail, ngay tren nut Cap nhat
+  grpToolsAiMoved: '🔮 Trợ Lý AI đã chuyển ra thanh bên trái, ngay trên nút Cập nhật — bấm ở đó để mở nhanh từ mọi tab.',
+  aiCompanionNeedCard: 'Trợ Lý AI cần một thẻ đã nạp để đọc. Hãy Import thẻ ở bước 2 rồi bấm lại.',
   tabFields: 'Trường dịch',
   tabVerify: 'Kiểm tra',
   tabExport: 'Xuất thẻ',

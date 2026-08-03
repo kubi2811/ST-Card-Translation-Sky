@@ -527,6 +527,9 @@ const ui = {
   grpTranslateNeedCard: 'load a card first',
   grpTools: 'Other tools',
   grpToolsHint: 'regex · assistant · compare',
+  // (bug 208) AI Assistant moved to the rail, right above the Update button
+  grpToolsAiMoved: '🔮 The AI Assistant moved to the left rail, right above the Update button — open it from any tab there.',
+  aiCompanionNeedCard: 'The AI Assistant needs a loaded card to read. Import a card in step 2, then click again.',
   tabFields: 'Fields',
   tabVerify: 'Verify',
   tabExport: 'Export',

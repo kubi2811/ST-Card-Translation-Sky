@@ -127,6 +127,38 @@ export function simulateStDelivery(mes) {
   return out;
 }
 
+/**
+ * (bug 206) MỒI CỦA HAI MÀN PHẢI NUỐT TRỌN TIN NHẮN.
+ *
+ * Bản đầu chỉ tìm đúng cái thẻ (`</UpdateVariable>` hoặc `<GameStart/>`) rồi chèn giao diện
+ * vào CHỖ ĐÓ. Nghĩa là mọi thứ nằm ngoài cái thẻ — nguyên đoạn kể của AI, cả khối JSON cập
+ * nhật biến — vẫn được SillyTavern in ra như chữ thường, NGAY PHÍA TRÊN khung giao diện. Đó
+ * chính là "chữ tràn ra ngoài giao diện" mà người chơi thấy sau khi bấm Bắt đầu hành trình:
+ * không phải lỗi bố cục, mà là phần văn bản lẽ ra phải bị giao diện thay thế trọn vẹn.
+ *
+ * (Thẻ mẫu Eldran không lộ ra vì nó có sẵn một regex khác xoá lời kể; thẻ do app sinh ra thì
+ * không có, nên lộ hết. Đây là lý do bản vá 201 — vốn chỉ chỉnh CSS — không chạm tới bệnh.)
+ *
+ * Lời kể KHÔNG mất: khung chat nhúng tự đọc nó từ chính nội dung tin nhắn và hiển thị bên
+ * trong. Và vì hai script này `markdownOnly`, phần bị nuốt chỉ biến mất Ở LỚP HIỂN THỊ —
+ * tin nhắn thật, prompt gửi cho AI và dữ liệu MVU đều còn nguyên.
+ *
+ * NEO `^` LÀ BẮT BUỘC, không phải cho đẹp. Thiếu nó thì khi tin nhắn KHÔNG chứa thẻ mồi,
+ * bộ máy regex phải thử `[\s\S]*` từ mọi vị trí bắt đầu — bình phương độ dài. Payload giao
+ * diện dài gần 60 nghìn ký tự, nên script màn chính soi một tin nhắn đã mang màn khởi tạo là
+ * treo cứng luôn (đo được: quá 5 giây, chưa xong). Có `^` thì chỉ còn một lượt duyệt.
+ *
+ * @param {string} tag  tên thẻ đã được kiểm (chỉ chữ cái/số/gạch dưới — xem validateOptions)
+ */
+export function openingFindRegex(tag) {
+  return `^[\\s\\S]*<${tag}\\s*/>[\\s\\S]*$`;
+}
+
+/** Cặp song sinh cho màn chính: mồi là thẻ ĐÓNG của khối cập nhật biến. */
+export function mainFindRegex(tag) {
+  return `^[\\s\\S]*<\\/${tag}>[\\s\\S]*$`;
+}
+
 /** Bọc khối code đúng kiểu card mẫu: ba dấu huyền trần, không kèm tên ngôn ngữ. */
 export function fenceBlock(html) {
   const f = String.fromCharCode(96, 96, 96);

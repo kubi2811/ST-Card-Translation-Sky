@@ -8,8 +8,10 @@ import type { MVUZODSchema, InitVarConfig } from '../../types/mvuzod.types';
 import type { RegexScript } from '../../types';
 import type { FrontendKitOptions, FrontendBuildResult, StfeConfig } from './types';
 import { buildStfeConfig, serializeConfig } from './schemaToConfig';
+// Một dòng CÓ CHỦ Ý: chỉ thị @ts-expect-error bám vào dòng ngay dưới nó, mà lỗi thiếu khai
+// báo kiểu lại được báo ở dòng chứa tên module — tách nhiều dòng là chỉ thị trượt mục tiêu.
 // @ts-expect-error — module JS thuần dùng chung với bộ dựng dòng lệnh, không có khai báo kiểu
-import { scanPayload, scanTriggers, fenceBlock, stableId, composePage } from './payloadRules.js';
+import { scanPayload, scanTriggers, fenceBlock, stableId, composePage, openingFindRegex, mainFindRegex } from './payloadRules.js';
 
 import runtimeSrc from './assets/runtime.js?raw';
 import openingSrc from './assets/opening.js?raw';
@@ -108,9 +110,10 @@ export function buildFrontend(
     openingHtml,
     mainHtml,
     violations,
+    // (bug 206) Cả hai mồi NUỐT TRỌN tin nhắn — xem openingFindRegex/mainFindRegex.
     scripts: [
-      mk(SCRIPT_NAME_OPENING, `<${opts.bootTag}\\s*/>`, fenceBlock(openingHtml)),
-      mk(SCRIPT_NAME_MAIN, `</${opts.updateTag}>`, `</${opts.updateTag}>\n` + fenceBlock(mainHtml)),
+      mk(SCRIPT_NAME_OPENING, openingFindRegex(opts.bootTag), fenceBlock(openingHtml)),
+      mk(SCRIPT_NAME_MAIN, mainFindRegex(opts.updateTag), fenceBlock(mainHtml)),
     ],
     firstMes: `<${opts.bootTag}/>`,
     sizes: { opening: openingHtml.length, main: mainHtml.length },

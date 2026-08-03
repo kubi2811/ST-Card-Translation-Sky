@@ -24,6 +24,7 @@ import { validateMvuVariables, autoFixMvuVariables, generateSyncReport, buildEnt
 import { buildEffectivePrompt } from '../utils/promptBuilder';
 import { applyRegexAlternation } from '../scriptTranslate/regexAlternation';
 import { surgicalTranslate, verifyCodeStructureParity, detectInventedDeclarations } from '../utils/surgical';
+import { decideSoftGate } from '../utils/softGate';
 import { repairUnquotedObjectKeys, repairUnquotedObjectKeysInHtml } from '../utils/repairObjectKeys';
 import { parsePatchOutput, applyPatches, validatePatchResult } from '../utils/patchEngine';
 import { injectMvuZodSystem } from '../utils/mvuGenerator';
@@ -388,6 +389,38 @@ export function useTranslation() {
 
     // IMPORTANT: read fresh retries from store (not stale `field` parameter) to prevent infinite retry loops
     const freshRetries = () => useStore.getState().fields.find(f => f.path === field.path)?.retries || 0;
+
+    /**
+     * (bug 198) CỔNG MỀM — cùng MỘT lý do thì chỉ bắt dịch lại ĐÚNG MỘT LẦN.
+     *
+     * User: "luồng dịch chính có quá nhiều thứ gây xung đột… thường hay bắt quá sát yêu cầu dịch
+     * lại, trong khi dịch bằng retry lại khá tốt". Hàm này có 11 cổng `return 'retry'`, phần lớn
+     * là SUY ĐOÁN (tỉ lệ dài ngắn, còn chữ Hán, lệch khối EJS, nghi bịa code). Suy đoán sai thì
+     * dịch lại cũng ra y hệt — chỉ tốn thời gian và token, tệ nhất là quay vòng như bug 197.
+     *
+     * Chốt JS đã có sẵn cách chữa đúng từ bugNeedFix/95: nhớ dấu vân tay lý do, trùng thì dừng.
+     * Ở đây chỉ mở rộng cách đó ra CHO MỌI cổng mềm. Lần đầu vẫn thử lại y như cũ (không mất khả
+     * năng phát hiện), nhưng lần thứ hai cùng lý do là dừng, giữ bản dịch và ghi rõ cho user biết.
+     * Bằng chứng CỨNG (rỗng, vỡ cú pháp JS, lỗi mạng/chunk) KHÔNG đi qua đây — vẫn thử lại như cũ.
+     */
+    const softGate = (reasonKey: string, retryLog: string, stopLog: string, max?: number): boolean => {
+      const decision = decideSoftGate({
+        reasonKey,
+        previousReasonKey: useStore.getState().fields.find(f => f.path === field.path)?.lastSoftGateFingerprint,
+        retries: freshRetries(),
+        maxRetries: max ?? (store.proxy.maxRetries || 3),
+      });
+      if (decision === 'stop-same-reason') {
+        store.addLog('warning',
+          `⚠️ ${field.label}: ${stopLog} — lượt trước dịch lại đã ra ĐÚNG lý do này, nên dừng thử lại ` +
+          `(giữ bản dịch hiện có). Nếu thấy chưa ổn, bấm dịch lại riêng entry này hoặc chỉnh từ điển.`);
+        return false;
+      }
+      if (decision === 'stop-out-of-retries') return false;
+      store.updateField(field.path, { retries: freshRetries() + 1, lastSoftGateFingerprint: reasonKey });
+      store.addLog('retry', retryLog);
+      return true;
+    };
 
     try {
       // Contextual keyword translation: for lorebook keys, find the already-translated content
@@ -880,12 +913,10 @@ export function useTranslation() {
         const minRatio = isCodeField ? 0.5 : 0.6;
         
         if (transLen < origLen * minRatio) {
-          if (freshRetries() < 1) {
-            store.updateField(field.path, { retries: freshRetries() + 1 });
-            store.addLog('retry', 
-              `⚠️ Dịch thiếu nghiêm trọng: ${transLen}/${origLen} chars ` +
-              `(${(transLen / origLen * 100).toFixed(0)}% < ${(minRatio * 100).toFixed(0)}%). Auto-retry...`
-            );
+          const pct = (transLen / origLen * 100).toFixed(0);
+          if (softGate('short',
+            `⚠️ Dịch thiếu nghiêm trọng: ${transLen}/${origLen} chars (${pct}% < ${(minRatio * 100).toFixed(0)}%). Auto-retry...`,
+            `vẫn ngắn (${pct}%)`, 1)) {
             await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
             return 'retry';
           }
@@ -923,9 +954,9 @@ export function useTranslation() {
           // dich lai khi CHUA DICH that (echo / do nua chung, >35% Han song), bo qua vai chu con sot.
           const { suspect, transCjk, origCjk, survival } = detectResidualCjk(field.original, translated);
           if (suspect) {
-            if (freshRetries() < (store.proxy.maxRetries || 3)) {
-              store.updateField(field.path, { retries: freshRetries() + 1 });
-              store.addLog('retry', `⚠️ Script con ${transCjk}/${origCjk} chu Han (${(survival * 100).toFixed(0)}%) — nghi chua dich. Thu lai: ${field.label}…`);
+            if (softGate('cjk-script',
+              `⚠️ Script con ${transCjk}/${origCjk} chu Han (${(survival * 100).toFixed(0)}%) — nghi chua dich. Thu lai: ${field.label}…`,
+              `vẫn còn ${transCjk}/${origCjk} chữ Hán`)) {
               await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
               return 'retry';
             }
@@ -939,9 +970,9 @@ export function useTranslation() {
           const cjkRegex = /[一-鿿㐀-䶿]/;
           const translatedStripped = stripUrlsForCjkCheck(translated);
           if (cjkRegex.test(translatedStripped)) {
-            if (freshRetries() < (store.proxy.maxRetries || 3)) {
-              store.updateField(field.path, { retries: freshRetries() + 1 });
-              store.addLog('retry', `⚠️ Con chu Han trong Schema (${field.label}). Dang thu lai…`);
+            if (softGate('cjk-schema',
+              `⚠️ Con chu Han trong Schema (${field.label}). Dang thu lai…`,
+              'vẫn còn chữ Hán trong Schema')) {
               await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
               return 'retry';
             }
@@ -967,12 +998,11 @@ export function useTranslation() {
       ) {
         const { suspect, origCjk, transCjk, survival } = detectResidualCjk(field.original, translated);
         if (suspect) {
-          if (freshRetries() < (store.proxy.maxRetries || 3)) {
-            store.updateField(field.path, { retries: freshRetries() + 1 });
-            store.addLog('retry',
-              `⚠️ Nghi CHƯA DỊCH: còn ${(survival * 100).toFixed(0)}% chữ Hán ` +
-              `(${transCjk}/${origCjk}) ở ${field.label}. AI có thể trả lại nguyên văn. Thử lại…`
-            );
+          // (bug 198) Vân tay gồm cả TỈ LỆ còn sót: dịch lại mà tỉ lệ y hệt nghĩa là AI trả về
+          // cùng một thứ — thử thêm lần nữa cũng thế. Tỉ lệ ĐỔI thì vẫn cho thử tiếp (đang tiến bộ).
+          if (softGate(`cjk-text:${transCjk}/${origCjk}`,
+            `⚠️ Nghi CHƯA DỊCH: còn ${(survival * 100).toFixed(0)}% chữ Hán (${transCjk}/${origCjk}) ở ${field.label}. AI có thể trả lại nguyên văn. Thử lại…`,
+            `vẫn còn ${(survival * 100).toFixed(0)}% chữ Hán (${transCjk}/${origCjk})`)) {
             await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
             return 'retry';
           }
@@ -998,9 +1028,9 @@ export function useTranslation() {
       if (ratio > 0 && field.original.length > 20) {
         const responseRatio = translated.length / field.original.length;
         if (responseRatio < ratio) {
-          if (freshRetries() < 1) {
-            store.updateField(field.path, { retries: freshRetries() + 1 });
-            store.addLog('retry', `⚠️ Translation too short for ${field.label}: ${translated.length}/${field.original.length} chars (${(responseRatio * 100).toFixed(0)}% ratio). Auto-retrying...`);
+          if (softGate('ratio',
+            `⚠️ Translation too short for ${field.label}: ${translated.length}/${field.original.length} chars (${(responseRatio * 100).toFixed(0)}% ratio). Auto-retrying...`,
+            `bản dịch vẫn ngắn (${(responseRatio * 100).toFixed(0)}%)`, 1)) {
             await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
             return 'retry'; // Signal to retry
           } else {
@@ -1019,9 +1049,9 @@ export function useTranslation() {
         const origBlocks = countEjsBlocks(field.original);
         const transBlocks = countEjsBlocks(translated);
         if (origBlocks > 0 && transBlocks !== origBlocks) {
-          if (freshRetries() < (store.proxy.maxRetries || 3)) {
-            store.updateField(field.path, { retries: freshRetries() + 1 });
-            store.addLog('retry', `⚠️ EJS lệch khối: ${field.label} có ${transBlocks}/${origBlocks} khối <%…%> → dịch lại để không vỡ JS…`);
+          if (softGate(`ejs-blocks:${transBlocks}/${origBlocks}`,
+            `⚠️ EJS lệch khối: ${field.label} có ${transBlocks}/${origBlocks} khối <%…%> → dịch lại để không vỡ JS…`,
+            `vẫn lệch khối EJS (${transBlocks}/${origBlocks})`)) {
             await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
             return 'retry';
           }
@@ -1119,9 +1149,11 @@ export function useTranslation() {
           const why = invented.length > 0
             ? `thêm khai báo lạ [${invented.slice(0, 3).join(', ')}${invented.length > 3 ? '…' : ''}]` + (parity.reason ? ` + ${parity.reason}` : '')
             : (parity.reason || 'cấu trúc code lệch');
-          if (freshRetries() < (store.proxy.maxRetries || 3)) {
-            store.updateField(field.path, { retries: freshRetries() + 1 });
-            store.addLog('retry', `⚠️ Nghi AI BỊA CODE (${field.label}): ${why} → dịch lại (chỉ dịch chữ, không thêm code)…`);
+          // (bug 197/198) Vân tay là CHÍNH LÝ DO: phẫu thuật gần như tất định nên dịch lại ra đúng
+          // cùng lý do — quay vòng vô ích, đúng cảnh user thấy ở bug 197.
+          if (softGate(`halluc:${why}`,
+            `⚠️ Nghi AI BỊA CODE (${field.label}): ${why} → dịch lại (chỉ dịch chữ, không thêm code)…`,
+            `vẫn ${why}`)) {
             await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
             return 'retry';
           }

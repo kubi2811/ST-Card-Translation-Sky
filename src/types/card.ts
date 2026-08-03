@@ -147,6 +147,8 @@ export interface TranslationField {
    * thế → dừng ngay thay vì đốt hết lượt retry (user từng mất 1-2 tiếng cho một field Zod).
    */
   lastJsErrorFingerprint?: string;
+  /** (bug 198) Vân tay LÝ DO của cổng mềm gần nhất — cùng lý do hai lượt liền thì thôi dịch lại. */
+  lastSoftGateFingerprint?: string;
   /** Previous translation for updating/merging */
   previousTranslation?: string;
   /** MVU entry classification for per-type translation strategy */

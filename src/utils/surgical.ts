@@ -675,9 +675,16 @@ export function extractCJKTokens(
     }
 
     if (!insideStringLiteral && protectedIds.size > 0) {
+      // (bug 197) BIÊN MỞ RỘNG PHẢI ĐI QUA CẢ CHỮ HÁN, không chỉ [\w$].
+      // Tên khai báo TRỘN như `境界delta境界` bị bộ gom cắt thành hai cụm Hán quanh chữ `delta`.
+      // Biên cũ chỉ nuốt ký tự `\w` nên từ cụm `境界` nó dừng ngay ở `境` kế tiếp, so ra
+      // `境界delta` — không khớp tên thật trong protectedIds ⇒ tưởng không được bảo vệ ⇒ đem dịch.
+      // Kết quả `const Cảnh Giới delta Cảnh Giới` — tên biến có DẤU CÁCH, SyntaxError, cả script
+      // chết. Đây là hỏng thật chứ không phải báo oan, và nó im lặng tới lúc chạy mới lộ.
+      const IDCH = /[\w$一-鿿㐀-䶿]/;
       let wStart = mStart, wEnd = mEnd;
-      while (wStart > 0 && /[\w$]/.test(text[wStart - 1])) wStart--;
-      while (wEnd < text.length && /[\w$]/.test(text[wEnd])) wEnd++;
+      while (wStart > 0 && IDCH.test(text[wStart - 1])) wStart--;
+      while (wEnd < text.length && IDCH.test(text[wEnd])) wEnd++;
       // (bug 151) TỪ ĐIỂN USER THẮNG LỚP BẢO VỆ — nhưng CHỈ ở thế thuộc tính.
       // Lý do phải phân biệt: cùng một cái tên có thể vừa là khai báo trần (`const 配置` —
       // đổi là SyntaxError, không có cách bọc nào cứu được) vừa là thuộc tính (`t.配置` —
@@ -1174,6 +1181,13 @@ export function verifyCodeStructureParity(
     for (let i = 0; i < str.length; i++) if (chars.indexOf(str[i]) !== -1) c++;
     return c;
   };
+  // (bug 197/198) CHỈ ĐẾM NGOẶC TRONG CODE, bỏ ruột chú thích và chuỗi.
+  // Tiền đề của guard — "bản dịch code trung thực không đổi số ngoặc" — chỉ đúng với ngoặc CODE.
+  // Chú thích tiếng Trung dùng đầy （）【】 và người dịch bỏ/thêm một cặp là chuyện thường; ca thật ở
+  // bug 197: chú thích `六维（可信基线）` dịch ra không giữ cặp ngoặc, lệch đúng 4 — chạm ngưỡng 4 và
+  // bị kết luận "AI bịa code". Ngoặc của code AI tự chế thì nằm ngoài chuỗi/chú thích nên vẫn bị bắt.
+  original = stripCommentsAndStringContent(original);
+  translated = stripCommentsAndStringContent(translated);
   const checks: { name: string; chars: string }[] = [
     { name: '(', chars: '(（' },
     { name: ')', chars: ')）' },
@@ -1183,13 +1197,21 @@ export function verifyCodeStructureParity(
     { name: ']', chars: ']］】〕〗' },
     { name: '`', chars: '`' },
   ];
+  // (bug 197) TỰ ĐO phần ngoặc thêm hợp lệ, không chờ ai truyền tay.
+  // Bug 154 đã có tham số `expectedBracketPairs`, nhưng LUỒNG CHÍNH của Dịch Card gọi hàm này mà
+  // KHÔNG truyền gì — chỉ Dịch Script mới truyền. Nên mỗi lần từ điển/phẫu thuật đổi `obj.键` sang
+  // `obj['Tên Việt']` là guard kêu "thêm ngoặc" rồi ép dịch lại, càng nhiều biến càng chắc dính.
+  // Thẻ ở bug 197 có 89 khoá như vậy: `[` gốc 108 → dịch 197, THÊM đúng 89 — không đời nào thoát,
+  // nên nó quay vòng dịch lại mãi. Đo thẳng từ hai bản văn thì cả đường phẫu thuật lẫn đường dịch
+  // thường đều được tha đúng phần đáng tha, mà không phải nối dây qua mấy tầng gọi.
+  const autoAllowance = Math.max(expectedBracketPairs, countBracketKeyRewrites(original, translated));
   let worst: { name: string; o: number; t: number; diff: number } | null = null;
   for (const c of checks) {
     const o = countClass(original, c.chars);
     const t = countClass(translated, c.chars);
     // Với [ và ] thì trừ đi phần thêm hợp lệ do bracket-wrap; chỉ trừ khi bản dịch NHIỀU HƠN
     // (bớt ngoặc thì vẫn là bất thường, không có lý do gì tha).
-    const allowance = (c.name === '[' || c.name === ']') && t > o ? expectedBracketPairs : 0;
+    const allowance = (c.name === '[' || c.name === ']') && t > o ? autoAllowance : 0;
     const diff = Math.max(0, Math.abs(t - o) - allowance);
     if (!worst || diff > worst.diff) worst = { name: c.name, o, t, diff };
   }
@@ -1209,21 +1231,157 @@ export function verifyCodeStructureParity(
  * vì phiên âm định danh Hán sang ASCII là hợp lệ trong vài trường hợp.
  */
 export function detectInventedDeclarations(original: string, translated: string): string[] {
-  const declRe = /\b(?:const|let|var|function)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g;
-  const names = (src: string): Set<string> => {
-    const s = new Set<string>();
+  // (bug 197) HAI SỬA ĐỔI, ĐỀU LÀ ĐỂ THÔI BÁO OAN:
+  //
+  // 1. Mẫu cũ `[A-Za-z_$][A-Za-z0-9_$]*` là ASCII THUẦN. Tên biến sau khi dịch là tiếng Việt CÓ
+  //    DẤU (`const Cảnh_Giới`), nên nó cắt ở ký tự có dấu đầu tiên và bắt được mảnh cụt "C" —
+  //    rồi báo "AI bịa ra khai báo tên C". Log user: "thêm khai báo lạ [L, Th, Linh…]" chính là
+  //    mấy mảnh cụt của "Linh Thạch", "Thiên Phú", "Linh Lực". Nay dùng lớp ký tự Unicode.
+  //
+  // 2. ĐỔI TÊN không phải là THÊM. Dịch code thì tên biến Hán đổi thành tên Việt là chuyện đương
+  //    nhiên, tên mới đương nhiên "không có trong bản gốc". Cái đáng sợ là AI viết THÊM hàm/biến,
+  //    tức TỔNG SỐ khai báo tăng lên. Nên chỉ báo khi số khai báo của bản dịch NHIỀU HƠN bản gốc,
+  //    và chỉ kể ra những tên thuần ASCII (hàm AI tự chế luôn tên tiếng Anh: safeString, helper…)
+  //    — tên có dấu tiếng Việt gần như chắc chắn là tên cũ vừa được dịch.
+  const IDENT = 'A-Za-z_$\\u00C0-\\u024F\\u1E00-\\u1EFF\\u4e00-\\u9fff\\u3400-\\u4dbf';
+  const declRe = new RegExp(`\\b(?:const|let|var|function)\\s+([${IDENT}][${IDENT}0-9]*)`, 'g');
+  const names = (src: string): string[] => {
+    const out: string[] = [];
     let m: RegExpExecArray | null;
     declRe.lastIndex = 0;
-    while ((m = declRe.exec(src)) !== null) s.add(m[1]);
-    return s;
+    while ((m = declRe.exec(src)) !== null) out.push(m[1]);
+    return out;
   };
   const origNames = names(original);
   const transNames = names(translated);
-  const invented: string[] = [];
-  for (const n of transNames) {
-    if (!origNames.has(n)) invented.push(n);
+  // Số khai báo không tăng ⇒ chỉ là đổi tên ⇒ không có gì bị bịa thêm.
+  if (transNames.length <= origNames.length) return [];
+
+  const origSet = new Set(origNames);
+  const isPlainAscii = (n: string) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(n);
+  const invented = transNames.filter(n => !origSet.has(n) && isPlainAscii(n));
+  // Tăng số khai báo mà tên mới toàn là tên đã dịch (có dấu) thì vẫn phải báo — nêu tên thô.
+  return invented.length > 0 ? [...new Set(invented)] : [...new Set(transNames.filter(n => !origSet.has(n)))];
+}
+
+/**
+ * (bug 197) Đếm số khoá đã được đổi từ dot-notation sang bracket: `obj.键` → `obj['Tên Việt']`.
+ *
+ * Mỗi lần đổi thêm ĐÚNG một `[` và một `]` — cân bằng và hoàn toàn hợp lệ, nhưng bộ đếm ngoặc thô
+ * thì thấy "thêm ngoặc" và kêu AI bịa code. Đo bằng cách đếm số lần xuất hiện dạng `['…']`/`["…"]`
+ * ở bản dịch trừ đi ở bản gốc: đó đúng là hình dạng mà phép đổi khoá sinh ra, còn code AI tự chế
+ * thì ngoặc của nó chủ yếu là `()`/`{}` nên guard vẫn bắt được.
+ */
+/**
+ * (bug 197/198) Xoá RUỘT của chú thích và chuỗi, GIỮ nguyên dấu mở/đóng và mọi thứ còn lại.
+ *
+ * Dùng cho các phép đếm cấu trúc: ngoặc nằm trong câu chữ (chú thích tiếng Trung, chuỗi hiển thị)
+ * không nói lên điều gì về việc code có bị thêm/bớt hay không. Bên trong `${…}` của template
+ * literal thì lại LÀ code nên phải đếm — hàm này quay về chế độ code ở đó.
+ */
+export function stripCommentsAndStringContent(src: string): string {
+  const s = String(src ?? '');
+  let out = '';
+  let i = 0;
+  /** Ngăn xếp template literal đang mở, để biết `}` nào là đóng `${…}`. */
+  const tplStack: number[] = [];
+  let depth = 0;
+
+  /**
+   * (bug 197) PHẢI HIỂU REGEX LITERAL, không thì lệch pha rồi mù hẳn.
+   * Field thật của user có `/^['"`]+|['"`]+$/g`. Không nhận ra đó là regex thì thấy dấu nháy bên
+   * trong và tưởng đang mở chuỗi — từ đó về sau mọi thứ bị coi là ruột chuỗi, ngoặc thôi được đếm,
+   * guard hoá ra luôn "sạch". Test bug 197 bắt đúng ca này: nhét thêm một hàm vào mà guard vẫn im.
+   * Phân biệt regex với phép chia bằng ký tự có nghĩa liền trước: sau `)`/`]`/tên/số thì `/` là chia.
+   */
+  const regexCanStartHere = (): boolean => {
+    for (let k = out.length - 1; k >= 0; k--) {
+      const ch = out[k];
+      if (/\s/.test(ch)) continue;
+      return !/[)\]\w$]/.test(ch);
+    }
+    return true;
+  };
+
+  while (i < s.length) {
+    const c = s[i], n = s[i + 1];
+    if (c === '/' && n !== '/' && n !== '*' && regexCanStartHere()) {
+      // Nuốt trọn regex literal: giữ hai dấu `/` và cờ, xoá ruột (ruột không phải code).
+      let j = i + 1;
+      let inClass = false;
+      let closed = false;
+      while (j < s.length) {
+        const d = s[j];
+        if (d === '\\') { j += 2; continue; }
+        if (d === '\n') break;                       // xuống dòng ⇒ không phải regex, trả lại
+        if (inClass) { if (d === ']') inClass = false; j++; continue; }
+        if (d === '[') { inClass = true; j++; continue; }
+        if (d === '/') { closed = true; break; }
+        j++;
+      }
+      if (closed) {
+        out += '/' + ' '.repeat(Math.max(0, j - i - 1)) + '/';
+        i = j + 1;
+        while (i < s.length && /[gimsuyd]/.test(s[i])) { out += s[i]; i++; }
+        continue;
+      }
+      // Không đóng được trên cùng dòng ⇒ đúng là phép chia, xử lý như ký tự thường.
+    }
+    if (c === '/' && n === '/') {                       // chú thích một dòng
+      out += '//';
+      i += 2;
+      while (i < s.length && s[i] !== '\n') { out += ' '; i++; }
+      continue;
+    }
+    if (c === '/' && n === '*') {                       // chú thích khối
+      out += '/*';
+      i += 2;
+      while (i < s.length && !(s[i] === '*' && s[i + 1] === '/')) { out += s[i] === '\n' ? '\n' : ' '; i++; }
+      out += '*/';
+      i += 2;
+      continue;
+    }
+    if (c === "'" || c === '"') {                       // chuỗi thường
+      const q = c;
+      out += q; i++;
+      while (i < s.length && s[i] !== q) {
+        if (s[i] === '\\') { out += '  '; i += 2; continue; }
+        out += s[i] === '\n' ? '\n' : ' '; i++;
+      }
+      if (i < s.length) { out += q; i++; }
+      continue;
+    }
+    if (c === '`') {                                    // template literal
+      out += '`'; i++;
+      while (i < s.length) {
+        if (s[i] === '\\') { out += '  '; i += 2; continue; }
+        if (s[i] === '`') { out += '`'; i++; break; }
+        if (s[i] === '$' && s[i + 1] === '{') {          // vào lại chế độ CODE
+          out += '${'; i += 2;
+          tplStack.push(depth);
+          depth++;
+          let d = 1;
+          while (i < s.length && d > 0) {
+            if (s[i] === '{') d++;
+            else if (s[i] === '}') { d--; if (d === 0) break; }
+            out += s[i]; i++;
+          }
+          if (i < s.length) { out += '}'; i++; }
+          depth--; tplStack.pop();
+          continue;
+        }
+        out += s[i] === '\n' ? '\n' : ' '; i++;
+      }
+      continue;
+    }
+    out += c; i++;
   }
-  return invented;
+  return out;
+}
+
+export function countBracketKeyRewrites(original: string, translated: string): number {
+  const count = (s: string) => (s.match(/\[\s*(?:'[^'\n]*'|"[^"\n]*")\s*\]/g) ?? []).length;
+  return Math.max(0, count(translated) - count(original));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

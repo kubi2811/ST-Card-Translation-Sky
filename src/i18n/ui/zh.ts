@@ -417,6 +417,11 @@ const ui: UiKeys = {
   tpModContinue: '继续改写',
   tpPreprocessHint: '正在为逐字段翻译做准备 —— 这一步会分批调用 AI（每批 25 条）。',
   tpListFieldsTitle: '在翻译前列出所有字段 —— 方便你取消勾选想手工翻译的字段（不调用 API）',
+  // (bug 211) 未达标条目：错误 + 跳过 + 已"完成"但仍含中文（含被安全闸保留原文的条目）
+  tpProblemLabel: '未达标',
+  tpProblemBtn: '🩹 重译 {n} 个未达标条目',
+  tpProblemTip: '一键收集所有未真正完成的条目：红色错误、被跳过的、以及标记"完成"但仍含中文的（包括被安全闸还原为原文的条目）。多线程运行，每个条目自动重试最多 3 次，残留中文的条目会被精确指出未译段落。',
+  tpProblemBreakdown: '{e} 个错误 · {s} 个跳过 · {r} 个仍含中文',
   tpListFields: '查看/选择字段（跳过翻译）',
   tpManualHint1: '想手工翻译某个字段？',
   tpManualHint2: '取消勾选',

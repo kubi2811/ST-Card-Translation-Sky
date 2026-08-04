@@ -419,6 +419,11 @@ const ui = {
   tpModContinue: 'Continue mod',
   tpPreprocessHint: 'Preparing before translating each field — this step calls the AI in batches (25 items per batch).',
   tpListFieldsTitle: 'List every field before translating — so you can UNTICK the fields you want to translate by hand (no API call)',
+  // (bug 211) problem fields: errors + skipped + done-but-still-Chinese (incl. safety-guard kept-original)
+  tpProblemLabel: 'Needs rework',
+  tpProblemBtn: '🩹 Retranslate {n} unfinished item(s)',
+  tpProblemTip: 'One click collects every item that is NOT done properly: red errors, skipped items, and items marked "Done" that still contain Chinese (including ones the safety guard reverted to the original). Runs multi-threaded; each item auto-retries up to 3 times, and leftover-Chinese items get told exactly which passages remain.',
+  tpProblemBreakdown: '{e} errors · {s} skipped · {r} still Chinese',
   tpListFields: 'View/pick fields (skip translation)',
   tpManualHint1: 'Want to translate a field by hand?',
   tpManualHint2: 'Untick',

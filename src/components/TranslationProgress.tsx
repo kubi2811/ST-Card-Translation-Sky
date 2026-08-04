@@ -5,6 +5,8 @@ import { useTranslation } from '../hooks/useTranslation';
 import { useT, useUi } from '../i18n/useLocale';
 import type { LogFilter, LogEntry, LogPhase } from '../types/card';
 import ActiveCallsPanel from './ActiveCallsPanel';
+// (bug 211) bộ gom "mục chưa đạt" — cùng nguồn sự thật với nút dịch lại trong useTranslation
+import { collectProblemFields } from '../utils/problemFields';
 import {
   Play,
   Pause,
@@ -609,7 +611,7 @@ function TranslationPanel() {
   const preprocessProgress = useThrottledStore((s) => s.preprocessProgress, 150);
   const deleteCurrentCardCache = useStore((s) => s.deleteCurrentCardCache);
   const ui = useUi();
-  const { startTranslation, continueTranslation, pauseTranslation, resumeTranslation, cancelTranslation, retryAllErrors, prepareFields } = useTranslation();
+  const { startTranslation, continueTranslation, pauseTranslation, resumeTranslation, cancelTranslation, retranslateProblemFields, prepareFields } = useTranslation();
   const t = useT();
 
   const totalFields = fields.length;
@@ -624,6 +626,15 @@ function TranslationPanel() {
   const isPaused = phase === 'paused';
   const isDone = phase === 'done';
   const isCancelled = phase === 'cancelled';
+
+  // (bug 211) Đếm "mục chưa đạt" = lỗi + bỏ qua + done-nhưng-còn-chữ-Hán. Quét chữ Hán trên
+  // toàn bộ field là việc nặng nên CHỈ chạy khi không dịch (fields cũng đã throttle 150ms);
+  // đang dịch thì con số đổi liên tục, đếm cũng vô nghĩa.
+  const problemSummary = useMemo(() => {
+    if (isTranslating) return null;
+    return collectProblemFields(fields, { cssCjkHandling: translationConfig.cssCjkHandling || 'preserve' });
+  }, [fields, isTranslating, translationConfig.cssCjkHandling]);
+  const problemCount = problemSummary?.counts.total ?? 0;
 
   const getETA = () => {
     if (!startTime || doneFields === 0) return '--';
@@ -734,6 +745,16 @@ function TranslationPanel() {
           )}
           <MiniStat icon={<XCircle size={12} />} value={errorFields} label={t.error} color="var(--accent-danger)" />
           <MiniStat icon={<Loader2 size={12} />} value={totalFields - doneFields - errorFields - skippedFields - ignoredFields} label={t.remaining} color="var(--text-muted)" />
+          {/* (bug 211) "0 Lỗi" không có nghĩa là sạch: mục bị chốt an toàn giữ nguyên gốc và mục
+              dịch sót chữ Hán đều mang mác "Xong". Đếm thẳng ra đây cho khỏi ai bị lừa. */}
+          {problemCount > 0 && (
+            <span title={ui.tpProblemBreakdown
+              .replace('{e}', String(problemSummary!.counts.error))
+              .replace('{s}', String(problemSummary!.counts.skipped))
+              .replace('{r}', String(problemSummary!.counts.residual))}>
+              <MiniStat icon={<AlertTriangle size={12} />} value={problemCount} label={ui.tpProblemLabel} color="var(--accent-warning)" />
+            </span>
+          )}
         </div>
       )}
 
@@ -758,9 +779,13 @@ function TranslationPanel() {
             <button className="btn btn-primary" onClick={() => continueTranslation()}>
               <Play size={14} /> {t.continueTranslation}
             </button>
-            {errorFields > 0 && (
-              <button className="btn btn-secondary" onClick={retryAllErrors} style={{ borderColor: 'var(--accent-danger)', color: 'var(--accent-danger)' }}>
-                <RotateCcw size={14} /> Retry {errorFields} Error{errorFields > 1 ? 's' : ''}
+            {/* (bug 211) MỘT nút cho cả list chưa đạt — thay nút "Retry N Errors" cũ vốn chỉ
+                thấy lỗi đỏ, mù với mục bị bỏ qua và mục "Xong" còn nguyên tiếng Trung. */}
+            {problemCount > 0 && (
+              <button className="btn btn-secondary" onClick={retranslateProblemFields}
+                title={ui.tpProblemTip}
+                style={{ borderColor: 'var(--accent-warning)', color: 'var(--accent-warning)' }}>
+                <RotateCcw size={14} /> {ui.tpProblemBtn.replace('{n}', String(problemCount))}
               </button>
             )}
             <button

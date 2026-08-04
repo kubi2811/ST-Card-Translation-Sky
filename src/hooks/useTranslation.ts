@@ -34,6 +34,9 @@ import { isEjsProseField, maskEjsCode, unmaskEjsCode, countEjsBlocks } from '../
 import { isLikelyJsScript, jsParseErrorAny, isImportOnlyScript, hasRealJsSignal, jsErrorFingerprint } from '../utils/scriptSafety';
 import { planTargetedChunkRetry, mergeChunkProgress } from '../utils/chunkRetryPlan';
 import { chunkCharsForField } from '../utils/chunking';
+// (bug 211) Chốt an toàn CHUNG cho mọi đường dịch lại + bộ gom "mục chưa đạt".
+import { finalizeRetryTranslation } from '../utils/retryGuards';
+import { collectProblemFields } from '../utils/problemFields';
 
 /* ─── (bug 205) Wake lock trong lúc dịch ───
  * Edge/Chrome cho tab nền "ngủ" rất hăng khi máy tắt màn hình — user để tool chạy ngầm vài chục
@@ -3647,46 +3650,33 @@ export function useTranslation() {
         field.rawChunks,
       );
 
-      // Post-process regex HTML: font swap + underscore display
-      const isRegexContent = field.group === 'regex' && (field.path.includes('replaceString') || field.path.includes('trimStrings'));
-      if (isRegexContent && translated) {
-        translated = postProcessRegexHtml(translated);
-      }
-      // Post-process TavernHelper content that contains HTML
-      if (field.group === 'tavern_helper' && translated && /<[a-z][^>]*>/i.test(translated)) {
-        translated = postProcessRegexHtml(translated);
-      }
-      // Smart-quote fix for ALL code fields (regex Manager, external custom code, TavernHelper):
-      // turns “ ” ‘ ’ ＂ ＇ back into straight " ' so the translated regex/JS actually runs.
-      if (translated && (field.group === 'regex' || field.group === 'tavern_helper')) {
-        translated = normalizeSmartQuotesInCode(translated);
-        translated = fixNestedQuoteBracketPaths(translated);
-      }
-
-      // (bugNeedFix/180) Đường "dịch lại một trường" cũng phải trả macro về nguyên văn — đây
-      // chính là nút user sẽ bấm để chữa mấy entry đã dính lỗi, nên nó mà không có chốt thì
-      // bấm bao nhiêu lần cũng có thể ra lại đúng cái sai cũ.
-      if (translated) {
-        const mg = restoreMacros(field.original, translated);
-        if (mg.fixes.length > 0) {
-          translated = mg.text;
-          store.addLog('warning', `🔒 Trả lại ${mg.fixes.length} macro bị đổi trong ${field.label}: `
-            + mg.fixes.map(f => `{{${f.wrong}}}→{{${f.right}}}`).join(', '));
-        }
-        if (mg.unresolved.length > 0) {
-          store.addLog('warning', `⚠️ ${field.label}: mất macro ${mg.unresolved.slice(0, 3).join(', ')} — hãy kiểm tay.`);
-        }
-      }
+      // (bug 211) Hậu xử lý + TOÀN BỘ chốt an toàn của vòng dịch chính, rút về một chỗ chung:
+      // trước đây đường này chỉ có macro/nháy cong — thiếu vá khoá bug 109, thiếu chốt cú pháp
+      // JS, thiếu chốt EJS/bịa code. Tức là nút "dịch lại" — nút sinh ra để CHỮA entry hỏng —
+      // lại là đường duy nhất có thể ghi script vỡ vào thẻ mà không ai chặn.
+      const verdict = finalizeRetryTranslation({
+        original: field.original,
+        translated,
+        label: field.label,
+        group: field.group,
+        entryType: field.entryType,
+        path: field.path,
+      });
+      for (const n of verdict.notes) store.addLog(n.level, n.msg);
+      translated = verdict.text;
 
       store.updateField(path, {
         status: 'done',
         translated,
         failedChunkIndex: undefined,
-        // (bug 203) Dịch lại thành công thì gỡ cờ "cố ý giữ gốc" — nếu không, một lần bị chốt
-        // an toàn chặn là field đó bị bộ quét bỏ qua vĩnh viễn.
-        keptOriginalOnPurpose: undefined,
+        // (bug 203 + 211) Dịch lại THÀNH CÔNG thì gỡ cờ "cố ý giữ gốc"; còn nếu chính lượt này
+        // lại bị chốt an toàn chặn thì phải GIỮ cờ — để bộ đếm "mục chưa đạt" còn thấy nó.
+        keptOriginalOnPurpose: verdict.keptOriginal ? true : undefined,
       });
-      store.addLog('success', `Re-translated: ${field.label}`);
+      store.addLog(verdict.guardReason ? 'warning' : 'success',
+        verdict.guardReason
+          ? `↩️ ${field.label}: dịch lại bị chốt an toàn chặn (${verdict.guardReason}) — giữ bản gốc.`
+          : `Re-translated: ${field.label}`);
       // (bug 132) GHI TIẾN TRÌNH XUỐNG ĐĨA. Vòng dịch chính vẫn tự lưu sau mỗi đợt, nhưng dịch
       // LẺ từng field — đường mà tab "Regex" dùng cho mọi nút Dịch/Dịch lại — thì trước giờ
       // không lưu chỗ nào cả. Nên bản dịch regex chỉ sống trong RAM: F5 hay nhập lại thẻ là
@@ -3766,12 +3756,21 @@ export function useTranslation() {
       }
       if (hits.length > 10) store.addLog('info', `   … và ${hits.length - 10} mục nữa`);
 
-      for (const h of hits) {
-        if (checkAbort()) return totalFixed;
-        if (await waitForPause()) return totalFixed;
-        await retranslateField(h.path, false, buildResidualRetryInstruction(h));
-        totalFixed++;
-      }
+      // (bug 211) SONG SONG qua pool thay vì nối đuôi từng mục: sweep cũ chạy `for … await`
+      // nên lúc còn vài chục mục sót, cả dàn lane API ngồi không nhìn MỘT call chạy — đúng
+      // đoạn "phí thời gian" user tả. retranslateField tự quản controller theo path nên chạy
+      // song song an toàn; trần luồng vẫn là computePoolConcurrency như vòng dịch chính.
+      const sweepPool = await runWorkerPool({
+        total: hits.length,
+        concurrency: computePoolConcurrency(store.proxy),
+        shouldStop: () => !!checkAbort(),
+        waitIfPaused: () => waitForPause(),
+        runOne: async (i: number) => {
+          await retranslateField(hits[i].path, false, buildResidualRetryInstruction(hits[i]));
+          totalFixed++;
+        },
+      });
+      if (sweepPool.cancelled) return totalFixed;
     }
 
     // Hết lượt mà vẫn còn → báo rõ chứ không im lặng nuốt (user cần biết để sửa tay).
@@ -3880,7 +3879,7 @@ export function useTranslation() {
    */
   const retranslateFieldsBulk = useCallback(async (
     targets: TranslationField[],
-    opts?: { verb?: string },
+    opts?: { verb?: string; extraInstructionByPath?: Map<string, string> },
   ) => {
     const errorFields = targets;
     const verb = opts?.verb ?? 'dịch lại';
@@ -3906,194 +3905,90 @@ export function useTranslation() {
     let successCount = 0;
     let failCount = 0;
 
+    // ═══ (bug 211) BULK = retranslateField × pool. ═══
+    // Trước đây đường này CHÉP TAY lời gọi translateText với prompt CỤT (thiếu buildEffectivePrompt
+    // → không từ điển MVU, không RAG, không glossary chuẩn) và KHÔNG một chốt an toàn nào — nhận
+    // thẳng đầu ra AI làm bản dịch. Đó là lý do "bấm thử lại hàng loạt thì dở, bấm dịch lại từng
+    // entry thì được": hai nút đi hai đường khác hẳn nhau. Nay bulk chỉ là vòng lặp attempts quanh
+    // ĐÚNG retranslateField (đủ prompt pipeline + chốt cú pháp/EJS/macro + resume chunk + lưu đĩa),
+    // nên kết quả của "1 nút cho cả list" và "bấm tay từng cái" là MỘT.
     let bulkCancelled = false;
+    // User chốt: lỗi thì tự dịch lại 3 lần rồi mới cho vào danh sách chờ nút bấm.
+    const maxAttempts = Math.max(3, store.proxy.maxRetries || 3);
+
     await runWorkerPool({
       total: errorFields.length,
       concurrency: computePoolConcurrency(store.proxy),
       shouldStop: () => bulkCancelled || !!checkAbort(),
       waitIfPaused: () => waitForPause(),
       runOne: async (bulkIdx: number) => {
-      const field = errorFields[bulkIdx];
-      // Check abort/pause between fields
-      if (checkAbort()) {
-        runningRef.current = false;
-        store.setPhase(pauseRef.current ? 'paused' : 'cancelled');
-        bulkCancelled = true;
-        store.addLog('warning', 'Retry cancelled by user');
-        return;
-      }
-      if (await waitForPause()) {
-        runningRef.current = false;
-        store.setPhase(pauseRef.current ? 'paused' : 'cancelled');
-        bulkCancelled = true;
-        return;
-      }
-
-      let attempts = 0;
-      const maxAttempts = 2; // Auto-retry up to 2 times for chunk errors
-      let success = false;
-
-      while (attempts <= maxAttempts) {
-        try {
-          // Cancel any previous in-flight translation for this field
-          const prevCtrl = fieldAbortMap.current.get(field.path);
-          if (prevCtrl) {
-            prevCtrl.abort();
-            fieldAbortMap.current.delete(field.path);
-          }
-          const retryController = new AbortController();
-          fieldAbortMap.current.set(field.path, retryController);
-          store.updateField(field.path, { status: 'translating', error: undefined });
-
-          // Build context hint for lorebook keys
-          let contextHint: string | undefined;
-          if (field.group === 'lorebook_keys') {
-            const contentPath = field.path.replace('.keys', '.content');
-            const contentField = store.fields.find(f => f.path === contentPath);
-            if (contentField) {
-              contextHint = (contentField.translated || contentField.original || '').slice(0, 1500);
-            }
-          }
-
-          // Chunk-level resume: pass previously completed chunks if available dynamically from the store
-          const freshField = useStore.getState().fields.find(f => f.path === field.path) || field;
-          const prevChunks = freshField.completedChunks && freshField.completedChunks.length > 0
-            ? freshField.completedChunks
-            : undefined;
-
-          if (prevChunks && attempts === 0) {
-            const filledCount = prevChunks.filter(c => c && c.length > 0).length;
-            store.addLog('info', `🔄 Tiếp tục ${field.label}: đã có ${filledCount} phần (chunk) trong bộ nhớ`);
-          }
-
-          const translated = await translateText(
-            field.original,
-            field.label,
-            store.proxy,
-            store.translationConfig.targetLanguage,
-            store.translationConfig.sourceLanguage,
-            store.translationConfig.translationPrompt,
-            store.translationConfig.customSchema,
-            abortRef.current?.signal,
-            contextHint,
-            store.translationConfig.glossary,
-            field.previousTranslation,
-            undefined,
-            undefined,
-            store.translationConfig.chunkSize,
-            prevChunks,
-            // onChunkComplete: save chunk progress in real-time (supports out-of-order for parallel)
-            (chunkIdx, translatedChunk, totalChunks) => {
-              const currentField = useStore.getState().fields.find(f => f.path === field.path);
-              const currentCompleted = currentField?.completedChunks || [];
-              const updatedChunks = [...currentCompleted];
-              while (updatedChunks.length <= chunkIdx) updatedChunks.push('');
-              updatedChunks[chunkIdx] = translatedChunk;
-              store.updateField(field.path, {
-                completedChunks: updatedChunks,
-                totalChunks,
-              });
-              // (bug 205) Chốt xuống đĩa theo TỪNG chunk (debounce sẵn 1.5s) — tab bị kill giữa entry lớn không mất phần đã dịch.
-              useStore.getState().saveTranslationCache();
-            },
-            computePoolConcurrency(store.proxy),
-            store.translationConfig.enableChunkVerification,
-            // onChunksReady
-            (rawChunks) => {
-              store.updateField(field.path, {
-                rawChunks,
-                totalChunks: rawChunks.length,
-              });
-            },
-            // cssCjkHandling
-            store.translationConfig.cssCjkHandling,
-            // (bug 203) HAI ĐỐI SỐ CUỐI TỪNG BỊ BỎ QUÊN Ở RIÊNG ĐƯỜNG NÀY. Nút "Thử lại tất cả
-            // lỗi" đi qua đây, mà không truyền field.rawChunks thì chốt bugNeedFix/144 mù: nó
-            // không biết nhịp cắt đã đổi và ghép bản dịch cũ vào nhịp mới — đúng triệu chứng
-            // "ghép xong thiếu/sai chunk". Hai đường kia (dịch mới, dịch lại 1 field) đều có đủ.
-            false,
-            field.rawChunks,
-          );
-
-          // Keep chunk progress for export, clear failed index only
-          store.updateField(field.path, {
-            status: 'done', translated, retries: field.retries + attempts + 1,
-            failedChunkIndex: undefined,
-          });
-          store.addLog('success', `✓ Retry OK: ${field.label}`);
-          successCount++;
-          success = true;
-          fieldAbortMap.current.delete(field.path);
-
-          // Delay between retries
-          if (store.proxy.requestDelay > 0) {
-            await new Promise(r => setTimeout(r, store.proxy.requestDelay));
-          }
-          break;
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-
-          // Handle cancellation during retry
-          if (msg === 'Cancelled' || msg === 'The operation was aborted' || msg === 'The user aborted a request.' || checkAbort()) {
-            store.updateField(field.path, { status: 'error', error: 'Cancelled' });
-            fieldAbortMap.current.delete(field.path);
-            runningRef.current = false;
-            store.setPhase(pauseRef.current ? 'paused' : 'cancelled');
-            bulkCancelled = true;
-            store.addLog('warning', 'Retry cancelled by user');
-            return;
-          }
-
-          attempts++;
-
-          // Check if chunking is expected
-          const currentMaxTokens = store.proxy.maxTokens;
-          const currentChunkSize = store.translationConfig.chunkSize;
-          const CHUNK_THRESHOLD = currentChunkSize && currentChunkSize >= 100
-            ? currentChunkSize
-            : (currentMaxTokens && currentMaxTokens > 0 ? Math.min(Math.floor(currentMaxTokens * 3.5), 200000) : 100000);
-          const isChunked = field.original.length > CHUNK_THRESHOLD;
-
-          if (isChunked && attempts <= maxAttempts) {
-            if (err instanceof ChunkError) {
-              store.updateField(field.path, {
-                completedChunks: mergeChunkProgress(useStore.getState().fields.find(f => f.path === field.path)?.completedChunks, err.completedChunks),
-                failedChunkIndex: err.failedChunkIndex,
-                totalChunks: err.totalChunks,
-              });
-              store.addLog('retry', `⚠️ Lỗi thử lại chunk ${err.failedChunkIndex + 1}/${err.totalChunks}. Đang tự động thử lại (Attempt ${attempts}/${maxAttempts})...`);
-            } else {
-              store.addLog('retry', `⚠️ Lỗi thử lại chunk 1. Đang tự động thử lại (Attempt ${attempts}/${maxAttempts})...`);
-            }
-            await new Promise(r => setTimeout(r, store.proxy.retryDelay || 1000));
-            continue;
-          }
-
-          // If we reach here, it failed and we are not retrying
-          if (err instanceof ChunkError) {
-            store.updateField(field.path, {
-              status: 'error', error: msg, retries: field.retries + attempts,
-              completedChunks: mergeChunkProgress(useStore.getState().fields.find(f => f.path === field.path)?.completedChunks, err.completedChunks),
-              failedChunkIndex: err.failedChunkIndex,
-              totalChunks: err.totalChunks,
-            });
-            store.addLog('error', `✗ Thử lại lỗi: ${field.label} — phần ${err.failedChunkIndex + 1}/${err.totalChunks} (đã lưu ${err.completedChunks.length})`);
-          } else {
-            store.updateField(field.path, { status: 'error', error: msg, retries: field.retries + attempts });
-            store.addLog('error', `✗ Retry failed: ${field.label} — ${msg}`);
-          }
-          failCount++;
-          fieldAbortMap.current.delete(field.path);
-
-          // Delay between retries
-          if (store.proxy.requestDelay > 0) {
-            await new Promise(r => setTimeout(r, store.proxy.requestDelay));
-          }
-          break;
+        const field = errorFields[bulkIdx];
+        if (checkAbort() || await waitForPause()) {
+          bulkCancelled = true;
+          return;
         }
-      }
+
+        // Xoá dấu vân tay của các chốt từ lượt TRƯỚC: user đã chủ động bấm dịch lại thì mọi
+        // "lý do cũ" phải được đo lại từ đầu, không được vin vào lượt hỏng trước mà dừng sớm.
+        store.updateField(field.path, {
+          lastJsErrorFingerprint: undefined,
+          lastSoftGateFingerprint: undefined,
+          keptOriginalOnPurpose: undefined,
+        });
+
+        const extra = opts?.extraInstructionByPath?.get(field.path);
+        let success = false;
+
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+          if (checkAbort()) { bulkCancelled = true; return; }
+          if (await waitForPause()) { bulkCancelled = true; return; }
+
+          // Lượt đầu của field ĐANG LỖI: resume để không đốt lại các chunk đã dịch xong (tiền
+          // thật). Field 'done còn sót'/'skipped'/sau khi bị chốt chặn thì dịch TƯƠI — bản cũ
+          // chính là thứ vừa bị chê, resume là ghép lại đúng cái sai cũ.
+          const fresh = useStore.getState().fields.find(f => f.path === field.path) || field;
+          const resume = attempt === 0 && fresh.status === 'error'
+            && !!fresh.completedChunks && fresh.completedChunks.some(c => c && c.length > 0);
+
+          await retranslateField(field.path, resume, extra);
+
+          const after = useStore.getState().fields.find(f => f.path === field.path);
+          if (checkAbort()) { bulkCancelled = true; return; }
+          // retranslateField trả field về 'pending' khi call bị abort giữa chừng (huỷ/ghi đè).
+          if (!after || after.status === 'pending') { bulkCancelled = true; return; }
+
+          if (after.status === 'done' && !after.keptOriginalOnPurpose) {
+            success = true;
+            break;
+          }
+          if (attempt < maxAttempts - 1) {
+            const why = after.status === 'error'
+              ? (after.error || 'lỗi API').slice(0, 80)
+              : 'bị chốt an toàn chặn / AI trả nguyên văn';
+            store.addLog('retry', `↻ ${field.label}: lượt ${attempt + 1}/${maxAttempts} chưa đạt (${why}) — thử lại…`);
+            await new Promise(r => setTimeout(r, store.proxy.retryDelay || 1000));
+          }
+        }
+
+        if (success) {
+          successCount++;
+          store.addLog('success', `✓ ${verb} OK: ${field.label}`);
+        } else {
+          failCount++;
+          store.addLog('error', `✗ ${field.label}: vẫn chưa đạt sau ${maxAttempts} lượt — nằm lại trong danh sách "chưa đạt".`);
+        }
+
+        if (store.proxy.requestDelay > 0) {
+          await new Promise(r => setTimeout(r, store.proxy.requestDelay));
+        }
       },
     });
+
+    if (bulkCancelled) {
+      runningRef.current = false;
+      store.setPhase(pauseRef.current ? 'paused' : 'cancelled');
+      store.addLog('warning', 'Retry cancelled by user');
+    }
 
     runningRef.current = false;
     // Only set phase to done/cancelled if still in 'translating' (not already cancelled by user)
@@ -4103,7 +3998,40 @@ export function useTranslation() {
     store.saveTranslationCache();
     store.addLog('info', `Thử lại xong: ${successCount} đã sửa, ${failCount} vẫn lỗi`);
     store.addToast(failCount === 0 ? 'success' : 'error', `${verb}: ${successCount}/${errorFields.length} xong`);
-  }, [store]);
+  }, [store, retranslateField]);
+
+  /**
+   * (bug 211) DANH SÁCH "MỤC CHƯA ĐẠT" — một nguồn sự thật cho cả UI lẫn nút dịch lại.
+   * Gồm: lỗi đỏ + bỏ qua + done-nhưng-còn-chữ-Hán (kể cả mục bị chốt an toàn giữ nguyên gốc —
+   * thứ mà bảng đếm cũ giấu sau chữ "Xong" khiến user tưởng "0 Lỗi" là sạch).
+   */
+  const listProblemFields = useCallback(() => {
+    const cssMode = useStore.getState().translationConfig.cssCjkHandling || 'preserve';
+    return collectProblemFields(useStore.getState().fields, { cssCjkHandling: cssMode });
+  }, []);
+
+  /**
+   * (bug 211) MỘT NÚT DỊCH LẠI TẤT CẢ MỤC CHƯA ĐẠT — đa luồng, mỗi mục tự retry tối đa 3 lượt.
+   * Mục còn sót chữ Hán được nhét kèm câu nhắc "chỗ này còn sót" (việc 80) — dịch lại trơn với
+   * đúng prompt cũ rất dễ ra đúng kết quả cũ.
+   */
+  const retranslateProblemFields = useCallback(async () => {
+    const { problems, counts } = listProblemFields();
+    if (problems.length === 0) {
+      store.addToast('info', 'Không còn mục nào chưa đạt — bản dịch đã sạch.');
+      return;
+    }
+    const all = useStore.getState().fields;
+    const byPath = new Map(all.map(f => [f.path, f]));
+    const targets = problems.map(p => byPath.get(p.path)).filter((f): f is TranslationField => !!f);
+    const extraInstructionByPath = new Map<string, string>();
+    for (const p of problems) {
+      if (p.residual) extraInstructionByPath.set(p.path, buildResidualRetryInstruction(p.residual));
+    }
+    store.addLog('info',
+      `🩹 Dịch lại ${counts.total} mục chưa đạt: ${counts.error} lỗi · ${counts.skipped} bỏ qua · ${counts.residual} còn tiếng Trung.`);
+    await retranslateFieldsBulk(targets, { verb: 'dịch lại mục chưa đạt', extraInstructionByPath });
+  }, [store, listProblemFields, retranslateFieldsBulk]);
 
   /** Thử lại mọi mục LỖI — giữ nguyên nút cũ, nay chạy đa luồng qua engine chung. */
   const retryAllErrors = useCallback(async () => {
@@ -5290,6 +5218,9 @@ export function useTranslation() {
     retryAllErrors,
     retranslateFieldsBulk,
     retranslateSkipped,
+    // (bug 211) danh sách "mục chưa đạt" + nút dịch lại tất cả một phát
+    listProblemFields,
+    retranslateProblemFields,
     getExportCard,
     applyModToField,
     applyModToAllFields,

@@ -423,6 +423,11 @@ const ui: UiKeys = {
   tpPreprocessHint: 'Đang chuẩn bị trước khi dịch từng trường — bước này gọi AI theo lô (mỗi lô 25 mục).',
   tpListFieldsTitle: 'Liệt kê tất cả trường trước khi dịch — để bạn BỎ TICK những trường muốn tự dịch tay (không gọi API)',
   tpListFields: 'Xem/chọn trường (bỏ dịch)',
+  // (bug 211) mục chưa đạt: lỗi + bỏ qua + done-nhưng-còn-chữ-Hán (kể cả bị chốt an toàn giữ gốc)
+  tpProblemLabel: 'Chưa đạt',
+  tpProblemBtn: '🩹 Dịch lại {n} mục chưa đạt',
+  tpProblemTip: 'Gom một phát tất cả mục CHƯA ĐẠT: lỗi đỏ, bị bỏ qua, và cả mục đã "Xong" nhưng vẫn còn tiếng Trung (gồm mục bị chốt an toàn giữ nguyên bản gốc). Chạy đa luồng, mỗi mục tự thử lại tối đa 3 lượt, mục còn sót được nhắc đích danh đoạn nào chưa dịch.',
+  tpProblemBreakdown: '{e} lỗi · {s} bỏ qua · {r} còn tiếng Trung',
   tpManualHint1: 'Muốn tự dịch tay trường nào?',
   tpManualHint2: 'Bỏ tick',
   tpManualHint3: 'ô của trường đó ở bảng',

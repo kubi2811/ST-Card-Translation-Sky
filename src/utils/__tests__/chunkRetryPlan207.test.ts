@@ -94,15 +94,20 @@ describe('(L6) chunkDoctor hết bắt oan chunk code còn vài chữ Hán hợp
 describe('nối dây (L1/L2/L3/L4/L5)', () => {
   const read = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
-  it('useTranslation: 3 cổng retry đều khoanh vùng trước khi trả retry; 5 chỗ ChunkError đều gộp theo chỉ số', () => {
+  it('useTranslation: 3 cổng retry đều khoanh vùng trước khi trả retry; mọi chỗ ChunkError đều gộp theo chỉ số', () => {
     const SRC = read('../../hooks/useTranslation.ts');
     expect((SRC.match(/clearSuspectChunksForRetry\('cjk'\)/g) ?? []).length).toBe(2);
     expect((SRC.match(/clearSuspectChunksForRetry\('syntax'\)/g) ?? []).length).toBe(1);
-    expect((SRC.match(/mergeChunkProgress\(/g) ?? []).length).toBeGreaterThanOrEqual(5);
+    // (bug 211) 5 → 3: đường bulk không còn BẢN SAO translateText riêng nữa — nó gọi thẳng
+    // retranslateField nên hai call-site trùng lặp (merge lúc retry + merge lúc fail) biến mất.
+    // Ba chỗ còn lại: 2 của vòng dịch chính + 1 của retranslateField (mà bulk nay dùng chung).
+    expect((SRC.match(/mergeChunkProgress\(/g) ?? []).length).toBe(3);
     // (L2) prepareFields mang tiến trình chunk sang field mới thay vì bản trắng
     expect(SRC).toContain('completedChunks: existing.completedChunks');
-    // (L4) totalChunks có NGAY khi cắt xong
-    expect((SRC.match(/totalChunks: rawChunks\.length/g) ?? []).length).toBe(4);
+    // (L4) totalChunks có NGAY khi cắt xong — (bug 211) 4 → 3, lý do như trên.
+    expect((SRC.match(/totalChunks: rawChunks\.length/g) ?? []).length).toBe(3);
+    // (bug 211) và chốt kiến trúc mới: bulk phải đi qua retranslateField, không tự gọi API.
+    expect(SRC).toContain('await retranslateField(field.path, resume, extra)');
   });
 
   it('repairObjectKeys có ngân sách thời gian + trần vòng co theo độ dài (L5)', () => {

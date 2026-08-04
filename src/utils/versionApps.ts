@@ -50,7 +50,12 @@ const SCOPE_MAP: Record<string, AppId> = {
 
 /** Từ khoá dự phòng khi commit KHÔNG có scope — chỉ dùng khi thật rõ ràng. */
 const KEYWORD_HINTS: Array<[RegExp, AppId]> = [
+  // Bộ front-end kit (STFE, khung chat nhúng) sống trong Tạo Card — các commit 192/201/206/209/212
+  // toàn tả bằng mấy chữ này mà không nêu tên app.
+  [/\b(front[- ]?end|frontend|khung chat|stfe|tra wiki|tạo card)\b/i, 'tao-card'],
   [/\b(auto ?creator|lorebook|mvuzod|ejs studio|opening form|status bar|tao[- ]card)\b/i, 'tao-card'],
+  // Chuyện dịch sót/dịch lại/chunk là đặc sản của Dịch Card (bug 193/203/207/211…).
+  [/\b(dịch lại|dich lai|tiếng trung|tieng trung|chữ hán|chu han|chunk)\b/i, 'dich-card'],
   [/\b(dich script|script translate)\b/i, 'dich-script'],
   [/\b(dich preset|preset translate)\b/i, 'dich-preset'],
   [/\b(preset[- ]tool|tao preset)\b/i, 'tao-preset'],

@@ -327,6 +327,11 @@ html, body {
 
 .fe-toolbar { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 10px; }
 
+/* (bug 212) Menu lựa chọn của preset (<choice>…) dựng thành nút ngay dưới lời kể.
+   Nút được phép xuống dòng — lựa chọn của preset diễn đàn thường là cả một câu dài. */
+.fe-choicebar { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.fe-choicebar .fe-choice { white-space: normal; text-align: left; line-height: 1.45; }
+
 /* ── biểu mẫu khởi tạo ────────────────────────────────────────────────── */
 
 .fe-form { display: grid; gap: 12px; }

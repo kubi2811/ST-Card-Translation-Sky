@@ -164,18 +164,34 @@
    */
   var EMPTY_TURN_HINT = 'Lượt này AI không kể gì, chỉ xuất khối kỹ thuật — bấm Kể lại lượt này.';
 
-  function aiBodyHtml(view) {
+  /**
+   * (bug 212) Nhận NGUYÊN VĂN lượt AI, không phải bản đã lọc: renderBody cho regex của
+   * preset chạy trước trên nguyên văn (đúng như chat gốc) rồi mới tự dọn phần thừa. Menu
+   * `<choice>` của preset được dựng thành nút bấm ngay dưới lời kể.
+   */
+  function aiBodyHtml(rawText) {
     var body;
     try {
-      body = S.renderBody(view);
-      if (S.hasVisibleText(body)) return body;
+      body = S.renderBody(rawText);
+      if (S.hasVisibleText(body)) return body + choiceBarHtml(rawText);
+      return '<p class="fe-msg-empty">' + S.esc(EMPTY_TURN_HINT) + '</p>' + choiceBarHtml(rawText);
     } catch (e) {
       // (bug 209) Lượt kể đã về tới nơi rồi thì KHÔNG được để khâu vẽ làm mất nó: `runTurn`
       // bắt lỗi bằng cách gỡ luôn bong bóng, nên một cú ném ở đây là đúng triệu chứng user báo.
       console.error('[STFE] Không dựng được thân bong bóng, lùi về chữ trần:', e);
-      return S.mdLite(String(view == null ? '' : view));
+      return S.mdLite(String(rawText == null ? '' : rawText));
     }
-    return '<p class="fe-msg-empty">' + S.esc(EMPTY_TURN_HINT) + '</p>';
+  }
+
+  /** (bug 212) Menu lựa chọn của preset → dãy nút; bấm là gửi (số nếu dòng đánh số). */
+  function choiceBarHtml(rawText) {
+    var chs;
+    try { chs = S.extractChoices(rawText); } catch (e) { chs = []; }
+    if (!chs.length) return '';
+    return '<div class="fe-choicebar">' + chs.map(function (c) {
+      return '<button class="fe-btn fe-btn-sm fe-btn-ghost fe-choice" data-choice-send="'
+        + S.esc(c.send) + '">' + S.esc(c.label) + '</button>';
+    }).join('') + '</div>';
   }
 
   function msgHtml(entry, idx) {
@@ -190,9 +206,9 @@
       // đúng cái thẻ span đó bằng chữ.
       body = '<span class="fe-typing"></span>';
     } else {
-      // (bug 206) Qua renderBody: regex hiển thị của thẻ (tô màu lời thoại, gắn nhãn…) được
-      // áp ở đây y như chat gốc, thay vì khung chat này hiện một kiểu còn chat gốc một kiểu.
-      body = aiBodyHtml(S.viewOf(entry));
+      // (bug 206 + 212) Qua renderBody, TỪ NGUYÊN VĂN: regex hiển thị của thẻ/preset được áp
+      // y như chat gốc — trên tin nhắn đầy đủ, không phải trên bản đã bị lọc mất mồi.
+      body = aiBodyHtml(entry.text);
     }
     return '<div class="fe-msg ' + cls + '" data-idx="' + idx + '">'
       + '<div class="fe-msg-meta">' + who + (entry.at ? ' · ' + S.esc(entry.at) : '') + '</div>'
@@ -320,6 +336,16 @@
         box.focus();
       };
     });
+
+    // (bug 212) Nút menu lựa chọn của preset — chèn động theo từng lượt nên bắt bằng
+    // delegation trên cả khung log, khỏi phải bind lại sau mỗi tin nhắn.
+    el('fe-log').onclick = function (ev) {
+      var t = ev.target;
+      while (t && t !== el('fe-log') && !(t.dataset && t.dataset.choiceSend !== undefined)) t = t.parentNode;
+      if (!t || t === el('fe-log') || !t.dataset || t.dataset.choiceSend === undefined) return;
+      if (S.isBusy()) return;
+      send(t.dataset.choiceSend);
+    };
   }
 
   function restoreDraftInput() {
@@ -403,7 +429,8 @@
       var entry = S.logEntryOf(reply, S.nowStamp());
       // (bug 206) Regex của thẻ áp ở bản CHỐT, không áp lúc đang nhả từng chữ: chạy cả chuỗi
       // regex trên mỗi token là bình phương số việc, mà nửa câu thì regex cũng khớp sai.
-      streamingNode.querySelector('.fe-msg-body').innerHTML = aiBodyHtml(entry.view);
+      // (bug 212) Đưa NGUYÊN VĂN cho aiBodyHtml — regex preset cần thấy đủ mồi.
+      streamingNode.querySelector('.fe-msg-body').innerHTML = aiBodyHtml(entry.text);
 
       S.state.log.push(entry);
 

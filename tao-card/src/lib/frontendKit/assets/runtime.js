@@ -284,20 +284,32 @@
   }
 
   /**
-   * Dựng thân bong bóng chat: áp regex của thẻ trước, rồi mới quyết định cách hiển thị.
-   * Regex có sinh thẻ HTML ⇒ đó chính là ý đồ của script làm đẹp, hiện thẳng (đã lọc mã).
-   * Không thì đi đường cũ — markdown nhẹ, escape hết.
+   * Dựng thân bong bóng chat — (bug 212) THỨ TỰ LÀ LINH HỒN CỦA VIỆC TƯƠNG THÍCH PRESET LẠ:
+   *
+   *   1. Regex hiển thị của thẻ/preset chạy TRƯỚC, trên NGUYÊN VĂN tin nhắn — y như SillyTavern
+   *      gốc. Bản 206 cho regex chạy trên văn bản ĐÃ BỊ LỌC, nghĩa là preset diễn đàn nào có
+   *      regex bắt `<thinking>`/`<choice>`/khối trạng thái đều trượt vì mồi đã bị cắt mất một
+   *      nửa. Người dùng quyết bằng regex — muốn dựng giao diện hay ẩn đi là việc của regex.
+   *   2. RỒI mới dọn phần regex KHÔNG xử lý (stripCore): khối tư duy, khối mở từ prefill, thẻ
+   *      kỹ thuật lạ… — lưới an toàn cho preset không kèm regex.
+   *   3. Regex có sinh HTML thì hiện thẳng (đã lọc mã); không thì markdown nhẹ, escape hết.
    */
   function renderBody(raw) {
     var src = String(raw == null ? '' : raw);
     var r = applyCardRegexes(src);
-    var body = (r.changed && /<[a-zA-Z][^>]*>/.test(r.text))
-      ? blockify(sanitizeDisplayHtml(r.text))
-      : mdLite(r.text);
-    // (bug 209) CHỐT CHẶN CUỐI, sau cả bộ lọc trong applyCardRegexes: lời kể có chữ mà thân
-    // bong bóng ra trắng ⇒ vứt bản đã qua regex, hiện lời kể gốc. Thà hiện không màu mè còn
-    // hơn để người chơi nhìn một ô trống và tưởng tool nuốt mất lượt của mình.
-    if (hasVisibleText(src) && !hasVisibleText(body)) return mdLite(src);
+    var body;
+    if (r.changed && /<[a-zA-Z][^>]*>/.test(r.text)) {
+      // Đường HTML: dọn khối kỹ thuật nhưng GIỮ thẻ trình bày mà regex vừa dựng.
+      body = blockify(sanitizeDisplayHtml(stripCore(r.text, 'html')));
+    } else {
+      body = mdLite(stripCore(r.text, 'plain'));
+    }
+    // (bug 209) CHỐT CHẶN CUỐI: lời kể có chữ mà thân bong bóng ra trắng ⇒ lùi về lời kể đã
+    // lọc sạch khối kỹ thuật (KHÔNG phải nguyên văn — nguyên văn là lộ lại đúng đống rác 212).
+    if (!hasVisibleText(body)) {
+      var narrative = stripCore(src, 'plain');
+      if (hasVisibleText(narrative)) return mdLite(narrative);
+    }
     return body;
   }
 
@@ -754,16 +766,140 @@
     return s;
   }
 
-  /**
-   * Dọn mọi khối không phải văn xuôi.
-   * @param {string} text
-   * @param {boolean} dropUpdate  có cắt luôn khối cập nhật biến của thẻ hay không
+  /* ── (bug 212) LƯỚI LỌC ĐỘC LẬP VỚI PRESET ─────────────────────────────
+   * Mẫu bug/212/message.txt (preset tải từ diễn đàn) phơi ra BA lỗ mà bộ lọc cũ mù:
+   *  1. KHỐI MỞ TỪ PREFILL — preset mồi sẵn `<thinking>` trong lượt assistant nên văn bản
+   *     stream về CHỈ có thẻ đóng `</thinking>` mồ côi; stripBalancedTag cần thẻ mở nên bỏ
+   *     qua, cả 47 dòng "kế hoạch viết" hiện nguyên văn.
+   *  2. THẺ KỸ THUẬT LẠ — <theater>, <choice>, <world_logic>… không nằm trong danh sách đoán
+   *     sẵn nào; danh sách thì không bao giờ đuổi kịp preset diễn đàn.
+   *  3. FENCE TRẠNG THÁI MỘT DÒNG — dòng đầu bọc ba dấu huyền có nội dung bên trong, luật cũ
+   *     chỉ xoá dòng fence TRẦN nên hiện nguyên cả dấu huyền.
    */
-  function stripHidden(text, dropUpdate) {
+
+  /** Thẻ HTML (khối + inline) — để phân biệt thẻ TRÌNH BÀY với thẻ KỸ THUẬT của preset. */
+  var HTML_TAG_SET = (function () {
+    var set = {};
+    HTML_BLOCK_TAGS.concat(HTML_INLINE_TAGS).forEach(function (t) { set[t] = 1; });
+    return set;
+  })();
+
+  /** Thẻ VỎ BỌC văn bản — preset bọc lời kể trong đây: bỏ thẻ, GIỮ trọn ruột. */
+  var CONTENT_WRAPPER_TAGS = [
+    'gametxt', 'gametext', 'content', 'action', 'narration', 'narrative', 'story',
+    'text', 'txt', 'novel', 'maintext', 'main_text', 'output', 'response', 'reply', 'answer',
+  ];
+
+  /** Thẻ menu lựa chọn — bị cắt khỏi lời kể, nhưng RUỘT được dựng thành nút bấm (extractChoices). */
+  var CHOICE_TAGS = ['choice', 'choices', 'options'];
+
+  function isHtmlTagName(name) { return !!HTML_TAG_SET[String(name || '').toLowerCase()]; }
+
+  /**
+   * (bug 212·1) Thẻ đóng KHÔNG có thẻ mở đứng trước ⇒ khối được mở từ prefill: mọi thứ từ đầu
+   * văn bản tới hết thẻ đóng chính là ruột khối đó — cắt trọn. Chỉ áp cho thẻ KHÔNG phải HTML
+   * (một `</div>` sót lẻ là chuyện trình bày, để luật HTML lo).
+   */
+  function stripOrphanClosers(text) {
+    var s = String(text);
+    var guard = 0;
+    // `\s*>` ngay sau tên = ranh giới thẻ THẬT. Thiếu nó thì `</mưuKế>` bị đọc thành thẻ "m"
+    // + rác — tên thẻ có ký tự ngoài ASCII phải rơi ra ngoài, không được đoán bừa.
+    outer: while (guard++ < 20) {
+      var re = /<\/([a-zA-Z][a-zA-Z0-9_-]*)\s*>/g;
+      var m;
+      while ((m = re.exec(s))) {
+        if (isHtmlTagName(m[1])) continue;
+        var openRe = new RegExp('<' + m[1] + '(?=[\\s/>])[^>]*>', 'i');
+        if (openRe.test(s.slice(0, m.index))) continue;
+        s = s.slice(m.index + m[0].length);
+        continue outer;
+      }
+      break;
+    }
+    return s;
+  }
+
+  /** Bỏ CẶP THẺ của một tên nhưng giữ nguyên ruột (cho thẻ vỏ bọc văn bản). */
+  function unwrapTag(text, name) {
+    return String(text).replace(new RegExp('<\\/?' + name + '(?![a-zA-Z0-9_-])[^>]*>', 'gi'), '');
+  }
+
+  /**
+   * (bug 212·2) Dọn MỌI khối thẻ lạ (không phải HTML, không phải thẻ đã biết) mà regex của
+   * preset không xử lý. Mặc định cắt trọn khối — nhưng nếu cắt xong bong bóng gần như trống
+   * thì khối đó chính là VỎ BỌC lời kể của preset ⇒ bóc vỏ giữ ruột. Nhờ luật này, tool không
+   * cần biết trước tên thẻ của bất kỳ preset nào.
+   */
+  function stripUnknownTagBlocks(text) {
+    var s = String(text);
+    var tag = String(updateTag()).toLowerCase();
+    var skip = {};
+    safeNames(HIDDEN_TAGS, CFG.hideTags).forEach(function (t) { skip[t] = 1; });
+    CONTENT_WRAPPER_TAGS.forEach(function (t) { skip[t] = 1; });
+    skip[tag] = 1;
+    // Menu lựa chọn LUÔN cắt trọn kể cả khi là thứ duy nhất trong tin nhắn — ruột của nó đã
+    // được dựng thành nút bấm riêng, bóc vỏ ở đây là chữ hiện HAI lần.
+    var forceDrop = {};
+    CHOICE_TAGS.forEach(function (t) { forceDrop[t] = 1; });
+
+    var guard = 0;
+    while (guard++ < 60) {
+      var found = null;
+      // (?=[\s/>]) — ranh giới tên thẻ THẬT: thiếu nó thì `<mưuKế>` bị đọc thành thẻ "m" và
+      // cả lời kể phía sau bị nuốt. Tên thẻ ngoài ASCII không phải việc của luật này.
+      var re = /<([a-zA-Z][a-zA-Z0-9_-]*)(?=[\s/>])[^>]*>/g;
+      var m;
+      while ((m = re.exec(s))) {
+        var name = m[1].toLowerCase();
+        if (isHtmlTagName(name) || skip[name]) continue;
+        found = m[1];
+        break;
+      }
+      if (!found) break;
+      var lower = found.toLowerCase();
+
+      // KHÔNG có thẻ đóng ⇒ đây là MARKER viết một mình (`… <world_logic>` cuối câu), không
+      // phải khối. Cắt-tới-cuối kiểu stripBalancedTag sẽ nuốt sạch lời kể phía sau — để lượt
+      // quét thẻ-sót-lẻ phía dưới nhấc riêng cái thẻ, giữ chữ quanh nó.
+      if (!new RegExp('<\\/' + found + '\\s*>', 'i').test(s)) {
+        skip[lower] = 1;
+        continue;
+      }
+
+      var removed = stripBalancedTag(s, found);
+      var keptLen = visibleTextOf(removed).length;
+      // Cắt xong mà chẳng còn lại bao nhiêu ⇒ khối này là VỎ BỌC lời kể chưa kịp có tên trong
+      // CONTENT_WRAPPER_TAGS — bóc vỏ thay vì nuốt cả bài (tinh thần bug 209).
+      if (forceDrop[lower] || keptLen >= 80 || keptLen >= visibleTextOf(s).length * 0.5) {
+        s = removed;
+      } else {
+        s = unwrapTag(s, found);
+      }
+    }
+    return s;
+  }
+
+  /**
+   * (bug 212) MỘT bộ lọc, BA chế độ — trước đây mỗi đường tự lọc một kiểu là mỗi đường thủng
+   * một lỗ khác nhau:
+   *   'plain'   — khung chat, đường markdown: dọn hết khối kỹ thuật LẪN thẻ HTML.
+   *   'html'    — khung chat, đường HTML do regex preset dựng: dọn khối kỹ thuật nhưng GIỮ
+   *               thẻ trình bày (div/table/span…) mà regex vừa tạo ra.
+   *   'history' — nhật ký gửi lại AI: chỉ cắt khối tư duy (đọc lại rác của chính mình thì
+   *               lượt sau càng nhả rác); GIỮ khối cập nhật biến, menu lựa chọn, fence trạng
+   *               thái — preset cần thấy lại ĐỦ định dạng của chính nó để giữ mạch.
+   */
+  function stripCore(text, mode) {
     var s = String(text == null ? '' : text);
     var tag = updateTag();
+    var forHistory = mode === 'history';
+    var keepHtml = mode === 'html';
 
-    if (dropUpdate) {
+    // Khối mở từ prefill — cắt ở MỌI chế độ (nhật ký cũng không được chứa kế hoạch viết).
+    s = stripOrphanClosers(s);
+
+    if (!forHistory) {
       s = stripBalancedTag(s, tag);
       // Đang stream thì khối mở ra mà chưa đóng — cắt từ chỗ mở tới hết, đừng để JSONPatch
       // chạy qua màn hình từng chữ một.
@@ -774,21 +910,42 @@
       if (t === String(tag).toLowerCase()) return;
       s = stripBalancedTag(s, t);
     });
-    HTML_BLOCK_TAGS.forEach(function (t) { s = stripBalancedTag(s, t); });
 
     // Chú thích HTML: tiện ích bảng trí nhớ gói cả bài toán của nó trong đây.
-    s = s.replace(/<!--[\s\S]*?-->/g, '').replace(/<!--[\s\S]*/, '');
+    s = s.replace(/<!--[\s\S]*?-->/g, '');
+    if (!forHistory) s = s.replace(/<!--[\s\S]*/, '');
 
     safeNames(HIDDEN_BRACKETS, CFG.hideBracketTags).forEach(function (n) { s = stripBracketBlock(s, n); });
 
-    var breakRe = new RegExp('<\\/?(?:' + HTML_BREAK_TAGS.join('|') + ')(?:\\s[^>]*)?\\/?>', 'gi');
-    var inlineRe = new RegExp('<\\/?(?:' + HTML_INLINE_TAGS.join('|') + ')(?:\\s[^>]*)?\\/?>', 'gi');
-    s = s.replace(breakRe, '\n').replace(inlineRe, '');
-    s = s.replace(/<\/?(gametxt|content|action)>/gi, '');
+    if (forHistory) {
+      return s.replace(/\n{3,}/g, '\n\n').trim();
+    }
+
+    // Thẻ kỹ thuật lạ của preset (theater, choice, world_logic…) — sau khi regex đã có cơ hội.
+    s = stripUnknownTagBlocks(s);
+    // Vỏ bọc văn bản: bỏ thẻ giữ ruột.
+    CONTENT_WRAPPER_TAGS.forEach(function (t) { s = unwrapTag(s, t); });
+
+    if (!keepHtml) {
+      HTML_BLOCK_TAGS.forEach(function (t) { s = stripBalancedTag(s, t); });
+      var breakRe = new RegExp('<\\/?(?:' + HTML_BREAK_TAGS.join('|') + ')(?:\\s[^>]*)?\\/?>', 'gi');
+      var inlineRe = new RegExp('<\\/?(?:' + HTML_INLINE_TAGS.join('|') + ')(?:\\s[^>]*)?\\/?>', 'gi');
+      s = s.replace(breakRe, '\n').replace(inlineRe, '');
+    }
+
+    // Thẻ lạ còn SÓT LẺ (marker viết một mình, cặp không cân) — bỏ thẻ, giữ chữ quanh nó.
+    // Cùng ranh giới (?=[\s/>]) như trên: thẻ tên ngoài ASCII để nguyên cho esc() hiển thị.
+    s = s.replace(/<\/?([a-zA-Z][a-zA-Z0-9_-]*)(?=[\s/>])[^>]*>/g, function (m0, name) {
+      return (keepHtml && isHtmlTagName(name)) ? m0 : '';
+    });
 
     // Ba dấu huyền phải dựng bằng mã ký tự: viết thẳng vào đây là ĐÓNG SỚM khối code bọc cả
     // giao diện, và mọi thứ phía sau bị SillyTavern bọc <q> quanh từng cặp nháy kép.
     var fence = String.fromCharCode(96, 96, 96);
+    // (bug 212·3) Fence MỘT DÒNG có ruột (dòng trạng thái "Địa điểm·Ngày·Giờ" của preset):
+    // giữ ruột, bỏ dấu huyền — thông tin đó là cho người chơi đọc.
+    s = s.replace(new RegExp('^[ \\t]*' + fence + '([^\\n]+?)' + fence + '[ \\t]*$', 'gm'),
+      function (m0, inner) { return inner.trim(); });
     s = s.replace(new RegExp('^\\s*' + fence + '[a-zA-Z]*\\s*$', 'gm'), '');
 
     // Thẻ mới ra được một nửa (đang stream): chưa có dấu đóng thì không luật nào ở trên khớp,
@@ -799,20 +956,55 @@
     return s.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   }
 
+  /**
+   * Dọn mọi khối không phải văn xuôi (giữ nguyên chữ ký cũ cho test + các caller).
+   * @param {string} text
+   * @param {boolean} dropUpdate  có cắt luôn khối cập nhật biến của thẻ hay không
+   */
+  function stripHidden(text, dropUpdate) {
+    if (dropUpdate === false) return stripCore(text, 'history');
+    return stripCore(text, 'plain');
+  }
+
+  /**
+   * (bug 212) MENU LỰA CHỌN của preset (`<choice>1. …</choice>`) → danh sách nút bấm.
+   * `send` là thứ gửi đi khi bấm: dòng có đánh số thì gửi ĐÚNG con số (preset đọc số),
+   * dòng trơn thì gửi nguyên văn.
+   */
+  function extractChoices(text) {
+    var s = String(text == null ? '' : text);
+    for (var i = 0; i < CHOICE_TAGS.length; i++) {
+      var t = CHOICE_TAGS[i];
+      var m = s.match(new RegExp('<' + t + '(?![a-zA-Z0-9_-])[^>]*>([\\s\\S]*?)<\\/' + t + '\\s*>', 'i'));
+      if (!m) continue;
+      var out = [];
+      m[1].split('\n').forEach(function (line) {
+        var l = line.replace(/^[\s]*[-*•]?\s*/, '').trim();
+        if (!l) return;
+        var num = l.match(/^(\d+)[.)、.:：]?\s+(.+)$/);
+        if (num) out.push({ send: num[1], label: l });
+        else out.push({ send: l, label: l });
+      });
+      if (out.length) return out;
+    }
+    return [];
+  }
+
   function splitReply(text) {
     var raw = String(text || '');
     var tag = updateTag();
     var block = '';
     var m = raw.match(new RegExp('<' + tag + '>[\\s\\S]*?<\\/' + tag + '>', 'i'));
     if (m) block = m[0];
-    var narrative = stripHidden(raw, true);
-    // Nhật ký gửi lại cho AI: sạch khối tư duy (đọc lại rác của chính mình thì lượt sau nó
-    // càng nhả rác) nhưng GIỮ khối cập nhật biến, vì đó là mẫu định dạng duy nhất nó có.
     return {
-      narrative: narrative,
+      narrative: stripCore(raw, 'plain'),
       updateBlock: block,
       raw: raw,
-      history: block ? narrative + '\n\n' + block : narrative,
+      choices: extractChoices(raw),
+      // (bug 212) Nhật ký = nguyên văn trừ khối tư duy. Bản cũ ghép narrative + block là tự ý
+      // đục bỏ menu lựa chọn, fence trạng thái, thẻ riêng của preset — AI mất mẫu định dạng
+      // của CHÍNH preset đó và các lượt sau trôi dạt dần.
+      history: stripCore(raw, 'history'),
     };
   }
 
@@ -823,7 +1015,9 @@
    * `view` chỉ được TIN khi nó do chính bản này ghi ra: nhật ký lưu trước bản vá 202 còn
    * nguyên khối tư duy trong đó, mà nhật ký thì sống trong biến chat, mở lại là hiện lại.
    */
-  var VIEW_VERSION = 2;
+  // (bug 212) 2 → 3: bộ lọc học thêm khối mở-từ-prefill + thẻ lạ + fence trạng thái, nên view
+  // cũ (lưu trong biến chat) phải được tính lại — không thì log cũ vẫn hiện rác preset.
+  var VIEW_VERSION = 3;
 
   function viewOf(entry) {
     if (!entry) return '';
@@ -1110,6 +1304,9 @@
     normalizeUpdateBlock: normalizeUpdateBlock,
     splitReply: splitReply,
     stripHidden: stripHidden,
+    // (bug 212) lưới lọc độc lập preset + menu lựa chọn thành nút bấm
+    stripCore: stripCore,
+    extractChoices: extractChoices,
     viewOf: viewOf,
     logEntryOf: logEntryOf,
     gameMessageId: gameMessageId,

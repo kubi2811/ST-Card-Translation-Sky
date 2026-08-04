@@ -236,7 +236,8 @@ describe('(bug 202) nhật ký cũ lưu trong biến chat phải tự lành', ()
 
   it('mục do bản này ghi ra thì tin `view`, khỏi tính lại mỗi lần vẽ', () => {
     const e = RT.logEntryOf(DIRTY, '10:00');
-    expect(e.vc).toBe(2);
+    // (bug 212) 2 → 3: bộ lọc học thêm luật mới nên view cũ phải được tính lại.
+    expect(e.vc).toBe(3);
     expect(e.view).toBe('Lời kể cũ.');
     expect(RT.viewOf({ ...e, view: 'ĐÃ SỬA TAY' })).toBe('ĐÃ SỬA TAY');
   });

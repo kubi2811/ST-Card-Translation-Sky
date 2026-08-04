@@ -36,6 +36,8 @@ interface Runtime {
   applyCardRegexes: (t: string) => { text: string; changed: boolean };
   renderBody: (t: string) => string;
   resetCardRegexes: () => void;
+  // (bug 209)
+  hasVisibleText: (html: string) => boolean;
 }
 
 let RT: Runtime;
@@ -380,5 +382,97 @@ describe('(bug 206) regex của thẻ chạm được vào khung chat nhúng', (
     delete g.getTavernRegexes;
     (RT as unknown as { resetCardRegexes: () => void }).resetCardRegexes();
     expect(RT.renderBody('Lời kể bình thường.')).toContain('Lời kể bình thường.');
+  });
+});
+
+/* ────────── 209 · lời kể biến mất ngay sau khi nhả xong chữ ────────── */
+
+/**
+ * (bug 209) Người chơi thấy lượt kể chạy từng chữ bình thường, nhả xong thì bong bóng trắng
+ * bong. Chỉ có ĐÚNG MỘT khác biệt giữa hai lúc đó: lúc nhả chữ đi qua `mdLite`, lúc chốt đi
+ * qua `renderBody` — tức là qua dàn regex hiển thị của thẻ, thêm ở bản 206.
+ *
+ * Và gần như thẻ nào có bảng giao diện riêng cũng mang một script XOÁ SẠCH LỜI KỂ ở lớp hiển
+ * thị, vì lời kể đã được vẽ lại trong bảng. Bản 206 chối script ấy theo TÊN (`[FE] …`) nên
+ * chỉ chối được đúng hai script do chính app sinh ra; script cùng loại của thẻ khác lọt hết.
+ * Nay chối theo VIỆC NÓ LÀM.
+ */
+describe('(bug 209) script của thẻ không được xoá trắng khung chat nhúng', () => {
+  const g = globalThis as Record<string, unknown>;
+  const feed = (list: unknown[]) => {
+    g.getTavernRegexes = () => list;
+    RT.resetCardRegexes();
+  };
+  const script = (over: Record<string, unknown> = {}) => ({
+    script_name: 'Ẩn lời kể (thẻ tự vẽ lại trong bảng)',
+    enabled: true,
+    source: { ai_output: true, user_input: false },
+    destination: { display: true, prompt: false },
+    trim_strings: [],
+    ...over,
+  });
+
+  const KE = 'Bạn bước qua cổng đá, gió Veil rít lên từng hồi trong lòng thung lũng cạn.';
+
+  afterEach(() => { delete g.getTavernRegexes; RT.resetCardRegexes(); });
+
+  it('script XOÁ SẠCH lời kể bị chối, dù tên nó không phải [FE]', () => {
+    feed([script({ find_regex: '/[\\s\\S]+/', replace_string: '' })]);
+    const out = RT.applyCardRegexes(KE);
+    expect(out.changed).toBe(false);
+    expect(out.text).toBe(KE);
+    expect(RT.renderBody(KE)).toContain('gió Veil');
+  });
+
+  it('script NUỐT TRỌN tin nhắn rồi nhả ra thứ khác hẳn cũng bị chối', () => {
+    feed([script({ find_regex: '/^[\\s\\S]+$/', replace_string: '<div class="bang">HP 10/10</div>' })]);
+    expect(RT.applyCardRegexes(KE).text).toBe(KE);
+  });
+
+  it('script nhồi CẢ MỘT TRANG HTML vào bị chối — đó là script [FE] của thẻ khác', () => {
+    const trang = '<' + '!DOCTYPE html><html lang="vi"><body>' + KE + ' (đủ dài)</body></html>';
+    feed([script({ script_name: 'Màn Chính của thẻ khác', find_regex: '/[\\s\\S]+/', replace_string: trang })]);
+    expect(RT.applyCardRegexes(KE).text).toBe(KE);
+  });
+
+  it('nhưng script LÀM ĐẸP bọc cả bài trong một khung thì VẪN chạy — nó giữ nguyên chữ', () => {
+    feed([script({
+      script_name: 'Khung lời kể',
+      find_regex: '/^[\\s\\S]+$/',
+      replace_string: '<div class="khung">{{match}}</div>',
+    })]);
+    const out = RT.applyCardRegexes(KE);
+    expect(out.changed).toBe(true);
+    expect(out.text).toBe('<div class="khung">' + KE + '</div>');
+  });
+
+  it('chốt chặn cuối: bộ lọc thẻ nguy hiểm ăn hết nội dung thì lùi về lời kể gốc', () => {
+    // Ở đây regex qua được vòng lọc (còn chữ "ổn"), nhưng sanitize gỡ TRỌN khối iframe.
+    feed([script({ find_regex: '/[\\s\\S]+/', replace_string: '<iframe>ổn</iframe>' })]);
+    expect(RT.renderBody(KE)).toContain('gió Veil');
+  });
+
+  it('script chỉ tô màu vài chữ vẫn giữ được chỗ ngắt đoạn', () => {
+    feed([script({ script_name: 'Nhấn thuật ngữ', find_regex: '/Veil/g', replace_string: '<b>Veil</b>' })]);
+    const html = RT.renderBody('Đoạn một nhắc Veil.\n\nĐoạn hai.');
+    expect(html).toContain('<b>Veil</b>');
+    expect(html).toMatch(/<\/p>\s*<p>/);
+  });
+
+  it('đúng ca của user: dàn regex thẻ Eldran + một script ẩn lời kể ⇒ lời kể vẫn sống', () => {
+    feed([
+      script({ script_name: '[AI] Loại bỏ khối UpdateVariable', find_regex: '/<UpdateVariable>[\\s\\S]*?<\\/UpdateVariable>/gm', replace_string: '' }),
+      script({ script_name: '[AI] Ẩn lời kể', find_regex: '/^[\\s\\S]*$/', replace_string: '' }),
+      script({ script_name: '[Style] Nhấn mạnh Thuật ngữ Game', find_regex: '/(Veil)/g', replace_string: '<span style="color:#c084fc;">$1</span>' }),
+    ]);
+    const html = RT.renderBody(KE);
+    expect(RT.hasVisibleText(html)).toBe(true);
+    expect(html).toContain('color:#c084fc;');
+  });
+
+  it('bong bóng trống thì hasVisibleText nói đúng sự thật', () => {
+    expect(RT.hasVisibleText('<p></p>')).toBe(false);
+    expect(RT.hasVisibleText('<div><span> </span></div>')).toBe(false);
+    expect(RT.hasVisibleText('<p>có chữ</p>')).toBe(true);
   });
 });

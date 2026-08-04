@@ -154,6 +154,30 @@
 
   /* ── khung chat ───────────────────────────────────────────────────────── */
 
+  /**
+   * (bug 209) Thân bong bóng của MỘT lượt AI — dùng chung cho lúc dựng lại nhật ký và lúc
+   * chốt xong một lượt, để hai nơi không bao giờ hiện hai kiểu.
+   *
+   * Bong bóng trắng bong là thứ tệ nhất: người chơi thấy lượt kể chạy qua màn hình rồi biến
+   * mất, không biết là AI im lặng hay tool nuốt mất. Nói thẳng ra. (Lời kể sạch mà vẫn trắng
+   * thì runtime đã tự lùi về bản gốc rồi — tới đây chỉ còn ca AI thật sự không kể gì.)
+   */
+  var EMPTY_TURN_HINT = 'Lượt này AI không kể gì, chỉ xuất khối kỹ thuật — bấm Kể lại lượt này.';
+
+  function aiBodyHtml(view) {
+    var body;
+    try {
+      body = S.renderBody(view);
+      if (S.hasVisibleText(body)) return body;
+    } catch (e) {
+      // (bug 209) Lượt kể đã về tới nơi rồi thì KHÔNG được để khâu vẽ làm mất nó: `runTurn`
+      // bắt lỗi bằng cách gỡ luôn bong bóng, nên một cú ném ở đây là đúng triệu chứng user báo.
+      console.error('[STFE] Không dựng được thân bong bóng, lùi về chữ trần:', e);
+      return S.mdLite(String(view == null ? '' : view));
+    }
+    return '<p class="fe-msg-empty">' + S.esc(EMPTY_TURN_HINT) + '</p>';
+  }
+
   function msgHtml(entry, idx) {
     var cls = entry.role === 'user' ? 'is-user' : (entry.role === 'system' ? 'is-sys' : '');
     var who = entry.role === 'user' ? 'Bạn' : (entry.role === 'system' ? 'Hệ thống' : 'Quản Trò');
@@ -168,7 +192,7 @@
     } else {
       // (bug 206) Qua renderBody: regex hiển thị của thẻ (tô màu lời thoại, gắn nhãn…) được
       // áp ở đây y như chat gốc, thay vì khung chat này hiện một kiểu còn chat gốc một kiểu.
-      body = S.renderBody(S.viewOf(entry));
+      body = aiBodyHtml(S.viewOf(entry));
     }
     return '<div class="fe-msg ' + cls + '" data-idx="' + idx + '">'
       + '<div class="fe-msg-meta">' + who + (entry.at ? ' · ' + S.esc(entry.at) : '') + '</div>'
@@ -379,7 +403,7 @@
       var entry = S.logEntryOf(reply, S.nowStamp());
       // (bug 206) Regex của thẻ áp ở bản CHỐT, không áp lúc đang nhả từng chữ: chạy cả chuỗi
       // regex trên mỗi token là bình phương số việc, mà nửa câu thì regex cũng khớp sai.
-      streamingNode.querySelector('.fe-msg-body').innerHTML = S.renderBody(entry.view);
+      streamingNode.querySelector('.fe-msg-body').innerHTML = aiBodyHtml(entry.view);
 
       S.state.log.push(entry);
 

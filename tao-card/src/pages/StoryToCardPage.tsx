@@ -18,6 +18,8 @@ import { useIdbState } from '../lib/idbState';
 import { isSameAsUserPersona } from '../lib/ai/userPersonaSwap';
 import { adviseChunks, adviceText, type ChunkAdvice } from '../lib/ai/chunkAdvice';
 import { cascadeSearch } from '../lib/ai/webScraper';
+// (bug 210) Dán link wiki thì cào ĐÚNG trang đó, khỏi phó mặc cho tìm kiếm theo từ khoá.
+import { splitWikiRefs, fetchWikiBackground, formatWikiDigest } from '../lib/wikiImport/backgroundFetch';
 import { SingleThreadToggle } from '../components/shared/SingleThreadToggle';
 import { t as ui, fmt } from '../i18n';
 
@@ -132,16 +134,36 @@ export function StoryToCardPage() {
   const [deepLog, setDeepLog] = useState('');
   // (bug 204) Tra wiki lấy kiến thức nền trước khi quét — entry trích ra đầy đủ hơn.
   const [wikiLoading, setWikiLoading] = useState(false);
-  const fetchWikiBackground = async () => {
-    const q = (deepOpts.wikiQuery ?? '').trim();
-    if (!q) { toast.error(ui.s2cdWikiNeedQuery); return; }
+  /**
+   * (bug 210) HAI ĐƯỜNG, ưu tiên đường CHẮC CHẮN.
+   *
+   * Có link ⇒ cào đúng trang đó bằng bộ cào wiki sẵn có. Không có link ⇒ vẫn chạy đường tìm
+   * kiếm cũ, nhưng nói thẳng ra rằng đó là ĐOÁN và kèm URL từng nguồn. Bệnh của bản cũ không
+   * chỉ là đoán sai (gõ "lord of the mysterious" ra tiểu thuyết Jules Verne) mà là đoán sai
+   * TRONG IM LẶNG: người dùng thấy một hộp chữ đầy đặn và tin là đúng.
+   */
+  const runWikiLookup = async () => {
+    const raw = (deepOpts.wikiQuery ?? '').trim();
+    if (!raw) { toast.error(ui.s2cdWikiNeedQuery); return; }
+    const { urls, keyword } = splitWikiRefs(raw);
     setWikiLoading(true);
     try {
-      const results = await cascadeSearch(q);
+      if (urls.length > 0) {
+        const { sources, failed } = await fetchWikiBackground(urls);
+        const why = failed.map(f => `${f.url} (${f.why})`).join(' · ');
+        if (sources.length === 0) { toast.error(fmt(ui.s2cdWikiUrlFail, { why })); return; }
+        setD({ background: formatWikiDigest(sources) });
+        if (failed.length > 0) toast.error(fmt(ui.s2cdWikiUrlPartial, { n: failed.length, why }));
+        toast.success(fmt(ui.s2cdWikiUrlDone, { n: sources.length, titles: sources.map(s => s.title).join(', ') }));
+        return;
+      }
+
+      const results = await cascadeSearch(keyword);
       if (results.length === 0) { toast.error(ui.s2cdWikiEmpty); return; }
-      const digest = results.map(r => `【${r.source}】${r.content}`).join('\n\n').slice(0, 6000);
+      // Ghi kèm URL: nguồn sai thì nhìn một cái là thấy, khỏi phải đọc hết đoạn chữ.
+      const digest = results.map(r => `【${r.source}】${r.url}\n${r.content}`).join('\n\n').slice(0, 6000);
       setD({ background: digest });
-      toast.success(fmt(ui.s2cdWikiDone, { n: results.length }));
+      toast.success(fmt(ui.s2cdWikiGuess, { titles: results.map(r => r.url || r.source).join(' · ') }));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
@@ -587,18 +609,20 @@ export function StoryToCardPage() {
             <label className="text-xs block">{ui.s2cExtraNotes}
               <input value={deepOpts.extraNotes} onChange={(e) => setD({ extraNotes: e.target.value })} className="settings-input text-xs mt-1 w-full" placeholder={ui.s2cExtraNotesPh} />
             </label>
-            {/* (bug 204) Kiến thức nền wiki — entry trích ra đầy đủ/chi tiết hơn */}
+            {/* (bug 204) Kiến thức nền wiki — entry trích ra đầy đủ/chi tiết hơn.
+                (bug 210) Ô nhập thành nhiều dòng để dán được cả danh sách link. */}
             <div className="text-xs space-y-1.5">
-              <div className="flex items-center gap-2">
-                <span title={ui.s2cdBackgroundTip}>{ui.s2cdBackground}</span>
-                <input value={deepOpts.wikiQuery ?? ''} onChange={(e) => setD({ wikiQuery: e.target.value })}
-                  className="settings-input text-xs flex-1" placeholder={ui.s2cdWikiQueryPh} />
-                <button onClick={() => void fetchWikiBackground()} disabled={wikiLoading || deepRunning}
+              <div className="flex items-start gap-2">
+                <span title={ui.s2cdBackgroundTip} className="pt-1.5 whitespace-nowrap">{ui.s2cdBackground}</span>
+                <textarea value={deepOpts.wikiQuery ?? ''} onChange={(e) => setD({ wikiQuery: e.target.value })} rows={2}
+                  className="settings-input text-xs flex-1 resize-y" placeholder={ui.s2cdWikiQueryPh} />
+                <button onClick={() => void runWikiLookup()} disabled={wikiLoading || deepRunning}
                   className="px-2.5 py-1.5 rounded-md text-xs font-semibold border border-border hover:bg-muted disabled:opacity-50"
                   style={{ cursor: wikiLoading ? 'wait' : 'pointer' }}>
                   {wikiLoading ? ui.s2cdWikiLoading : ui.s2cdWikiBtn}
                 </button>
               </div>
+              <p className="text-[11px] text-muted-foreground leading-snug">{ui.s2cdWikiHint}</p>
               <textarea value={deepOpts.background ?? ''} onChange={(e) => setD({ background: e.target.value })} rows={3}
                 className="settings-input text-xs w-full resize-y" placeholder={ui.s2cdBackgroundPh} />
             </div>

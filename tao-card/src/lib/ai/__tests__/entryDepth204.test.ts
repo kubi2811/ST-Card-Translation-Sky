@@ -37,10 +37,13 @@ describe('(bug 204) luật độ sâu entry', () => {
     expect(SRC).toContain('Dòng thời gian: [mốc đầu] – [mốc cuối]');
   });
 
-  it('UI: có ô kiến thức nền + nút tra wiki nối cascadeSearch', () => {
+  // (bug 210) Ô này nay có HAI đường: dán link ⇒ cào đúng trang; không link ⇒ mới đi tìm
+  // theo từ khoá như cũ. Đường đoán mò không còn là đường DUY NHẤT.
+  it('UI: ô kiến thức nền — dán link thì cào đúng trang, không link mới tìm theo từ khoá', () => {
     const SRC = read('../../../pages/StoryToCardPage.tsx');
-    expect(SRC).toContain('fetchWikiBackground');
-    expect(SRC).toContain('cascadeSearch(q)');
+    expect(SRC).toContain('splitWikiRefs');
+    expect(SRC).toContain('fetchWikiBackground(urls)');
+    expect(SRC).toContain('cascadeSearch(keyword)');
     expect(SRC).toContain('backgroundInfo:');
   });
 });

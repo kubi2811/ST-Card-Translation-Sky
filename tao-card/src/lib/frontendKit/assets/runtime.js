@@ -146,15 +146,23 @@
     return out;
   }
 
-  /** Áp MỘT script, xử lý chuỗi thay thế đúng như quán rượu (nhóm bắt + macro đoạn khớp). */
+  /**
+   * Áp MỘT script, xử lý chuỗi thay thế đúng như quán rượu (nhóm bắt + macro đoạn khớp).
+   * Trả kèm `ateAll`: có lần khớp nào ăn TRỌN chuỗi đầu vào không — dấu vân tay của script
+   * "thay cả tin nhắn bằng màn hình khác" (xem applyCardRegexes, bug 209).
+   */
   function applyOneRegex(text, rule) {
-    return String(text).replace(rule.re, function () {
+    var src = String(text);
+    var ateAll = false;
+    var out = src.replace(rule.re, function () {
       var args = Array.prototype.slice.call(arguments);
       // Đuôi của callback: [..., vị trí, chuỗi gốc] và có thể thêm object nhóm-có-tên.
       if (args.length && args[args.length - 1] && typeof args[args.length - 1] === 'object') args.pop();
-      args.pop();
-      args.pop();
-      var whole = String(args[0] == null ? '' : args[0]);
+      var matched = String(args[0] == null ? '' : args[0]);
+      var subject = String(args.pop());
+      var offset = args.pop();
+      if (offset === 0 && matched.length === subject.length) ateAll = true;
+      var whole = matched;
       var groups = args.slice(1);
       for (var t = 0; t < rule.trims.length; t++) {
         if (rule.trims[t]) whole = whole.split(rule.trims[t]).join('');
@@ -167,16 +175,56 @@
       });
       return rep;
     });
+    return { text: out, ateAll: ateAll };
   }
+
+  /**
+   * (bug 209) BA LOẠI SCRIPT KHÔNG ĐƯỢC PHÉP CHẠM VÀO KHUNG CHAT NHÚNG.
+   *
+   * Bản 206 chỉ chối theo TÊN (`[FE] …`). Nhưng thứ nguy hiểm không nằm ở cái tên: gần như
+   * thẻ nào có bảng giao diện riêng cũng mang thêm một script XOÁ SẠCH LỜI KỂ ở lớp hiển
+   * thị — vì lời kể đã được vẽ lại bên trong bảng, để nguyên thì hiện hai lần. Script ấy
+   * chạy cho chat gốc là đúng, nhưng chạy trong khung chat nhúng thì khung tự xoá đúng cái
+   * mà nó sinh ra để hiện.
+   *
+   * Đo được ở bug 209: lúc AI nhả từng chữ vẫn đọc được bình thường (đường đó đi mdLite),
+   * nhả xong là bong bóng trắng bong (đường này, thêm ở bản 206). Không phải mất tin nhắn —
+   * là chính khung chat vừa xoá nó đi.
+   *
+   * Nên chối theo VIỆC NÓ LÀM chứ không theo tên:
+   *   1. làm bay hết chữ người đọc được;
+   *   2. nuốt trọn tin nhắn rồi nhả ra thứ chẳng còn mấy chữ cũ (script thay màn hình);
+   *   3. nhồi nguyên một trang HTML vào (chính hai script [FE] của một thẻ khác).
+   * Script làm đẹp thật — tô màu, gắn nhãn, bọc thẻ quanh cả bài — không phạm cái nào, kể cả
+   * loại khớp trọn tin nhắn rồi trả lại nguyên chữ cũ trong một cái khung.
+   */
+  var FULL_PAGE_RE = /<!DOCTYPE|<html[\s>]|<body[\s>]/i;
+  /** Dưới ngưỡng này thì coi như script đã vứt bài kể đi chứ không phải làm đẹp nó. */
+  var KEEP_RATIO = 0.25;
 
   function applyCardRegexes(text) {
     var rules = cardRegexes();
     var out = String(text == null ? '' : text);
     var changed = false;
     for (var i = 0; i < rules.length; i++) {
-      var next;
-      try { next = applyOneRegex(out, rules[i]); } catch (e) { continue; }
-      if (next !== out) { out = next; changed = true; }
+      var res;
+      try { res = applyOneRegex(out, rules[i]); } catch (e) { continue; }
+      if (res.text === out) continue;
+
+      var before = visibleTextOf(out);
+      var after = visibleTextOf(res.text);
+      var why = '';
+      if (before && !after) why = 'nó làm bay sạch lời kể';
+      else if (res.ateAll && after.length < before.length * KEEP_RATIO) why = 'nó nuốt trọn tin nhắn';
+      else if (FULL_PAGE_RE.test(res.text) && !FULL_PAGE_RE.test(out)) why = 'nó nhồi cả một trang HTML vào';
+      if (why) {
+        console.warn('[STFE] Khung chat bỏ qua script regex ' + JSON.stringify(rules[i].name)
+          + ': ' + why + '. Script vẫn chạy bình thường ở chat gốc.');
+        continue;
+      }
+
+      out = res.text;
+      changed = true;
     }
     return { text: out, changed: changed };
   }
@@ -204,14 +252,53 @@
   }
 
   /**
+   * (bug 209) Chữ người chơi THẬT SỰ đọc được: bỏ chú thích, bỏ ruột <style>/<script>, bỏ thẻ.
+   * Đây là thước đo duy nhất đáng tin để nói "bong bóng này trống" — đếm ký tự thô thì một
+   * đống thẻ rỗng cũng ra "có nội dung".
+   */
+  // Thực thể HTML phải dựng bằng mã ký tự, không viết thẳng — xem luật ở đầu file.
+  var NBSP_RE = new RegExp(String.fromCharCode(38) + 'nbsp;', 'gi');
+
+  function visibleTextOf(html) {
+    return String(html == null ? '' : html)
+      .replace(/<!--[\s\S]*?-->/g, '')
+      .replace(new RegExp('<(' + CODE_TAG + '|style)\\b[^>]*>[\\s\\S]*?<\\/\\1\\s*>', 'gi'), '')
+      .replace(/<[^>]*>/g, '')
+      .replace(NBSP_RE, ' ')
+      .trim();
+  }
+
+  function hasVisibleText(html) { return visibleTextOf(html).length > 0; }
+
+  /** Thẻ khối — có mặt nghĩa là script đã tự lo bố cục, đừng dựng đoạn chồng lên nữa. */
+  var BLOCK_TAG_RE = /<(?:p|div|br|table|ul|ol|li|blockquote|pre|section|article|h[1-6])[\s>/]/i;
+
+  /**
+   * (bug 209) Đường HTML bỏ qua mdLite, mà mdLite mới là chỗ đổi xuống dòng thành ngắt đoạn.
+   * Script chỉ tô màu vài chữ (toàn thẻ inline) thì cả bài kể dồn thành một cục chữ liền.
+   */
+  function blockify(html) {
+    var s = String(html);
+    if (BLOCK_TAG_RE.test(s)) return s;
+    return '<p>' + s.replace(/\n{2,}/g, '</p><p>').replace(/\n/g, '<br>') + '</p>';
+  }
+
+  /**
    * Dựng thân bong bóng chat: áp regex của thẻ trước, rồi mới quyết định cách hiển thị.
    * Regex có sinh thẻ HTML ⇒ đó chính là ý đồ của script làm đẹp, hiện thẳng (đã lọc mã).
    * Không thì đi đường cũ — markdown nhẹ, escape hết.
    */
   function renderBody(raw) {
-    var r = applyCardRegexes(raw);
-    if (r.changed && /<[a-zA-Z][^>]*>/.test(r.text)) return sanitizeDisplayHtml(r.text);
-    return mdLite(r.text);
+    var src = String(raw == null ? '' : raw);
+    var r = applyCardRegexes(src);
+    var body = (r.changed && /<[a-zA-Z][^>]*>/.test(r.text))
+      ? blockify(sanitizeDisplayHtml(r.text))
+      : mdLite(r.text);
+    // (bug 209) CHỐT CHẶN CUỐI, sau cả bộ lọc trong applyCardRegexes: lời kể có chữ mà thân
+    // bong bóng ra trắng ⇒ vứt bản đã qua regex, hiện lời kể gốc. Thà hiện không màu mè còn
+    // hơn để người chơi nhìn một ô trống và tưởng tool nuốt mất lượt của mình.
+    if (hasVisibleText(src) && !hasVisibleText(body)) return mdLite(src);
+    return body;
   }
 
   function clone(v) { try { return JSON.parse(JSON.stringify(v)); } catch (e) { return v; } }
@@ -1005,6 +1092,8 @@
     renderBody: renderBody,
     applyCardRegexes: applyCardRegexes,
     cardRegexes: cardRegexes,
+    // (bug 209) main.js cần biết "bong bóng này có chữ không" để không bỏ mặc ô trống.
+    hasVisibleText: hasVisibleText,
     resetCardRegexes: function () { regexCache = null; regexCacheAt = 0; },
     clone: clone,
     deepDefaults: deepDefaults,

@@ -262,6 +262,9 @@ html, body {
 
 .fe-msg-body p { margin: 0 0 .6em; }
 .fe-msg-body p:last-child { margin-bottom: 0; }
+
+/* (bug 209) Lời nhắn thay cho bong bóng trắng — nhạt và nghiêng để không lẫn với lời kể. */
+.fe-msg-body .fe-msg-empty { color: var(--fe-text-dim); font-style: italic; font-size: .85rem; }
 .fe-msg-body q { color: var(--fe-accent); font-style: normal; }
 .fe-msg-body blockquote {
   margin: .4em 0;

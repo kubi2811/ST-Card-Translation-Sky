@@ -343,17 +343,21 @@ export default function FileUpload() {
             )}
 
             {/* Replace / Update Actions */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-              <div {...getRootProps()} style={{ cursor: 'pointer' }}>
+            {/* (bug 216) Trước đây là grid `1fr 1fr` CỨNG: sidebar hẹp thì mỗi cột chỉ còn ~90px
+                trong khi chữ "Cập nhật bản gốc" cần 187px → nút bị cắt chữ, còn ô "Kéo thả file"
+                bị bóp xuống 1px. `auto-fit + minmax` cho hai nút TỰ XUỐNG DÒNG khi không đủ chỗ,
+                và cho chữ xuống hàng thay vì tràn ra ngoài. */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '8px' }}>
+              <div {...getRootProps()} style={{ cursor: 'pointer', minWidth: 0 }}>
                 <input {...getInputProps()} />
-                <button className="btn btn-ghost btn-sm" style={{ width: '100%', fontSize: '0.75rem', border: '1px dashed var(--border-subtle)' }} title="Replace current card completely">
+                <button className="btn btn-ghost btn-sm" style={{ width: '100%', minWidth: 0, fontSize: '0.75rem', whiteSpace: 'normal', lineHeight: 1.25, border: '1px dashed var(--border-subtle)' }} title="Replace current card completely">
                   <Upload size={12} /> {t.dragDropCard}
                 </button>
               </div>
 
-              <div {...getUpdateProps()} style={{ cursor: 'pointer' }}>
+              <div {...getUpdateProps()} style={{ cursor: 'pointer', minWidth: 0 }}>
                 <input {...getUpdateInputProps()} />
-                <button className="btn btn-primary btn-sm" style={{ width: '100%', fontSize: '0.75rem' }} title="Update from a newer original card, keeping existing translations">
+                <button className="btn btn-primary btn-sm" style={{ width: '100%', minWidth: 0, fontSize: '0.75rem', whiteSpace: 'normal', lineHeight: 1.25 }} title="Update from a newer original card, keeping existing translations">
                   <Upload size={12} /> {ui.fuUpdateOriginal}
                 </button>
               </div>

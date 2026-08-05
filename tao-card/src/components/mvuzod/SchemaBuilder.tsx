@@ -24,7 +24,8 @@ import { useCardStore } from '../../store/cardStore';
 import type { MVUZODSchema, MVUZODField, MVUZODConstraints } from '../../types/mvuzod.types';
 import type { LorebookEntry, CardExtensions } from '../../types';
 import { MVUZOD_TEMPLATES, type MVUZODTemplate } from '../../lib/mvuzod/templateLibrary';
-import { analyzeLorebookForSchema, buildMinimalSchemaFromReport, parseSchemaInferenceResponse, schemaToZodCode } from '../../lib/mvuzod/schemaInferencer';
+import { analyzeLorebookForSchema, buildMinimalSchemaFromReport, parseSchemaInferenceResponse, assertUsableSchema, schemaToZodCode } from '../../lib/mvuzod/schemaInferencer';
+import { checkSchemaHealth, summarizeHealth } from '../../lib/mvuzod/schemaHealth';
 import { parseZodCodeToSchema, isMvuSchemaScript } from '../../lib/mvuzod/zodCodeParser';
 import { mergeInferredSchemas } from '../../lib/mvuzod/mergeInferredSchemas';
 import { buildMVUZODScripts } from '../../lib/mvuzod/tavernScriptBuilder';
@@ -882,9 +883,11 @@ function SchemaSourcePanel({
 
       setLoadingStatus('Phân tích phản hồi...');
       const parsed = parseSchemaInferenceResponse(finalText!);
-      if (!parsed.proposedSchema) throw new Error('AI không trả về schema hợp lệ.');
+      // (bug 216) Chốt CŨ `if (!parsed.proposedSchema)` là CHỐT CHẾT: normalizeMVUZODSchema không bao
+      // giờ trả null, nên schema 0 biến vẫn lọt vào thẻ mà không báo gì — đúng triệu chứng user gặp.
+      const usable = assertUsableSchema(parsed.proposedSchema, 'AI Inference');
 
-      await onApplyInferred(parsed.proposedSchema);
+      await onApplyInferred(usable);
     } catch (err) {
       // Bấm Dừng thì request bị abort — đó là ý user, không phải lỗi để đỏ màn hình.
       const msg = err instanceof Error ? err.message : String(err);
@@ -982,9 +985,10 @@ function SchemaSourcePanel({
 
       setIdeaStatus('Phân tích phản hồi...');
       const parsed = parseSchemaInferenceResponse(fullText);
-      if (!parsed.proposedSchema) throw new Error('AI không trả về schema hợp lệ.');
+      // (bug 216) xem ghi chú ở handleAIAnalyze — chốt cũ không bao giờ kích hoạt được.
+      const usable = assertUsableSchema(parsed.proposedSchema, 'AI Thiết kế Schema');
 
-      await onApplyInferred(parsed.proposedSchema);
+      await onApplyInferred(usable);
       setIdeaStatus('Tạo schema thành công!');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -1787,6 +1791,11 @@ function ActionsPanel({
         )}
       </div>
 
+      {/* (bug 216) KIỂM SCHEMA — user xin "thêm cơ chế kiểm tra xem nó có hoạt động không".
+          Trước đây tab ghi thẳng schema vào thẻ rồi hiện "Schema loaded", chẳng kiểm gì: schema
+          0 biến, không dựng nổi Zod code, tên trùng nhau… đều lọt, tới lúc chơi thật mới lộ. */}
+      <SchemaHealthPanel schema={schema} />
+
       {/* AI Expand Variables */}
       <AIExpandVariables schema={schema} />
 
@@ -1842,6 +1851,57 @@ interface SchemaDeleteAction {
 type SchemaAction = SchemaAddAction | SchemaEditAction | SchemaDeleteAction;
 
 type AIOperationMode = 'add' | 'edit' | 'smart';
+
+/**
+ * (bug 216) Bảng KIỂM SCHEMA — chạy đúng bộ chốt mà pipeline Auto Creator dùng để chặn schema
+ * hỏng, cộng vài phép kiểm rút từ các bug cũ. Bấm một nút là biết schema có chạy được không,
+ * thay vì phải xuất thẻ ra SillyTavern rồi mới phát hiện.
+ */
+function SchemaHealthPanel({ schema }: { schema: MVUZODSchema }) {
+  const [report, setReport] = useState<import('../../lib/mvuzod/schemaHealth').SchemaHealthReport | null>(null);
+
+  const run = () => setReport(checkSchemaHealth(schema));
+
+  return (
+    <div className="rounded-lg border border-border p-3 space-y-2">
+      <h4 className="text-xs font-semibold flex items-center gap-1.5">
+        <CheckCircle className="w-3.5 h-3.5 text-emerald-400" /> Kiểm schema
+      </h4>
+      <p className="text-[10px] text-muted-foreground">
+        Soi schema có dựng được Zod code, có biến nào không, tên có trùng nhau không…
+      </p>
+      <button
+        onClick={run}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-600/90 transition-colors"
+      >
+        <CheckCircle className="w-3.5 h-3.5" /> Kiểm ngay
+      </button>
+
+      {report && (
+        <div className="space-y-1.5 pt-1">
+          <p className={`text-[11px] font-medium ${report.ok ? 'text-emerald-400' : 'text-red-400'}`}>
+            {summarizeHealth(report)}
+          </p>
+          <p className="text-[10px] text-muted-foreground">
+            {report.stats.totalLeaves} biến · {report.stats.maxDepth} tầng · Zod {report.stats.zodCodeChars} ký tự
+          </p>
+          {report.issues.length > 0 && (
+            <ul className="space-y-1 max-h-48 overflow-y-auto">
+              {report.issues.map((iss, i) => (
+                <li
+                  key={i}
+                  className={`text-[10px] leading-snug ${iss.level === 'error' ? 'text-red-400' : iss.level === 'warning' ? 'text-amber-400' : 'text-muted-foreground'}`}
+                >
+                  {iss.level === 'error' ? '❌' : iss.level === 'warning' ? '⚠️' : 'ℹ️'} {iss.message}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function AIExpandVariables({ schema }: { schema: MVUZODSchema }) {
   const [expandText, setExpandText] = useState('');

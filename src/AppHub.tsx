@@ -64,6 +64,15 @@ export default function AppHub() {
       {/* ─── Rail + Content ─── */}
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         {/* Flow rail */}
+        {/* (bug 216) RAIL PHẢI CUỘN ĐƯỢC.
+            Vỏ Hub là `height:100vh; overflow:hidden`, còn rail thì `flexShrink:0` và không có
+            overflow riêng. Với 9 app + Trợ Lý AI + Cập nhật, rail cần ~754px; màn hình cao 720px
+            (laptop 768px trừ thanh trình duyệt — rất phổ thông) chỉ còn 666px cho nó.
+            Hậu quả đo được: nút "Trợ Lý AI" tràn xuống 746px, nút "Cập nhật" xuống tận 808px —
+            NẰM HẲN NGOÀI MÀN HÌNH và không có thanh cuộn nào để với tới. Người dùng màn thấp coi
+            như mất trắng hai nút đó.
+            Cách chữa: danh sách app cuộn được, còn Trợ Lý AI + Cập nhật GHIM ĐÁY — hai nút quan
+            trọng nhất luôn bấm được, dù thêm bao nhiêu app đi nữa. */}
         <nav
           style={{
             width: RAIL_WIDTH,
@@ -75,19 +84,39 @@ export default function AppHub() {
             alignItems: 'center',
             padding: '10px 0',
             gap: '6px',
+            minHeight: 0,
+            overflow: 'hidden',
           }}
         >
-          {FLOWS.map((f) => (
-            <RailButton key={f.id} flow={f} active={active === f.id} onClick={() => select(f.id)} />
-          ))}
-          {/* Push the update button to the bottom of the rail */}
-          <div style={{ flexGrow: 1 }} />
+          {/* Danh sách app — phần DUY NHẤT được phép co lại và cuộn. */}
+          <div
+            className="hub-rail-scroll"
+            style={{
+              flex: '1 1 auto',
+              minHeight: 0,
+              overflowY: 'auto',
+              overflowX: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '6px',
+              width: '100%',
+            }}
+          >
+            {FLOWS.map((f) => (
+              <RailButton key={f.id} flow={f} active={active === f.id} onClick={() => select(f.id)} />
+            ))}
+          </div>
+
           {/* (bug 208) Trợ Lý AI lên NGAY TRÊN nút Cập nhật. Trước đây nó nằm trong mục "Công cụ
               khác" của sidebar Dịch Card — một mục thu gọn, nên mỗi lần cần hỏi Trợ Lý là phải mở
               mục ra rồi mới bấm được, và ở tab khác thì không thấy nó đâu. Ở rail thì luôn nhìn
-              thấy từ mọi tab. */}
-          <RailAiCompanionButton onOpen={() => select('translate')} />
-          <HubUpdateButton />
+              thấy từ mọi tab.
+              (bug 216) Ghim đáy, không co: đây là hai nút không bao giờ được phép biến mất. */}
+          <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', width: '100%' }}>
+            <RailAiCompanionButton onOpen={() => select('translate')} />
+            <HubUpdateButton />
+          </div>
         </nav>
 
         {/* Content */}

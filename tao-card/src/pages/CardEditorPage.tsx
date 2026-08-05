@@ -9,6 +9,7 @@ import {
   Plus, Trash2, GripVertical, Star, StarOff, Hash,
   X, ChevronDown, ChevronUp, ChevronRight, Copy,
 } from 'lucide-react';
+import { normalizeAvatarFile, describeNormalize } from '../lib/converters/avatarImage';
 import { useCardStore } from '../store/cardStore';
 import StagePersonaButton from '../components/StagePersonaButton';
 import { t as ui, fmt } from '../i18n';
@@ -118,12 +119,22 @@ function TabBasic({ data, updateField }: TabProps) {
                     input.onchange = async (e) => {
                       const file = (e.target as HTMLInputElement).files?.[0];
                       if (!file) return;
-                      const base64 = await new Promise<string>((resolve) => {
-                        const reader = new FileReader();
-                        reader.onloadend = () => resolve(reader.result as string);
-                        reader.readAsDataURL(file);
-                      });
-                      updateField('avatar', base64);
+                      // (bug 217) Thu nhỏ + nén trước khi lưu. Trước đây ảnh vào nguyên xi rồi nở
+                      // thêm 33% vì base64 — ảnh 4K là thẻ nặng vài chục MB, trong khi avatar chỉ
+                      // hiển thị vài trăm pixel.
+                      try {
+                        const norm = await normalizeAvatarFile(file);
+                        updateField('avatar', norm.dataUrl);
+                        console.info(`[bug217] ${describeNormalize(norm, file.size)}`);
+                      } catch {
+                        // Không đọc được ảnh (định dạng lạ) → giữ nguyên hành vi cũ để không mất chức năng.
+                        const base64 = await new Promise<string>((resolve) => {
+                          const reader = new FileReader();
+                          reader.onloadend = () => resolve(reader.result as string);
+                          reader.readAsDataURL(file);
+                        });
+                        updateField('avatar', base64);
+                      }
                     };
                     input.click();
                   }}

@@ -8,6 +8,7 @@ import {
   Menu, Upload, Download, Undo2, Moon, Sun, ChevronDown,
   FileJson, BookOpen, FileText, AlertCircle, Check, Image, Plus, Folder, Shield, LayoutGrid, Eraser,
 } from 'lucide-react';
+import { normalizeAvatarFile, describeNormalize } from '../../lib/converters/avatarImage';
 import { useCardStore } from '../../store/cardStore';
 import { useToastStore } from '../../store/toastStore';
 import { importCard, exportCardV3, exportCardV2Compat, exportStandaloneLorebook, exportCharacterOnly } from '../../lib/converters/lorebookConvert';
@@ -133,12 +134,15 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
           }
           json = JSON.parse(charaJsonStr) as Record<string, unknown>;
 
-          // Store the PNG image itself as base64 in card.avatar
-          avatarBase64 = await new Promise<string>((resolve) => {
-            const reader = new FileReader();
-            reader.onloadend = () => resolve(reader.result as string);
-            reader.readAsDataURL(file);
-          });
+          // (bug 217) TUYỆT ĐỐI KHÔNG `readAsDataURL(file)` ở đây.
+          // File PNG này chứa cả hai chunk metadata `ccv3`/`chara` mà lần export trước đã nhét
+          // base64 ảnh vào — đọc nguyên file làm avatar là base64 LỒNG base64, và mỗi vòng
+          // import→export lại nhân ~3.56 lần. Đó chính là đường lên 30–40 MB user báo.
+          // normalizeAvatarFile vẽ lại qua canvas nên CHỈ lấy pixel: metadata rơi hết, vòng lặp
+          // bị cắt đứt, ảnh còn được thu về kích thước hiển thị thật.
+          const norm = await normalizeAvatarFile(file);
+          avatarBase64 = norm.dataUrl;
+          console.info(`[bug217] ${describeNormalize(norm, file.size)} — gốc ${Math.round(file.size / 1024)} KB`);
         } else {
           const text = await file.text();
           json = JSON.parse(text) as Record<string, unknown>;

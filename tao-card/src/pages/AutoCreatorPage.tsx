@@ -372,7 +372,7 @@ export function AutoCreatorPage() {
               <>
                 {/* (User 2026) totalEntries = TỐI ĐA; minEntries = TỐI THIỂU (0 = không ép sàn).
                     AI trả thiếu/trùng bị loại → pipeline tự nối batch bù tới khi đạt tối thiểu. */}
-                <SliderControl label={`${ui.acTotalEntries} (tối đa)`} value={stepConfigs.lorebook.totalEntries} min={1} max={100} step={5} hardMax={2000} onChange={(v) => store.updateStepConfig('lorebook', { totalEntries: v, minEntries: Math.min(stepConfigs.lorebook.minEntries ?? 0, v) })} disabled={store.isRunning} />
+                <SliderControl label={`${ui.acTotalEntries} (tối đa)`} value={stepConfigs.lorebook.totalEntries} min={1} max={500} step={5} hardMax={5000} onChange={(v) => store.updateStepConfig('lorebook', { totalEntries: v, minEntries: Math.min(stepConfigs.lorebook.minEntries ?? 0, v) })} disabled={store.isRunning} />
                 <SliderControl label="Entry tối thiểu (0 = không ép)" value={stepConfigs.lorebook.minEntries ?? 0} min={0} max={stepConfigs.lorebook.totalEntries} step={5} hardMax={stepConfigs.lorebook.totalEntries} onChange={(v) => store.updateStepConfig('lorebook', { minEntries: v })} disabled={store.isRunning} />
                 {/* (bug 215) Ngân sách token mỗi entry — user xin "lorebook thì cho chỉnh mỗi
                     entries bao nhiêu token". batchGenerator vốn đã biết dùng con số này (bơm chỉ

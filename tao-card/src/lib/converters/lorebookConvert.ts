@@ -97,9 +97,32 @@ export function importCard(json: Record<string, unknown>): ImportResult {
 // EXPORT
 // ═══════════════════════════════════════════════════════════════════════════
 
+/**
+ * (bug 217) GỠ base64 ảnh khỏi bản JSON đem nhúng vào PNG.
+ *
+ * Theo đặc tả thẻ nhân vật, `avatar` là TÊN FILE / đường dẫn (mặc định `'none'`) — chính chú thích
+ * trong `card.types.ts` cũng ghi vậy. Nhưng app đang nhét nguyên data URL base64 của ảnh vào đó,
+ * rồi bản JSON ấy lại được nhúng vào metadata của chính tấm PNG chứa ảnh đó.
+ *
+ * File user gửi ở `bug/217` là bằng chứng: 3.35 MB thì `avatar` chiếm ĐÚNG 3.35 MB — tức 100%.
+ *
+ * Tệ hơn, nó phình theo cấp số nhân: PNG xuất ra ghi ảnh vào HAI chunk (`ccv3` + `chara`), mỗi
+ * chunk lại base64 thêm một tầng nữa (4/3), nên riêng phần metadata đã là 2 × 4/3 × 4/3 ≈ 3.56 lần
+ * kích thước ảnh. Vòng sau import lại chính file đó thì `avatar` mới = base64 của CẢ FILE (pixel +
+ * hai chunk cũ) → 3.56 lần nữa. Vài vòng là chạm 30–40 MB đúng như user báo.
+ *
+ * Trong PNG thì base64 này DƯ THỪA HOÀN TOÀN: ảnh đã nằm sẵn ở phần pixel rồi.
+ */
+function stripEmbeddedAvatar<T extends { avatar?: string }>(card: T): T {
+  if (typeof card.avatar === 'string' && card.avatar.startsWith('data:')) {
+    return { ...card, avatar: 'none' };
+  }
+  return card;
+}
+
 /** Export full V3 card JSON */
 export function exportCardV3(card: CharacterCardV3): string {
-  const synced = syncMirrorFields(structuredClone(card));
+  const synced = stripEmbeddedAvatar(syncMirrorFields(structuredClone(card)));
   // (bug 73) Chốt chặn CHUNG cho mọi đường xuất — cả nút xuất nhanh ở TopBar lẫn Export
   // Wizard đều đi qua đây. Không có data.extensions.world thì SillyTavern để lorebook nằm
   // rời, user phải tự vào "More… → Import Card Lore" rồi tự gắn vào nhân vật.
@@ -116,7 +139,7 @@ export function exportCardV3(card: CharacterCardV3): string {
  * (uid, key, keysecondary, order, disable, etc.).
  */
 export function exportCardV2Compat(card: CharacterCardV3): string {
-  const synced = syncMirrorFields(structuredClone(card));
+  const synced = stripEmbeddedAvatar(syncMirrorFields(structuredClone(card)));   // (bug 217)
   // (bug 73) Chunk 'chara' của PNG cũng phải mang sợi dây world — xem exportCardV3.
   syncEmbeddedWorldLink(synced, card);
 

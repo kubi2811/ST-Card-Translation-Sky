@@ -1212,6 +1212,44 @@ export function parseSchemaInferenceResponse(raw: string): {
     };
     proposedSchema: MVUZODSchema;
   };
-  typed.proposedSchema = normalizeMVUZODSchema(typed.proposedSchema);
+
+  // ─── (bug 216) AI HAY TRẢ SAI TÊN KHOÁ ───
+  // Prompt của tab đòi `proposedSchema`, nhưng model rất hay trả `schema` (đó là tên khoá mà
+  // prompt của Auto Creator dùng), hoặc trả thẳng `{ version, fields }` không bọc gì. Trước đây
+  // mọi biến thể ấy đều rơi vào `undefined` rồi bị normalize thành schema RỖNG — và cái rỗng đó
+  // được ghi thẳng vào thẻ. Nhận cả ba dạng thay vì bắt AI phải đoán đúng tên.
+  const bag = obj as Record<string, unknown>;
+  const rawSchema =
+    (bag.proposedSchema as unknown) ??
+    (bag.schema as unknown) ??
+    (Array.isArray(bag.fields) ? bag : undefined);
+
+  typed.proposedSchema = normalizeMVUZODSchema(rawSchema);
   return typed;
+}
+
+/**
+ * (bug 216) Schema này có DÙNG ĐƯỢC không?
+ *
+ * `normalizeMVUZODSchema` cố ý không bao giờ ném lỗi và luôn trả về một object hợp lệ — kể cả khi
+ * đầu vào là `undefined` thì nó vẫn cho ra `{ version:'1.0', fields: [] }`. Rất tiện cho việc
+ * render, nhưng nó biến chốt duy nhất của tab MVUZOD — `if (!parsed.proposedSchema) throw` — thành
+ * CHỐT CHẾT: vế trái luôn là object truthy nên không đời nào kích hoạt.
+ *
+ * Hậu quả đúng như user báo: AI trả sai khoá hoặc JSON bị cắt → tab ghi vào thẻ một schema 0 field,
+ * KHÔNG báo lỗi, mà header vẫn hiện "Schema loaded" nên nhìn như đã xong. Đường Auto Creator không
+ * dính vì nó có `verifyMvuzodResult` chặn đúng ca này.
+ *
+ * Hàm này là chốt còn thiếu, dùng chung cho mọi đường sinh schema của tab.
+ */
+export function assertUsableSchema(schema: MVUZODSchema | null | undefined, where = 'AI'): MVUZODSchema {
+  const n = normalizeMVUZODSchema(schema);
+  if (!n.fields || n.fields.length === 0) {
+    throw new Error(
+      `${where} không trả về schema dùng được (0 biến). `
+      + `Thường do model trả sai định dạng hoặc JSON bị cắt giữa chừng — thử bấm lại, `
+      + `hoặc đổi sang model mạnh hơn / bỏ ép JSON output.`,
+    );
+  }
+  return n;
 }

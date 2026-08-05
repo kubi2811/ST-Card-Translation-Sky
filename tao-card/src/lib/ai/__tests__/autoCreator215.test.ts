@@ -71,14 +71,15 @@ describe('không còn trần cứng — gõ được số tuỳ ý', () => {
     expect(pageSrc).toMatch(/Math\.max\(min, Math\.min\(hardMax, Math\.round\(raw\)\)\)/);
   });
 
+  // (bug 216) User báo vẫn còn thấy chặn 100 → nâng tiếp: thanh trượt kéo tới 500, gõ tay tới 5000.
   it('pipeline bỏ trần 100 entry, giữ trần an toàn rất rộng', () => {
     expect(pipelineSrc).not.toMatch(/Math\.min\(100, Math\.max\(lbConfig\.totalEntries/);
-    expect(pipelineSrc).toMatch(/Math\.min\(2000, Math\.max\(lbConfig\.totalEntries/);
+    expect(pipelineSrc).toMatch(/Math\.min\(5000, Math\.max\(lbConfig\.totalEntries/);
   });
 
   it('các tham số từng bị chặn thấp nay đều có hardMax rộng hơn', () => {
     const expected: [string, string][] = [
-      ['totalEntries', 'hardMax={2000}'],
+      ['totalEntries', 'hardMax={5000}'],
       ['entriesPerBatch', 'hardMax={50}'],
       ['concurrentBatches', 'hardMax={24}'],
       ['tokensPerEntry', 'hardMax={20000}'],

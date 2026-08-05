@@ -600,7 +600,7 @@ ${response.text}`;
       // thế giới lớn có thể cần vài trăm entry, mà trần này âm thầm cắt xuống 100 kể cả khi
       // chính user đã đặt cao hơn. Vẫn để một trần AN TOÀN rất rộng để không bao giờ chạy vô hạn
       // vì một con số nhập nhầm.
-      const totalEntries = Math.min(2000, Math.max(lbConfig.totalEntries, entityCount + 5));
+      const totalEntries = Math.min(5000, Math.max(lbConfig.totalEntries, entityCount + 5));
       // 2) SÀN mặc định = 80% trần (card cũ lưu minEntries=0 cũng được nâng) → thiếu thì tự nối batch bù.
       const minEntries = Math.max(lbConfig.minEntries ?? 0, Math.floor(totalEntries * 0.8));
       if (totalEntries > lbConfig.totalEntries) {

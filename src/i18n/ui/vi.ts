@@ -61,7 +61,7 @@ const ui: UiKeys = {
   psTrVdBrace: 'prompts[{i}] ({id}): {{ }} mất cân bằng',
   psTrVdMacro: 'prompts[{i}] ({id}): {{{kind}::{name}}} {before}→{after}',
   psTrVdOrder: 'prompt_order bị đổi',
-  psTrVdOutside: 'Có thay đổi NGOÀI các field được phép dịch (name/content/scriptName/findRegex)',
+  psTrVdOutside: 'Có thay đổi NGOÀI các field được phép dịch (name/content/scriptName/findRegex/replaceString)',
 
   // ─── Dịch Script (Phase B) ───
   railScriptTranslate: 'Dịch Script',

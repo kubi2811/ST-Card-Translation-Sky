@@ -3259,7 +3259,22 @@ function _regexSpecialSignals(regexFields: TranslationField[]): string {
   return [...sigs].join('; ') || 'không phát hiện ca đặc biệt';
 }
 
-const _balanced = (s: string, o: string, c: string) => s.split(o).length === s.split(c).length;
+/**
+ * (bug 213) Độ lệch ngoặc phải so với BẢN GỐC, không phải với 0.
+ *
+ * Chính file này đã học được bài đó ở chốt code_splice (xem comment "Sửa bug #2" phía trên):
+ * replaceString / fragment template hợp lệ VỐN có thể lệch ngoặc — dấu `}` nằm trong chuỗi hoặc
+ * regex, `${...}` nội suy… Gốc lệch -1 thì bản dịch giữ -1 là ĐÚNG.
+ *
+ * Nhưng bước validate của nút "1 nút quét+sửa regex" lại đòi cân bằng TUYỆT ĐỐI. Hậu quả đúng
+ * bằng họ bug 197/198: bản AI sửa đúng (giữ nguyên độ lệch của gốc) bị bác "Validate thất bại —
+ * giữ bản cũ", vòng quét sau lại tìm ra y hệt các lỗi đó, user bấm bao nhiêu lần cũng không sạch.
+ *
+ * Dung sai ±1 cho khớp với chốt tương đương ở aiFixRegexFields.
+ */
+const _bracketDelta = (s: string, o: string, c: string) => s.split(o).length - s.split(c).length;
+const _bracketMatchesOrig = (fixed: string, orig: string, o: string, c: string) =>
+  Math.abs(_bracketDelta(fixed, o, c) - _bracketDelta(orig, o, c)) <= 1;
 
 /**
  * Pipeline GỘP quét+sửa regex (1 nút). Trả issues + fixes; áp fix qua callback applyFix.
@@ -3362,7 +3377,11 @@ Xuất ĐÚNG XML, đặt TOÀN BỘ field đã sửa trong tag (không markdown
       if (!fixed) { fixDone++; return; }
       const ratio = fixed.length / Math.max(1, cur.length);
       const validRegex = fieldType !== 'findRegex' || /^\/[\s\S]*\/[a-z]*$/.test(fixed.trim());
-      const ok = ratio >= 0.4 && ratio <= 2.5 && _balanced(fixed, '{', '}') && _balanced(fixed, '[', ']') && _balanced(fixed, '(', ')') && validRegex;
+      const ok = ratio >= 0.4 && ratio <= 2.5
+        && _bracketMatchesOrig(fixed, field.original, '{', '}')
+        && _bracketMatchesOrig(fixed, field.original, '[', ']')
+        && _bracketMatchesOrig(fixed, field.original, '(', ')')
+        && validRegex;
       if (ok && fixed !== cur) {
         applyFix(fp, fixed);
         fixes.push({ regexIndex: rIdx, scriptName: field.label, fieldPath: fp, fieldType: fieldType as RegexFixResult['fieldType'], success: true, before: cur, after: fixed, reason: `Đã sửa ${fIssues.length} lỗi` });
@@ -3376,11 +3395,30 @@ Xuất ĐÚNG XML, đặt TOÀN BỘ field đã sửa trong tag (không markdown
   if (signal?.aborted) { onProgress({ phase: 'cancelled', phaseLabel: 'Đã hủy.', done: fixDone, total: fixTargets.length, issues, fixes }); return { issues, fixes, planNotes }; }
 
   // ── GĐ4: Kiểm mốc chunk / coverage ──
+  // (bug 213) Trước đây `covered` dựng từ chính `chunks`, mà chunkRegexFields LUÔN tạo ≥1 chunk cho
+  // mọi regex field → `missed` luôn rỗng, giai đoạn này chỉ tạo cảm giác an toàn giả. Giờ kiểm đúng
+  // cái đáng lo: ghép các chunk lại có dựng đúng NGUYÊN VĂN field không (sót/trùng/lệch ký tự).
   onProgress({ phase: 'coverage', phaseLabel: 'Giai đoạn 4: Kiểm mốc chunk (coverage)…', done: 0, total: 1, issues, fixes });
-  const covered = new Set(chunks.map(c => c.fieldPath));
-  const missed = regexFields.filter(f => !covered.has(f.path));
-  if (missed.length) {
-    issues.push({ id: crypto.randomUUID(), severity: 'warning', location: 'coverage', description: `${missed.length} field regex bị bỏ sót khi chia chunk — cần kiểm tay: ${missed.map(f => f.label).slice(0, 5).join(', ')}`, original: '', current: '', suggestion: '', autoFixable: false });
+  const chunksByField = new Map<string, RegexChunk[]>();
+  for (const c of chunks) {
+    if (!chunksByField.has(c.fieldPath)) chunksByField.set(c.fieldPath, []);
+    chunksByField.get(c.fieldPath)!.push(c);
+  }
+  for (const f of regexFields) {
+    const cs = (chunksByField.get(f.path) || []).sort((a, b) => a.part - b.part);
+    if (cs.length === 0) {
+      issues.push({ id: crypto.randomUUID(), severity: 'warning', location: 'coverage', description: `Field regex "${f.label}" không được chia chunk nào — KHÔNG hề được quét, cần kiểm tay.`, original: '', current: '', suggestion: '', autoFixable: false });
+      continue;
+    }
+    const origRebuilt = cs.map(c => c.origChunk).join('\n');
+    const transRebuilt = cs.map(c => c.transChunk).join('\n');
+    if (origRebuilt !== f.original || transRebuilt !== (f.translated || '')) {
+      issues.push({
+        id: crypto.randomUUID(), severity: 'warning', location: 'coverage',
+        description: `Chia chunk làm lệch nội dung "${f.label}" (ghép ${cs.length} phần lại không khớp nguyên văn: gốc ${origRebuilt.length}/${f.original.length} ký tự, dịch ${transRebuilt.length}/${(f.translated || '').length}) — có đoạn chưa được quét.`,
+        original: '', current: '', suggestion: 'Kiểm tay field này, hoặc dịch lại rồi quét lại.', autoFixable: false,
+      });
+    }
   }
 
   onProgress({ phase: 'done', phaseLabel: `Xong: ${issues.filter(i => i.severity === 'error').length} lỗi, ${fixes.filter(f => f.success).length} field đã sửa.`, done: 1, total: 1, issues, fixes });

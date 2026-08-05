@@ -65,7 +65,12 @@ export function validatePreset(
     const clone = JSON.parse(JSON.stringify(p)) as STPreset;
     for (const pr of clone.prompts || []) { pr.name = ''; pr.content = ''; }
     const { regexScripts, helperScripts } = getPresetExtras(clone);
-    for (const r of regexScripts) { r.scriptName = ''; r.findRegex = ''; }
+    // (bug 213) `replaceString` PHẢI được mask: pipeline có sửa nó ở hai chỗ — đồng bộ nhãn theo
+    // prompt (applyLabelMapToText) và dịch khối HTML qua pipeline Dịch Script (việc 118). Quên mask
+    // ⇒ cứ dịch replaceString thành công là deep-equal thấy khác nhau và bắn `psTrVdOutside`
+    // "Có thay đổi NGOÀI field được phép dịch". Tính năng chạy càng ĐÚNG thì báo cáo càng ĐỎ —
+    // đúng lớp báo động giả dạy user bỏ qua cảnh báo thật (bài học bug 154).
+    for (const r of regexScripts) { r.scriptName = ''; r.findRegex = ''; r.replaceString = ''; }
     for (const h of helperScripts) { h.name = ''; h.content = ''; }
     const top = clone as unknown as Record<string, unknown>;
     for (const k of proseKeys) if (typeof top[k] === 'string') top[k] = '';

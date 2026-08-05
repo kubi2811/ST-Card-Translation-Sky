@@ -59,7 +59,7 @@ const ui = {
   psTrVdBrace: 'prompts[{i}] ({id}): {{ }} is unbalanced',
   psTrVdMacro: 'prompts[{i}] ({id}): {{{kind}::{name}}} {before}→{after}',
   psTrVdOrder: 'prompt_order was modified',
-  psTrVdOutside: 'Something changed OUTSIDE the translatable fields (name/content/scriptName/findRegex)',
+  psTrVdOutside: 'Something changed OUTSIDE the translatable fields (name/content/scriptName/findRegex/replaceString)',
 
   // ─── Dịch Script (Phase B) ───
   railScriptTranslate: 'Script Trans',

@@ -57,7 +57,7 @@ const ui: UiKeys = {
   psTrVdBrace: 'prompts[{i}]（{id}）：{{ }} 不配对',
   psTrVdMacro: 'prompts[{i}]（{id}）：{{{kind}::{name}}} {before}→{after}',
   psTrVdOrder: 'prompt_order 被改动',
-  psTrVdOutside: '在可翻译字段（name/content/scriptName/findRegex）之外发生了改动',
+  psTrVdOutside: '在可翻译字段（name/content/scriptName/findRegex/replaceString）之外发生了改动',
 
   // ─── Dịch Script (Phase B) ───
   railScriptTranslate: '脚本翻译',

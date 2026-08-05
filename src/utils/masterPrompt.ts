@@ -121,6 +121,15 @@ export interface MasterPromptOptions {
    LAYER 1 — CORE ROLE + PROJECT CONTEXT (~800 tokens)
    Identity, priority hierarchy, dual mandate, subsystem overview
    ════════════════════════════════════════════════════════════════════ */
+/**
+ * (bug 213) SUBSYSTEM 5 phía dưới từng liệt kê `executeSlashCommands()` và `sendMessage()` vào
+ * danh sách "API TavernHelper — cấm dịch". Nhưng RULE C3.1 ở Layer 2 (bản vá bug 164 HM0-B) lại
+ * tuyên bố ngược hẳn: "there is NO setVariable/getVariable/sendMessage/executeSlashCommands in
+ * this API" — và chú thích ở stPreview.ts xác nhận 4 tên đó KHÔNG tồn tại trong API thật.
+ * Để cả hai thì cùng một prompt mang hai chỉ dẫn đối nghịch về cùng nhóm tên hàm: gặp biến hoặc
+ * hàm do chính tác giả thẻ đặt tên trùng, model không biết theo luật nào. Đã gỡ khỏi Layer 1 để
+ * hai tầng nói cùng một điều.
+ */
 function buildCoreRole(targetLang: string, sourceLang: string): string {
   const sourceInfo = sourceLang && sourceLang !== 'auto'
     ? `You are translating FROM ${sourceLang} TO ${targetLang}.`
@@ -194,7 +203,7 @@ TavernHelper enables EJS (Embedded JavaScript) inside card text. EJS tags:
   <%= expr %>    Output escaped result
   <%- expr %>    Output unescaped result (raw HTML)
 Common EJS API functions (NEVER translate these function names):
-  getvar('name'), setvar('name', value), addvar('name', delta), getglobalvar('name'), executeSlashCommands(), sendMessage(), fetch()
+  getvar('name'), setvar('name', value), addvar('name', delta), getglobalvar('name'), fetch()
 The STRING LITERALS inside getvar/setvar (the variable names) MUST be translated to match the JSON key translation.
 
 SUBSYSTEM 6 — MVU & Zod State Management:

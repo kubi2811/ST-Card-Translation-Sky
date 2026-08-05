@@ -53,7 +53,7 @@ export function escapeForRegex(s: string): string {
  * Các đoạn [start,end) nằm TRONG character class [...] của thân regex — trong đó `(?:a|b)`
  * là ký tự thường chứ không phải nhóm ⇒ TUYỆT ĐỐI không thêm nhánh vào đấy.
  */
-function charClassRanges(body: string): Array<[number, number]> {
+export function charClassRanges(body: string): Array<[number, number]> {
   const ranges: Array<[number, number]> = [];
   let inClass = false;
   let classStart = 0;

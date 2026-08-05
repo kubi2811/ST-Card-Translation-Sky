@@ -1285,23 +1285,24 @@ export function verifyFields(
       }
 
       // CSS classes should NOT be translated
+      // (bug 213) Trước đây class gốc bị mất được GHÉP MÒ với class mới ĐẦU TIÊN BẤT KỲ rồi báo
+      // 'X was translated to Y'. Class mới đó thường chẳng liên quan gì (thứ tự trong Set là ngẫu
+      // nhiên theo văn bản), nên câu mô tả sai sự thật và đi thẳng vào prompt aiFix — AI bị dặn
+      // "sửa" một cặp không tồn tại. Đây đúng anti-pattern mà bản vá bug #2 đã xoá ở check #13
+      // nhưng còn sót nguyên ở đây. Nhánh CSS ID ngay bên dưới vốn đã làm đúng: báo mất, không
+      // đoán nó thành cái gì.
       for (const cls of origClasses) {
         if (cls && !transClasses.has(cls) && cls.length > 2) {
-          // Check if it was translated (replaced by something else)
-          const transArr = [...transClasses];
-          const possibleTranslation = transArr.find(tc => !origClasses.has(tc) && tc.length > 2);
-          if (possibleTranslation) {
-            issues.push({
-              id: crypto.randomUUID(), fieldPath: field.path,
-              severity: 'error', category: 'css_class_sync',
-              location: field.label,
-              description: `CSS class "${cls}" was translated to "${possibleTranslation}". CSS classes must NOT be translated — JS/CSS references will break.`,
-              original: cls,
-              current: possibleTranslation,
-              suggestion: `Restore CSS class "${cls}" — do not translate class names.`,
-              autoFixable: false,
-            });
-          }
+          issues.push({
+            id: crypto.randomUUID(), fieldPath: field.path,
+            severity: 'error', category: 'css_class_sync',
+            location: field.label,
+            description: `CSS class "${cls}" biến mất khỏi bản dịch (bị dịch hoặc bị đổi tên). CSS class KHÔNG được dịch — mọi tham chiếu JS/CSS sẽ gãy.`,
+            original: cls,
+            current: '(mất hoặc bị đổi tên)',
+            suggestion: `Khôi phục CSS class "${cls}" đúng nguyên văn — không dịch tên class.`,
+            autoFixable: false,
+          });
         }
       }
       // CSS IDs should NOT be translated

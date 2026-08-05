@@ -334,7 +334,11 @@ export function patchReplaceString(
   }
 
   // Replace first occurrence (safest default)
-  const result = replaceString.replace(find, replace);
+  // (bug 213) PHẢI dùng callback. `replace` là ĐOẠN CODE cần chèn; nếu nó chứa `$&`, `$'`, "$`"
+  // hay `$1` — chuyện rất thường gặp trong replaceString của regex script, vì đó chính là cú pháp
+  // tham chiếu nhóm bắt — thì String.replace sẽ DIỄN GIẢI chúng thành pattern thay thế và chèn
+  // vào nội dung khác hẳn thứ ta định chèn, âm thầm.
+  const result = replaceString.replace(find, () => replace);
 
   return { result, matchCount, success: true };
 }
@@ -359,8 +363,19 @@ export function validateReplaceStringSyntax(replaceString: string): SyntaxValida
 
     scriptIndex++;
 
+    // (bug 213) EJS phải được xử lý TRƯỚC TIÊN. Script trong replaceString rất hay có thẻ EJS,
+    // mà mấy thẻ đó không phải JS hợp lệ đứng một mình → new Function() luôn ném SyntaxError →
+    // injectFunction bác cả bản chèn ĐÚNG. Đó là báo động giả chặn oan chính tính năng của mình.
+    //
+    //  · Thẻ XUẤT `<%= %>` / `<%- %>` nằm ở vị trí BIỂU THỨC → thay bằng một literal là parse được.
+    //  · Thẻ ĐIỀU KHIỂN `<% if … { %> … <% } %>` thì KHÔNG: bỏ nó đi là mất luôn thân lệnh, thay
+    //    bằng literal là dính hai biểu thức cạnh nhau. Không có cách nào parse tử tế, nên với khối
+    //    đó ta BỎ QUA kiểm cú pháp thay vì báo bừa — thà không kết luận còn hơn kết luận sai.
+    const ejsStripped = scriptContent.replace(/<%[=-]([\s\S]*?)%>/g, '"__EJS__"');
+    if (/<%[\s\S]*?%>/.test(ejsStripped)) continue;   // còn thẻ điều khiển → không kết luận được
+
     // Replace common ST/jQuery patterns that would fail in strict JS parse
-    let sanitized = scriptContent
+    const sanitized = ejsStripped
       // Replace capture group references
       .replace(/\$(\d+)/g, '"__CAPTURE_$1__"')
       .replace(/\$&/g, '"__CAPTURE_FULL__"')

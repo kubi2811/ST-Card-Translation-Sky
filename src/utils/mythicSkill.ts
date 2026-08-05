@@ -262,7 +262,11 @@ export function applyMythicTranslation(
     if (!touched) continue;
     // Giữ nguyên định dạng khối gốc: xuống dòng sau _START, JSON một dòng, xuống dòng trước _END.
     const rebuilt = `<!-- ${b.name}_START\n${JSON.stringify(next)}\n${b.name}_END -->`;
-    out = out.replace(b.raw, rebuilt);
+    // (bug 213) PHẢI dùng callback. `rebuilt` chứa description/triggerWhen ĐÃ DỊCH; nếu bản dịch
+    // có `$&`, `$'`, "$`" hay `$1` (AI echo nhầm capture group, hoặc văn bản có ký hiệu tiền tệ
+    // kèm ký tự đặc biệt) thì String.replace diễn giải chúng thành pattern thay thế → khối meta
+    // bị chèn rác, JSON hỏng, entry bị Agent loại. Truyền hàm thì chuỗi được chèn nguyên văn.
+    out = out.replace(b.raw, () => rebuilt);
   }
 
   return { comment: out, metaFieldsApplied, hashesRebuilt };

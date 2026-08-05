@@ -141,7 +141,7 @@ export async function runPresetTranslation(
   deps: ScriptPipelineDeps,
   ctl: ScriptRunControl & { onUnitsUpdated?: (units: PresetUnit[]) => void },
   cb: (p: PresetProgress) => void,
-  preTranslated?: Record<string, string>,
+  preTranslated?: import('./persist').UnitMap,
 ): Promise<PresetTranslateResult> {
   const t0 = Date.now();
 
@@ -157,7 +157,10 @@ export async function runPresetTranslation(
   if (preTranslated) {
     for (const u of units) {
       const saved = preTranslated[u.id];
-      if (saved) u.translated = saved;
+      // (bug 213) DÂY AN TOÀN THỨ 2 — id trùng CHƯA ĐỦ, chuỗi gốc cũng phải trùng. Chữ ký file chỉ
+      // gồm độ dài + 64 ký tự đầu/cuối, nên sửa một prompt ở GIỮA mà tổng độ dài không đổi thì chữ
+      // ký vẫn trùng và bản dịch cũ sẽ được áp cho nội dung mới. Dịch Script đã có dây này sẵn.
+      if (saved && saved.o === u.original) u.translated = saved.t;
     }
   }
 

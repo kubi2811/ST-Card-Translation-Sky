@@ -510,6 +510,27 @@ export function recanonicalizeMvuInFields(
  * @param mvuDictionary The MVU dictionary (original CJK → translated name)
  * @returns { text: string, fixes: { found: string, replaced: string }[] }
  */
+/**
+ * (bug 213) Gom mọi chuỗi ĐANG ĐỨNG Ở VỊ TRÍ TÊN BIẾN trong một đoạn text.
+ *
+ * Dùng làm chứng cứ cho Pass 5: chỉ khi một literal cũng xuất hiện ở đây thì nó mới đáng được
+ * fuzzy-match theo từ điển; còn lại phải khớp chính xác mới đụng vào. Đây là ranh giới giữa
+ * "sửa tên biến bị dịch lệch" (đúng việc) và "ghi đè giá trị enum hợp lệ" (phá code âm thầm).
+ */
+export function collectNameLikeLiterals(text: string): Set<string> {
+  const out = new Set<string>();
+  const add = (s?: string) => { const t = s?.trim(); if (t) out.add(t.toLowerCase()); };
+  // {{getvar::TÊN}}, {{setglobalvar::TÊN::...}}
+  for (const m of text.matchAll(/(?:get|set|add)(?:global)?var::\s*([^:}]+)/g)) add(m[1]);
+  // obj['TÊN'] / obj["TÊN"]
+  for (const m of text.matchAll(/\[\s*['"]([^'"]+)['"]\s*\]/g)) add(m[1]);
+  // stat_data.TÊN / data.TÊN / variables.TÊN
+  for (const m of text.matchAll(/(?:stat_data|data|variables)\.([^\s.,;:'")\]}]+)/g)) add(m[1]);
+  // khoá YAML `TÊN:` đầu dòng
+  for (const m of text.matchAll(/^\s*(?:["']([^"':\n]+)["']|([^"':\s\n][^"':\n]*[^"':\s\n]))\s*:/gm)) add(m[1] || m[2]);
+  return out;
+}
+
 export function enforceInitvarCovariance(
   translatedText: string,
   mvuDictionary: Record<string, string>,
@@ -672,13 +693,31 @@ export function enforceInitvarCovariance(
 
   // ─── Pass 5: String comparison covariance ───
   // Fix === 'KEY' / !== "KEY" / case 'KEY'
+  //
+  // (bug 213) Đây là chỗ MẬP MỜ NHẤT trong cả hàm: chuỗi trong `=== '...'` / `case '...'` có thể
+  // là TÊN BIẾN (đáng ép theo từ điển) mà cũng rất có thể là GIÁ TRỊ enum hợp lệ (tuyệt đối không
+  // được đụng). Trước đây nó gọi fuzzy Levenshtein y như các pass khác, nên `case 'Hảo Tâm':` —
+  // một giá trị hợp lệ, cách "Hảo Cảm" đúng 2 ký tự và dài 7 nên lọt ngưỡng dist ≤ 2 — bị ghi đè
+  // thành `case 'Hảo Cảm':`. So sánh sai âm thầm: không lỗi cú pháp, không cảnh báo, chỉ lộ ra
+  // lúc chơi khi nhánh đó không bao giờ khớp nữa.
+  //
+  // Giờ chỉ sửa khi CÓ CHỨNG CỨ chuỗi đó thật sự là tên biến:
+  //   (a) khớp CHÍNH XÁC (sau chuẩn hoá hoa/thường, gạch dưới) một giá trị trong từ điển — an
+  //       toàn tuyệt đối, không phải đoán; HOẶC
+  //   (b) đúng chuỗi đó còn xuất hiện ở vị trí TÊN BIẾN trong CÙNG văn bản (getvar::X, data.X,
+  //       obj['X'], hay khoá YAML `X:`) — lúc đó nó đúng là tên và fuzzy mới được phép.
+  const nameLikeLiterals = collectNameLikeLiterals(result);
   const compRegex = /((?:===|!==|==|!=|case)\s*['"])([^'"]+)(['"])/g;
   result = result.replace(compRegex, (match, prefix, inner, suffix) => {
     if (!inner || inner.length < 2) return match;
     if (translatedToOriginal.has(inner.toLowerCase())) return match;
     if (originalToTranslated.has(inner)) return match;
 
-    const correctValue = findClosestDictValue(inner, mvuDictionary, strict);
+    const exactValue = findClosestDictValue(inner, mvuDictionary, true);
+    const correctValue = exactValue
+      ?? (nameLikeLiterals.has(inner.trim().toLowerCase())
+        ? findClosestDictValue(inner, mvuDictionary, strict)
+        : null);
     if (correctValue && correctValue !== inner) {
       if (!fixes.some(f => f.found === inner)) {
         fixes.push({ found: inner, replaced: correctValue });

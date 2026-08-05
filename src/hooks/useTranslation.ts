@@ -36,6 +36,7 @@ import { planTargetedChunkRetry, mergeChunkProgress } from '../utils/chunkRetryP
 import { chunkCharsForField } from '../utils/chunking';
 // (bug 211) Chốt an toàn CHUNG cho mọi đường dịch lại + bộ gom "mục chưa đạt".
 import { finalizeRetryTranslation } from '../utils/retryGuards';
+import { isRefusalError } from '../utils/refusalGuard';
 import { collectProblemFields } from '../utils/problemFields';
 
 /* ─── (bug 205) Wake lock trong lúc dịch ───
@@ -255,6 +256,13 @@ export function useTranslation() {
    * cho một lượt dịch. Gom vào đây rồi flush MỘT lần sau mỗi lô thì kết quả cuối y hệt (vẫn là
    * hợp nhất các cặp mới, vẫn không ghi đè cặp đã có) nhưng số lần dựng lại UI giảm hai bậc.
    */
+  /**
+   * (bug 214) Các field bị AI TỪ CHỐI trong lượt chạy này. Cuối lượt in ra thành DANH SÁCH —
+   * đây chính là thứ user xin: "phải có thông báo có list những chỗ nào bị trả response lỗi
+   * chứ ghép vào luôn thì không biết".
+   */
+  const refusedFields = useRef<Map<string, { label: string; detail: string }>>(new Map());
+
   const pendingEjsNames = useRef<Record<string, string>>({});
   /**
    * Ngưỡng gom. KHÔNG để vô hạn: hơn 20 chỗ khác trong hook đọc từ điển này thẳng từ store để
@@ -1318,6 +1326,21 @@ export function useTranslation() {
         throw err; // Re-throw for cancel handling
       }
 
+      // ═══ (bug 214) AI TỪ CHỐI — không phải lỗi kỹ thuật, đừng thử lại vô ích ═══
+      // Cùng prompt + cùng model + cùng bộ lọc thì lần nào cũng bị chặn. Ghi nhận đích danh để
+      // cuối lượt có DANH SÁCH cho user (trước đây câu từ chối bị ghép thẳng vào thẻ, không lỗi
+      // đỏ nào, nên "lâu lâu cũng không để ý").
+      if (isRefusalError(err) || /AI TỪ CHỐI|AI_REFUSAL/.test(msg)) {
+        refusedFields.current.set(field.path, { label: field.label, detail: msg });
+        store.updateField(field.path, {
+          status: 'error',
+          error: msg,
+          keptOriginalOnPurpose: true,   // để bộ đếm "mục chưa đạt" lôi ra được
+        });
+        store.addLog('error', `🚫 ${field.label}: AI TỪ CHỐI dịch (nội dung 18+/nhạy cảm). Giữ nguyên bản gốc — KHÔNG ghép câu từ chối vào thẻ.`);
+        return 'error';
+      }
+
       // ═══ CHUNK-LEVEL RESUME: Save partial progress on chunk failure ═══
       const currentRetries = freshRetries();
       const maxChunkRetries = 2; // Auto-retry up to 2 times for chunk errors (3 total attempts)
@@ -2013,6 +2036,10 @@ export function useTranslation() {
       store.addLog('error', '🔑 Chưa cấu hình API key nên chưa thể dịch. Vào mục 1 “Thiết lập” → ô “API Key”, dán key (mỗi dòng 1 key nếu có nhiều), rồi bấm “Kiểm tra kết nối” cho chắc.');
       return;
     }
+
+    // (bug 214) Lượt mới → danh sách "bị từ chối" phải sạch, kẻo báo lại mục của lượt trước.
+    // (Chạy tiếp/continue thì GIỮ, vì đó vẫn là cùng một lượt dịch.)
+    if (!continueMode) refusedFields.current.clear();
 
     const allFields = prepareFields(continueMode, freshStart);
     if (allFields.length === 0) {
@@ -3271,6 +3298,19 @@ export function useTranslation() {
     const freshFields = useStore.getState().fields;
     const doneCount = freshFields.filter((f) => f.status === 'done').length;
     const failCount = freshFields.filter((f) => f.status === 'error').length;
+    // ═══ (bug 214) DANH SÁCH MỤC BỊ AI TỪ CHỐI ═══
+    // In TRƯỚC dòng tổng kết để nó không bị trôi mất giữa hàng trăm dòng log, và nêu đích danh
+    // từng mục kèm việc cần làm.
+    if (refusedFields.current.size > 0) {
+      const list = [...refusedFields.current.values()];
+      store.addLog('error',
+        `🚫 ${list.length} mục bị AI TỪ CHỐI dịch (kiểm duyệt nội dung 18+/nhạy cảm), đã GIỮ NGUYÊN bản gốc:\n`
+        + list.map((r, i) => `   ${i + 1}. ${r.label}`).join('\n')
+        + `\n   → Cách xử lý: bật “Jailbreak” + “Luật NSFW Gomorrah” trong Cấu hình dịch, hoặc đổi sang model ít kiểm duyệt hơn `
+        + `(Gemini Flash / model qua proxy khác), rồi bấm “Dịch lại tất cả mục lỗi”. Cũng có thể dịch tay riêng từng mục này.`);
+      store.addToast('error', `🚫 ${list.length} mục bị AI từ chối dịch — xem danh sách trong log để xử lý.`);
+    }
+
     // (bug 213) Không ăn mừng trên một lượt thất bại. "🎉 Dịch xong: 0 thành công, 5 lỗi" kèm
     // toast màu xanh là thông điệp sai tông và làm user tưởng mọi thứ ổn.
     if (doneCount === 0 && failCount > 0) {

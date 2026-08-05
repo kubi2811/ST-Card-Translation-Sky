@@ -45,6 +45,7 @@ interface TokenUsageSink {
 // chunkText tách sang ./chunking (Đợt tách monolith). Import để dùng nội bộ + RE-EXPORT
 // để các file khác vẫn `import { chunkText } from './apiClient'` như cũ (không phải sửa importer).
 import { chunkText } from './chunking';
+import { detectRefusal, RefusalError, isRefusalError } from './refusalGuard';
 import { hedgedRace } from './hedge';
 // (bug 193) Bác sĩ chunk: chẩn đoán 6 mặt + lượt SỬA có chẩn đoán + lọc/ép từ điển MVU theo chunk.
 import {
@@ -2465,6 +2466,18 @@ async function translateChunk(
         throw new Error('AI bị ngắt ngang do chạm giới hạn Max Tokens (chưa kịp xuất bản dịch).');
       }
 
+      // ═══ (bug 214) LỜI TỪ CHỐI ĐỘI LỐT BẢN DỊCH ═══
+      // Nhà cung cấp có thể trả HTTP 200 với nội dung là câu từ chối ("The prompt could not be
+      // submitted… violates Google's Generative AI Prohibited Use policy…"). Đó không phải khối
+      // blockReason/finishReason có cấu trúc mà apiClient vốn đã bắt được, nên trước đây nó lọt
+      // thẳng vào làm "bản dịch" của chunk — rồi được GHÉP với các chunk dịch thành công, ra một
+      // entry mở đầu bằng tiếng Anh của Google. Không lỗi đỏ, không cảnh báo.
+      // Bắt NGAY ĐÂY, ở tầng chunk, trước mọi bước ghép.
+      const refusal = detectRefusal(result, { sourceLength: chunk.length });
+      if (refusal) {
+        throw new RefusalError(refusal, fieldName);
+      }
+
       // ═══ Expert Mode: detect <translation> bị cắt ngang ═══
       // AI output đủ reasoning nhưng <translation> không có </translation>
       // → reasoning ăn hết output tokens, bản dịch bị truncated
@@ -2601,6 +2614,11 @@ async function translateChunk(
       }
 
       if (signal?.aborted) throw err;
+
+      // (bug 214) TỪ CHỐI thì thử lại y hệt là vô nghĩa — cùng prompt, cùng model, cùng bộ lọc thì
+      // lần nào cũng bị chặn, chỉ tốn thêm tiền và kéo dài lượt dịch. Ném thẳng lên để tầng trên
+      // đổi CÁCH (giữ gốc + báo đích danh cho user) thay vì đâm đầu lại 3 lần.
+      if (isRefusalError(err)) throw err;
 
       if (err instanceof ApiError && !err.retryable) {
         throw err;
@@ -3762,9 +3780,16 @@ export async function translateText(
     if (completedList.length < chunks.length) {
       const completedForResume = translatedChunks.map(c => c || '') as string[];
       const firstMissingIdx = translatedChunks.findIndex(c => !c);
-      const errorMsg = errors.length > 0
-        ? `Parallel: ${errors.length} chunk(s) failed. First: chunk ${errors[0].idx + 1}/${chunks.length}: ${errors[0].err.message}`
-        : `Parallel: ${chunks.length - completedList.length} chunk(s) incomplete (workers exited early). Completed: ${completedList.length}/${chunks.length}`;
+      // (bug 214) Nếu nguyên nhân là AI TỪ CHỐI thì nói thẳng ra bằng tiếng người — user cần biết
+      // đây là kiểm duyệt nội dung, không phải tool hỏng hay mạng chập.
+      const refused = errors.filter(e => isRefusalError(e.err));
+      const errorMsg = refused.length > 0
+        ? `🚫 AI TỪ CHỐI dịch ${refused.length}/${chunks.length} đoạn (nội dung 18+/nhạy cảm). `
+          + `Đoạn bị chặn: ${refused.map(e => `#${e.idx + 1}`).join(', ')}. `
+          + `Bản gốc được GIỮ NGUYÊN — câu từ chối KHÔNG bị ghép vào thẻ.`
+        : errors.length > 0
+          ? `Parallel: ${errors.length} chunk(s) failed. First: chunk ${errors[0].idx + 1}/${chunks.length}: ${errors[0].err.message}`
+          : `Parallel: ${chunks.length - completedList.length} chunk(s) incomplete (workers exited early). Completed: ${completedList.length}/${chunks.length}`;
       
       if (completedList.length > 0) {
         throw new ChunkError(

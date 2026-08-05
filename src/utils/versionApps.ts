@@ -63,6 +63,10 @@ const KEYWORD_HINTS: Array<[RegExp, AppId]> = [
   [/\b(crawler|cào wiki|wiki import)\b/i, 'crawler'],
   [/\b(novalcard|trich card|trích card)\b/i, 'trich-card'],
   [/\b(dich card|dịch card|translation|regex manager)\b/i, 'dich-card'],
+  // (bug 214) "bản dịch" / "hỏng thẻ" / "vào thẻ" là đặc sản của Dịch Card — chỉ app này mới sinh
+  // ra bản dịch và ghi ngược vào thẻ. Thêm vì loạt commit bug 213 tả việc bằng đúng mấy chữ này
+  // mà không nêu tên app, nên rơi hết vào "Khác".
+  [/(bản dịch|ban dich|hỏng thẻ|hong the|vào thẻ|vao the|dịch thẻ|dich the)/i, 'dich-card'],
   [/\b(hub|header|rail|phiên bản|version)\b/i, 'hub'],
 ];
 
@@ -70,6 +74,34 @@ const KEYWORD_HINTS: Array<[RegExp, AppId]> = [
  * Một commit có thể đụng NHIỀU app (`feat(hub+tao-card): …`) — trả về TẤT CẢ, không ép về một.
  * Luôn trả ít nhất một phần tử.
  */
+/** Bỏ dấu tiếng Việt + hạ chữ thường — để so nhãn app không phụ thuộc cách gõ có/không dấu. */
+const foldVi = (s: string): string =>
+  s.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/gi, 'd').toLowerCase().trim();
+
+/**
+ * (bug 214) Nhãn app viết trong NGOẶC — quy ước mới của repo từ khoảng bug 204 trở đi:
+ *   `Bug 205 (Dich Card): …`, `Bug 212 (Tạo Card · Front-End): …`
+ * Trước đây chỉ có nhánh `type(scope):` kiểu conventional-commit nên cả loạt commit theo quy ước
+ * mới rơi hết vào "Khác" trong tab Giới thiệu — user đọc changelog không biết bản đó sửa app nào.
+ */
+const LABEL_MAP: Record<string, AppId> = {
+  'dich card': 'dich-card', 'dich script': 'dich-script', 'dich preset': 'dich-preset',
+  'tao card': 'tao-card', 'tao preset': 'tao-preset', 'mod card': 'mod-card',
+  'web crawler': 'crawler', 'crawler': 'crawler', 'trich card': 'trich-card',
+  'hub': 'hub',
+};
+
+function appsFromParenLabel(s: string): AppId[] {
+  // Lấy cụm trong ngoặc đầu tiên đứng TRƯỚC dấu hai chấm — `Bug 212 (Tạo Card · Front-End):`
+  const m = /^[^:]*?\(([^)]+)\)\s*:/.exec(s.trim());
+  if (!m) return [];
+  const ids = m[1]
+    .split(/[+,/&·|]/)                       // "Tạo Card · Front-End", "Hub + Tạo Card"
+    .map(part => LABEL_MAP[foldVi(part)])
+    .filter((x): x is AppId => !!x);
+  return [...new Set(ids)];
+}
+
 export function classifyCommitApps(subject: string): AppId[] {
   const s = String(subject ?? '');
   const scopeMatch = /^[a-z]+\(([^)]+)\)!?:/i.exec(s.trim());
@@ -80,6 +112,9 @@ export function classifyCommitApps(subject: string): AppId[] {
       .filter((x): x is AppId => !!x);
     if (ids.length) return [...new Set(ids)];
   }
+  const byLabel = appsFromParenLabel(s);
+  if (byLabel.length) return byLabel;
+
   for (const [re, id] of KEYWORD_HINTS) {
     if (re.test(s)) return [id];
   }

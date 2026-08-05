@@ -29,6 +29,7 @@ import { countEjsBlocks } from './ejsSegmenter';
 import { isLikelyJsScript, hasRealJsSignal, jsParseErrorAny } from './scriptSafety';
 import { repairUnquotedObjectKeys, repairUnquotedObjectKeysInHtml } from './repairObjectKeys';
 import { verifyCodeStructureParity, detectInventedDeclarations } from './surgical';
+import { detectRefusal, refusalMessage } from './refusalGuard';
 
 export interface RetryGuardInput {
   original: string;
@@ -68,6 +69,19 @@ export function finalizeRetryTranslation(input: RetryGuardInput): RetryGuardResu
 
   if (!text || !original) {
     return { text, keptOriginal: text === original, notes };
+  }
+
+  // ─── 0. (bug 214) LỜI TỪ CHỐI ĐỘI LỐT BẢN DỊCH — chốt TRƯỚC mọi thứ ───
+  // apiClient đã chặn ở tầng chunk, nhưng đây là lưới cuối cho mọi đường dịch lại: thà giữ bản
+  // gốc tiếng Trung còn hơn ghi câu "The prompt could not be submitted…" của Google vào thẻ.
+  const refusal = detectRefusal(text, { sourceLength: original.length });
+  if (refusal) {
+    return {
+      text: original,
+      keptOriginal: true,
+      guardReason: 'ai-refusal',
+      notes: [{ level: 'warning', msg: refusalMessage(refusal, label) }],
+    };
   }
 
   // ─── 1. Hậu xử lý (giống retranslateField cũ — nay bulk cũng được hưởng) ───

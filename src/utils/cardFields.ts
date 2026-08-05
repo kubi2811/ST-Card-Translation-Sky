@@ -102,12 +102,49 @@ function hasTranslatableText(text: string): boolean {
 }
 
 /* ─── Classify lorebook entry type for MVU per-type strategy ─── */
-type LorebookEntryType = 'initvar' | 'mvu_logic' | 'rules' | 'narrative' | 'controller';
+// (bug 213) `json_patch` từng bị thiếu ở alias CỤC BỘ này, trong khi TranslationField.entryType
+// (types/card.ts) có nó và 8+ chỗ khác kiểm nó — nên phép gán không thể tồn tại ngay từ tầng KIỂU.
+// Đó là lý do gốc khiến chốt bug 128 chưa từng chạy lần nào.
+type LorebookEntryType = 'initvar' | 'mvu_logic' | 'rules' | 'narrative' | 'controller' | 'json_patch';
+
+/**
+ * (bug 213) Nội dung này có phải một tài liệu JSON Patch không — `[{ "op": …, "path": … }]`?
+ *
+ * `entryType: 'json_patch'` được KIỂM ở 8+ chỗ (chốt bug 128 "json_patch là JSON, KHÔNG phải
+ * script" → miễn guard cú pháp JS ở useTranslation, đổi luật ở retryGuards/mvuValidator/cardHealth,
+ * đổi cách hiển thị ở FieldEditor) nhưng TRƯỚC ĐÂY KHÔNG NƠI NÀO GÁN nó — grep cả src không có
+ * một phép gán. Tức là toàn bộ chốt bug 128 chưa từng chạy lần nào: entry JSON-patch bị xếp nhầm
+ * thành mvu_logic/narrative rồi đem soi bằng guard cú pháp JS, và nếu nội dung tình cờ parse được
+ * như JS thì còn bị bắt dịch lại vô ích.
+ *
+ * Nhận diện CHẶT (phải parse ra JSON thật + mọi phần tử có `op` và `path` kiểu chuỗi) để không
+ * kéo nhầm entry văn xuôi nào vào đây.
+ */
+export function isJsonPatchContent(content: string): boolean {
+  const t = (content || '').trim();
+  if (!t.startsWith('[') && !t.startsWith('{')) return false;
+  if (!/"op"\s*:/.test(t) || !/"path"\s*:/.test(t)) return false;
+  try {
+    const parsed = JSON.parse(t) as unknown;
+    const ops = Array.isArray(parsed) ? parsed : [parsed];
+    if (ops.length === 0) return false;
+    return ops.every((o) =>
+      !!o && typeof o === 'object' &&
+      typeof (o as { op?: unknown }).op === 'string' &&
+      typeof (o as { path?: unknown }).path === 'string');
+  } catch {
+    return false;
+  }
+}
 
 function classifyLorebookEntry(entry: { name?: string; comment?: string; content?: string }): LorebookEntryType {
   const name = (typeof entry.name === 'string' ? entry.name : '').toLowerCase();
   const comment = (typeof entry.comment === 'string' ? entry.comment : '').toLowerCase();
   const content = typeof entry.content === 'string' ? entry.content : '';
+
+  // (bug 213) JSON Patch phải xét TRƯỚC mọi luật dựa vào tên/comment: một entry patch hoàn toàn có
+  // thể được đặt tên "mvu_update" và bị luật controller/mvu_logic bên dưới hớt mất.
+  if (isJsonPatchContent(content)) return 'json_patch';
 
   // [initvar] — variable initialization YAML
   if (content.includes('[initvar]') || comment.includes('initvar') || name.includes('initvar') || name.includes('var_init')) {

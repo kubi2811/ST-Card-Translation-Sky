@@ -1999,6 +1999,21 @@ export function useTranslation() {
 
   /* ─── Main translation loop ─── */
   const startTranslation = useCallback(async (continueMode = false, freshStart = false) => {
+    // (bug 213) CHẶN TRƯỚC KHI BẮN REQUEST khi chưa có API key.
+    // Trước đây bấm Dịch mà chưa nhập key thì app vẫn gửi đủ N request, nhận N cái 401, đánh mọi
+    // field thành 'error' rồi kết bằng "🎉 Dịch xong: 0 thành công, N lỗi" — emoji ăn mừng trên
+    // một lượt thất bại 100%, mà không dòng nào nói ra cái thiếu thật sự là API key.
+    const proxyNow = useStore.getState().proxy;
+    const hasKey = !!(proxyNow.apiKey?.trim() || (proxyNow.apiKeys && proxyNow.apiKeys.some((k) => k?.trim())));
+    const hasExtraProviderKey = (useStore.getState().providers || []).some(
+      (p) => p.apiKey?.trim() || (p.apiKeys && p.apiKeys.some((k) => k?.trim())),
+    );
+    if (!hasKey && !hasExtraProviderKey) {
+      store.addToast('error', 'Chưa có API key — mở mục 1 “Thiết lập” ở thanh bên, dán key vào ô API Key rồi bấm Dịch lại.');
+      store.addLog('error', '🔑 Chưa cấu hình API key nên chưa thể dịch. Vào mục 1 “Thiết lập” → ô “API Key”, dán key (mỗi dòng 1 key nếu có nhiều), rồi bấm “Kiểm tra kết nối” cho chắc.');
+      return;
+    }
+
     const allFields = prepareFields(continueMode, freshStart);
     if (allFields.length === 0) {
       store.addToast('info', 'No translatable fields found');
@@ -3256,8 +3271,18 @@ export function useTranslation() {
     const freshFields = useStore.getState().fields;
     const doneCount = freshFields.filter((f) => f.status === 'done').length;
     const failCount = freshFields.filter((f) => f.status === 'error').length;
-    store.addLog('info', `🎉 Dịch xong: ${doneCount} thành công, ${failCount} lỗi`);
-    store.addToast('success', `Translation complete! ${doneCount}/${fields.length} fields translated`);
+    // (bug 213) Không ăn mừng trên một lượt thất bại. "🎉 Dịch xong: 0 thành công, 5 lỗi" kèm
+    // toast màu xanh là thông điệp sai tông và làm user tưởng mọi thứ ổn.
+    if (doneCount === 0 && failCount > 0) {
+      store.addLog('error', `❌ Không dịch được mục nào (${failCount} lỗi). Xem chi tiết lỗi ở danh sách bên dưới — thường là API key/model sai, hết quota, hoặc mạng chặn.`);
+      store.addToast('error', `Không dịch được mục nào — ${failCount} lỗi. Kiểm tra lại API key và model.`);
+    } else if (failCount > 0) {
+      store.addLog('warning', `⚠️ Dịch xong: ${doneCount} thành công, ${failCount} lỗi — bấm “Dịch lại tất cả mục lỗi” để thử tiếp.`);
+      store.addToast('info', `Xong ${doneCount}/${fields.length} trường, còn ${failCount} lỗi.`);
+    } else {
+      store.addLog('info', `🎉 Dịch xong: ${doneCount} thành công, ${failCount} lỗi`);
+      store.addToast('success', `Translation complete! ${doneCount}/${fields.length} fields translated`);
+    }
 
     // (User 2026) Dịch xong có kết quả thật → mở popup hướng dẫn bước tiếp (Sức khoẻ thẻ / Đồng nhất
     // biến MVU / AI Verify). Popup tự tôn trọng "Đừng hiện lại" nên gọi vô điều kiện ở đây.
@@ -4042,18 +4067,24 @@ export function useTranslation() {
     });
 
     if (bulkCancelled) {
+      // (bug 213) THIẾU `return`: trước đây user bấm Hủy giữa chừng vẫn bị in tiếp dòng tổng kết
+      // "Thử lại xong: X đã sửa, Y vẫn lỗi" với con số đếm DỞ, kèm toast như một lượt chạy trọn vẹn.
       runningRef.current = false;
       store.setPhase(pauseRef.current ? 'paused' : 'cancelled');
-      store.addLog('warning', 'Retry cancelled by user');
+      store.addLog('warning', `Đã dừng giữa chừng theo yêu cầu — mới ${verb} được ${successCount}/${errorFields.length} mục. Phần đã xong vẫn được giữ.`);
+      store.saveTranslationCache();
+      return;
     }
 
     runningRef.current = false;
     // Only set phase to done/cancelled if still in 'translating' (not already cancelled by user)
     if (useStore.getState().phase === 'translating') {
-      store.setPhase(failCount > 0 ? 'done' : 'done');
+      // (bug 213) Trước đây là `failCount > 0 ? 'done' : 'done'` — hai nhánh y hệt nhau, dấu vết
+      // của một trạng thái 'partial-done' viết dở. Bỏ ternary chết, giữ đúng hành vi thật.
+      store.setPhase('done');
     }
     store.saveTranslationCache();
-    store.addLog('info', `Thử lại xong: ${successCount} đã sửa, ${failCount} vẫn lỗi`);
+    store.addLog(failCount === 0 ? 'success' : 'warning', `Thử lại xong: ${successCount} đã sửa, ${failCount} vẫn lỗi`);
     store.addToast(failCount === 0 ? 'success' : 'error', `${verb}: ${successCount}/${errorFields.length} xong`);
   }, [store, retranslateField]);
 

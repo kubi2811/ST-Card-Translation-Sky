@@ -14,6 +14,7 @@ const HIDE_KEY = 'st_posttranslate_guide_hidden';
  */
 export default function PostTranslateGuideModal() {
   const translateGuideSeed = useStore((s) => s.translateGuideSeed);
+  const dismissTranslateGuide = useStore((s) => s.dismissTranslateGuide);
   const ui = useUi() as Record<string, string>;
 
   const [open, setOpen] = useState(false);
@@ -35,6 +36,9 @@ export default function PostTranslateGuideModal() {
   const close = () => {
     if (dontShow) { try { localStorage.setItem(HIDE_KEY, '1'); } catch { /* ignore */ } }
     setOpen(false);
+    // (bug 213) Xoá dấu ở STORE, không chỉ ở state cục bộ — nếu không thì vào/ra Regex Manager
+    // fullscreen (App return sớm ⇒ modal unmount/remount) là popup bật lại với seed cũ.
+    dismissTranslateGuide();
   };
 
   // Cuộn tới panel đích + nháy sáng viền để user thấy ngay nút cần bấm nằm đâu.

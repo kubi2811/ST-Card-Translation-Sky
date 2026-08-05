@@ -42,8 +42,25 @@ export function getUiLang(): UiLang {
   return DEFAULT_LANG;
 }
 
-/** Đổi ngôn ngữ: lưu rồi RELOAD (theo đúng yêu cầu — nạp lại trang cho nhẹ app). */
+/**
+ * Đổi ngôn ngữ: lưu rồi RELOAD (theo đúng yêu cầu — nạp lại trang cho nhẹ app).
+ *
+ * (bug 213) Nhưng reload GIỮA LÚC ĐANG DỊCH là mất cả lượt chạy: vòng dịch sống trong bộ nhớ tab,
+ * reload là nó chết ngang, các call đang bay thành công cốc. Ba nút VI/EN/中文 lại nằm ngay cạnh
+ * nhau trên header nên bấm nhầm rất dễ. Giờ hỏi lại một câu trước khi nạp lại.
+ */
 export function setUiLang(lang: UiLang): void {
+  try {
+    const phase = (window as unknown as { __stPhase?: string }).__stPhase;
+    if (phase === 'translating') {
+      const msg = lang === 'vi'
+        ? 'Đang dịch dở. Đổi ngôn ngữ sẽ NẠP LẠI TRANG và lượt dịch đang chạy sẽ dừng (phần đã xong vẫn được lưu). Vẫn đổi?'
+        : lang === 'zh'
+          ? '正在翻译中。切换语言会重新加载页面并中断当前翻译（已完成的部分仍会保存）。确定切换？'
+          : 'A translation is running. Switching language reloads the page and stops it (finished fields are still saved). Switch anyway?';
+      if (!window.confirm(msg)) return;
+    }
+  } catch { /* không có window (test/SSR) → cứ đổi như thường */ }
   try { localStorage.setItem(LS_KEY, lang); } catch { /* ignore */ }
   try { window.location.reload(); } catch { /* ignore */ }
 }

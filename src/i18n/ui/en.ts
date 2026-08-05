@@ -628,6 +628,8 @@ const ui = {
   tcSettingsMgmt: 'Settings Management',
 
   // ─── CompareCardsPanel ───
+  appRestoredSession: '🔄 Restored your previous session ("{key}") — the earlier tab was closed or put to sleep. To start another card just Import as usual; to export PNG, re-import the original image.',
+
   ccSlotRaw: 'Raw Card',
   ccSlotTranslated: 'Translated Card',
   ccSlotFinal: 'Final Card',

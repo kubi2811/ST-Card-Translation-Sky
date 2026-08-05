@@ -167,7 +167,7 @@ const zh: TranslationKeys = {
   error: '错误',
   retry: '重试',
   warn: '警告',
-  active: '进行中',
+  active: '已开始',
   info: '信息',
 
   // Field Editor

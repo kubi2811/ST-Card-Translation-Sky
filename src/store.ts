@@ -166,6 +166,8 @@ interface AppState {
   setCurrentFieldIndex: (i: number) => void;
   startTime: number | null;
   setStartTime: (t: number | null) => void;
+  /** (bug 213) Mốc lượt dịch KẾT THÚC — để đồng hồ "Đã chạy" đóng băng đúng chỗ thay vì cứ tính tới Date.now(). */
+  endTime: number | null;
 
   // Pre-processing progress (Strategy B variable translation, conflict resolution,
   // EJS entry/keyword translation) — steps that run BEFORE the main field loop and
@@ -209,6 +211,8 @@ interface AppState {
    *  (Sức khoẻ thẻ → Đồng nhất biến MVU → chỉ AI Verify khi lỗi ngữ nghĩa). Ephemeral, không persist. */
   translateGuideSeed: number;
   triggerTranslateGuide: () => void;
+  /** (bug 213) Đóng popup hướng dẫn — nhớ ở STORE, cùng thuốc với dismissPresetRecommend (bug 143). */
+  dismissTranslateGuide: () => void;
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
 
@@ -836,7 +840,10 @@ export const useStore = create<AppState>((set) => ({
       targetLanguage: 'Tiếng Việt',
       translationPrompt: '',
       mode: 'field' as const,
-      lorebookStrategy: 'single' as const,
+      // (bug 213) PHẢI khớp default lúc khởi tạo ở trên ('batch'). Trước đây reset đẩy về 'single',
+      // tức là bấm "Đặt lại cấu hình" xong user bị ném vĩnh viễn vào đúng chế độ dịch tuần tự mà
+      // ghi chú Audit ở phần khởi tạo đã mô tả là "74 entry chậm kinh khủng" và cố ý loại bỏ.
+      lorebookStrategy: 'batch' as const,
       lorebookManualBatch: false,
       lorebookBatchSize: 5,
       skipAlreadyTranslated: true,
@@ -850,7 +857,9 @@ export const useStore = create<AppState>((set) => ({
       nameStyle: 'hanviet' as import('./types/card').NameStyle,
       fandomMode: false,
       fandomName: '',
-      enableMvuSync: false,
+      // (bug 213) Default khởi tạo là true — reset về false là TẮT một tính năng mặc định bật,
+      // trong khi user chỉ muốn "về như ban đầu".
+      enableMvuSync: true,
       enableMythicSync: false,
       mvuDictionary: {},
       mvuDictLocked: false,
@@ -941,6 +950,19 @@ export const useStore = create<AppState>((set) => ({
     LS.set('st-translator-ejs-translation-prompt', defaultTranslationConfig.ejsTranslationPrompt);
     LS.set('st-translator-css-cjk-handling', defaultTranslationConfig.cssCjkHandling);
 
+    // (bug 213) TÁM key dưới đây trước kia bị bỏ sót: reset đưa state trong bộ nhớ về mặc định
+    // nhưng KHÔNG ghi xuống localStorage, nên F5 một cái là chúng "hồi sinh" từ giá trị cũ —
+    // UI hiện một đằng, hành vi thật một nẻo. Ví dụ điển hình: bật Chế độ Đồng Nhân + khoá từ
+    // điển MVU → bấm Đặt lại → thấy đã tắt → F5 → cả hai bật lại.
+    LS.set('st-translator-name-style', defaultTranslationConfig.nameStyle);
+    LS.set('st-translator-fandom-mode', defaultTranslationConfig.fandomMode);
+    LS.set('st-translator-fandom-name', defaultTranslationConfig.fandomName);
+    LS.set('st-translator-mythic-sync-enabled', defaultTranslationConfig.enableMythicSync);
+    LS.set('st-translator-mvu-dict-locked', defaultTranslationConfig.mvuDictLocked);
+    LS.set('st-translator-wb-name-lock', defaultTranslationConfig.worldbookNameLock);
+    LS.set('st-translator-surgical-prompt', defaultTranslationConfig.surgicalPrompt);
+    LS.set('st-translator-ejs-sync-enabled', defaultTranslationConfig.enableEjsSync);
+
     set((s) => {
       let updatedFields = s.fields;
       if (s.card) {
@@ -981,13 +1003,27 @@ export const useStore = create<AppState>((set) => ({
       return { fields: nextFields };
     }),
   phase: 'idle',
-  setPhase: (p) => set(() => ({ phase: p })),
+  // (bug 213) Ghi lại MỐC KẾT THÚC ngay tại đây — một chỗ duy nhất, không phải rải rác ở mọi nơi
+  // gọi setPhase. Trước đây đồng hồ "Đã chạy" tính `Date.now() - startTime` MỖI LẦN RENDER: hết
+  // lượt dịch thì interval dừng nên trông như đã đứng, nhưng bất kỳ re-render nào sau đó (bấm tab,
+  // mở panel, khôi phục phiên cũ) lại làm nó nhảy vọt — lượt chạy 5 giây hiện thành 4:32.
+  setPhase: (p) => set((s) => {
+    // (bug 213) Phơi pha hiện tại ra window để i18n biết mà hỏi lại trước khi reload đổi ngôn ngữ.
+    // Dùng window thay vì import store vào i18n — i18n là tầng dưới, import ngược sẽ tạo vòng.
+    try { (window as unknown as { __stPhase?: string }).__stPhase = p; } catch { /* ignore */ }
+    if (p === 'translating') return { phase: p, endTime: null };
+    if (p === 'done' || p === 'cancelled') {
+      return { phase: p, endTime: s.endTime ?? Date.now() };
+    }
+    return { phase: p };   // 'paused' / 'idle' — giữ nguyên mốc kết thúc đang có
+  }),
   preprocessProgress: null,
   setPreprocessProgress: (p) => set({ preprocessProgress: p }),
   currentFieldIndex: 0,
   setCurrentFieldIndex: (i) => set({ currentFieldIndex: i }),
   startTime: null,
-  setStartTime: (t) => set({ startTime: t }),
+  setStartTime: (t) => set({ startTime: t, endTime: null }),   // (bug 213) lượt mới → xoá mốc kết thúc cũ
+  endTime: null,
 
   // ─── Logs ───
   logs: [],
@@ -1050,6 +1086,11 @@ export const useStore = create<AppState>((set) => ({
   dismissPresetRecommend: () => set({ presetRecommendCard: '' }),
   translateGuideSeed: 0,
   triggerTranslateGuide: () => set((s) => ({ translateGuideSeed: s.translateGuideSeed + 1 })),
+  // (bug 213) Bug 143 tái phát y hệt ở PostTranslateGuideModal: cờ "đã đóng" nằm trong useState
+  // CỤC BỘ, mà App return sớm khi mở Regex Manager fullscreen ⇒ modal unmount; thoát ra là remount,
+  // effect chạy lại với seed cũ (>0) và popup nhảy ra tiếp — mỗi lần ra vào một lần. Xoá dấu ở
+  // STORE thì đóng một lần là hết, tới lượt dịch xong kế tiếp mới hiện lại.
+  dismissTranslateGuide: () => set({ translateGuideSeed: 0 }),
   sidebarCollapsed: false,
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
 

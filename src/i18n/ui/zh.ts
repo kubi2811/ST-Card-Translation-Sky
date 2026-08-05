@@ -626,6 +626,8 @@ const ui: UiKeys = {
   tcSettingsMgmt: '设置管理',
 
   // ─── CompareCardsPanel ───
+  appRestoredSession: '🔄 已恢复上次的工作会话（"{key}"）——之前的标签页被关闭或休眠。想换一张卡直接照常 Import；想导出 PNG 请重新导入原图。',
+
   ccSlotRaw: '原始卡',
   ccSlotTranslated: '已翻译卡',
   ccSlotFinal: '最终卡',

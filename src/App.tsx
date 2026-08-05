@@ -6,6 +6,7 @@ import CardPreview from './components/CardPreview';
 import TranslationProgress from './components/TranslationProgress';
 import { useStore, flushProgressBeacon } from './store';
 import { useT, useUi } from './i18n/useLocale';
+import { fmt } from './i18n';
 import { Languages, X, Globe, Settings2, Upload, Wrench, FileText, ShieldCheck, Download, BookText } from 'lucide-react';
 import PresetImportPanel from './components/PresetImportPanel';
 import PresetRecommendModal from './components/PresetRecommendModal';
@@ -122,9 +123,9 @@ export default function App() {
     const t = setTimeout(() => {
       void useStore.getState().restoreLastSession?.().then((key) => {
         if (key) {
-          useStore.getState().addLog('info',
-            `🔄 Đã khôi phục phiên làm việc trước ("${key}") — tab trước đó bị đóng/cho ngủ. ` +
-            `Muốn bắt đầu card khác thì cứ Import như thường; muốn xuất PNG thì import lại ảnh gốc.`);
+          // (bug 213) Trước đây câu này hardcode tiếng Việt nên user chạy UI English/中文 vẫn thấy
+          // một dòng tiếng Việt chen ngang.
+          useStore.getState().addLog('info', fmt(ui.appRestoredSession, { key }));
         }
       });
     }, 300); // nhường useEffect nạp card từ đường khác (nếu có) chạy trước

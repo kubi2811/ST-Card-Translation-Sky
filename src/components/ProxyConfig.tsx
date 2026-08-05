@@ -100,7 +100,10 @@ export default function ProxyConfig() {
 
   return (
     <div className="section">
-      <div className="section-header" onClick={() => {}}>
+      {/* (bug 213) Bỏ onClick rỗng: class .section-header có style :hover đổi nền nên header trông
+          như bấm mở/đóng được, bấm lại chẳng làm gì. Tàn dư của collapsible cũ — giờ
+          CollapsibleSection ở App.tsx đã đảm nhận việc thu gọn. */}
+      <div className="section-header">
         <span className="section-title">
           <Settings size={16} style={{ color: 'var(--accent-primary)' }} />
           {t.apiConfiguration}

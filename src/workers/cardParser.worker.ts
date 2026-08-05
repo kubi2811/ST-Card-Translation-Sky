@@ -239,12 +239,34 @@ function hasTranslatableText(text: string): boolean {
   return hasCyrillic || hasSubstantialLatin || stripped.length > 20;
 }
 
-type LorebookEntryType = 'initvar' | 'mvu_logic' | 'rules' | 'narrative' | 'controller';
+// (bug 213) Giữ đồng bộ với cardFields.ts — thiếu 'json_patch' ở đây là lý do gốc khiến chốt
+// bug 128 không thể kích hoạt.
+type LorebookEntryType = 'initvar' | 'mvu_logic' | 'rules' | 'narrative' | 'controller' | 'json_patch';
+
+/** (bug 213) Giữ ĐỒNG BỘ với `isJsonPatchContent` ở cardFields.ts — worker là bản chép tay. */
+function isJsonPatchContent(content: string): boolean {
+  const t = (content || '').trim();
+  if (!t.startsWith('[') && !t.startsWith('{')) return false;
+  if (!/"op"\s*:/.test(t) || !/"path"\s*:/.test(t)) return false;
+  try {
+    const parsed = JSON.parse(t) as unknown;
+    const ops = Array.isArray(parsed) ? parsed : [parsed];
+    if (ops.length === 0) return false;
+    return ops.every((o) =>
+      !!o && typeof o === 'object' &&
+      typeof (o as { op?: unknown }).op === 'string' &&
+      typeof (o as { path?: unknown }).path === 'string');
+  } catch {
+    return false;
+  }
+}
 
 function classifyLorebookEntry(entry: { name?: string; comment?: string; content?: string }): LorebookEntryType {
   const name = (entry.name || '').toLowerCase();
   const comment = (entry.comment || '').toLowerCase();
   const content = entry.content || '';
+  // (bug 213) Xét TRƯỚC các luật theo tên/comment — xem giải thích ở cardFields.ts.
+  if (isJsonPatchContent(content)) return 'json_patch';
   if (content.includes('[initvar]') || comment.includes('initvar') || name.includes('initvar') || name.includes('var_init')) return 'initvar';
   if (/controller|mvu_update|update_mvu/i.test(comment) || /controller|mvu_update/i.test(name)) return 'controller';
   if (/mvu|zod|variable/i.test(comment) || /mvu|zod|variable/i.test(name)) return 'mvu_logic';

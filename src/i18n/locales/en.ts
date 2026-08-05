@@ -166,7 +166,7 @@ const en = {
   error: 'Error',
   retry: 'Retry',
   warn: 'Warn',
-  active: 'Active',
+  active: 'Started',
   info: 'Info',
 
   // Field Editor

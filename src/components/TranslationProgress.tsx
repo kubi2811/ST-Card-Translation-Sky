@@ -46,6 +46,7 @@ function MiniStat({ icon, value, label, color }: { icon: React.ReactNode; value:
 function ElapsedTime({ color = 'var(--text-secondary)' }: { color?: string }) {
   // (bugNeedFix/39) selector hẹp — trước đây subscribe toàn store, thêm 1 re-render mỗi set().
   const startTime = useStore((s) => s.startTime);
+  const endTime = useStore((s) => s.endTime);
   const phase = useStore((s) => s.phase);
   const ui = useUi();
   const [, tick] = useState(0);
@@ -56,7 +57,9 @@ function ElapsedTime({ color = 'var(--text-secondary)' }: { color?: string }) {
   }, [phase]);
 
   if (!startTime) return null;
-  const totalSec = Math.max(0, Math.floor((Date.now() - startTime) / 1000));
+  // (bug 213) Dừng ở MỐC KẾT THÚC thật. Trước đây luôn lấy Date.now() nên lượt dịch đã xong vẫn
+  // nhảy số mỗi khi có re-render — lượt 5 giây hiện thành 4:32 sau khi khôi phục phiên.
+  const totalSec = Math.max(0, Math.floor(((endTime ?? Date.now()) - startTime) / 1000));
   const h = Math.floor(totalSec / 3600);
   const m = Math.floor((totalSec % 3600) / 60);
   const s = totalSec % 60;

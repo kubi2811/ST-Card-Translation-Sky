@@ -1458,20 +1458,37 @@ export function getRateLimitUsage(): Record<string, number> {
  * Uses a sliding window: records timestamp, waits if rpm requests already made in last 60s.
  */
 async function waitForRateLimitModel(model: string, rpm: number, signal?: AbortSignal): Promise<void> {
-  const now = Date.now();
   const bucket = _getModelBucket(model);
-  _pruneBucket(bucket, now);
 
-  if (bucket.length < rpm) {
-    bucket.push(now);
-    return;
-  }
+  // (bug 213) VÒNG LẶP thay cho "ngủ một giấc rồi push thẳng".
+  //
+  // Bản cũ: hết slot thì tính waitMs từ mốc cũ nhất, ngủ, dậy là `bucket.push(now2)` — KHÔNG kiểm
+  // lại còn chỗ hay không. Với pool vài chục luồng, khi mọi lane cạn RPM thì hàng chục worker cùng
+  // chờ trên CÙNG một lane (pickLane không atomic qua await), một slot vừa trống là cả đám cùng
+  // dậy và cùng push ⇒ bucket vọt lên rpm + N ⇒ burst 429 ⇒ lane vào cooldown 15s ⇒ hiệu ứng dây
+  // chuyền "lane đỏ hàng loạt".
+  //
+  // Giờ mỗi lần dậy đều KIỂM LẠI; còn chỗ mới chiếm, hết chỗ thì ngủ tiếp. Trần vòng lặp để không
+  // bao giờ kẹt vĩnh viễn nếu đồng hồ/bucket có gì bất thường.
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const now = Date.now();
+    _pruneBucket(bucket, now);
 
-  const oldestInWindow = bucket[0];
-  const waitMs = oldestInWindow + RATE_LIMIT_WINDOW_MS - now + 50; // +50ms buffer
+    if (bucket.length < rpm) {
+      bucket.push(now);
+      return;
+    }
 
-  if (waitMs > 0) {
-    console.log(`[RateLimit] ${model}: ${rpm}rpm limit hit — waiting ${(waitMs / 1000).toFixed(1)}s`);
+    const oldestInWindow = bucket[0];
+    // Rải nhẹ mỗi luồng một chút để chúng không dậy đúng cùng một mili-giây rồi lại tranh nhau.
+    const jitter = Math.floor(Math.random() * 120);
+    const waitMs = oldestInWindow + RATE_LIMIT_WINDOW_MS - now + 50 + jitter;
+
+    if (waitMs <= 0) continue;   // mốc cũ nhất đã hết hạn ngay lúc này → vòng lại chiếm chỗ
+
+    if (attempt === 0) {
+      console.log(`[RateLimit] ${model}: ${rpm}rpm limit hit — waiting ${(waitMs / 1000).toFixed(1)}s`);
+    }
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(resolve, waitMs);
       if (signal) {
@@ -1482,9 +1499,10 @@ async function waitForRateLimitModel(model: string, rpm: number, signal?: AbortS
     });
   }
 
-  const now2 = Date.now();
-  _pruneBucket(bucket, now2);
-  bucket.push(now2);
+  // Chạm trần vòng lặp (rất khó xảy ra) — cứ đi tiếp còn hơn treo luôn lượt dịch.
+  const fallbackNow = Date.now();
+  _pruneBucket(bucket, fallbackNow);
+  bucket.push(fallbackNow);
 }
 
 /* ─── Multi-provider pool ───

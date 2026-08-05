@@ -52,10 +52,18 @@ export function hasStructuralProblem(problems: ChunkProblem[]): boolean {
 
 // ─────────────────────── phép đo cấu trúc (thuần, dùng chung) ───────────────────────
 
+// (bug 213) KHÔNG cờ /g. `.test()` trên regex có /g giữ `lastIndex` giữa các lần gọi: lần trước
+// khớp ở cuối chuỗi để lastIndex trỏ quá vị trí token, lần sau trên chuỗi khác trả FALSE dù token
+// có thật. Hậu quả: `diagnoseChunk` bỏ qua kiểm toàn vẹn EJS cho chunk đó và `keepSafeChunk` có
+// thể không giữ bản gốc khi chunk EJS vỡ cấu trúc — token mask rơi mất mà không ai bắt được ở tầng
+// chunk (chỉ còn lưới cuối `unmaskEjsCode`, mà lúc đó nó vứt CẢ FIELD về bản gốc thay vì 1 chunk).
+// Chính file này đã ghi chú đúng cái bẫy đó cho HAN_RE_G nhưng lại dính y hệt ở đây.
+// Bản KHÔNG cờ /g dành cho `.test()`; bản có /g dành cho `.match()` (cần bắt hết token).
+const EJS_TOKEN_TEST_RE = /\{\{__ejs_\d+__\}\}/;
 const EJS_TOKEN_RE = /\{\{__ejs_\d+__\}\}/g;
 
 export function hasEjsBlocks(s: string): boolean {
-  return /<%/.test(s) || EJS_TOKEN_RE.test(s);
+  return /<%/.test(s) || EJS_TOKEN_TEST_RE.test(s);
 }
 
 /** Khối <%…%> và token mask {{__ejs_N__}} phải giữ ĐỦ và ĐÚNG bộ sau khi dịch. */

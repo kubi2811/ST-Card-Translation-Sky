@@ -168,7 +168,7 @@ const vi: TranslationKeys = {
   error: 'Lỗi',
   retry: 'Thử lại',
   warn: 'Cảnh báo',
-  active: 'Đang chạy',
+  active: 'Đã bắt đầu',
   info: 'Thông tin',
 
   // Field Editor

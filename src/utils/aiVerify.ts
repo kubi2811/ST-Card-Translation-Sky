@@ -1586,6 +1586,13 @@ function validateFixQuality(
   field: TranslationField,
   initialIssueCount = 0
 ): { valid: boolean; reason?: string } {
+  // 0. (bug 213) Marker cắt cụt KHÔNG BAO GIỜ được phép chui vào thẻ. Khi field quá khổ,
+  // prompt chỉ gửi một đoạn; nếu AI chép luôn cái marker "[... N chars truncated ...]" của
+  // ta hoặc tự bịa marker tương tự thì bản sửa đó đang mô tả phần nó KHÔNG nhìn thấy.
+  if (/\[\s*\.{3}\s*\d+\s*chars?(?:\s+truncated)?\s*\.{3}\s*\]/i.test(fixedText)) {
+    return { valid: false, reason: 'Bản AI sửa chứa marker cắt cụt "[... N chars ...]" — AI đang chép lại phần nó không nhìn thấy, không áp dụng.' };
+  }
+
   // 1. Length ratio check: fix shouldn't be drastically different from current
   const lengthRatio = fixedText.length / currentTranslation.length;
   if (lengthRatio < 0.4) {
@@ -1734,6 +1741,40 @@ function smartTruncate(text: string, maxChars: number, issuePositions?: number[]
   return result.slice(0, maxChars + 500); // allow slight overshoot for markers
 }
 
+/* ═══ (bug 213) Cửa sổ vá — không bao giờ để bản CẮT CỤT thay cả field ═══
+ *
+ * Trước đây field dài hơn hạn mức bị smartTruncate cắt thành đầu+đuôi kèm marker
+ * "[... N chars truncated ...]" rồi gửi AI, NHƯNG bản AI trả về (viết dựa trên bản đã cắt)
+ * lại được nhận làm bản dịch mới cho TOÀN field → khúc giữa bốc hơi vĩnh viễn và marker rác
+ * chui thẳng vào thẻ xuất ra. Lớp chặn duy nhất là tỉ lệ độ dài ≥ 0.4 nên field cỡ 66K–160K
+ * lọt qua trót lọt.
+ *
+ * Giờ field quá khổ chỉ gửi MỘT đoạn liền mạch (cửa sổ quanh chỗ lỗi), và bản sửa được ghép
+ * trở lại đúng vị trí cũ: đầu + đoạn đã sửa + đuôi. Phần nằm ngoài cửa sổ không hề bị đụng,
+ * nên không còn đường nào làm mất dữ liệu.
+ */
+export function pickFixWindow(text: string, anchors: number[], budget: number): { start: number; end: number } {
+  if (text.length <= budget) return { start: 0, end: text.length };
+
+  const valid = anchors.filter(a => a >= 0 && a < text.length).sort((a, b) => a - b);
+  const center = valid.length > 0 ? valid[Math.floor(valid.length / 2)] : Math.floor(text.length / 2);
+
+  let start = Math.max(0, center - Math.floor(budget / 2));
+  let end = Math.min(text.length, start + budget);
+  start = Math.max(0, end - budget);
+
+  // Bám ranh giới dòng cho đoạn gọn gàng — chỉ co VÀO trong, không nới ra ngoài ngân sách.
+  if (start > 0) {
+    const nl = text.indexOf('\n', start);
+    if (nl !== -1 && nl - start < 500) start = nl + 1;
+  }
+  if (end < text.length) {
+    const nl = text.lastIndexOf('\n', end);
+    if (nl > start && end - nl < 500) end = nl;
+  }
+  return { start, end };
+}
+
 /** Get dynamic content limit based on model name */
 function getModelContentLimit(model: string): number {
   const m = model.toLowerCase();
@@ -1755,7 +1796,7 @@ function buildFixPrompt(
   mvuBlock: string,
   roundInfo?: { round: number; prevFixFeedback?: string },
   modelName?: string,
-): { system: string; user: string } {
+): { system: string; user: string; window?: { start: number; end: number } } {
   const issueDesc = issueList.map((i, idx) => {
     const cat = 'category' in i ? (i as FieldIssue).category : null;
     return `${idx + 1}. [${i.severity}${cat ? '/' + cat : ''}] ${i.description}${i.original ? ` | original: "${i.original}"` : ''}${i.suggestion ? ` | hint: ${i.suggestion}` : ''}`;
@@ -1775,6 +1816,40 @@ function buildFixPrompt(
     ? `\n\nNOTE: This is fix attempt #${roundInfo.round}. Previous fix was rejected because: ${roundInfo.prevFixFeedback || 'validation failed'}. Please be more careful this time.`
     : '';
 
+  // Dynamic content limit based on model
+  const contentLimit = Math.floor(getModelContentLimit(modelName || 'unknown') / 3); // /3 because we send original + translation + system
+
+  // Find issue positions in the text for windowing
+  const issuePositions: number[] = [];
+  for (const issue of issueList) {
+    if (issue.original && issue.original.length > 3) {
+      const pos = field.original.indexOf(issue.original);
+      if (pos !== -1) issuePositions.push(pos);
+    }
+  }
+
+  // (bug 213) Vị trí lỗi đo trên bản GỐC. Suy ra vị trí tương ứng bên bản dịch theo tỉ lệ độ dài
+  // để hai cửa sổ nhìn CÙNG một khúc — trước đây offset của bản gốc được đem cắt thẳng bản dịch
+  // nên hai bên lệch nhau, AI đối chiếu nhầm đoạn.
+  const lenRatio = field.original.length > 0 ? field.translated.length / field.original.length : 1;
+  const transAnchors = issuePositions.map(p => Math.round(p * lenRatio));
+
+  const origWin = pickFixWindow(field.original, issuePositions, contentLimit);
+  const transWin = pickFixWindow(field.translated, transAnchors, contentLimit);
+  const origContent = field.original.slice(origWin.start, origWin.end);
+  const transContent = field.translated.slice(transWin.start, transWin.end);
+  const windowed = transWin.start > 0 || transWin.end < field.translated.length;
+
+  const excerptRule = windowed
+    ? `
+
+⚠️ EXCERPT MODE — THIS FIELD IS TOO LARGE TO SEND IN FULL:
+- The texts below are a CONTIGUOUS EXCERPT of a much larger field, cut at the exact boundaries shown.
+- Return ONLY the corrected version of THIS EXCERPT: same starting words, same ending words, nothing before, nothing after.
+- Do NOT write "..." , do NOT summarize, do NOT mention that text was omitted, do NOT try to reconstruct the parts you cannot see.
+- The excerpt will be spliced back into the full field at its exact position, so its boundaries must stay intact.`
+    : '';
+
   const system = `You fix SPECIFIC translation errors in SillyTavern character card fields.
 Return ONLY the corrected translated text. No explanations, no markdown code fences, no extra text.
 
@@ -1787,29 +1862,14 @@ CRITICAL RULES:
 - Do NOT change variable names, function names, or technical identifiers
 - Do NOT add or remove line breaks unless an issue specifically requires it
 - The output length should be very close to the input translation length
-${categoryHints ? '\n' + categoryHints : ''}${mvuBlock}${roundNote}${fandomNameOverride()}`;
-
-  // Dynamic content limit based on model
-  const contentLimit = Math.floor(getModelContentLimit(modelName || 'unknown') / 3); // /3 because we send original + translation + system
-  
-  // Find issue positions in the text for smart truncation
-  const issuePositions: number[] = [];
-  for (const issue of issueList) {
-    if (issue.original && issue.original.length > 3) {
-      const pos = field.original.indexOf(issue.original);
-      if (pos !== -1) issuePositions.push(pos);
-    }
-  }
-
-  const origContent = smartTruncate(field.original, contentLimit, issuePositions);
-  const transContent = smartTruncate(field.translated, contentLimit, issuePositions);
+${categoryHints ? '\n' + categoryHints : ''}${mvuBlock}${roundNote}${excerptRule}${fandomNameOverride()}`;
 
   const user = `Fix this ${targetLang} translation. ONLY fix the listed issues.
 
-ORIGINAL:
+ORIGINAL${windowed ? ' (excerpt)' : ''}:
 ${origContent}
 
-CURRENT TRANSLATION:
+CURRENT TRANSLATION${windowed ? ' (excerpt — return exactly this range, corrected)' : ''}:
 ${transContent}
 
 ISSUES TO FIX:
@@ -1817,7 +1877,7 @@ ${issueDesc}
 
 Return the corrected translation (fix ONLY the issues above, change nothing else):`;
 
-  return { system, user };
+  return { system, user, window: windowed ? transWin : undefined };
 }
 
 /* ═══ AI Fix Issues — multi-round LLM fix with quality validation ═══ */
@@ -1934,7 +1994,7 @@ export async function aiFixIssues(
         ? report.filter(r => r.path === path && r.status === 'rejected').map(r => r.reason).pop()
         : undefined;
 
-      const { system, user } = buildFixPrompt(
+      const { system, user, window: fixWindow } = buildFixPrompt(
         currentIssueList, workingField, targetLang, mvuBlock,
         { round, prevFixFeedback: prevFeedback },
         config.model,
@@ -1951,7 +2011,10 @@ export async function aiFixIssues(
         if (mdMatch) fixed = mdMatch[1].trim();
         else fixed = fixed.replace(/^```[\s\S]*?\n/, '').replace(/\n```\s*$/, '').trim();
 
-        if (!fixed || fixed.length < Math.max(10, effectiveTranslation.length * 0.3)) {
+        // (bug 213) Khi gửi cửa sổ, ngưỡng "quá ngắn" phải đo theo CỬA SỔ chứ không phải cả field —
+        // lấy cả field làm mốc thì bản sửa đúng của một đoạn nhỏ luôn bị coi là cụt.
+        const expectedLen = fixWindow ? fixWindow.end - fixWindow.start : effectiveTranslation.length;
+        if (!fixed || fixed.length < Math.max(10, expectedLen * 0.3)) {
           report.push({
             path, label: origField.label, status: 'rejected', round,
             reason: `Empty or too short response (${fixed?.length || 0} chars)`,
@@ -1962,9 +2025,16 @@ export async function aiFixIssues(
           return;
         }
 
+        // (bug 213) Field quá khổ → AI chỉ nhìn thấy MỘT đoạn. Ghép đoạn đã sửa trở lại đúng chỗ
+        // thay vì lấy nó làm cả field: đầu + đoạn sửa + đuôi. Mọi lớp kiểm bên dưới chạy trên bản
+        // ĐẦY ĐỦ này, nên guard độ dài/macro/ngoặc vẫn soi được toàn field như trước.
+        const fixedFull = fixWindow
+          ? effectiveTranslation.slice(0, fixWindow.start) + fixed + effectiveTranslation.slice(fixWindow.end)
+          : fixed;
+
         // Multi-layer validation — pass initialIssueCount for tolerance
         const validation = validateFixQuality(
-          origField.original, effectiveTranslation, fixed, mvuDictionary, sourceLang, workingField, initialIssueCount
+          origField.original, effectiveTranslation, fixedFull, mvuDictionary, sourceLang, workingField, initialIssueCount
         );
 
         if (!validation.valid) {
@@ -1979,13 +2049,13 @@ export async function aiFixIssues(
         }
 
         // Count issues after fix
-        const mockAfter = { ...workingField, translated: fixed };
+        const mockAfter = { ...workingField, translated: fixedFull };
         const issuesAfter = verifyFields([mockAfter], mvuDictionary, sourceLang);
 
         // Accept if this is the best result so far
         const currentBest = bestFixes.get(path);
         if (!currentBest || issuesAfter.length < currentBest.issuesAfter) {
-          bestFixes.set(path, { fixedText: fixed, issuesAfter: issuesAfter.length, round });
+          bestFixes.set(path, { fixedText: fixedFull, issuesAfter: issuesAfter.length, round });
           report.push({
             path, label: origField.label, status: 'accepted', round,
             issuesBefore: issuesBefore.length, issuesAfter: issuesAfter.length,
@@ -2056,6 +2126,21 @@ export async function aiFixSingleIssue(
 
   const categoryHint = CATEGORY_FIX_HINTS[issue.category] || '';
 
+  // (bug 213) Cùng thuốc với aiFixIssues: field quá khổ thì chỉ gửi MỘT đoạn liền mạch quanh chỗ
+  // lỗi rồi ghép lại đúng vị trí — không để bản dựa trên văn bản cắt cụt thay cả field.
+  const singleLimit = Math.floor(getModelContentLimit(config.model) / 3);
+  const anchorOrig = issue.original && issue.original.length > 3
+    ? field.original.indexOf(issue.original)
+    : -1;
+  const singleRatio = field.original.length > 0 ? field.translated.length / field.original.length : 1;
+  const origWin = pickFixWindow(field.original, anchorOrig >= 0 ? [anchorOrig] : [], singleLimit);
+  const transWin = pickFixWindow(
+    field.translated,
+    anchorOrig >= 0 ? [Math.round(anchorOrig * singleRatio)] : [],
+    singleLimit,
+  );
+  const windowed = transWin.start > 0 || transWin.end < field.translated.length;
+
   const systemPrompt = `You fix ONE SPECIFIC translation error in a SillyTavern character card field.
 Return ONLY the corrected translated text. No explanations, no markdown code fences.
 
@@ -2063,7 +2148,12 @@ RULES:
 - Fix ONLY the ONE issue described below. Change NOTHING else.
 - Preserve ALL {{macros}}, HTML tags, brackets, code blocks exactly.
 - Output length must be very close to input length.
-${categoryHint ? '\n' + categoryHint : ''}${mvuBlock}${fandomNameOverride()}`;
+${categoryHint ? '\n' + categoryHint : ''}${mvuBlock}${windowed ? `
+
+⚠️ EXCERPT MODE — THIS FIELD IS TOO LARGE TO SEND IN FULL:
+- The texts below are a CONTIGUOUS EXCERPT, cut at the exact boundaries shown.
+- Return ONLY the corrected version of THIS EXCERPT: same starting words, same ending words.
+- Do NOT write "...", do NOT summarize, do NOT mention omitted text, do NOT reconstruct what you cannot see.` : ''}${fandomNameOverride()}`;
 
   const userPrompt = `Fix this ONE issue in the ${targetLang} translation.
 
@@ -2071,11 +2161,11 @@ ISSUE: [${issue.severity}/${issue.category}] ${issue.description}
 ${issue.original ? `Original snippet: "${issue.original}"` : ''}
 ${issue.suggestion ? `Hint: ${issue.suggestion}` : ''}
 
-ORIGINAL TEXT:
-${smartTruncate(field.original, getModelContentLimit(config.model) / 3)}
+ORIGINAL TEXT${windowed ? ' (excerpt)' : ''}:
+${field.original.slice(origWin.start, origWin.end)}
 
-CURRENT TRANSLATION:
-${smartTruncate(field.translated, getModelContentLimit(config.model) / 3)}
+CURRENT TRANSLATION${windowed ? ' (excerpt — return exactly this range, corrected)' : ''}:
+${field.translated.slice(transWin.start, transWin.end)}
 
 Return the corrected translation:`;
 
@@ -2087,13 +2177,19 @@ Return the corrected translation:`;
     if (mdMatch) fixed = mdMatch[1].trim();
     else fixed = fixed.replace(/^```[\s\S]*?\n/, '').replace(/\n```\s*$/, '').trim();
 
-    if (!fixed || fixed.length < Math.max(10, field.translated.length * 0.3)) {
+    const expectedLen = windowed ? transWin.end - transWin.start : field.translated.length;
+    if (!fixed || fixed.length < Math.max(10, expectedLen * 0.3)) {
       return { success: false, reason: 'AI returned empty or truncated result' };
     }
 
+    // (bug 213) Ghép đoạn đã sửa về đúng vị trí trong field đầy đủ trước khi kiểm & trả về.
+    const fixedFull = windowed
+      ? field.translated.slice(0, transWin.start) + fixed + field.translated.slice(transWin.end)
+      : fixed;
+
     // Validate quality
     const validation = validateFixQuality(
-      field.original, field.translated, fixed, mvuDictionary, sourceLang, field, 1
+      field.original, field.translated, fixedFull, mvuDictionary, sourceLang, field, 1
     );
 
     if (!validation.valid) {
@@ -2102,7 +2198,7 @@ Return the corrected translation:`;
 
     // Specific check: did this particular issue get resolved?
     const mockBefore = { ...field, translated: field.translated };
-    const mockAfter = { ...field, translated: fixed };
+    const mockAfter = { ...field, translated: fixedFull };
     const issuesBefore = verifyFields([mockBefore], mvuDictionary, sourceLang);
     const issuesAfter = verifyFields([mockAfter], mvuDictionary, sourceLang);
 
@@ -2114,7 +2210,7 @@ Return the corrected translation:`;
       return { success: false, reason: `Issue not resolved (${issue.category}: ${catBefore} → ${catAfter})` };
     }
 
-    return { success: true, fixedText: fixed };
+    return { success: true, fixedText: fixedFull };
   } catch (err) {
     return { success: false, reason: err instanceof Error ? err.message : String(err) };
   }
@@ -2676,13 +2772,26 @@ export async function aiRegexFixAll(
       `${idx + 1}. [${i.severity}] ${i.description}${i.original ? ` | original: "${i.original}"` : ''}${i.suggestion ? ` | fix: ${i.suggestion}` : ''}`
     ).join('\n');
 
-    const origContent = field.original.length > contentLimit
-      ? smartTruncate(field.original, contentLimit) : field.original;
-    const transContent = field.translated.length > contentLimit
-      ? smartTruncate(field.translated, contentLimit) : field.translated;
+    // (bug 213) Cửa sổ liền mạch + ghép lại đúng chỗ, thay cho đầu+đuôi kèm marker: bản AI viết
+    // dựa trên văn bản đã cắt không được phép thay CẢ field.
+    const rgAnchors: number[] = [];
+    for (const i of fieldIssues) {
+      if (i.original && i.original.length > 3) {
+        const p = field.original.indexOf(i.original);
+        if (p !== -1) rgAnchors.push(p);
+      }
+    }
+    const rgRatio = field.original.length > 0 ? field.translated.length / field.original.length : 1;
+    const rgOrigWin = pickFixWindow(field.original, rgAnchors, contentLimit);
+    const rgTransWin = pickFixWindow(field.translated, rgAnchors.map(p => Math.round(p * rgRatio)), contentLimit);
+    const rgWindowed = rgTransWin.start > 0 || rgTransWin.end < field.translated.length;
+    const origContent = field.original.slice(rgOrigWin.start, rgOrigWin.end);
+    const transContent = field.translated.slice(rgTransWin.start, rgTransWin.end);
 
     const systemPrompt = `You fix translation errors in a SillyTavern regex script field.
-Return ONLY the corrected translated text. No explanations, no markdown code fences.
+Return ONLY the corrected translated text. No explanations, no markdown code fences.${rgWindowed ? `
+
+⚠️ EXCERPT MODE: the texts below are a CONTIGUOUS EXCERPT of a larger field. Return ONLY the corrected version of THIS EXCERPT — same start, same end. Never write "...", never mention omitted text.` : ''}
 
 CRITICAL REGEX FIX RULES:
 - Fix ONLY the issues listed. Do NOT modify anything else.
@@ -2718,11 +2827,25 @@ Return the corrected ${fieldType} (fix listed issues, change NOTHING else):`;
       if (mdMatch) fixed = mdMatch[1].trim();
       else fixed = fixed.replace(/^```[\s\S]*?\n/, '').replace(/\n```\s*$/, '').trim();
 
-      if (!fixed || fixed.length < Math.max(10, field.translated.length * 0.3)) {
+      const rgExpectedLen = rgWindowed ? rgTransWin.end - rgTransWin.start : field.translated.length;
+      if (!fixed || fixed.length < Math.max(10, rgExpectedLen * 0.3)) {
         results.push({
           regexIndex: regexIdx, scriptName, fieldPath, fieldType,
           success: false, before: field.translated, after: '',
           reason: `Empty or too short (${fixed?.length || 0} chars)`,
+        });
+        return;
+      }
+
+      // (bug 213) Ghép đoạn đã sửa về đúng vị trí — mọi lớp kiểm bên dưới soi bản ĐẦY ĐỦ.
+      if (rgWindowed) {
+        fixed = field.translated.slice(0, rgTransWin.start) + fixed + field.translated.slice(rgTransWin.end);
+      }
+      if (/\[\s*\.{3}\s*\d+\s*chars?(?:\s+truncated)?\s*\.{3}\s*\]/i.test(fixed)) {
+        results.push({
+          regexIndex: regexIdx, scriptName, fieldPath, fieldType,
+          success: false, before: field.translated, after: fixed,
+          reason: 'Bản sửa chứa marker cắt cụt "[... N chars ...]" — AI chép lại phần không nhìn thấy',
         });
         return;
       }

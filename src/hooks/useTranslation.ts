@@ -3519,6 +3519,17 @@ export function useTranslation() {
     const field = store.fields.find((f) => f.path === path);
     if (!field) return;
 
+    // (bug 213) KHOÁ CHUNG VỚI VÒNG DỊCH CHÍNH.
+    // Vòng chính chống dịch trùng bằng `inFlightPaths`, còn đường này chỉ quản `fieldAbortMap`
+    // riêng của nó — hai cơ chế không biết nhau. Hậu quả: sweeper chữ Hán sót / nút "Dịch lại
+    // mục này" chạy song song đúng lúc vòng chính đang dịch cùng field → hai call cùng bay,
+    // ai xong sau ghi đè, chunk-progress của nhau trộn vào nhau. Giờ dùng CHUNG một khoá.
+    if (inFlightPaths.current.has(path)) {
+      store.addLog('warning', `⏭️ Bỏ qua dịch lại trùng: ${field.label} (đang được dịch ở luồng khác)`);
+      return;
+    }
+    inFlightPaths.current.add(path);
+
     // ═══ Cancel any previous in-flight translation for this field ═══
     const prevController = fieldAbortMap.current.get(path);
     if (prevController) {
@@ -3709,6 +3720,7 @@ export function useTranslation() {
     } finally {
       // Clean up per-field abort controller
       fieldAbortMap.current.delete(path);
+      inFlightPaths.current.delete(path);   // (bug 213) nhả khoá chung
     }
   }, [store]);
 
@@ -3889,6 +3901,12 @@ export function useTranslation() {
     }
 
     // ═══ Properly manage phase and abort controller for retry ═══
+    // (bug 213) PHẢI bump runIdRef trước khi thay controller. Vòng dịch chính chỉ chịu thoát khi
+    // thấy runIdRef đổi ở checkpoint; nếu chỉ abort rồi lắp controller MỚI thì call đang bay của
+    // vòng cũ chết với message "The operation was aborted" (≠ 'Cancelled'), checkAbort() lại đọc
+    // controller mới (chưa abort) nên vòng cũ coi đó là lỗi thường, đánh field 'error' rồi ĐI TIẾP
+    // field kế bằng signal mới → hai engine cùng ghi fields, cùng đốt RPM, log trộn lẫn.
+    runIdRef.current++;
     if (abortRef.current) {
       abortRef.current.abort();
     }
@@ -3896,6 +3914,7 @@ export function useTranslation() {
       ctrl.abort();
     }
     fieldAbortMap.current.clear();
+    inFlightPaths.current.clear();
     abortRef.current = new AbortController();
     pauseRef.current = false;
     runningRef.current = true;
@@ -4428,6 +4447,9 @@ export function useTranslation() {
       : detectedLang;
 
     // ═══ Abort any previous running operation before starting fresh ═══
+    // (bug 213) Bump runIdRef trước: chỉ abort rồi lắp controller mới thì vòng dịch cũ không
+    // thấy tín hiệu thoát ở checkpoint và chạy song song với lượt Mod này.
+    runIdRef.current++;
     if (abortRef.current) {
       abortRef.current.abort();
     }
@@ -4436,6 +4458,7 @@ export function useTranslation() {
       ctrl.abort();
     }
     fieldAbortMap.current.clear();
+    inFlightPaths.current.clear();
 
     // Clear state for fresh progress tracking
     abortRef.current = new AbortController();
@@ -5051,6 +5074,17 @@ export function useTranslation() {
     }
 
     store.addLog('info', '📚 Starting lorebook entry generation...');
+
+    // (bug 213) Trước đây chỗ này ghi đè thẳng `abortRef.current` bằng controller mới mà KHÔNG
+    // abort cái cũ: vòng dịch đang chạy vừa không bị dừng, vừa mất luôn đường huỷ (nút Hủy từ đó
+    // chỉ huỷ được phần sinh lorebook). Giờ dừng hẳn vòng cũ trước khi chiếm abortRef.
+    runIdRef.current++;
+    abortRef.current?.abort();
+    for (const [, ctrl] of fieldAbortMap.current) ctrl.abort();
+    fieldAbortMap.current.clear();
+    inFlightPaths.current.clear();
+    runningRef.current = false;
+
     store.setPhase('translating');
 
     try {

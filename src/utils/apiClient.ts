@@ -31,7 +31,17 @@ import { extractCJKTokens, reinsertTranslations, surgicalTranslate } from './sur
 import { CallMonitor, estimateTokens } from './callMonitor';
 
 /** Hứng usage token từ response API — hàm call đổ vào, callProvider đọc ra ghi thống kê. */
-interface TokenUsageSink { input?: number; output?: number; cached?: number }
+interface TokenUsageSink {
+  input?: number; output?: number; cached?: number;
+  /**
+   * (bug 213) Stream đứt giữa chừng nhưng đã nhận được một phần → ta vẫn trả phần đó (bỏ đi thì
+   * phí cả lượt gọi), NHƯNG phải báo lên trên là "bản này ĐANG CỤT". Trước đây chỗ này chỉ
+   * console.warn rồi trả về như thành công: nếu phần nhận được tình cờ vượt ngưỡng continuation
+   * (85% độ dài kỳ vọng, hoặc ≥100% thì thoát ngay không kiểm) thì đoạn đuôi mất hẳn — không lỗi,
+   * không log UI, không ai biết.
+   */
+  streamBroken?: boolean;
+}
 // chunkText tách sang ./chunking (Đợt tách monolith). Import để dùng nội bộ + RE-EXPORT
 // để các file khác vẫn `import { chunkText } from './apiClient'` như cũ (không phải sửa importer).
 import { chunkText } from './chunking';
@@ -786,6 +796,20 @@ ${fragmentList}${mvuBlock}`;
         // Restore the protected links before re-counting / returning.
         const parsed = unmaskUrls(parsedRaw, residualUrlMap);
         const newResidual = countChineseChars(parsed);
+
+        // (bug 213) HÀNG RÀO ĐỘ DÀI — trước đây điều kiện nhận bản dọn CHỈ là "ít chữ Hán hơn",
+        // không hề so độ dài. Bước này gửi TOÀN BỘ bản ghép trong MỘT call nên với entry vài chục
+        // nghìn ký tự, agent dọn rất dễ trả về nửa văn bản (chạm trần token) hoặc chỉ trả mấy đoạn
+        // nó vừa dịch — mà bản cụt thì đương nhiên "ít chữ Hán hơn" nên được nhận làm KẾT QUẢ CUỐI.
+        // Đây là bước chạy SAU mọi guard độ dài của translateText, nên bản cụt lọt thẳng vào thẻ.
+        // Ngưỡng 0.75: bản dọn đúng chỉ thay chữ Hán bằng chữ Việt (thường DÀI HƠN, không ngắn đi),
+        // nên mất >25% độ dài là dấu hiệu cụt chứ không phải dịch gọn.
+        const cleanedRatio = currentResult.length > 0 ? parsed.trim().length / currentResult.length : 1;
+        if (cleanedRatio < 0.75) {
+          console.warn(`[ResidualCheck] ${fieldName}: Bản dọn NGẮN bất thường (${parsed.trim().length}/${currentResult.length} ký tự = ${(cleanedRatio * 100).toFixed(0)}%), nghi bị cắt cụt — GIỮ bản cũ dù còn ${newResidual} chữ Hán.`);
+          return currentResult;
+        }
+
         if (newResidual < residualCount) {
           currentResult = parsed.trim();
           console.log(`[ResidualCheck] ${fieldName}: Reduced ${residualCount} -> ${newResidual} Chinese chars`);
@@ -984,6 +1008,7 @@ async function callOpenAICompatible(
   } catch (err: any) {
     if (fullContent && !signal?.aborted) {
       console.warn(`[API] OpenAI stream aborted prematurely (${err.message}). Returning partial content.`);
+      if (usageSink) usageSink.streamBroken = true;   // (bug 213) báo lên trên: bản này ĐANG CỤT
     } else {
       throw err;
     }
@@ -1141,6 +1166,7 @@ async function callAnthropic(
   } catch (err: any) {
     if (fullContent && !signal?.aborted) {
       console.warn(`[API] Anthropic stream aborted prematurely (${err.message}). Returning partial content.`);
+      if (usageSink) usageSink.streamBroken = true;   // (bug 213) báo lên trên: bản này ĐANG CỤT
     } else {
       throw err;
     }
@@ -1306,6 +1332,7 @@ async function callGemini(
   } catch (err: any) {
     if (fullContent && !signal?.aborted) {
       console.warn(`[API] Gemini stream aborted prematurely (${err.message}). Returning partial content.`);
+      if (usageSink) usageSink.streamBroken = true;   // (bug 213) báo lên trên: bản này ĐANG CỤT
     } else {
       throw err;
     }
@@ -1605,7 +1632,11 @@ export async function callProvider(
   user: string,
   signal?: AbortSignal,
   images?: string[],
-  meta?: { label?: string; charCount?: number; preferSecondary?: boolean },
+  meta?: {
+    label?: string; charCount?: number; preferSecondary?: boolean;
+    /** (bug 213) Ô ghi ngược cho caller: `streamBroken` = stream đứt giữa chừng, bản trả về ĐANG CỤT. */
+    out?: { streamBroken?: boolean };
+  },
   /** Gọi mỗi khi nhận thêm 1 chunk stream — cho watchdog "im lặng bao lâu thì abort" ở tầng trên. */
   onProgress?: () => void
 ): Promise<string> {
@@ -1651,6 +1682,7 @@ export async function callProvider(
         break;
     }
     recordLaneSuccess(laneRlKey); // lane khoẻ lại → xoá đếm fail + hết nghỉ
+    if (meta?.out && usageSink.streamBroken) meta.out.streamBroken = true;   // (bug 213)
     const estimated = usageSink.input == null || usageSink.output == null;
     CallMonitor.recordTokens({
       providerId: lane.providerId,
@@ -2386,12 +2418,15 @@ async function translateChunk(
         ? AbortSignal.any([signal, controller.signal])
         : controller.signal;
 
+      // (bug 213) Ô nhận tín hiệu "stream đứt giữa chừng" từ tầng dưới.
+      const callOut: { streamBroken?: boolean } = {};
       let result = await callProvider(config, systemPrompt, userPrompt, combinedSignal, undefined, {
         label: totalChunks > 1 ? `${fieldName} (phần ${chunkIdx + 1}/${totalChunks})` : fieldName,
         charCount: chunk.length,
         // (User yêu cầu 2026) Routing model phụ giờ THUẦN theo số ký tự của chunk (laneOrder), KHÔNG
         // còn ép xuống phụ khi retry. Giữ preferSecondary chỉ để tương thích chữ ký (laneOrder bỏ qua).
         preferSecondary,
+        out: callOut,
       });
       clearTimeout(timeoutId);
 
@@ -2445,12 +2480,19 @@ async function translateChunk(
       const CONT_THRESHOLD = isCodeHeavy ? 0.50 : 0.85;
       const MAX_CONT_ROUNDS = 5;
 
+      // (bug 213) Stream đứt giữa chừng ⇒ bản này CHẮC CHẮN cụt, bất kể tỉ lệ độ dài trông đẹp
+      // cỡ nào. Ép đi tiếp ít nhất một vòng continuation thay vì tin vào ngưỡng 85%/100%.
+      let forceContinuation = !!callOut.streamBroken;
+      if (forceContinuation) {
+        console.warn(`[translateChunk] ${fieldName} chunk ${chunkIdx + 1}/${totalChunks}: stream ĐỨT GIỮA CHỪNG — ép continuation dù độ dài trông đủ.`);
+      }
+
       if (chunk.length > 500 && result.length > 0) {
         for (let contRound = 0; contRound < MAX_CONT_ROUNDS; contRound++) {
           // Compare against EXPECTED output length (accounts for CJK→Latin expansion)
           const responseRatio = result.length / expectedOutputLen;
-          
-          if (responseRatio >= CONT_THRESHOLD) {
+
+          if (responseRatio >= CONT_THRESHOLD && !forceContinuation) {
             // If response already meets expected output length, check structural only
             if (responseRatio >= 1.0) {
               break;
@@ -2471,6 +2513,10 @@ async function translateChunk(
           }
 
           console.log(`[translateChunk] ${fieldName} chunk ${chunkIdx + 1}/${totalChunks}: response ${(responseRatio * 100).toFixed(0)}% of expected (${result.length}/${Math.round(expectedOutputLen)} chars) < ${(CONT_THRESHOLD * 100).toFixed(0)}% (or structural issue) → continuation round ${contRound + 1}/${MAX_CONT_ROUNDS}...`);
+
+          // (bug 213) Cờ ép chỉ dùng cho ĐÚNG một vòng: đã nối bù xong thì các vòng sau xét theo
+          // ngưỡng như bình thường, khỏi quay đủ 5 vòng vô ích.
+          forceContinuation = false;
 
           // ═══ SIZE GUARD: prevent bloat from false-positive structural checks ═══
           // Only stop if result is absurdly large (3x expected output)
@@ -2500,10 +2546,14 @@ async function translateChunk(
               ? AbortSignal.any([signal, contController.signal])
               : contController.signal;
 
+            const contOut: { streamBroken?: boolean } = {};
             const continuation = await callProvider(config, systemPrompt, continuationPrompt, contSignal, undefined, {
               label: `${fieldName} (tiếp nối)`,
+              out: contOut,
             });
             clearTimeout(contTimeout);
+            // (bug 213) Lượt nối bù cũng đứt stream → vòng sau lại phải ép, đừng tin độ dài.
+            if (contOut.streamBroken) forceContinuation = true;
 
             if (continuation.trim()) {
               // ═══ SIZE GUARD: don't append if it would make result absurdly large ═══

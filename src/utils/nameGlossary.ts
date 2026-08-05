@@ -148,14 +148,42 @@ export function extractNameCandidates(
   // một cụm dài đã giữ (count ngắn ≤ count dài × 1.6). 青云宗(40) vs 青云宗弟子(10) → giữ cả hai;
   // 云宗弟(10) trong 青云宗弟子(10) → loại. Key ưu tiên không bao giờ bị loại.
   passed.sort((a, b) => (b.term.length - a.term.length) || (b.count - a.count));
+
+  // (bug 213) Vòng khử này là O(n²) phép substring và chạy TRƯỚC khi cắt trần `maxCandidates`.
+  // Corpus tới 400K ký tự với n-gram 2..6 và minCount 3 có thể để lại HÀNG CHỤC NGHÌN cụm ở
+  // `passed` — đủ đứng hình vài giây ngay ở Pha 0, trước cả khi gọi AI lần nào.
+  //
+  // Chặn bằng chỉ mục ngược: mỗi cụm ngắn chỉ so với những cụm DÀI THẬT SỰ CHỨA NÓ, tra qua map
+  // n-gram → các cụm đã nhận có chứa n-gram đó. Kết quả giữ nguyên 100% (vẫn là "bị nuốt nếu nằm
+  // trong một cụm dài đã giữ và tần suất không vượt 1.6×"), chỉ khác cách tìm ứng viên để so.
   const accepted: { term: string; count: number }[] = [];
+  /** n-gram (mọi chuỗi con) của các cụm ĐÃ NHẬN → danh sách cụm chứa nó. */
+  const byPiece = new Map<string, { term: string; count: number }[]>();
+  const MAX_PIECE = 8;   // cụm dài hơn ngần này thì không ai "nằm lọt" trong nó theo nghĩa hữu ích
+
   for (const cand of passed) {
-    const swallowed = !keyTerms.has(cand.term) && accepted.some(a =>
-      a.term.length > cand.term.length &&
-      a.term.includes(cand.term) &&
-      cand.count <= a.count * 1.6,
-    );
-    if (!swallowed) accepted.push(cand);
+    let swallowed = false;
+    if (!keyTerms.has(cand.term)) {
+      const holders = byPiece.get(cand.term);
+      if (holders) {
+        swallowed = holders.some(a => a.term.length > cand.term.length && cand.count <= a.count * 1.6);
+      }
+    }
+    if (swallowed) continue;
+
+    accepted.push(cand);
+    // Ghi mọi chuỗi con của cụm vừa nhận vào chỉ mục để các cụm ngắn hơn tra được ngay.
+    const s = cand.term;
+    if (s.length <= MAX_PIECE) {
+      for (let i = 0; i < s.length; i++) {
+        for (let j = i + 1; j <= s.length; j++) {
+          if (j - i === s.length) continue;   // chính nó, không cần
+          const piece = s.slice(i, j);
+          const list = byPiece.get(piece);
+          if (list) list.push(cand); else byPiece.set(piece, [cand]);
+        }
+      }
+    }
   }
 
   // ── Xếp hạng: key ưu tiên trước, rồi theo tần suất ──

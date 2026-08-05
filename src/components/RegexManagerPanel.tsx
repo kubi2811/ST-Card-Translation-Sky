@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { useStore } from '../store';
+import { useThrottledStore } from '../hooks/useThrottledStore';
 import { useTranslation } from '../hooks/useTranslation';
 import { useT, useUi } from '../i18n/useLocale';
 import { fmt } from '../i18n';
@@ -231,7 +232,23 @@ export default function RegexManagerPanel({ onClose, isFullscreen }: { onClose: 
   const t = useT();
   // (bug 132) saveTranslationCache: mọi việc làm trong tab này (dịch lẻ, AI sửa, áp vào thẻ,
   // bật/tắt) phải xuống đĩa — trước đây tab Regex không hề gọi nó nên F5/nhập lại là mất trắng.
-  const { card, updateCard, addToast, fields, updateField, phase, deleteCurrentCardCache, translationConfig, addLog, proxy, jumpToFieldPath, setJumpToFieldPath, saveTranslationCache } = useStore();
+  // (bug 213) Selector hẹp thay cho destructure trần. Vòng dịch chính chạy bằng promise loop đọc
+  // getState() nên nó KHÔNG chết khi TranslationPanel unmount — user mở Regex Manager fullscreen
+  // giữa lúc đang dịch là mỗi addLog/updateField re-render cả panel 1200 dòng kèm subtree 2 iframe
+  // preview. `fields` throttle 300ms (chỉ dùng để hiển thị trạng thái/bản dịch của từng script).
+  const card = useStore((s) => s.card);
+  const updateCard = useStore((s) => s.updateCard);
+  const addToast = useStore((s) => s.addToast);
+  const fields = useThrottledStore((s) => s.fields, 300);
+  const updateField = useStore((s) => s.updateField);
+  const phase = useStore((s) => s.phase);
+  const deleteCurrentCardCache = useStore((s) => s.deleteCurrentCardCache);
+  const translationConfig = useStore((s) => s.translationConfig);
+  const addLog = useStore((s) => s.addLog);
+  const proxy = useStore((s) => s.proxy);
+  const jumpToFieldPath = useStore((s) => s.jumpToFieldPath);
+  const setJumpToFieldPath = useStore((s) => s.setJumpToFieldPath);
+  const saveTranslationCache = useStore((s) => s.saveTranslationCache);
   const { retranslateField, cancelTranslation, cancelFieldTranslation, cancelAllFieldTranslations } = useTranslation();
 
   // ─── Regex scripts from card ───
@@ -1198,7 +1215,10 @@ function CopyButton({ text }: { text: string }) {
    ════════════════════════════════════════════════════════════════════ */
 function SurgicalPromptSection() {
   const ui = useUi();
-  const { translationConfig, setTranslationConfig } = useStore();
+  // (bug 213) selector hẹp — destructure trần từ useStore() là subscribe TOÀN store: mọi
+  // set() (addLog/updateField suốt lượt dịch) đều kéo component này re-render dù chẳng liên quan.
+  const translationConfig = useStore((s) => s.translationConfig);
+  const setTranslationConfig = useStore((s) => s.setTranslationConfig);
   const [isExpanded, setIsExpanded] = useState(false);
 
   return (

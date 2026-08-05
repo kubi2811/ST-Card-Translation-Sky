@@ -7,7 +7,12 @@ import type { CharacterCard, FieldGroup } from '../types/card';
 import CardParserWorker from '../workers/cardParser.worker.ts?worker';
 
 export function useCardParser() {
-  const { setCard, addToast, clearCard } = useStore();
+  // (bug 213) Selector hẹp. Hook này sống trong FileUpload — component nằm ở sidebar và mount
+  // vĩnh viễn — nên destructure trần từ useStore() khiến sidebar re-render theo MỌI store write
+  // suốt lượt dịch, dù ở đây chỉ cần 3 action vốn có identity cố định.
+  const setCard = useStore((s) => s.setCard);
+  const addToast = useStore((s) => s.addToast);
+  const clearCard = useStore((s) => s.clearCard);
   const [isParsing, setIsParsing] = useState(false);
   const [parseProgress, setParseProgress] = useState<{ stage: string; percent: number } | null>(null);
   const workerRef = useRef<Worker | null>(null);

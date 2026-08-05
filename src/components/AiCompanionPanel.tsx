@@ -490,7 +490,14 @@ const TextSection = memo(({ text }: { text: string }) => {
 });
 
 const CodeSection = memo(({ language, code }: { language: string; code: string }) => {
-  const { card, updateCard, addToast, setFields } = useStore();
+  // (bug 213) `memo()` bên ngoài BỊ VÔ HIỆU HOÀN TOÀN nếu bên trong subscribe cả store: hàng rào
+  // memo chỉ chặn re-render do PROPS đổi, còn hook subscribe thì tự kéo re-render bất kể props.
+  // Lịch sử chat có cả chục khối code, mỗi khối gánh HTML shiki qua dangerouslySetInnerHTML —
+  // mọi store write (kể cả addLog của lượt dịch chạy nền) dựng lại sạch cả chục khối.
+  const card = useStore((s) => s.card);
+  const updateCard = useStore((s) => s.updateCard);
+  const addToast = useStore((s) => s.addToast);
+  const setFields = useStore((s) => s.setFields);
   const ui = useUi();
   const [copied, setCopied] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
@@ -1483,7 +1490,16 @@ const MessageList = memo(({
    ════════════════════════════════════════════════════════════════════ */
 export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
   // (User 2026) `providers` = các provider PHỤ — bơm vào pool để Trợ Lý AI cũng xoay lane như Dịch Card.
-  const { card, proxy, providers, updateCard, addToast, fields } = useStore();
+  // (bug 213) Panel này dài hơn 5000 dòng và user hoàn toàn có thể mở nó GIỮA LÚC ĐANG DỊCH.
+  // Trước đây nó destructure trần từ `useStore()` — subscribe TOÀN store, lại còn ôm cả `fields`.
+  // Burst dịch bắn hàng trăm set() (updateField/addLog) ⇒ mỗi cái dựng lại cả khung chat.
+  // `fields` chỉ được đọc trong callback lúc gửi tin (dựng ngữ cảnh + tra bản dịch entry), nên
+  // KHÔNG cần subscribe: đọc tươi bằng getState() tại thời điểm dùng là đúng nhất.
+  const card = useStore((s) => s.card);
+  const proxy = useStore((s) => s.proxy);
+  const providers = useStore((s) => s.providers);
+  const updateCard = useStore((s) => s.updateCard);
+  const addToast = useStore((s) => s.addToast);
   const ui = useUi();
   
   // ─── Local Storage States ───
@@ -1776,7 +1792,7 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
     // nằm trong store `fields` chưa ghi ngược vào card ⇒ AI không có bản dịch để so sánh/sửa lỗi.
     // Dựng map path→bản dịch để đính KÈM bản dịch cạnh bản gốc trong ngữ cảnh.
     const transByPath = new Map<string, string>();
-    for (const f of (fields || [])) {
+    for (const f of (useStore.getState().fields || [])) {   // (bug 213) đọc tươi, không subscribe
       if (f.status === 'done' && f.translated && f.translated !== f.original) {
         transByPath.set(f.path, f.translated);
       }
@@ -1906,7 +1922,9 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
     }
 
     return context.trim();
-  }, [card, attachedFiles, fields]);
+    // (bug 213) `fields` không còn nằm trong dep vì hàm đọc tươi qua getState() — vẫn luôn lấy
+    // được bản dịch mới nhất, mà không kéo cả panel re-render theo từng updateField.
+  }, [card, attachedFiles]);
 
   // ─── Send message logic ───
     
@@ -2106,7 +2124,7 @@ ${ragBlock ? `\n${ragBlock}` : ''}${directiveBlock}`;
                 ? va.params.entryIndex
                 : (card.data?.character_book?.entries ?? []).findIndex(
                     (e: any) => String(e.comment ?? '').trim().toLowerCase() === String(va.params.name ?? '').trim().toLowerCase());
-              const tf = (fields || []).find(f => f.path === `data.character_book.entries[${ei}].content`);
+              const tf = (useStore.getState().fields || []).find(f => f.path === `data.character_book.entries[${ei}].content`);
               if (tf?.translated) {
                 viewFeedback += `\n--- content BẢN DỊCH (FULL, ${tf.translated.length} ký tự) ---\n${tf.translated}`;
               }
@@ -3507,7 +3525,12 @@ function PresetCard({
 }
 
 function MvuZodTab() {
-  const { card, proxy, updateCard, addToast, setFields } = useStore();
+  // (bug 213) selector hẹp — xem ghi chú ở CodeSection.
+  const card = useStore((s) => s.card);
+  const proxy = useStore((s) => s.proxy);
+  const updateCard = useStore((s) => s.updateCard);
+  const addToast = useStore((s) => s.addToast);
+  const setFields = useStore((s) => s.setFields);
   const ui = useUi();
   const [step, setStep] = useState<1 | 2 | 3 | 4 | 5 | 6 | 7>(1);
   const [loading, setLoading] = useState(false);

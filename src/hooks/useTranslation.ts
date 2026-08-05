@@ -242,6 +242,49 @@ export function useTranslation() {
   // Paths currently being translated by SOME context. Prevents the same field from
   // being translated twice at once (e.g. a zombie loop + a fresh resume loop).
   const inFlightPaths = useRef<Set<string>>(new Set());
+
+  /* ─── (bug 213) Hàng đợi "từ điển tên entry EJS" — gom rồi ghi một lần ───
+   *
+   * Từ điển là dữ liệu NÓNG nhưng lại nằm trong object `translationConfig` vốn LẠNH. Mỗi lần ghi
+   * tạo ra một `translationConfig` mới ⇒ MỌI component subscribe `s.translationConfig` (19 chỗ:
+   * TranslateConfig 1520 dòng luôn mount ở sidebar, VerifyPanel, MvuSyncPanel, ExportPanel,
+   * TranslationPanel, ModModePanel, FieldEditor…) re-render đồng loạt. Selector hẹp không cứu
+   * được vì cả object đổi identity.
+   *
+   * Mà đường ghi này chạy THEO TỪNG FIELD: card 74 entry lorebook có thể bắn tới ~148 lượt ghi
+   * cho một lượt dịch. Gom vào đây rồi flush MỘT lần sau mỗi lô thì kết quả cuối y hệt (vẫn là
+   * hợp nhất các cặp mới, vẫn không ghi đè cặp đã có) nhưng số lần dựng lại UI giảm hai bậc.
+   */
+  const pendingEjsNames = useRef<Record<string, string>>({});
+  /**
+   * Ngưỡng gom. KHÔNG để vô hạn: hơn 20 chỗ khác trong hook đọc từ điển này thẳng từ store để
+   * dựng prompt, nên cặp còn nằm trong hàng đợi là cặp CHƯA ai thấy. Vốn dĩ đường này chỉ là
+   * "best-effort" (field chạy song song qua pool, prompt của nhiều field đã dựng xong trước khi
+   * cặp mới kịp ghi), nhưng gom 8 cái một lần vẫn giữ đúng tinh thần tiến bộ dần mà cắt được
+   * ~90% số lần dựng lại UI.
+   */
+  const EJS_NAME_FLUSH_AT = 8;
+  const queueEjsNameMapping = (orig: string, trans: string) => {
+    const fresh = useStore.getState().translationConfig.ejsEntryNameDict;
+    if (orig in fresh || orig in pendingEjsNames.current) return;
+    pendingEjsNames.current[orig] = trans;
+    if (Object.keys(pendingEjsNames.current).length >= EJS_NAME_FLUSH_AT) flushEjsNameMappings();
+  };
+  const flushEjsNameMappings = () => {
+    const queued = pendingEjsNames.current;
+    const names = Object.keys(queued);
+    if (names.length === 0) return;
+    pendingEjsNames.current = {};
+    const fresh = useStore.getState().translationConfig.ejsEntryNameDict;
+    const merged = { ...fresh };
+    let added = 0;
+    for (const [o, t] of Object.entries(queued)) {
+      if (!(o in merged)) { merged[o] = t; added++; }
+    }
+    if (added === 0) return;
+    store.setTranslationConfig({ ejsEntryNameDict: merged });
+    store.addLog('info', `🔗 EJS Progressive: +${added} tên entry vào từ điển (${names.slice(0, 3).join(', ')}${names.length > 3 ? '…' : ''})`);
+  };
   // Which flow last ran, so Resume (after a hard pause) continues the correct one.
   const lastRunModeRef = useRef<'translate' | 'mod'>('translate');
   // (Việc 80) Bộ quét chữ Trung sót được khai báo SAU startTranslation (nó cần retranslateField)
@@ -896,13 +939,10 @@ export function useTranslation() {
           field.path.endsWith('.name') || field.path.endsWith('.comment')
         ) && field.path.includes('character_book.entries[');
         if (isLbNameOrComment && translated && field.original !== translated) {
-          const freshEjsDict = useStore.getState().translationConfig.ejsEntryNameDict;
           const trimOrig = field.original.trim();
           const trimTrans = translated.trim();
-          if (trimOrig && trimTrans && !(trimOrig in freshEjsDict) && trimOrig !== trimTrans) {
-            const updatedEjsDict = { ...freshEjsDict, [trimOrig]: trimTrans };
-            store.setTranslationConfig({ ejsEntryNameDict: updatedEjsDict });
-            store.addLog('info', `🔗 EJS Progressive: +1 entry name mapping "${trimOrig}" → "${trimTrans}"`);
+          if (trimOrig && trimTrans && trimOrig !== trimTrans) {
+            queueEjsNameMapping(trimOrig, trimTrans);
           }
         }
       }
@@ -1737,13 +1777,10 @@ export function useTranslation() {
               batchFields[j].path.endsWith('.name') || batchFields[j].path.endsWith('.comment')
             ) && batchFields[j].path.includes('character_book.entries[');
             if (isLbNameOrComment && translated && batchFields[j].original !== translated) {
-              const freshEjsDict = useStore.getState().translationConfig.ejsEntryNameDict;
               const trimOrig = batchFields[j].original.trim();
               const trimTrans = translated.trim();
-              if (trimOrig && trimTrans && !(trimOrig in freshEjsDict) && trimOrig !== trimTrans) {
-                const updatedEjsDict = { ...freshEjsDict, [trimOrig]: trimTrans };
-                store.setTranslationConfig({ ejsEntryNameDict: updatedEjsDict });
-                store.addLog('info', `🔗 EJS Progressive: +1 entry name "${trimOrig}" → "${trimTrans}"`);
+              if (trimOrig && trimTrans && trimOrig !== trimTrans) {
+                queueEjsNameMapping(trimOrig, trimTrans);
               }
             }
           }
@@ -3210,6 +3247,7 @@ export function useTranslation() {
     } catch { /* ép mốc chỉ tăng cường — lỗi thì bỏ qua */ }
 
     runningRef.current = false;
+    flushEjsNameMappings();   // (bug 213) đẩy nốt các cặp tên entry còn trong hàng đợi
     releaseWakeLock();   // (bug 205) hết lượt dịch thì trả màn hình về bình thường
     store.setPhase('done');
     store.saveTranslationCache();

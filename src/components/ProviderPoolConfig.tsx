@@ -24,7 +24,12 @@ const lbl: React.CSSProperties = { fontSize: '0.64rem', color: 'var(--text-muted
  * call round-robin chạy song song. Layout 2 cột cho gọn; mỗi provider có nút "Load model" riêng.
  */
 export default function ProviderPoolConfig() {
-  const { providers, addProvider, updateProvider, removeProvider } = useStore();
+  // (bug 213) selector hẹp — destructure trần từ useStore() là subscribe TOÀN store: mọi
+  // set() (addLog/updateField suốt lượt dịch) đều kéo component này re-render dù chẳng liên quan.
+  const providers = useStore((s) => s.providers);
+  const addProvider = useStore((s) => s.addProvider);
+  const updateProvider = useStore((s) => s.updateProvider);
+  const removeProvider = useStore((s) => s.removeProvider);
   const ui = useUi();
   const [open, setOpen] = useState(true);
 

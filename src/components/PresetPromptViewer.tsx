@@ -20,7 +20,11 @@ const ROLE_COLORS: Record<string, string> = {
 export default function PresetPromptViewer({ onClose }: Props) {
   const t = useT();
   const ui = useUi();
-  const { activePreset, setActivePreset, addToast } = useStore();
+  // (bug 213) selector hẹp — destructure trần từ useStore() là subscribe TOÀN store: mọi
+  // set() (addLog/updateField suốt lượt dịch) đều kéo component này re-render dù chẳng liên quan.
+  const activePreset = useStore((s) => s.activePreset);
+  const setActivePreset = useStore((s) => s.setActivePreset);
+  const addToast = useStore((s) => s.addToast);
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState<string>('all');
   const [expandedId, setExpandedId] = useState<string | null>(null);

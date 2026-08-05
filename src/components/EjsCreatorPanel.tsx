@@ -318,7 +318,14 @@ function GeneratedEntriesPreview({
 
 export default function EjsCreatorPanel({ onClose }: { onClose: () => void }) {
   const t = useT();
-  const { card, updateCard, addToast, proxy, translationConfig, setTranslationConfig } = useStore();
+  // (bug 213) selector hẹp — destructure trần từ useStore() là subscribe TOÀN store: mọi
+  // set() (addLog/updateField suốt lượt dịch) đều kéo component này re-render dù chẳng liên quan.
+  const card = useStore((s) => s.card);
+  const updateCard = useStore((s) => s.updateCard);
+  const addToast = useStore((s) => s.addToast);
+  const proxy = useStore((s) => s.proxy);
+  const translationConfig = useStore((s) => s.translationConfig);
+  const setTranslationConfig = useStore((s) => s.setTranslationConfig);
   const ui = useUi();
   
   const entries = card?.data?.character_book?.entries || [];

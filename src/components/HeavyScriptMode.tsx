@@ -31,7 +31,12 @@ function sourceSig(s: string): string {
 const LS_KEY = 'heavy-script-progress';
 
 export default function HeavyScriptMode({ source, onMerged }: Props) {
-  const { proxy, providers, translationConfig, addToast } = useStore();
+  // (bug 213) selector hẹp — destructure trần từ useStore() là subscribe TOÀN store: mọi
+  // set() (addLog/updateField suốt lượt dịch) đều kéo component này re-render dù chẳng liên quan.
+  const proxy = useStore((s) => s.proxy);
+  const providers = useStore((s) => s.providers);
+  const translationConfig = useStore((s) => s.translationConfig);
+  const addToast = useStore((s) => s.addToast);
   const ui = useUi();
 
   const [threshold, setThreshold] = useState(() => {

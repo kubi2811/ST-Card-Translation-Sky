@@ -557,6 +557,21 @@ export function enforceInitvarCovariance(
     return { text: translatedText, fixes: [] };
   }
 
+  // (bug 213) MEMO cho findClosestDictValue. Mỗi lần gọi là một lượt Levenshtein QUÉT TRỌN từ điển;
+  // hàm này chạy cho từng dòng YAML lệch dict, từng macro, từng path, từng phép so sánh — mà tên
+  // khoá lặp lại rất nhiều trong initvar (map lồng dùng đi dùng lại cùng bộ khoá). Với initvar
+  // nghìn dòng + dict vài trăm mục thì đây là hàng giây block main thread cho MỖI field code, và
+  // recanonicalize gọi nó cho MỌI field. `strict` cố định trong một lượt gọi nên cache theo khoá
+  // là chính xác. Cùng loại thuốc đã dùng cho extractZodDescriptions (bug 39c) và filterDictByText.
+  const closestCache = new Map<string, string | null>();
+  const closest = (key: string): string | null => {
+    const hit = closestCache.get(key);
+    if (hit !== undefined) return hit;
+    const val = findClosestDictValue(key, mvuDictionary, strict);
+    closestCache.set(key, val);
+    return val;
+  };
+
   let result = cleanYamlQuotes(translatedText);
 
   // ─── Pass 1: YAML key covariance (existing logic) ───
@@ -577,7 +592,7 @@ export function enforceInitvarCovariance(
     // This key is NOT in the dictionary — it might be a mismatched translation
     // Try to find the correct translation by checking if any dictionary value
     // is "close" to this key (fuzzy match)
-    const correctValue = findClosestDictValue(yamlKey, mvuDictionary, strict);
+    const correctValue = closest(yamlKey);
     if (correctValue && correctValue !== yamlKey) {
       // Build a regex that replaces this specific YAML key occurrence
       const escaped = yamlKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -613,7 +628,7 @@ export function enforceInitvarCovariance(
     // Skip if it's still a CJK original
     if (originalToTranslated.has(varName)) continue;
 
-    const correctValue = findClosestDictValue(varName, mvuDictionary, strict);
+    const correctValue = closest(varName);
     if (correctValue && correctValue !== varName) {
       macroFixes.push({ from: varName, to: correctValue });
     }
@@ -645,7 +660,7 @@ export function enforceInitvarCovariance(
     if (translatedToOriginal.has(varName.toLowerCase())) continue;
     if (originalToTranslated.has(varName)) continue;
 
-    const correctValue = findClosestDictValue(varName, mvuDictionary, strict);
+    const correctValue = closest(varName);
     if (correctValue && correctValue !== varName) {
       bracketFixes.push({ from: varName, to: correctValue });
     }
@@ -678,7 +693,7 @@ export function enforceInitvarCovariance(
       if (translatedToOriginal.has(seg.toLowerCase())) return seg;
       if (originalToTranslated.has(seg)) return seg;
 
-      const correctValue = findClosestDictValue(seg, mvuDictionary, strict);
+      const correctValue = closest(seg);
       if (correctValue && correctValue !== seg) {
         changed = true;
         if (!fixes.some(f => f.found === seg)) {
@@ -716,7 +731,7 @@ export function enforceInitvarCovariance(
     const exactValue = findClosestDictValue(inner, mvuDictionary, true);
     const correctValue = exactValue
       ?? (nameLikeLiterals.has(inner.trim().toLowerCase())
-        ? findClosestDictValue(inner, mvuDictionary, strict)
+        ? closest(inner)
         : null);
     if (correctValue && correctValue !== inner) {
       if (!fixes.some(f => f.found === inner)) {
@@ -739,7 +754,7 @@ export function enforceInitvarCovariance(
       if (translatedToOriginal.has(seg.toLowerCase())) return seg;
       if (originalToTranslated.has(seg)) return seg;
 
-      const correctValue = findClosestDictValue(seg, mvuDictionary, strict);
+      const correctValue = closest(seg);
       if (correctValue && correctValue !== seg) {
         changed = true;
         if (!fixes.some(f => f.found === seg)) {
@@ -769,7 +784,7 @@ export function enforceInitvarCovariance(
       if (translatedToOriginal.has(val.toLowerCase())) return item;
       if (originalToTranslated.has(val)) return item;
 
-      const correctValue = findClosestDictValue(val, mvuDictionary, strict);
+      const correctValue = closest(val);
       if (correctValue && correctValue !== val) {
         changed = true;
         if (!fixes.some(f => f.found === val)) {

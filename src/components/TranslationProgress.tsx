@@ -266,6 +266,10 @@ function ModModePanel() {
   const phase = useStore((s) => s.phase);
   const startTime = useStore((s) => s.startTime);
   const translationConfig = useStore((s) => s.translationConfig);
+  // (bug 213) Trước đây hai chỗ dưới JSX gọi thẳng `useStore()` KHÔNG selector — đăng ký toàn
+  // store và phá sạch công throttle 150ms ở ngay dòng trên: mod đang chạy thì mỗi set() vẫn
+  // re-render cả panel.
+  const mvuConversionProgress = useStore((s) => s.mvuConversionProgress);
   const ui = useUi();
   const { applyModToAllFields, continueMod, retryAllErrors, cancelTranslation, pauseTranslation, resumeTranslation, generateModLorebook } = useTranslation();
   const t = useT();
@@ -576,7 +580,7 @@ function ModModePanel() {
       )}
 
       {/* MVU Conversion Progress */}
-      {useStore().mvuConversionProgress && (
+      {mvuConversionProgress && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: '10px',
           padding: '12px 14px', marginBottom: '16px',
@@ -586,7 +590,7 @@ function ModModePanel() {
           fontSize: '0.8rem', color: '#e67e22',
         }}>
           <Loader2 size={16} className="spin" />
-          {useStore().mvuConversionProgress}
+          {mvuConversionProgress}
         </div>
       )}
 

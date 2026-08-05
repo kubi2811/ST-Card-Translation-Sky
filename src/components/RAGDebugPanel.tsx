@@ -9,7 +9,10 @@ interface RAGDebugPanelProps {
 }
 
 export default function RAGDebugPanel({ field, onClose }: RAGDebugPanelProps) {
-  const { fields, translationConfig } = useStore();
+  // (bug 213) selector hẹp — destructure trần từ useStore() là subscribe TOÀN store: mọi
+  // set() (addLog/updateField suốt lượt dịch) đều kéo component này re-render dù chẳng liên quan.
+  const fields = useStore((s) => s.fields);
+  const translationConfig = useStore((s) => s.translationConfig);
   const [showFullContext, setShowFullContext] = useState(false);
 
   const result = useMemo(() => {

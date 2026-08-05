@@ -37,19 +37,82 @@ function isInsideFunctionBody(text: string, pos: number): boolean {
   return braceDepth < -1; // deeply unmatched = inside nested block
 }
 
+/* ═══ (bug 213) CHỈ MỤC MỐC — dựng MỘT lần cho cả văn bản, mỗi truy vấn O(log n) ═══
+ *
+ * Các phép kiểm ranh giới trước đây đều làm `text.slice(0, pos)` rồi regex quét lại TOÀN BỘ tiền
+ * tố. Bản vá bug 39 đã cắt SỐ LẦN dò (trần 12 mỗi dấu) nhưng không cắt CHI PHÍ mỗi lần dò: field
+ * 148K ký tự vẫn là hàng trăm lượt copy + quét full-prefix cho MỖI chunk, tất cả trên main thread
+ * (chunkText chạy đồng bộ trong translateText, worker chỉ dùng cho parse card).
+ *
+ * Giờ ghi sẵn vị trí mọi mốc một lượt O(n), rồi "đếm mốc trước pos" = tìm nhị phân.
+ */
+export interface MarkerIndex {
+  scriptOpen: number[]; scriptClose: number[];
+  styleOpen: number[]; styleClose: number[];
+  ejsOpen: number[]; ejsClose: number[];
+  fence: number[];
+}
+
+/**
+ * Lưu vị trí KẾT THÚC của mỗi mốc, không phải vị trí bắt đầu.
+ *
+ * Cách đếm cũ là `text.slice(0, pos).match(re).length` — tức chỉ tính mốc NẰM TRỌN trong tiền tố:
+ * `<%` bắt đầu ở chỉ số 1 KHÔNG được tính khi pos = 2. Lưu điểm kết thúc rồi đếm `end <= pos` cho
+ * ra con số y hệt, không lệch một trường hợp nào.
+ */
+function markerPositions(text: string, re: RegExp): number[] {
+  const out: number[] = [];
+  const r = new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g');
+  for (let m = r.exec(text); m; m = r.exec(text)) {
+    out.push(m.index + m[0].length);
+    if (m.index === r.lastIndex) r.lastIndex++;   // mẫu rỗng — không xảy ra ở đây, nhưng cứ an toàn
+  }
+  return out;
+}
+
+export function buildMarkerIndex(text: string): MarkerIndex {
+  return {
+    scriptOpen: markerPositions(text, /<script[\s>]/gi),
+    scriptClose: markerPositions(text, /<\/script>/gi),
+    styleOpen: markerPositions(text, /<style[\s>]/gi),
+    styleClose: markerPositions(text, /<\/style>/gi),
+    ejsOpen: markerPositions(text, /<%/g),
+    ejsClose: markerPositions(text, /%>/g),
+    fence: markerPositions(text, /```/g),
+  };
+}
+
+/**
+ * Cache MỘT mục theo văn bản. `chunkText` gọi isSafeBoundary tới hàng chục lần trên CÙNG một
+ * chuỗi `remaining` (12 lần dò × 6 loại dấu × các fallback), nên chỉ cần nhớ chuỗi gần nhất là đủ
+ * biến O(n) mỗi lần dò thành O(n) mỗi chuỗi. Chỉ mục phụ thuộc DUY NHẤT vào nội dung nên dùng lại
+ * luôn đúng.
+ */
+let _miText: string | null = null;
+let _miIndex: MarkerIndex | null = null;
+export function markerIndexFor(text: string): MarkerIndex {
+  if (_miText === text && _miIndex) return _miIndex;
+  _miIndex = buildMarkerIndex(text);
+  _miText = text;
+  return _miIndex;
+}
+
+/** Số mốc nằm TRỌN trước `pos` (tìm nhị phân trên mảng điểm-kết-thúc đã sắp). */
+export function countMarkersBefore(endPositions: number[], pos: number): number {
+  let lo = 0, hi = endPositions.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (endPositions[mid] <= pos) lo = mid + 1; else hi = mid;
+  }
+  return lo;
+}
+
 /**
  * Check if position is inside a <script> or <style> block.
  */
-function isInsideScriptOrStyle(text: string, pos: number): boolean {
-  const before = text.slice(0, pos);
-  const scriptOpens = (before.match(/<script[\s>]/gi) || []).length;
-  const scriptCloses = (before.match(/<\/script>/gi) || []).length;
-  if (scriptOpens > scriptCloses) return true;
-
-  const styleOpens = (before.match(/<style[\s>]/gi) || []).length;
-  const styleCloses = (before.match(/<\/style>/gi) || []).length;
-  if (styleOpens > styleCloses) return true;
-
+function isInsideScriptOrStyle(idx: MarkerIndex, pos: number): boolean {
+  if (countMarkersBefore(idx.scriptOpen, pos) > countMarkersBefore(idx.scriptClose, pos)) return true;
+  if (countMarkersBefore(idx.styleOpen, pos) > countMarkersBefore(idx.styleClose, pos)) return true;
   return false;
 }
 
@@ -172,24 +235,21 @@ function isInsideUrl(text: string, pos: number): boolean {
  * URL, or unbalanced JSON/code structure.
  * Returns true if it is safe to split at `pos`.
  */
-function isSafeBoundary(text: string, pos: number): boolean {
-  const before = text.slice(0, pos);
-
+function isSafeBoundary(text: string, pos: number, idx: MarkerIndex = markerIndexFor(text)): boolean {
   // 1. Backtick balance
   const backtickCount = countUnescapedBackticks(text, pos, 10000);
   if (backtickCount % 2 !== 0) return false;
 
   // 2. EJS tag balance
-  const ejsOpens = (before.match(/<%/g) || []).length;
-  const ejsCloses = (before.match(/%>/g) || []).length;
-  if (ejsOpens > ejsCloses) return false;
+  // (bug 213) tra chỉ mục thay cho quét lại toàn bộ tiền tố
+  if (countMarkersBefore(idx.ejsOpen, pos) > countMarkersBefore(idx.ejsClose, pos)) return false;
 
   // 3. Triple-backtick code fence balance
-  const codeBlockMarkers = (before.match(/```/g) || []).length;
-  if (codeBlockMarkers % 2 !== 0) return false;
+  if (countMarkersBefore(idx.fence, pos) % 2 !== 0) return false;
 
   // 4. Brace/bracket balance
-  const recentSlice = before.slice(-10000);
+  // (bug 213) chỉ cắt đúng cửa sổ 10K cần dùng, không copy cả tiền tố rồi mới cắt đuôi
+  const recentSlice = text.slice(Math.max(0, pos - 10000), pos);
   let braceDepth = 0;
   let bracketDepth = 0;
   let parenDepth = 0;
@@ -209,7 +269,7 @@ function isSafeBoundary(text: string, pos: number): boolean {
   if (isInsideFunctionBody(text, pos)) return false;
 
   // 6. Script/style block detection
-  if (isInsideScriptOrStyle(text, pos)) return false;
+  if (isInsideScriptOrStyle(idx, pos)) return false;
 
   // 7. String literal detection
   if (isInsideStringLiteral(text, pos)) return false;

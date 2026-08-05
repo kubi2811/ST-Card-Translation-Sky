@@ -10,7 +10,14 @@ import { isMvuUpdateField } from '../utils/cardFields';
  * (Trước đây logic nằm inline trong 3 onClick — popup ra đời thì phải tách, kẻo đúp.)
  */
 export function usePresetApply() {
-  const { translationConfig, setTranslationConfig, fields, setFields, addToast, setActivePresetId } = useStore();
+  // (bug 213) selector hẹp — destructure trần từ useStore() là subscribe TOÀN store: mọi
+  // set() (addLog/updateField suốt lượt dịch) đều kéo component này re-render dù chẳng liên quan.
+  const translationConfig = useStore((s) => s.translationConfig);
+  const setTranslationConfig = useStore((s) => s.setTranslationConfig);
+  const fields = useStore((s) => s.fields);
+  const setFields = useStore((s) => s.setFields);
+  const addToast = useStore((s) => s.addToast);
+  const setActivePresetId = useStore((s) => s.setActivePresetId);
   const ui = useUi();
 
   return (preset: RecommendedPreset) => {

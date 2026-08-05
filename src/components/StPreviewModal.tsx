@@ -24,7 +24,12 @@ interface ScriptErr {
  * - ⇄ So 2 bản: Gốc | Đã dịch cạnh nhau — nhìn ngay khung nào mất data/vỡ giao diện sau dịch.
  */
 export default function StPreviewModal({ onClose }: { onClose: () => void }) {
-  const { card, proxy, setJumpToFieldPath, addToast } = useStore();
+  // (bug 213) selector hẹp — destructure trần từ useStore() là subscribe TOÀN store: mọi
+  // set() (addLog/updateField suốt lượt dịch) đều kéo component này re-render dù chẳng liên quan.
+  const card = useStore((s) => s.card);
+  const proxy = useStore((s) => s.proxy);
+  const setJumpToFieldPath = useStore((s) => s.setJumpToFieldPath);
+  const addToast = useStore((s) => s.addToast);
   const { getExportCard } = useTranslation();
   const ui = useUi() as Record<string, string>;
 

@@ -8,7 +8,12 @@ import { fmt } from '../i18n';
  *  Clearly separates the SillyTavern character name (card.data.name / card.name)
  *  from the export file name (cardFileName) so the two are never mixed up. */
 export default function CardRenamePanel() {
-  const { card, cardFileName, renameCard, addToast } = useStore();
+  // (bug 213) selector hẹp — destructure trần từ useStore() là subscribe TOÀN store: mọi
+  // set() (addLog/updateField suốt lượt dịch) đều kéo component này re-render dù chẳng liên quan.
+  const card = useStore((s) => s.card);
+  const cardFileName = useStore((s) => s.cardFileName);
+  const renameCard = useStore((s) => s.renameCard);
+  const addToast = useStore((s) => s.addToast);
   const ui = useUi();
   const [open, setOpen] = useState(false);
 

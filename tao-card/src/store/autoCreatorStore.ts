@@ -171,7 +171,7 @@ const defaultConfig = (): AutoCreatorConfig => ({
     autoApplyAll: true,
     stepConfigs: {
       basic_info: { includePersonality: true, includeScenario: true, language: 'vi', promptMode: 'default' },
-      lorebook: { totalEntries: 20, minEntries: 0, entriesPerBatch: 5, concurrentBatches: 1, category: 'custom', cardType: 'single', useWebSearch: false, promptMode: 'default' },
+      lorebook: { totalEntries: 20, minEntries: 0, tokensPerEntry: 0, entriesPerBatch: 5, concurrentBatches: 1, category: 'custom', cardType: 'single', useWebSearch: false, promptMode: 'default' },
       regex: { count: 3, types: ['dialog', 'cleanup', 'style'], promptMode: 'default' },
       mvuzod: { autoDetect: true, createInitVar: true, createVarList: true, createUpdateRules: true, promptMode: 'default' },
       game_ui: { component: 'full_set' },

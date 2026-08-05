@@ -139,13 +139,18 @@ export function BatchGeneratorPanel() {
     }
     const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.round(v) || lo));
     const tab = TABS.find(t => t.id === activeTab)!;
-    const total = clamp(totalEntries, 5, 100);
+    // (bug 215) Nới trần cho khớp Auto Creator (đã bỏ giới hạn cứng) — trước đây bấm "Áp dụng vào
+    // Auto Creator" là con số user đặt bị bóp về 5–100 / 1–10 / 1–5 một cách âm thầm.
+    const total = clamp(totalEntries, 1, 2000);
     const prev = store.config.stepConfigs.lorebook;
     const patch = {
       totalEntries: total,
       minEntries: criteria.enabled ? clamp(criteria.minEntryCount ?? 0, 0, total) : 0,
-      entriesPerBatch: clamp(entriesPerBatch, 1, 10),
-      concurrentBatches: clamp(concurrentBatches, 1, 5),
+      // (bug 215) Mang luôn ngân sách token/entry sang — panel này vốn có ô đó, nhưng patch cũ
+      // không chép nên user chỉnh xong áp sang Auto Creator là mất.
+      tokensPerEntry: clamp(tokensPerEntry ?? 0, 0, 20000),
+      entriesPerBatch: clamp(entriesPerBatch, 1, 50),
+      concurrentBatches: clamp(concurrentBatches, 1, 24),
       useWebSearch,
       category: tab.category,
       cardType: tab.cardType,
@@ -417,7 +422,7 @@ export function BatchGeneratorPanel() {
         <div>
           <label className="settings-label">Tokens / Entry</label>
           {/* (bug 196) Trần cũ 2000 chặn thẳng yêu cầu 3000-5000 token/entry của user. */}
-          <input type="number" value={tokensPerEntry} onChange={e => setTokensPerEntry(Math.max(0, Math.min(6000, parseInt(e.target.value) || 0)))}
+          <input type="number" value={tokensPerEntry} onChange={e => setTokensPerEntry(Math.max(0, Math.min(20000, parseInt(e.target.value) || 0)))}
             className="settings-input" min={0} max={6000} step={50} disabled={isRunning}
             title={ui.bgTokensPerEntry} />
         </div>

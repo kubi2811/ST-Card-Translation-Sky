@@ -50,14 +50,24 @@ export type WorldviewPath = 'real_background' | 'small_world' | 'large_world';
 
 // ═══ Config từng bước (user tùy chỉnh) ═══
 export interface LorebookStepConfig {
-  totalEntries: number;        // Tổng số entry muốn tạo (5-100, default 20) — đóng vai trò TRẦN (tối đa)
+  totalEntries: number;        // Tổng số entry muốn tạo (default 20) — đóng vai trò TRẦN (tối đa)
   /**
    * (User 2026) SÀN số entry: pipeline tiếp tục chạy batch bù cho tới khi đạt ÍT NHẤT chừng này entry
    * (AI đôi khi trả thiếu). 0/undefined = không ép sàn (hành vi cũ). Luôn ≤ totalEntries.
    */
   minEntries?: number;
-  entriesPerBatch: number;     // Entries mỗi batch (1-10, default 5)
-  concurrentBatches: number;   // Batch song song (1-5, default 1)
+  entriesPerBatch: number;     // Entries mỗi batch (default 5)
+  concurrentBatches: number;   // Batch song song (default 1)
+  /**
+   * (bug 215) NGÂN SÁCH TOKEN CHO MỖI ENTRY — user xin: "lorebook thì cho chỉnh mỗi entries bao
+   * nhiêu token".
+   *
+   * `batchGenerator` VỐN ĐÃ nhận `tokensPerEntry` (bơm chỉ dẫn độ dài vào prompt, tự co số entry
+   * mỗi lô khi tổng nhu cầu chạm trần output — xem tokenBudget.ts, bug 194/196), nhưng Auto
+   * Creator chưa bao giờ truyền xuống, nên độ dài entry hoàn toàn phó mặc cho AI.
+   * 0 = không ràng buộc (giữ đúng hành vi cũ).
+   */
+  tokensPerEntry?: number;
   category: EntryCategory;     // Loại entry
   cardType: CardType;          // Thẻ đơn/nhiều NV
   useWebSearch: boolean;       // Có dùng web search không

@@ -596,7 +596,11 @@ ${response.text}`;
         (blueprint?.suggestedEntryTopics?.length ?? 0) +
         (blueprint?.worldStructure?.factions?.length ?? 0) +
         (blueprint?.worldStructure?.systems?.length ?? 0);
-      const totalEntries = Math.min(100, Math.max(lbConfig.totalEntries, entityCount + 5));
+      // (bug 215) BỎ TRẦN CỨNG 100. User xin "không hạn chế max là bao nhiêu giống hiện tại":
+      // thế giới lớn có thể cần vài trăm entry, mà trần này âm thầm cắt xuống 100 kể cả khi
+      // chính user đã đặt cao hơn. Vẫn để một trần AN TOÀN rất rộng để không bao giờ chạy vô hạn
+      // vì một con số nhập nhầm.
+      const totalEntries = Math.min(2000, Math.max(lbConfig.totalEntries, entityCount + 5));
       // 2) SÀN mặc định = 80% trần (card cũ lưu minEntries=0 cũng được nâng) → thiếu thì tự nối batch bù.
       const minEntries = Math.max(lbConfig.minEntries ?? 0, Math.floor(totalEntries * 0.8));
       if (totalEntries > lbConfig.totalEntries) {
@@ -614,6 +618,9 @@ ${response.text}`;
         minEntries,
         entriesPerBatch: lbConfig.entriesPerBatch,
         concurrentBatches: lbConfig.concurrentBatches,
+        // (bug 215) Ngân sách token mỗi entry — batchGenerator vốn đã biết dùng nó (bơm chỉ dẫn
+        // độ dài + tự co lô khi chạm trần output), chỉ là Auto Creator chưa từng truyền xuống.
+        tokensPerEntry: lbConfig.tokensPerEntry ?? 0,
         defaultPosition: 0,
         insertionOrderMode: 'increment',
         insertionOrderStart: 100,

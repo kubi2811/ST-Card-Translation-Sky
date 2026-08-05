@@ -29,13 +29,35 @@ const STEP_DEFS: { id: AutoCreatorStep; label: string; icon: LucideIcon; desc: s
   { id: 'basic_info', label: ui.acStepBasicInfo, icon: User, desc: 'Name, Description, Personality, Scenario' },
   { id: 'lorebook', label: 'Lorebook Entries', icon: BookOpen, desc: ui.acStepLorebookDesc },
   { id: 'mvuzod', label: 'MVUZOD Schema', icon: Hash, desc: ui.acStepMvuzodDesc },
-  { id: 'game_ui', label: 'Game UI', icon: Settings2, desc: ui.acStepGameUiDesc },
+  // (bug 215) User: "game ui và regex có thể hợp lại thành một". Hai bước này vốn là MỘT việc —
+  // dựng lớp hiển thị của thẻ từ schema MVU: game_ui đẻ ra script giao diện (status bar / opening
+  // form), regex đẻ ra script bám đúng tên biến của schema đó. Cả hai cùng phụ thuộc `mvuzod`,
+  // cùng ghi vào `extensions.regex_scripts`, và tách ra chỉ tổ bắt user tick hai ô cho một việc.
+  //
+  // GỘP Ở LỚP TRÌNH BÀY, không đụng pipeline: hai bước vẫn chạy tuần tự đúng thứ tự cũ (game_ui
+  // rồi regex) nên DAG, phần chạy lại từng bước, và mọi config đã lưu của user đều còn nguyên.
+  { id: 'game_ui', label: 'Giao diện & Regex', icon: Settings2, desc: 'Status bar / Opening form + bộ regex bám tên biến schema' },
   { id: 'regex', label: 'Regex Scripts', icon: Settings2, desc: ui.acStepRegexDesc },
   { id: 'system_prompt', label: 'System Prompt', icon: Terminal, desc: ui.acStepSysPromptDesc },
   { id: 'first_message', label: 'First Message', icon: MessageSquare, desc: ui.acStepFirstMesDesc },
   { id: 'mes_example', label: 'Message Examples', icon: MessageSquare, desc: ui.acStepMesExampleDesc },
   { id: 'final_check', label: ui.acStepFinalCheck, icon: CheckCircle2, desc: ui.acStepFinalCheckDesc },
 ];
+
+/**
+ * (bug 215) BƯỚC GỘP Ở LỚP TRÌNH BÀY — khoá là bước "chủ" (hiện thẻ), giá trị là các bước bị gộp
+ * vào nó. Bước con không hiện thẻ riêng, không hiện dòng tiến trình riêng; tick/bỏ tick ở thẻ chủ
+ * là áp cho cả cụm. Pipeline không hề biết tới chuyện gộp này.
+ */
+const MERGED_STEPS: Partial<Record<AutoCreatorStep, AutoCreatorStep[]>> = {
+  game_ui: ['regex'],
+};
+/** Các bước ĐANG bị gộp vào bước khác — bỏ qua khi liệt kê. */
+const MERGED_CHILDREN = new Set<AutoCreatorStep>(
+  Object.values(MERGED_STEPS).flat() as AutoCreatorStep[],
+);
+/** Cụm của một bước chủ: chính nó + các bước con (dùng cho tick chung, gộp trạng thái). */
+const stepGroup = (step: AutoCreatorStep): AutoCreatorStep[] => [step, ...(MERGED_STEPS[step] ?? [])];
 
 /** Nhãn hiển thị của preset. Giữ `AUTO_CREATOR_PRESETS` nguyên vẹn (config là dữ liệu). */
 const PRESET_UI: Record<string, { label: string; desc: string }> = {
@@ -297,16 +319,28 @@ export function AutoCreatorPage() {
   );
 
   const renderStepConfig = (step: AutoCreatorStep) => {
+    // (bug 215) Bước bị gộp không có thẻ riêng — cấu hình của nó nằm trong thẻ chủ.
+    if (MERGED_CHILDREN.has(step)) return null;
+
     const isExpanded = expandedStep === step;
+    const group = stepGroup(step);
     const isSelected = store.config.selectedSteps.includes(step);
     const { stepConfigs } = store.config;
     const isPromptOverrideOpen = showPromptOverride === step;
     const currentConfig = stepConfigs[step] as unknown as Record<string, unknown>;
 
+    /** Tick ở thẻ chủ áp cho CẢ CỤM — user chỉ thấy một việc thì chỉ phải bấm một lần. */
+    const toggleGroup = () => {
+      const want = !isSelected;
+      for (const s of group) {
+        if (store.config.selectedSteps.includes(s) !== want) store.toggleStep(s);
+      }
+    };
+
     return (
       <div key={step} className={cn("border rounded-xl transition-all overflow-hidden", isSelected ? "border-primary/30 bg-primary/5" : "border-border bg-card opacity-70")}>
-        <div className="flex items-center px-3 py-2 cursor-pointer" onClick={() => store.toggleStep(step)}>
-          <input type="checkbox" className="w-4 h-4 rounded border-border text-primary cursor-pointer mr-3" checked={isSelected} onChange={() => store.toggleStep(step)} onClick={(e) => e.stopPropagation()} disabled={store.isRunning} />
+        <div className="flex items-center px-3 py-2 cursor-pointer" onClick={toggleGroup}>
+          <input type="checkbox" className="w-4 h-4 rounded border-border text-primary cursor-pointer mr-3" checked={isSelected} onChange={toggleGroup} onClick={(e) => e.stopPropagation()} disabled={store.isRunning} />
           <div className="flex-1 flex items-center gap-2">
             {(() => { const Icon = STEP_DEFS.find(s => s.id === step)?.icon || Circle; return <Icon className="w-4 h-4 text-muted-foreground" />; })()}
             <div>
@@ -338,27 +372,48 @@ export function AutoCreatorPage() {
               <>
                 {/* (User 2026) totalEntries = TỐI ĐA; minEntries = TỐI THIỂU (0 = không ép sàn).
                     AI trả thiếu/trùng bị loại → pipeline tự nối batch bù tới khi đạt tối thiểu. */}
-                <SliderControl label={`${ui.acTotalEntries} (tối đa)`} value={stepConfigs.lorebook.totalEntries} min={5} max={100} step={5} onChange={(v) => store.updateStepConfig('lorebook', { totalEntries: v, minEntries: Math.min(stepConfigs.lorebook.minEntries ?? 0, v) })} disabled={store.isRunning} />
-                <SliderControl label="Entry tối thiểu (0 = không ép)" value={stepConfigs.lorebook.minEntries ?? 0} min={0} max={stepConfigs.lorebook.totalEntries} step={5} onChange={(v) => store.updateStepConfig('lorebook', { minEntries: v })} disabled={store.isRunning} />
-                <SliderControl label="Entries / Batch" value={stepConfigs.lorebook.entriesPerBatch} min={1} max={10} onChange={(v) => store.updateStepConfig('lorebook', { entriesPerBatch: v })} disabled={store.isRunning} />
-                <SliderControl label={ui.acConcurrentBatches} value={stepConfigs.lorebook.concurrentBatches} min={1} max={5} onChange={(v) => store.updateStepConfig('lorebook', { concurrentBatches: v })} disabled={store.isRunning} />
+                <SliderControl label={`${ui.acTotalEntries} (tối đa)`} value={stepConfigs.lorebook.totalEntries} min={1} max={100} step={5} hardMax={2000} onChange={(v) => store.updateStepConfig('lorebook', { totalEntries: v, minEntries: Math.min(stepConfigs.lorebook.minEntries ?? 0, v) })} disabled={store.isRunning} />
+                <SliderControl label="Entry tối thiểu (0 = không ép)" value={stepConfigs.lorebook.minEntries ?? 0} min={0} max={stepConfigs.lorebook.totalEntries} step={5} hardMax={stepConfigs.lorebook.totalEntries} onChange={(v) => store.updateStepConfig('lorebook', { minEntries: v })} disabled={store.isRunning} />
+                {/* (bug 215) Ngân sách token mỗi entry — user xin "lorebook thì cho chỉnh mỗi
+                    entries bao nhiêu token". batchGenerator vốn đã biết dùng con số này (bơm chỉ
+                    dẫn độ dài vào prompt + tự co số entry mỗi lô khi chạm trần output). */}
+                <SliderControl
+                  label="Token mỗi entry (0 = để AI tự quyết)"
+                  value={stepConfigs.lorebook.tokensPerEntry ?? 0}
+                  min={0} max={2000} step={50} hardMax={20000}
+                  onChange={(v) => store.updateStepConfig('lorebook', { tokensPerEntry: v })}
+                  disabled={store.isRunning}
+                  hint="≈ 150–400: entry tra cứu ngắn gọn · 800–1500: entry mô tả sâu. Đặt cao thì lô tự co lại để không chạm trần output."
+                />
+                <SliderControl label="Entries / Batch" value={stepConfigs.lorebook.entriesPerBatch} min={1} max={10} hardMax={50} onChange={(v) => store.updateStepConfig('lorebook', { entriesPerBatch: v })} disabled={store.isRunning} />
+                <SliderControl label={ui.acConcurrentBatches} value={stepConfigs.lorebook.concurrentBatches} min={1} max={5} hardMax={24} onChange={(v) => store.updateStepConfig('lorebook', { concurrentBatches: v })} disabled={store.isRunning} />
                 <label className="flex items-center gap-2"><input type="checkbox" checked={stepConfigs.lorebook.useWebSearch} onChange={(e) => store.updateStepConfig('lorebook', { useWebSearch: e.target.checked })} disabled={store.isRunning} /> Web Search (RAG)</label>
               </>
             )}
 
-            {step === 'regex' && (
-              <SliderControl label={ui.acRegexCount} value={stepConfigs.regex.count} min={1} max={10} onChange={(v) => store.updateStepConfig('regex', { count: v })} disabled={store.isRunning} />
-            )}
-
+            {/* (bug 215) Thẻ GỘP "Giao diện & Regex": phần giao diện (không tốn AI, dựng từ
+                schema) đứng trên, phần regex (tốn AI) đứng dưới, ngăn bằng một đường kẻ. */}
             {step === 'game_ui' && (
-              <div className="flex items-center gap-2">
-                <span>{ui.acGameUiComponent}</span>
-                <select className="border rounded px-2 py-1 bg-background" value={stepConfigs.game_ui.component} onChange={(e) => store.updateStepConfig('game_ui', { component: e.target.value as 'status_bar' | 'opening_form' | 'full_set' })} disabled={store.isRunning}>
-                  <option value="full_set">{ui.acGameUiFullSet}</option>
-                  <option value="status_bar">{ui.acGameUiStatusBar}</option>
-                  <option value="opening_form">{ui.acGameUiOpeningForm}</option>
-                </select>
-              </div>
+              <>
+                <div className="flex items-center gap-2">
+                  <span>{ui.acGameUiComponent}</span>
+                  <select className="border rounded px-2 py-1 bg-background" value={stepConfigs.game_ui.component} onChange={(e) => store.updateStepConfig('game_ui', { component: e.target.value as 'status_bar' | 'opening_form' | 'full_set' })} disabled={store.isRunning}>
+                    <option value="full_set">{ui.acGameUiFullSet}</option>
+                    <option value="status_bar">{ui.acGameUiStatusBar}</option>
+                    <option value="opening_form">{ui.acGameUiOpeningForm}</option>
+                  </select>
+                </div>
+                <div className="mt-2 pt-2 border-t border-border/30 space-y-1">
+                  <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Regex Scripts</div>
+                  <SliderControl
+                    label={ui.acRegexCount} value={stepConfigs.regex.count}
+                    min={1} max={10} hardMax={100}
+                    onChange={(v) => store.updateStepConfig('regex', { count: v })}
+                    disabled={store.isRunning}
+                    hint="Bộ regex do AI viết, bám đúng tên biến trong schema MVU."
+                  />
+                </div>
+              </>
             )}
 
             {step === 'final_check' && (
@@ -377,17 +432,17 @@ export function AutoCreatorPage() {
               <>
                 <label className="flex items-center gap-2"><input type="checkbox" checked={stepConfigs.system_prompt.includeDepthPrompt} onChange={(e) => store.updateStepConfig('system_prompt', { includeDepthPrompt: e.target.checked })} disabled={store.isRunning} /> {ui.acIncludeDepthPrompt}</label>
                 {stepConfigs.system_prompt.includeDepthPrompt && (
-                  <div className="flex items-center gap-2 mt-1"><span>Depth:</span><input type="number" min="0" max="10" className="border rounded px-2 py-1 w-16 bg-background" value={stepConfigs.system_prompt.depthValue} onChange={(e) => store.updateStepConfig('system_prompt', { depthValue: parseInt(e.target.value) || 4 })} disabled={store.isRunning} /></div>
+                  <div className="flex items-center gap-2 mt-1"><span>Depth:</span><input type="number" min="0" max="100" title="Độ sâu chèn Depth prompt — không còn bị chặn ở 10" className="border rounded px-2 py-1 w-16 bg-background" value={stepConfigs.system_prompt.depthValue} onChange={(e) => store.updateStepConfig('system_prompt', { depthValue: parseInt(e.target.value) || 4 })} disabled={store.isRunning} /></div>
                 )}
               </>
             )}
 
             {step === 'first_message' && (
-              <SliderControl label="Alternate Greetings" value={stepConfigs.first_message.alternateGreetings} min={0} max={5} onChange={(v) => store.updateStepConfig('first_message', { alternateGreetings: v })} disabled={store.isRunning} />
+              <SliderControl label="Alternate Greetings" value={stepConfigs.first_message.alternateGreetings} min={0} max={5} hardMax={50} onChange={(v) => store.updateStepConfig('first_message', { alternateGreetings: v })} disabled={store.isRunning} />
             )}
 
             {step === 'mes_example' && (
-              <SliderControl label={ui.acExampleCount} value={stepConfigs.mes_example.exampleCount} min={1} max={5} onChange={(v) => store.updateStepConfig('mes_example', { exampleCount: v })} disabled={store.isRunning} />
+              <SliderControl label={ui.acExampleCount} value={stepConfigs.mes_example.exampleCount} min={1} max={5} hardMax={50} onChange={(v) => store.updateStepConfig('mes_example', { exampleCount: v })} disabled={store.isRunning} />
             )}
 
             {/* v3: Prompt Override */}
@@ -479,11 +534,11 @@ export function AutoCreatorPage() {
         {isExpanded && (
           <div className="px-10 py-3 border-t border-border/50 bg-background/50 text-xs space-y-3">
             {step === 'npc_creation' && (
-              <SliderControl label={ui.acNpcCount} value={currentConfig.npcCount as number} min={1} max={10} onChange={(v) => store.updateMnStepConfig('npc_creation', { npcCount: v })} disabled={store.isRunning} />
+              <SliderControl label={ui.acNpcCount} value={currentConfig.npcCount as number} min={1} max={10} hardMax={100} onChange={(v) => store.updateMnStepConfig('npc_creation', { npcCount: v })} disabled={store.isRunning} />
             )}
             
             {step === 'opening' && (
-              <SliderControl label="Alternate Greetings" value={currentConfig.alternateGreetings as number} min={0} max={5} onChange={(v) => store.updateMnStepConfig('opening', { alternateGreetings: v })} disabled={store.isRunning} />
+              <SliderControl label="Alternate Greetings" value={currentConfig.alternateGreetings as number} min={0} max={5} hardMax={50} onChange={(v) => store.updateMnStepConfig('opening', { alternateGreetings: v })} disabled={store.isRunning} />
             )}
 
             <div className="pt-2 border-t border-border/30">
@@ -858,11 +913,20 @@ export function AutoCreatorPage() {
                 );
               })
             ) : (
-              store.config.selectedSteps.map((step, idx) => {
-              const status = store.stepStatuses[step];
+              // (bug 215) Bước bị gộp không có DÒNG RIÊNG — nếu không thì bên trái user thấy một
+              // việc mà bên phải lại đếm thành hai, số thứ tự cũng lệch với danh sách cấu hình.
+              store.config.selectedSteps.filter(s => !MERGED_CHILDREN.has(s)).map((step, idx) => {
+              const group = stepGroup(step).filter(s => store.config.selectedSteps.includes(s));
+              // Trạng thái của CẢ CỤM: lỗi ở bất kỳ bước con nào là lỗi; xong hết mới là xong;
+              // còn cái nào đang chạy thì cụm đang chạy.
+              const groupStatuses = group.map(s => store.stepStatuses[s]);
+              const status = groupStatuses.includes('error') ? 'error'
+                : groupStatuses.includes('running') ? 'running'
+                : groupStatuses.every(st => st === 'done') ? 'done'
+                : groupStatuses.find(st => st && st !== 'pending') ?? store.stepStatuses[step];
               const def = STEP_DEFS.find(s => s.id === step);
-              const isActive = store.currentStep === step;
-              
+              const isActive = group.includes(store.currentStep as AutoCreatorStep);
+
               return (
                 <div key={step}>
                   <div className={cn("flex items-start gap-3 transition-opacity", status === 'pending' ? 'opacity-40' : 'opacity-100')}>
@@ -999,15 +1063,57 @@ export function AutoCreatorPage() {
   );
 }
 
-// ═══ Reusable slider ═══
-function SliderControl({ label, value, min, max, step = 1, onChange, disabled }: {
+/**
+ * ═══ Reusable slider ═══
+ *
+ * (bug 215) Thanh trượt CÓ TRẦN CỨNG là điều user phàn nàn: "không hạn chế max là bao nhiêu
+ * giống hiện tại". `<input type="range">` không cho vượt `max` bằng bất kỳ cách nào, nên muốn
+ * 200 entry lorebook hay 30 regex là chịu.
+ *
+ * Cách chữa giữ được cả hai mặt: thanh trượt vẫn phụ trách khoảng THƯỜNG DÙNG (kéo nhanh, trực
+ * quan), cạnh nó là ô SỐ nhập tay không trần — gõ bao nhiêu cũng được, chỉ chặn số âm và một
+ * trần an toàn rất rộng để lỡ gõ nhầm 999999 thì không treo máy.
+ * Khi giá trị vượt quá `max` của thanh trượt, thanh tự nới trần để con trỏ không dính mép.
+ */
+function SliderControl({ label, value, min, max, step = 1, onChange, disabled, hardMax = 100_000, hint }: {
   label: string; value: number; min: number; max: number; step?: number;
   onChange: (v: number) => void; disabled: boolean;
+  /** Trần an toàn cho ô nhập tay (chống gõ nhầm), KHÔNG phải trần tính năng. */
+  hardMax?: number;
+  hint?: string;
 }) {
+  // Vượt trần thanh trượt thì nới thanh ra cho khớp — nếu không con trỏ kẹt ở mép phải.
+  const sliderMax = Math.max(max, value);
+  const clampTyped = (raw: number) => Math.max(min, Math.min(hardMax, Math.round(raw)));
   return (
     <div className="space-y-1">
-      <div className="flex justify-between"><span>{label}:</span><span className="font-medium text-primary">{value}</span></div>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(parseInt(e.target.value))} disabled={disabled} className="w-full accent-primary" />
+      <div className="flex items-center justify-between gap-2">
+        <span>{label}:</span>
+        <div className="flex items-center gap-1">
+          <input
+            type="number"
+            value={value}
+            min={min}
+            max={hardMax}
+            step={step}
+            disabled={disabled}
+            onChange={(e) => {
+              const n = parseInt(e.target.value, 10);
+              if (Number.isFinite(n)) onChange(clampTyped(n));
+            }}
+            title={`Gõ thẳng số bạn muốn — không bị giới hạn ở ${max}`}
+            className="w-20 rounded border border-border bg-surface px-1.5 py-0.5 text-right text-xs font-medium text-primary"
+          />
+          {value > max && <span className="text-[10px] text-amber-400" title="Đang vượt khoảng khuyến nghị">⚠</span>}
+        </div>
+      </div>
+      <input
+        type="range" min={min} max={sliderMax} step={step} value={value}
+        onChange={(e) => onChange(parseInt(e.target.value, 10))}
+        disabled={disabled}
+        className="w-full accent-primary"
+      />
+      {hint && <div className="text-[10px] leading-snug text-muted">{hint}</div>}
     </div>
   );
 }

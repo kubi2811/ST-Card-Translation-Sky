@@ -15,7 +15,7 @@ export const AUTO_CREATOR_PRESETS: AutoCreatorPreset[] = [
       selectedSteps: ['basic_info', 'lorebook', 'system_prompt', 'first_message', 'mes_example', 'final_check'],
       stepConfigs: {
         basic_info: { includePersonality: true, includeScenario: true, language: 'vi', promptMode: 'default' },
-        lorebook: { totalEntries: 10, entriesPerBatch: 5, concurrentBatches: 1, category: 'custom', cardType: 'single', useWebSearch: false, promptMode: 'default' },
+        lorebook: { totalEntries: 10, tokensPerEntry: 0, entriesPerBatch: 5, concurrentBatches: 1, category: 'custom', cardType: 'single', useWebSearch: false, promptMode: 'default' },
         regex: { count: 2, types: ['dialog', 'style'], promptMode: 'default' },
         mvuzod: { autoDetect: false, createInitVar: false, createVarList: false, createUpdateRules: false, promptMode: 'default' },
         game_ui: { component: 'full_set' },
@@ -35,7 +35,7 @@ export const AUTO_CREATOR_PRESETS: AutoCreatorPreset[] = [
       selectedSteps: ['basic_info', 'lorebook', 'regex', 'mvuzod', 'game_ui', 'system_prompt', 'first_message', 'mes_example', 'final_check'],
       stepConfigs: {
         basic_info: { includePersonality: true, includeScenario: true, language: 'vi', promptMode: 'default' },
-        lorebook: { totalEntries: 40, entriesPerBatch: 5, concurrentBatches: 2, category: 'custom', cardType: 'single', useWebSearch: false, promptMode: 'default' },
+        lorebook: { totalEntries: 40, tokensPerEntry: 0, entriesPerBatch: 5, concurrentBatches: 2, category: 'custom', cardType: 'single', useWebSearch: false, promptMode: 'default' },
         regex: { count: 5, types: ['dialog', 'cleanup', 'style'], promptMode: 'default' },
         mvuzod: { autoDetect: true, createInitVar: true, createVarList: true, createUpdateRules: true, promptMode: 'default' },
         game_ui: { component: 'full_set' },
@@ -55,7 +55,7 @@ export const AUTO_CREATOR_PRESETS: AutoCreatorPreset[] = [
       selectedSteps: ['basic_info', 'lorebook', 'system_prompt', 'first_message', 'mes_example', 'final_check'],
       stepConfigs: {
         basic_info: { includePersonality: true, includeScenario: true, language: 'vi', promptMode: 'default' },
-        lorebook: { totalEntries: 15, entriesPerBatch: 5, concurrentBatches: 1, category: 'custom', cardType: 'single', useWebSearch: false, promptMode: 'default' },
+        lorebook: { totalEntries: 15, tokensPerEntry: 0, entriesPerBatch: 5, concurrentBatches: 1, category: 'custom', cardType: 'single', useWebSearch: false, promptMode: 'default' },
         regex: { count: 2, types: ['dialog', 'style'], promptMode: 'default' },
         mvuzod: { autoDetect: true, createInitVar: true, createVarList: true, createUpdateRules: true, promptMode: 'default' },
         game_ui: { component: 'full_set' },
@@ -75,7 +75,7 @@ export const AUTO_CREATOR_PRESETS: AutoCreatorPreset[] = [
       selectedSteps: ['basic_info', 'lorebook', 'regex', 'mvuzod', 'game_ui', 'system_prompt', 'first_message', 'mes_example', 'final_check'],
       stepConfigs: {
         basic_info: { includePersonality: true, includeScenario: true, language: 'vi', promptMode: 'default' },
-        lorebook: { totalEntries: 50, entriesPerBatch: 5, concurrentBatches: 2, category: 'custom', cardType: 'single', useWebSearch: false, promptMode: 'default' },
+        lorebook: { totalEntries: 50, tokensPerEntry: 0, entriesPerBatch: 5, concurrentBatches: 2, category: 'custom', cardType: 'single', useWebSearch: false, promptMode: 'default' },
         regex: { count: 5, types: ['dialog', 'cleanup', 'style'], promptMode: 'default' },
         mvuzod: { autoDetect: true, createInitVar: true, createVarList: true, createUpdateRules: true, promptMode: 'default' },
         game_ui: { component: 'full_set' },
@@ -95,7 +95,7 @@ export const AUTO_CREATOR_PRESETS: AutoCreatorPreset[] = [
       selectedSteps: ['basic_info', 'lorebook', 'regex', 'system_prompt', 'first_message', 'mes_example', 'final_check'],
       stepConfigs: {
         basic_info: { includePersonality: true, includeScenario: true, language: 'vi', promptMode: 'default' },
-        lorebook: { totalEntries: 30, entriesPerBatch: 5, concurrentBatches: 2, category: 'custom', cardType: 'multi', useWebSearch: false, promptMode: 'default' },
+        lorebook: { totalEntries: 30, tokensPerEntry: 0, entriesPerBatch: 5, concurrentBatches: 2, category: 'custom', cardType: 'multi', useWebSearch: false, promptMode: 'default' },
         regex: { count: 3, types: ['dialog', 'cleanup'], promptMode: 'default' },
         mvuzod: { autoDetect: false, createInitVar: false, createVarList: false, createUpdateRules: false, promptMode: 'default' },
         game_ui: { component: 'full_set' },

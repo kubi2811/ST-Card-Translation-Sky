@@ -211,15 +211,18 @@ Nếu bạn không muốn tự tay viết thẻ từ số 0, Auto Creator sẽ l
 ### 5.1 Chọn Chế Độ Tạo Thẻ (Pipeline Selection)
 Hệ thống cung cấp hai quy trình sinh thẻ chuyên sâu:
 
-#### A. Standard Pipeline (Quy trình chuẩn 7 bước)
-Phù hợp với các thẻ nhân vật phong cách phương Tây, thẻ game nhập vai thông thường hoặc thẻ đồng hành đơn giản:
-1.  **Blueprint:** Sinh phác thảo nhân vật cơ bản.
-2.  **System Prompt:** Thiết lập chỉ thị diễn vai cho AI.
-3.  **First Message:** Viết lời thoại chào sân mở đầu câu chuyện.
-4.  **Message Examples:** Tạo các mẫu thoại đối đáp.
-5.  **Lorebook:** Tạo các tri thức nền tảng trong worldbook.
-6.  **Regex:** Tạo biểu thức chính quy định dạng hiển thị.
-7.  **Review:** Rà soát và đóng gói thẻ.
+#### A. Standard Pipeline (Quy trình chuẩn 8 bước)
+Phù hợp với các thẻ nhân vật phong cách phương Tây, thẻ game nhập vai thông thường hoặc thẻ đồng hành đơn giản. Thứ tự chạy đúng như dưới đây (bước sau cần kết quả bước trước):
+1.  **Thông tin cơ bản:** Tên, mô tả, tính cách, bối cảnh.
+2.  **Lorebook Entries:** Sinh tri thức nền tảng trong worldbook.
+3.  **MVUZOD Schema:** Suy ra bộ biến trạng thái (chỉ số, cờ, kho đồ…) từ lorebook.
+4.  **Giao diện & Regex:** *(gộp — xem 5.3)* Dựng status bar / opening form từ schema, kèm bộ regex bám đúng tên biến của schema đó.
+5.  **System Prompt:** Chỉ thị diễn vai + Depth prompt.
+6.  **First Message:** Lời chào mở đầu + các Alternate greetings.
+7.  **Message Examples:** Các đoạn hội thoại mẫu.
+8.  **Kiểm tra tổng thể:** Rà toàn thẻ cuối pipeline (MVU / initvar / regex / lorebook).
+
+> Mỗi bước có một ô tick riêng — bỏ tick là bỏ qua bước đó. Bấm mũi tên **›** ở cuối dòng để mở bảng tham số của bước.
 
 #### B. Minh Nguyệt Pipeline (Quy trình chuyên sâu 10 bước)
 Quy trình viết thẻ đỉnh cao theo phong cách viết card Trung Quốc cổ điển/hiện đại, tập trung sâu vào cốt cách, tủ quần áo, nội tâm và thần thái:
@@ -245,6 +248,21 @@ Quy trình viết thẻ đỉnh cao theo phong cách viết card Trung Quốc c�
     *   **Skip (Bỏ qua):** Bỏ qua bước này nếu bạn muốn tự tay viết phần đó sau.
 4.  **Smart Retry:** Nếu AI trả về kết quả bị lỗi cú pháp XML/JSON hoặc bị mất thẻ neo, hệ thống sẽ tự động gửi kèm log lỗi của trình duyệt và yêu cầu AI tự sửa đổi ở lượt sinh kế tiếp.
 5.  **Console Log:** Khung hiển thị nhật ký thời gian thực nằm phía dưới giúp bạn theo dõi chi tiết AI đang làm việc đến đâu, latency bao nhiêu và có gặp lỗi kết nối hay không.
+
+### 5.3 Tinh chỉnh tham số từng bước
+
+Mở bảng tham số bằng mũi tên **›** ở cuối mỗi dòng bước.
+
+**Không còn bị chặn trần.** Mỗi tham số có một thanh trượt (khoảng thường dùng, kéo cho nhanh) và **một ô số bên cạnh — gõ thẳng con số bạn muốn**, kể cả khi nó vượt ngoài thanh trượt. Ví dụ muốn 300 entry lorebook hay 20 regex script thì cứ gõ; thanh trượt sẽ tự nới ra cho khớp và hiện dấu ⚠ nhắc rằng bạn đang ra ngoài khoảng khuyến nghị. Vẫn có một trần an toàn rất rộng để lỡ gõ nhầm thì không treo máy.
+
+**Lorebook — ngân sách token mỗi entry.** Ô *"Token mỗi entry"* quyết định độ dài AI viết cho từng entry:
+*   `0` = để AI tự quyết (như trước đây).
+*   `150–400` = entry tra cứu ngắn gọn.
+*   `800–1500` = entry mô tả sâu, nhiều tầng.
+
+Đặt con số này thì hệ thống vừa bơm chỉ dẫn độ dài vào prompt, vừa **tự co số entry mỗi lô** lại khi tổng nhu cầu chạm trần output của model — nên đặt cao không làm entry bị cắt cụt giữa chừng. Sau mỗi lô, log in ra độ dài **đo thật** của từng entry để bạn đối chiếu.
+
+**Bước "Giao diện & Regex" gộp làm một.** Hai việc này vốn là một: dựng lớp hiển thị của thẻ từ schema MVU. Phần *Giao diện* (status bar / opening form) dựng bằng máy, không tốn lượt AI; phần *Regex Scripts* do AI viết, bám đúng tên biến trong schema. Một ô tick, một bảng tham số, một dòng tiến trình — nhưng bên trong vẫn chạy đủ hai công đoạn như cũ.
 
 ---
 

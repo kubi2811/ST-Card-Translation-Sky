@@ -38,6 +38,8 @@ import { generateOrchestrated, type OrchestratedProgress } from '../../lib/mvuzo
 import { autoFixGameHtml, type FixResult } from '../../lib/mvuzod/gameHtmlFixer';
 import { checkHtmlScripts } from '../../lib/scriptSafety';
 import { THEME_PRESETS, DEFAULT_THEME_ID } from '../../lib/mvuzod/gameHtmlTemplates';
+import { copyWithToast } from '../../lib/copyToClipboard';   // (bug 224) copy chạy được cả trong iframe của Hub
+import { useToastStore } from '../../store/toastStore';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -461,7 +463,7 @@ export function GameFrontendPreview({ schema }: GameFrontendPreviewProps) {
 
   // ─── Copy handler ───
   const handleCopy = useCallback(async (text: string, id: string) => {
-    await navigator.clipboard.writeText(text);
+    if (!(await copyWithToast(text, 'nội dung', useToastStore.getState()))) return;
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
   }, []);

@@ -217,7 +217,7 @@ export function EJSAgentPanel({ schema, onOpenInEditor }: EJSAgentPanelProps) {
         // tên kèm dấu nháy, thêm tiền tố "Entry: ", sai một dấu — cả dòng biến mất không dấu vết.
         // Nay: thử khớp gần (bỏ dấu nháy/tiền tố) rồi mới chịu thua, và thua thì NÓI RA.
         const target = byName.get(r.name.trim().toLowerCase())
-          ?? byName.get(r.name.trim().toLowerCase().replace(/^["'\u201C\u2018]|["'\u201D\u2019]$/g, '').replace(/^(entry|mục)\s*[:\-]\s*/i, '').trim());
+          ?? byName.get(r.name.trim().toLowerCase().replace(/^["'\u201C\u2018]|["'\u201D\u2019]$/g, '').replace(/^(entry|mục)\s*[:-]\s*/i, '').trim());
         if (!target) {
           blockedReasons.push(`Không tìm thấy entry tên "${r.name}" trong thẻ — AI có thể đã ghi sai tên. Dòng này bị bỏ qua.`);
           s.pushProgress(`⚠️ Bỏ qua đổi chế độ "${r.name}" — không có entry nào tên như vậy trong thẻ.`);

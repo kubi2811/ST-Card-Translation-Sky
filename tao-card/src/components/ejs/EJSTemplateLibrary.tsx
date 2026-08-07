@@ -10,6 +10,8 @@ import {
 } from 'lucide-react';
 import { EJS_ADVANCED_TEMPLATES, type EJSAdvancedTemplate } from './ejsSnippets';
 import { t as ui } from '../../i18n';
+import { copyWithToast } from '../../lib/copyToClipboard';   // (bug 224) copy chạy được cả trong iframe của Hub
+import { useToastStore } from '../../store/toastStore';
 
 interface EJSTemplateLibraryProps {
   onInsertCode: (code: string) => void;
@@ -64,7 +66,7 @@ export function EJSTemplateLibrary({ onInsertCode }: EJSTemplateLibraryProps) {
   }, [selectedCategory, searchQuery, favorites]);
 
   const handleCopy = useCallback((template: EJSAdvancedTemplate) => {
-    navigator.clipboard.writeText(template.code);
+    void copyWithToast(template.code, 'code mẫu', useToastStore.getState());
     setCopiedId(template.id);
     setTimeout(() => setCopiedId(null), 2000);
   }, []);

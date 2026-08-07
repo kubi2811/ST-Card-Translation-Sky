@@ -162,8 +162,8 @@ export function MVUZODPage() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-hidden" style={{ display: tab === 'game' ? undefined : 'none' }}>
-        <div className="max-w-6xl mx-auto px-6 py-5 h-full">
+      <div className="flex-1 overflow-y-auto scrollbar-thin" style={{ display: tab === 'game' ? undefined : 'none' }}>
+        <div className="max-w-6xl mx-auto px-6 py-5">
           <GameUiStudio schema={existingSchema} initVarConfig={existingInitVar} />
         </div>
       </div>

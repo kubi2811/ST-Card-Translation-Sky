@@ -140,9 +140,9 @@ export function GameUiStudio({ schema, initVarConfig }: Props) {
   const empty = messages.length === 0;
 
   return (
-    <div className="flex flex-col lg:flex-row gap-4 h-[calc(100vh-210px)] min-h-[540px]">
+    <div className="flex flex-col lg:flex-row gap-4 lg:h-[calc(100vh-230px)] lg:min-h-[540px]">
       {/* ═══ CỘT TRÁI — CHAT ═══ */}
-      <div className="flex flex-col flex-1 min-w-0 rounded-xl border border-border bg-card/40 overflow-hidden">
+      <div className="flex flex-col flex-1 min-w-0 h-[62vh] lg:h-auto rounded-xl border border-border bg-card/40 overflow-hidden">
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-border bg-card/60">
           <div className="flex items-center gap-2 text-sm font-semibold">
             <Gamepad2 className="w-4 h-4 text-primary" /> Game UI Studio
@@ -211,7 +211,7 @@ export function GameUiStudio({ schema, initVarConfig }: Props) {
       </div>
 
       {/* ═══ CỘT PHẢI — SẢN PHẨM ═══ */}
-      <div className="flex flex-col w-full lg:w-[46%] lg:max-w-[560px] rounded-xl border border-border bg-card/40 overflow-hidden">
+      <div className="flex flex-col w-full lg:w-[46%] lg:max-w-[560px] h-[70vh] lg:h-auto rounded-xl border border-border bg-card/40 overflow-hidden">
         {/* Tabs */}
         <div className="flex items-center gap-1 px-2 py-1.5 border-b border-border bg-card/60">
           <TabBtn active={tab === 'preview'} onClick={() => setTab('preview')} icon={Eye} label="Preview" />

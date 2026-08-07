@@ -36,6 +36,8 @@ import {
   type EjsStrategy,
 } from '../../prompts/ejsPrompt';
 import { t as ui, fmt } from '../../i18n';
+import { copyWithToast } from '../../lib/copyToClipboard';   // (bug 224) copy chạy được cả trong iframe của Hub
+import { useToastStore } from '../../store/toastStore';
 
 /**
  * Nhãn hiển thị của 6 loại template. KHÔNG sửa `EJS_TEMPLATE_LABELS` trong prompts/
@@ -289,7 +291,7 @@ export function EJSAIGenerator({ schema, onInsertCode, currentEditorCode }: EJSA
   // ─── Handlers ───
   const handleCopy = useCallback(() => {
     if (!result?.code) return;
-    navigator.clipboard.writeText(result.code);
+    void copyWithToast(result.code, 'code EJS', useToastStore.getState());
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }, [result]);

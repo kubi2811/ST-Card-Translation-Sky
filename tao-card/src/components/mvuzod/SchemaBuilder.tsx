@@ -11,7 +11,7 @@
  *   Right: Field Detail Editor + Actions + Live Zod Code Preview
  */
 
-import { useState, useCallback, useMemo, useRef } from 'react';
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import {
   Plus, Trash2, ChevronRight, ChevronDown, Wand2,
   FileJson, Copy, CheckCircle, AlertTriangle, EyeOff,
@@ -26,6 +26,7 @@ import type { LorebookEntry, CardExtensions } from '../../types';
 import { MVUZOD_TEMPLATES, type MVUZODTemplate } from '../../lib/mvuzod/templateLibrary';
 import { analyzeLorebookForSchema, buildMinimalSchemaFromReport, parseSchemaInferenceResponse, assertUsableSchema, schemaToZodCode } from '../../lib/mvuzod/schemaInferencer';
 import { checkSchemaHealth, summarizeHealth } from '../../lib/mvuzod/schemaHealth';
+import { buildSchemaFixInstruction } from '../../lib/mvuzod/schemaFixInstruction';   // (bug 224) báo cáo kiểm → chỉ thị cho AI
 import { parseZodCodeToSchema, isMvuSchemaScript } from '../../lib/mvuzod/zodCodeParser';
 import { mergeInferredSchemas } from '../../lib/mvuzod/mergeInferredSchemas';
 import { buildMVUZODScripts } from '../../lib/mvuzod/tavernScriptBuilder';
@@ -34,6 +35,8 @@ import { callAI } from '../../lib/ai/client';
 import { MVUZOD_SCHEMA_INFERENCE_PROMPT, MVUZOD_IDEA_TO_SCHEMA_PROMPT, MVUZOD_EXPAND_VARIABLES_PROMPT, MVUZOD_SCHEMA_EDITOR_PROMPT } from '../../prompts/modeMVUZOD';
 import type { ChatMessage } from '../../types';
 import { cn } from '../../lib/utils';
+import { copyWithToast } from '../../lib/copyToClipboard';   // (bug 224) copy chạy được cả trong iframe của Hub
+import { useToastStore } from '../../store/toastStore';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // HELPERS
@@ -1757,6 +1760,8 @@ function ActionsPanel({
   onCreateScripts: () => void;
   onReset: () => void;
 }) {
+  // (bug 224) Chỉ thị sửa do bảng Kiểm schema dựng ra, chuyển xuống ô AI chỉnh schema bên dưới.
+  const aiFixApi = useRef<((instruction: string) => void) | null>(null);
   const [scriptsCreated, setScriptsCreated] = useState(false);
 
   return (
@@ -1794,10 +1799,10 @@ function ActionsPanel({
       {/* (bug 216) KIỂM SCHEMA — user xin "thêm cơ chế kiểm tra xem nó có hoạt động không".
           Trước đây tab ghi thẳng schema vào thẻ rồi hiện "Schema loaded", chẳng kiểm gì: schema
           0 biến, không dựng nổi Zod code, tên trùng nhau… đều lọt, tới lúc chơi thật mới lộ. */}
-      <SchemaHealthPanel schema={schema} />
+      <SchemaHealthPanel schema={schema} onAskAiFix={(ins) => aiFixApi.current?.(ins)} />
 
       {/* AI Expand Variables */}
-      <AIExpandVariables schema={schema} />
+      <AIExpandVariables schema={schema} apiRef={aiFixApi} />
 
       {/* Reset */}
       <button onClick={onReset}
@@ -1857,10 +1862,12 @@ type AIOperationMode = 'add' | 'edit' | 'smart';
  * hỏng, cộng vài phép kiểm rút từ các bug cũ. Bấm một nút là biết schema có chạy được không,
  * thay vì phải xuất thẻ ra SillyTavern rồi mới phát hiện.
  */
-function SchemaHealthPanel({ schema }: { schema: MVUZODSchema }) {
+function SchemaHealthPanel({ schema, onAskAiFix }: { schema: MVUZODSchema; onAskAiFix: (instruction: string) => void }) {
   const [report, setReport] = useState<import('../../lib/mvuzod/schemaHealth').SchemaHealthReport | null>(null);
 
   const run = () => setReport(checkSchemaHealth(schema));
+  // Chỉ error + warning mới đáng nhờ AI; info là ghi chú, không phải lỗi.
+  const fixable = report ? report.issues.filter((i) => i.level === 'error' || i.level === 'warning').length : 0;
 
   return (
     <div className="rounded-lg border border-border p-3 space-y-2">
@@ -1870,12 +1877,26 @@ function SchemaHealthPanel({ schema }: { schema: MVUZODSchema }) {
       <p className="text-[10px] text-muted-foreground">
         Soi schema có dựng được Zod code, có biến nào không, tên có trùng nhau không…
       </p>
-      <button
-        onClick={run}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-600/90 transition-colors"
-      >
-        <CheckCircle className="w-3.5 h-3.5" /> Kiểm ngay
-      </button>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          onClick={run}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-600/90 transition-colors"
+        >
+          <CheckCircle className="w-3.5 h-3.5" /> Kiểm ngay
+        </button>
+        {/* (bug 224) Nút user xin: kiểm ra lỗi thì phải có đường nhờ AI sửa ngay, khỏi gõ lại
+            38 dòng cảnh báo bằng tay. Chỉ thị được đẩy sang ô "AI chỉnh schema" bên dưới —
+            vẫn qua bước XEM TRƯỚC action rồi mới áp, nên AI không tự tay đổi schema của user. */}
+        {fixable > 0 && (
+          <button
+            onClick={() => onAskAiFix(buildSchemaFixInstruction(report).instruction)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-600 text-white text-xs font-medium hover:bg-violet-600/90 transition-colors"
+            title="Gom mọi lỗi/cảnh báo thành chỉ thị rồi nhờ AI sửa — bạn xem trước từng thay đổi trước khi áp"
+          >
+            <Wand2 className="w-3.5 h-3.5" /> Nhờ AI sửa {fixable} vấn đề
+          </button>
+        )}
+      </div>
 
       {report && (
         <div className="space-y-1.5 pt-1">
@@ -1903,7 +1924,11 @@ function SchemaHealthPanel({ schema }: { schema: MVUZODSchema }) {
   );
 }
 
-function AIExpandVariables({ schema }: { schema: MVUZODSchema }) {
+function AIExpandVariables({ schema, apiRef }: {
+  schema: MVUZODSchema;
+  /** Cha gắn hàm vào đây để gọi thẳng lúc bấm "Nhờ AI sửa". */
+  apiRef?: React.MutableRefObject<((instruction: string) => void) | null>;
+}) {
   const [expandText, setExpandText] = useState('');
   const [mode, setMode] = useState<AIOperationMode>('smart');
   const [loading, setLoading] = useState(false);
@@ -1918,6 +1943,19 @@ function AIExpandVariables({ schema }: { schema: MVUZODSchema }) {
   const [reasoning, setReasoning] = useState('');
 
   const chips = mode === 'add' ? EXPAND_CHIPS : EDIT_CHIPS;
+
+  // (bug 224) Bấm "Nhờ AI sửa" ở bảng Kiểm schema → chỉ thị rơi vào ô này, chuyển sang chế độ
+  // "smart" (được phép sửa/xoá, không chỉ thêm) và kéo ô vào tầm mắt để user thấy nó đi đâu.
+  // Đăng ký bằng REF HÀM chứ không qua prop + effect: đổi state trong effect vừa là lỗi lint,
+  // vừa thêm một lượt render vô ích cho một việc vốn là phản hồi trực tiếp của cú bấm.
+  const boxRef = useRef<HTMLDivElement>(null);
+  const applyFixInstruction = useCallback((instruction: string) => {
+    if (!instruction) return;
+    setMode('smart');
+    setExpandText(instruction);
+    boxRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, []);
+  useEffect(() => { if (apiRef) apiRef.current = applyFixInstruction; }, [apiRef, applyFixInstruction]);
 
   // ─── Generate actions from AI ───
   const handleGenerate = useCallback(async () => {
@@ -2091,7 +2129,7 @@ function AIExpandVariables({ schema }: { schema: MVUZODSchema }) {
   const mc = modeColors[mode];
 
   return (
-    <div className={`rounded-lg border ${mc.border} ${mc.bg} p-3 space-y-2.5`}>
+    <div ref={boxRef} className={`rounded-lg border ${mc.border} ${mc.bg} p-3 space-y-2.5`}>
       {/* Header */}
       <h4 className="text-xs font-semibold flex items-center gap-1.5">
         <Sparkles className={`w-3.5 h-3.5 ${mc.accent}`} /> AI Chỉnh sửa biến
@@ -2304,9 +2342,11 @@ $(() => {
         </h3>
         <button
           onClick={() => {
-            navigator.clipboard.writeText(fullCode);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 2000);
+            void copyWithToast(fullCode, 'Zod code', useToastStore.getState()).then((ok) => {
+              if (!ok) return;
+              setCopied(true);
+              setTimeout(() => setCopied(false), 2000);
+            });
           }}
           className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
         >

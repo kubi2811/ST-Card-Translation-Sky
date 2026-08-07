@@ -17,6 +17,7 @@ import { useCardStore } from '../../store/cardStore';
 import { useSettingsStore } from '../../store/settingsStore';
 import { callAI } from '../../lib/ai/client';
 import { MVUZOD_VARLIST_PROMPT, MVUZOD_SIMPLE_UPDATE_RULES_PROMPT } from '../../prompts/modeMVUZOD';
+import { copyWithToast } from '../../lib/copyToClipboard';   // (bug 224) copy chạy được cả trong iframe của Hub
 
 // ─── Template Presets ────────────────────────────────────────────────────
 
@@ -484,7 +485,7 @@ function GeneratedEntryPreview({ title, entry, onAddToCard, added }: {
         </button>
         <div className="flex gap-1.5">
           <button
-            onClick={() => navigator.clipboard.writeText(entry.content)}
+            onClick={() => void copyWithToast(entry.content, 'nội dung entry', useToastStore.getState())}
             className="flex items-center gap-1 px-2 py-1 rounded text-[10px] bg-muted hover:bg-muted/80 transition-colors">
             <Copy className="w-3 h-3" /> Copy
           </button>

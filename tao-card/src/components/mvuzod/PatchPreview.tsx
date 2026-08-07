@@ -10,16 +10,18 @@ import {
 import type { MVUZODSchema, JSONPatchOp, PatchValidationResult } from '../../types/mvuzod.types';
 import { extractPatches } from '../../lib/mvuzod/patchExtractor';
 import { applyPatches } from '../../lib/mvuzod/jsonPatchEngine';
+import { buildSamplePatch } from '../../lib/mvuzod/samplePatch';
 
-const SAMPLE_PATCH = `<UpdateVariable>
-[
-  {"op":"replace","path":"/Trạng thái thế giới/Loại cảnh hiện tại","value":"Chiến đấu"},
-  {"op":"delta","path":"/Người chơi/Trạng thái tu luyện/Cấp bậc","value":1}
-]
-</UpdateVariable>`;
+// (bug 224) Mẫu KHÔNG còn ghi cứng: đường dẫn cứng là của schema khác, nên bấm Test trên thẻ
+// nào cũng ra "path không tồn tại" ⇒ tab trông như hỏng. Nay mẫu dựng từ chính schema đang mở.
 
 export function PatchPreview({ schema }: { schema: MVUZODSchema | null }) {
-  const [input, setInput] = useState(SAMPLE_PATCH);
+  const sample = useMemo(() => buildSamplePatch(schema), [schema]);
+  // Mọi tab MVUZOD được giữ mount sẵn (page chỉ bật/tắt display), nên PatchPreview mount lúc
+  // schema CÒN null. Dùng useState(sample) thì ô nhập đứng mãi ở mẫu dự phòng dù sau đó schema
+  // đã nạp — nên phải DẪN XUẤT: chưa sửa tay thì luôn theo mẫu mới nhất của schema hiện tại.
+  const [draft, setDraft] = useState<string | null>(null);
+  const input = draft ?? sample;
   const [mode, setMode] = useState<'strict' | 'lenient'>('lenient');
   const [result, setResult] = useState<PatchValidationResult | null>(null);
   const [extractedOps, setExtractedOps] = useState<JSONPatchOp[]>([]);
@@ -42,7 +44,7 @@ export function PatchPreview({ schema }: { schema: MVUZODSchema | null }) {
   }, [input, schema, mode, initialState]);
 
   const handleReset = useCallback(() => {
-    setInput(SAMPLE_PATCH);
+    setDraft(null);
     setResult(null);
     setExtractedOps([]);
   }, []);
@@ -71,7 +73,7 @@ export function PatchPreview({ schema }: { schema: MVUZODSchema | null }) {
             <option value="strict">Strict</option>
           </select>
         </div>
-        <textarea value={input} onChange={e => setInput(e.target.value)}
+        <textarea value={input} onChange={e => setDraft(e.target.value)}
           rows={5}
           className="w-full px-3 py-2 rounded-lg border border-border bg-background text-xs font-mono resize-y
             focus:outline-none focus:ring-2 focus:ring-primary/30"

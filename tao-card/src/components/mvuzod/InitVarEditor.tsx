@@ -18,6 +18,8 @@ import type { ChatMessage } from '../../types';
 import { MVUZOD_INITVAR_PROMPT } from '../../prompts/modeMVUZOD';
 import { parseSchemaInferenceResponse } from '../../lib/mvuzod/schemaInferencer';
 import { emitYamlScalar } from '../../lib/mvuzod/yamlScalars';
+import { copyWithToast } from '../../lib/copyToClipboard';   // (bug 224) copy chạy được cả trong iframe của Hub
+import { useToastStore } from '../../store/toastStore';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -386,9 +388,11 @@ function PerOpeningPreview({ entries }: { entries: InitVarEntry[] }) {
               </div>
               <button
                 onClick={() => {
-                  navigator.clipboard.writeText(block);
-                  setCopiedId(entry.id);
-                  setTimeout(() => setCopiedId(null), 2000);
+                  void copyWithToast(block, 'khối initvar', useToastStore.getState()).then((ok) => {
+                    if (!ok) return;
+                    setCopiedId(entry.id);
+                    setTimeout(() => setCopiedId(null), 2000);
+                  });
                 }}
                 className="flex items-center gap-1 px-2 py-1 rounded text-[10px] bg-muted hover:bg-muted/80 transition-colors"
               >
@@ -647,12 +651,12 @@ export function InitVarEditor({ schema }: { schema: MVUZODSchema | null }) {
             </h4>
             <div className="flex gap-1.5">
               <button
-                onClick={() => navigator.clipboard.writeText(lorebookContent)}
+                onClick={() => void copyWithToast(lorebookContent, 'entry worldbook (JSON)', useToastStore.getState())}
                 className="flex items-center gap-1 px-2 py-1 rounded text-[10px] bg-muted hover:bg-muted/80 transition-colors">
                 <Copy className="w-3 h-3" /> Copy JSON
               </button>
               <button
-                onClick={() => navigator.clipboard.writeText(yamlPreview)}
+                onClick={() => void copyWithToast(yamlPreview, 'YAML initvar', useToastStore.getState())}
                 className="flex items-center gap-1 px-2 py-1 rounded text-[10px] bg-muted hover:bg-muted/80 transition-colors">
                 <Download className="w-3 h-3" /> Copy YAML
               </button>

@@ -15,6 +15,8 @@ import type { MVUZODSchema, MVUZODField } from '../../types/mvuzod.types';
 
 import { EJS_SNIPPETS } from './ejsSnippets';
 import { t as ui, fmt } from '../../i18n';
+import { copyWithToast } from '../../lib/copyToClipboard';   // (bug 224) copy chạy được cả trong iframe của Hub
+import { useToastStore } from '../../store/toastStore';
 
 // ─── Mock Variable Manager ──────────────────────────────────────────────
 
@@ -365,7 +367,7 @@ function SnippetLibrary() {
                 <button
                   onClick={() => {
                     const snippet = EJS_SNIPPETS.find(s => s.id === selectedSnippet);
-                    if (snippet) navigator.clipboard.writeText(snippet.code);
+                    if (snippet) void copyWithToast(snippet.code, 'đoạn mã', useToastStore.getState());
                   }}
                   className="text-[10px] text-primary hover:text-primary/80 transition-colors">
                   Copy

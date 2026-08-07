@@ -18,6 +18,8 @@ import { MVUZOD_UPDATE_RULES_PROMPT, MVUZOD_OUTPUT_FORMAT_PROMPT } from '../../p
 import { parseSchemaInferenceResponse } from '../../lib/mvuzod/schemaInferencer';
 import { nextEntryId } from '../../lib/converters/cardDefaults';
 import type { LorebookEntry } from '../../types/lorebook.types';
+import { copyWithToast } from '../../lib/copyToClipboard';   // (bug 224) copy chạy được cả trong iframe của Hub
+import { useToastStore } from '../../store/toastStore';
 
 // ─── YAML Generator ──────────────────────────────────────────────────────
 
@@ -281,9 +283,11 @@ export function UpdateRulesEditor({ schema }: {
   }, []);
 
   const handleCopy = useCallback((content: string, label: string) => {
-    navigator.clipboard.writeText(content);
-    setCopied(label);
-    setTimeout(() => setCopied(null), 2000);
+    void copyWithToast(content, label, useToastStore.getState()).then((ok) => {
+      if (!ok) return;
+      setCopied(label);
+      setTimeout(() => setCopied(null), 2000);
+    });
   }, []);
 
   const tabs = [

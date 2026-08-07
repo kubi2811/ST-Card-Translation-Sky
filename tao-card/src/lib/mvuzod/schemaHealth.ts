@@ -68,15 +68,32 @@ export function checkSchemaHealth(input: MVUZODSchema | null | undefined): Schem
 
   let totalLeaves = 0;
   let maxDepth = 0;
-  const seen = new Map<string, number>();
+  // So khớp thì hạ chữ thường (trùng tên không phân biệt hoa/thường), nhưng câu báo phải in
+  // ĐÚNG NGUYÊN BẢN tên user đã đặt — báo lỗi mà đổi chữ hoa thì user đi tìm không thấy biến.
+  const seen = new Map<string, { count: number; parent: string; name: string }>();
 
   walk(schema.fields, (f, path, depth) => {
     maxDepth = Math.max(maxDepth, depth);
     const kids = (f as unknown as { children?: MVUZODField[] }).children;
     if (!kids?.length) totalLeaves++;
 
-    const key = (f.label || f.path || '').trim().toLowerCase();
-    if (key) seen.set(key, (seen.get(key) ?? 0) + 1);
+    // (bug 224) ĐẾM TRÙNG THEO CHA, KHÔNG THEO CẢ CÂY.
+    // Bản cũ gom theo NHÃN trên toàn schema, nên thẻ có 6 nhân vật, mỗi người một biến "tình
+    // trạng" là ăn ngay 1 cảnh báo "xuất hiện 6 lần — dễ ghi đè nhau". Ảnh user gửi có 38 cảnh
+    // báo kiểu đó và gần như tất cả là BÁO OAN: MVU địa chỉ hoá biến bằng ĐƯỜNG DẪN ĐẦY ĐỦ
+    // (stat_data['Nhân vật chính']['tình trạng']), nên hai biến cùng tên khác cha KHÔNG bao giờ
+    // đụng nhau. Rủi ro thật chỉ có một dạng: HAI BIẾN CÙNG MỘT CHA cùng tên — lúc đó chúng là
+    // cùng một khoá object và cái sau xoá cái trước. Đó mới là lỗi, và là lỗi thật (mất dữ liệu).
+    const raw = f.label || f.path || '';
+    const name = raw.trim().toLowerCase();
+    if (name) {
+      // `path` luôn kết thúc bằng đúng `raw` (xem walk) → cắt được chính xác phần cha.
+      const parent = path.length > raw.length ? path.slice(0, path.length - raw.length - 1) : '';
+      // Khoá gộp bằng JSON: nhãn có dấu cách nên không dùng được ký tự phân cách thường.
+      const key = JSON.stringify([parent.toLowerCase(), name]);
+      const prev = seen.get(key);
+      seen.set(key, { count: (prev?.count ?? 0) + 1, parent: prev?.parent ?? parent, name: prev?.name ?? raw.trim() });
+    }
 
     if (!f.label && !f.path) {
       issues.push({ level: 'error', code: 'field-no-name', message: `Có biến KHÔNG CÓ TÊN (ở ${path}) — SillyTavern sẽ không đọc được.`, path });
@@ -113,9 +130,15 @@ export function checkSchemaHealth(input: MVUZODSchema | null | undefined): Schem
   }
 
   // ─── Chốt 2: tên biến trùng nhau ───
-  for (const [name, count] of seen) {
-    if (count > 1) {
-      issues.push({ level: 'warning', code: 'duplicate-name', message: `Tên biến "${name}" xuất hiện ${count} lần — dễ ghi đè nhau lúc chạy.` });
+  for (const [, info] of seen) {
+    if (info.count > 1) {
+      // (bug 224) Cùng cha + cùng tên = CÙNG MỘT KHOÁ object ⇒ cái sau xoá cái trước: mất dữ
+      // liệu thật, nên là LỖI chứ không phải cảnh báo. Khác cha thì không đụng nhau, không báo.
+      const { parent: parentPath, name: kidName, count } = info;
+      issues.push({
+        level: 'error', code: 'duplicate-name',
+        message: `Trong "${parentPath || 'gốc schema'}" có ${count} biến cùng tên "${kidName}" — chúng là CÙNG một khoá nên cái sau xoá mất cái trước. Đổi tên hoặc gộp lại.`,
+      });
     }
   }
 

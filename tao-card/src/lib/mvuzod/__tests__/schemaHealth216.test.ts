@@ -167,7 +167,9 @@ describe('nối dây — tab MVUZOD dùng chốt mới và có nút kiểm', () 
 
   it('có bảng "Kiểm schema" trong ActionsPanel', () => {
     expect(src).toMatch(/function SchemaHealthPanel/);
-    expect(src).toMatch(/<SchemaHealthPanel schema=\{schema\} \/>/);
+    // (bug 224) Panel này nhận thêm onAskAiFix — nút "Nhờ AI sửa" đẩy chỉ thị sang ô AI chỉnh schema.
+    expect(src).toContain('<SchemaHealthPanel schema={schema} onAskAiFix=');
+    expect(src).toContain('buildSchemaFixInstruction');
     expect(src).toMatch(/checkSchemaHealth/);
   });
 });

@@ -420,7 +420,7 @@ export function FrontendStudio({ schema, initVarConfig }: Props) {
               <CheckRow ok={opts.formPaths.length > 0}
                 title={`Biểu mẫu khởi tạo có ${opts.formPaths.length} trường`}
                 detail="Không có trường nào thì người chơi vào thẳng game, không khai được gì" />
-              <CheckRow ok={Object.keys((r.configSource.match(/"defaultStat": \{[\s\S]*?\n  \}/) || [''])[0] || '').length > 20}
+              <CheckRow ok={Object.keys((r.configSource.match(/"defaultStat": \{[\s\S]*?\n {2}\}/) || [''])[0] || '').length > 20}
                 title="Có bộ biến mặc định"
                 detail="Lấy từ InitVar. Thiếu nó thì các danh sách không tồn tại và lệnh insert của AI sẽ trượt êm" />
               <div className="rounded border border-white/10 bg-white/[0.03] p-3 text-white/60 leading-relaxed">

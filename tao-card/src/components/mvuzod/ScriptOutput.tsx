@@ -16,6 +16,8 @@ import {
   type AllGeneratedOutputs,
   type GeneratedRegex,
 } from '../../lib/mvuzod/scriptGenerator';
+import { copyWithToast } from '../../lib/copyToClipboard';   // (bug 224) copy chạy được cả trong iframe của Hub
+import { useToastStore } from '../../store/toastStore';
 
 // ─── Output Panel Types ──────────────────────────────────────────────────
 
@@ -127,22 +129,11 @@ export function ScriptOutput({ schema, initVarValues }: ScriptOutputProps) {
     return generateAllOutputs(schema, initVarValues, varListMode);
   }, [schema, initVarValues, varListMode]);
 
+  // (bug 224) Đường lùi execCommand đã nằm trong copyToClipboard — ở đây chỉ cần đổi nhãn nút.
   const handleCopy = useCallback(async (text: string, id: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopiedId(id);
-      setTimeout(() => setCopiedId(null), 2000);
-    } catch {
-      // Fallback
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-      setCopiedId(id);
-      setTimeout(() => setCopiedId(null), 2000);
-    }
+    if (!(await copyWithToast(text, 'nội dung', useToastStore.getState()))) return;
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
   }, []);
 
   const handleDownloadAll = useCallback(() => {

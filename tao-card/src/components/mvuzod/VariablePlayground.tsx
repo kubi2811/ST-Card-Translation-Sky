@@ -1,16 +1,36 @@
-/* eslint-disable react-hooks/set-state-in-effect */
 /**
- * VariablePlayground — Interactive playground for testing MVUZOD variables
- * Input raw values → validate/transform → see results + errors
- * Also includes JSON Patch test panel
+ * VariablePlayground — (bug 224) BÀN THỬ NHIỀU LƯỢT, không còn là bản sao của tab Patch.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Bản cũ có đúng hai panel, panel thứ hai cũng là "dán patch rồi áp" — làm lại việc của tab
+ * Patch, mà còn TỰ VIẾT LẠI phép áp patch bằng tay: không kiểm schema, không đỡ op "move".
+ * Ba bản cài đặt cho một việc thì chỉ có cách phân kỳ dần.
+ *
+ * Nay panel 2 trả lời câu hỏi mà cả hai tab kia KHÔNG trả lời được: "chạy vài lượt liên tiếp
+ * thì trạng thái có còn đúng không?". Một patch lẻ luôn trông ổn; hỏng chỉ lộ khi cộng dồn —
+ * delta cộng máu vượt max (MVU không tự kẹp biên), mảng insert mãi mà không bao giờ remove,
+ * AI bịa đường dẫn ngoài schema (MVU lặng lẽ bỏ qua). Engine nằm ở lib/mvuzod/turnSimulator.ts.
  */
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import {
   Play, RotateCcw, AlertTriangle, CheckCircle, XCircle,
   Zap, Pencil, FlaskConical, ArrowRight, ChevronDown, ChevronRight,
 } from 'lucide-react';
-import type { MVUZODSchema, MVUZODField, JSONPatchOp } from '../../types/mvuzod.types';
+import type { MVUZODSchema, MVUZODField } from '../../types/mvuzod.types';
+import { simulateTurns, splitTurns, type SimResult } from '../../lib/mvuzod/turnSimulator';
+
+/** Mẫu gợi ý cho ô nhiều lượt — dạy đúng cách ngăn lượt và cách viết delta. */
+const SIM_PLACEHOLDER = [
+  'Lượt 1: nhân vật bị đánh trúng.',
+  '<UpdateVariable>',
+  '[{"op":"delta","path":"/Nhân vật/Máu","value":-30}]',
+  '</UpdateVariable>',
+  '---',
+  'Lượt 2: uống thuốc hồi máu.',
+  '<UpdateVariable>',
+  '[{"op":"delta","path":"/Nhân vật/Máu","value":80}]',
+  '</UpdateVariable>',
+].join('\n');
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -31,14 +51,15 @@ interface FieldValidation {
 // ═══════════════════════════════════════════════════════════════════════════
 
 export function VariablePlayground({ schema }: { schema: MVUZODSchema | null }) {
-  const [inputJson, setInputJson] = useState('');
+  const [draftJson, setDraftJson] = useState<string | null>(null);
   const [results, setResults] = useState<FieldValidation[]>([]);
   const [hasRun, setHasRun] = useState(false);
-  const [activePanel, setActivePanel] = useState<'validate' | 'patch'>('validate');
+  const [activePanel, setActivePanel] = useState<'validate' | 'sim'>('validate');
 
-  // Patch panel state
-  const [patchOps, setPatchOps] = useState('');
-  const [patchResult, setPatchResult] = useState<{ success: boolean; state: string; errors: string[] } | null>(null);
+  // Panel mô phỏng: nhiều lượt AI ngăn nhau bằng dòng ---
+  const [turnsText, setTurnsText] = useState('');
+  const [sim, setSim] = useState<SimResult | null>(null);
+  const [simMode, setSimMode] = useState<'strict' | 'lenient'>('lenient');
 
   // Build default state from schema
   const defaultState = useMemo(() => {
@@ -60,18 +81,18 @@ export function VariablePlayground({ schema }: { schema: MVUZODSchema | null }) 
 
   // Reset to defaults
   const handleReset = useCallback(() => {
-    setInputJson(JSON.stringify(defaultState, null, 2));
+    setDraftJson(null);
     setResults([]);
     setHasRun(false);
-    setPatchResult(null);
-  }, [defaultState]);
+    setSim(null);
+  }, []);
 
-  // Initialize input on first render
-  useEffect(() => {
-    if (!inputJson && Object.keys(defaultState).length > 0) {
-      setInputJson(JSON.stringify(defaultState, null, 2));
-    }
-  }, [defaultState, inputJson]);
+  // (bug 224) Mọi tab MVUZOD giữ mount sẵn nên component này mount lúc schema CÒN null.
+  // Bản cũ nạp mặc định bằng useEffect + setState (phải tắt lint cả file) và chỉ chạy một lần,
+  // nên schema nạp sau là ô nhập đứng mãi ở rỗng. Nay DẪN XUẤT: chưa gõ tay thì luôn theo
+  // mặc định mới nhất của schema hiện tại.
+  const defaultJson = useMemo(() => JSON.stringify(defaultState, null, 2), [defaultState]);
+  const inputJson = draftJson ?? defaultJson;
 
   // Run validation
   const handleValidate = useCallback(() => {
@@ -143,91 +164,28 @@ export function VariablePlayground({ schema }: { schema: MVUZODSchema | null }) 
   }, [schema, inputJson]);
 
   // Run JSON Patch
-  const handlePatch = useCallback(() => {
-    let currentState: Record<string, unknown>;
+  // Chạy mô phỏng: mỗi khối ngăn bằng --- là MỘT lượt AI, áp tuần tự từ trạng thái đang nhập.
+  const handleSimulate = useCallback(() => {
+    let start: Record<string, unknown>;
     try {
-      currentState = JSON.parse(inputJson);
-    } catch {
-      setPatchResult({ success: false, state: '', errors: ['Input state JSON không hợp lệ'] });
+      start = JSON.parse(inputJson);
+    } catch (err) {
+      setSim({
+        turns: [{
+          turn: 1, opsFound: 0, opsApplied: 0, state: {},
+          issues: [{ level: 'error', path: '', message: `Trạng thái đầu không phải JSON hợp lệ: ${err instanceof Error ? err.message : String(err)}` }],
+        }],
+        finalState: {}, totalIssues: 1,
+      });
       return;
     }
-
-    let ops: JSONPatchOp[];
-    try {
-      ops = JSON.parse(patchOps);
-      if (!Array.isArray(ops)) throw new Error('Patch phải là mảng JSON');
-    } catch (e) {
-      setPatchResult({ success: false, state: '', errors: [`Patch JSON không hợp lệ: ${e instanceof Error ? e.message : ''}`] });
+    const raw = splitTurns(turnsText);
+    if (raw.length === 0) {
+      setSim({ turns: [], finalState: start, totalIssues: 0 });
       return;
     }
-
-    const errors: string[] = [];
-
-    // Apply patches
-    try {
-      for (const op of ops) {
-        if (!op.op) {
-          errors.push(`Op thiếu "op": ${JSON.stringify(op)}`);
-          continue;
-        }
-
-        if (op.op === 'move') {
-          errors.push(`Op "move" chưa được hỗ trợ trong playground`);
-          continue;
-        }
-
-        if (!('path' in op) || !op.path) {
-          errors.push(`Op thiếu "path": ${JSON.stringify(op)}`);
-          continue;
-        }
-
-        const pathSegments = op.path.split('/').filter(Boolean);
-        let target: Record<string, unknown> = currentState;
-
-        for (let i = 0; i < pathSegments.length - 1; i++) {
-          const seg = pathSegments[i];
-          if (typeof target[seg] !== 'object' || target[seg] === null) {
-            target[seg] = {};
-          }
-          target = target[seg] as Record<string, unknown>;
-        }
-
-        const lastKey = pathSegments[pathSegments.length - 1];
-
-        switch (op.op) {
-          case 'replace':
-          case 'insert':
-            target[lastKey] = op.value;
-            break;
-          case 'remove':
-            delete target[lastKey];
-            break;
-          case 'delta':
-            if (typeof target[lastKey] === 'number') {
-               target[lastKey] = (target[lastKey] as number) + op.value;
-            } else {
-               target[lastKey] = op.value;
-            }
-            break;
-          default:
-            errors.push(`Op "${String((op as Record<string, unknown>).op)}" không được hỗ trợ`);
-        }
-      }
-    } catch (e) {
-      errors.push(`Lỗi apply patch: ${e instanceof Error ? e.message : String(e)}`);
-    }
-
-    setPatchResult({
-      success: errors.length === 0,
-      state: JSON.stringify(currentState, null, 2),
-      errors,
-    });
-
-    // Update input with patched state
-    if (errors.length === 0) {
-      setInputJson(JSON.stringify(currentState, null, 2));
-    }
-  }, [inputJson, patchOps]);
+    setSim(simulateTurns(schema, start, raw, simMode));
+  }, [inputJson, turnsText, schema, simMode]);
 
   if (!schema) {
     return (
@@ -260,12 +218,12 @@ export function VariablePlayground({ schema }: { schema: MVUZODSchema | null }) 
             <Zap className="w-3 h-3 inline mr-1" />Validate
           </button>
           <button
-            onClick={() => setActivePanel('patch')}
+            onClick={() => setActivePanel('sim')}
             className={`px-2.5 py-1 rounded-md text-[10px] font-medium transition-colors ${
-              activePanel === 'patch' ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted'
+              activePanel === 'sim' ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted'
             }`}
           >
-            <Pencil className="w-3 h-3 inline mr-1" />JSON Patch
+            <Pencil className="w-3 h-3 inline mr-1" />Mô phỏng nhiều lượt
           </button>
         </div>
       </div>
@@ -283,7 +241,7 @@ export function VariablePlayground({ schema }: { schema: MVUZODSchema | null }) 
         </div>
         <textarea
           value={inputJson}
-          onChange={e => setInputJson(e.target.value)}
+          onChange={e => setDraftJson(e.target.value)}
           className="w-full h-48 p-3 text-xs font-mono bg-background text-foreground/90 resize-y focus:outline-none"
           spellCheck={false}
           placeholder='{"fieldName": value, ...}'
@@ -300,26 +258,33 @@ export function VariablePlayground({ schema }: { schema: MVUZODSchema | null }) 
       ) : (
         <>
           <div className="rounded-xl border border-border bg-card overflow-hidden">
-            <div className="px-3 py-2 border-b border-border bg-muted/20">
+            <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-muted/20">
               <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                JSON Patch Operations
+                Các lượt AI — ngăn nhau bằng một dòng ---
               </span>
+              <select value={simMode} onChange={(e) => setSimMode(e.target.value as 'strict' | 'lenient')}
+                className="text-[10px] px-2 py-0.5 rounded border border-border bg-background">
+                <option value="lenient">Lenient</option>
+                <option value="strict">Strict</option>
+              </select>
             </div>
             <textarea
-              value={patchOps}
-              onChange={e => setPatchOps(e.target.value)}
-              className="w-full h-32 p-3 text-xs font-mono bg-background text-foreground/90 resize-y focus:outline-none"
+              value={turnsText}
+              onChange={(e) => setTurnsText(e.target.value)}
+              className="w-full h-40 p-3 text-xs font-mono bg-background text-foreground/90 resize-y focus:outline-none"
               spellCheck={false}
-              placeholder={`[
-  { "op": "replace", "path": "/fieldName", "value": 50 },
-  { "op": "insert", "path": "/newField", "value": "hello" }
-]`}
+              placeholder={SIM_PLACEHOLDER}
             />
+            <div className="px-3 py-2 border-t border-border text-[10px] text-muted-foreground leading-snug">
+              Dán nguyên lượt AI cũng được — tool tự bóc khối cập nhật biến. Sau MỖI lượt nó soi:
+              số vượt min/max (MVU <b>không</b> tự kẹp biên), mảng phình mãi vì chỉ insert, và
+              đường dẫn không có trong schema (MVU lặng lẽ bỏ qua nên chỉ số đứng yên).
+            </div>
           </div>
-          <button onClick={handlePatch}
+          <button onClick={handleSimulate}
             className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white text-xs font-medium hover:opacity-90 transition-opacity">
             <ArrowRight className="w-3.5 h-3.5" />
-            Apply Patch
+            Chạy mô phỏng
           </button>
         </>
       )}
@@ -353,40 +318,57 @@ export function VariablePlayground({ schema }: { schema: MVUZODSchema | null }) 
         </div>
       )}
 
-      {activePanel === 'patch' && patchResult && (
+      {activePanel === 'sim' && sim && (
         <div className="space-y-2">
           <div className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border ${
-            patchResult.success
+            sim.totalIssues === 0
               ? 'bg-emerald-500/5 border-emerald-500/20 text-emerald-400'
-              : 'bg-red-500/5 border-red-500/20 text-red-400'
+              : 'bg-amber-500/5 border-amber-500/20 text-amber-400'
           }`}>
-            {patchResult.success ? <CheckCircle className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
+            {sim.totalIssues === 0 ? <CheckCircle className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
             <span className="text-xs font-medium">
-              {patchResult.success ? 'Patch áp dụng thành công' : `${patchResult.errors.length} lỗi`}
+              {sim.turns.length} lượt · {sim.totalIssues === 0
+                ? 'trạng thái vẫn đúng sau tất cả các lượt'
+                : `${sim.totalIssues} vấn đề cộng dồn — xem từng lượt bên dưới`}
             </span>
           </div>
 
-          {patchResult.errors.length > 0 && (
-            <div className="space-y-1">
-              {patchResult.errors.map((err, i) => (
-                <div key={i} className="flex items-start gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/5 border border-red-500/10">
-                  <AlertTriangle className="w-3 h-3 text-red-400 mt-0.5 shrink-0" />
-                  <span className="text-[11px] text-red-300">{err}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {patchResult.success && (
-            <div className="rounded-xl border border-border bg-card overflow-hidden">
-              <div className="px-3 py-2 border-b border-border bg-muted/20">
-                <span className="text-[10px] font-semibold text-muted-foreground">Patched State</span>
+          {sim.turns.map((tn) => (
+            <div key={tn.turn} className="rounded-xl border border-border bg-card overflow-hidden">
+              <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-muted/20">
+                <span className="text-[11px] font-semibold">Lượt {tn.turn}</span>
+                <span className="text-[10px] text-muted-foreground">
+                  áp {tn.opsApplied}/{tn.opsFound} thao tác
+                </span>
+                {tn.issues.length > 0 && (
+                  <span className="ml-auto text-[10px] text-amber-400">{tn.issues.length} vấn đề</span>
+                )}
               </div>
-              <pre className="p-3 text-xs font-mono text-foreground/80 max-h-48 overflow-y-auto">
-                {patchResult.state}
-              </pre>
+              {tn.issues.length > 0 && (
+                <div className="px-3 py-2 space-y-1">
+                  {tn.issues.map((iss, k) => (
+                    <div key={k} className="flex items-start gap-1.5">
+                      {iss.level === 'error'
+                        ? <XCircle className="w-3 h-3 text-red-400 mt-0.5 shrink-0" />
+                        : <AlertTriangle className="w-3 h-3 text-amber-400 mt-0.5 shrink-0" />}
+                      <span className={`text-[11px] ${iss.level === 'error' ? 'text-red-300' : 'text-amber-300'}`}>
+                        {iss.message}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-          )}
+          ))}
+
+          <div className="rounded-xl border border-border bg-card overflow-hidden">
+            <div className="px-3 py-2 border-b border-border bg-muted/20">
+              <span className="text-[10px] font-semibold text-muted-foreground">Trạng thái sau lượt cuối</span>
+            </div>
+            <pre className="p-3 text-xs font-mono text-foreground/80 max-h-48 overflow-y-auto scrollbar-thin">
+              {JSON.stringify(sim.finalState, null, 2)}
+            </pre>
+          </div>
         </div>
       )}
     </div>

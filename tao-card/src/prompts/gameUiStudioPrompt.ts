@@ -9,6 +9,8 @@
  *   5. Giao thức XML output
  */
 import { REGEX_SCHEMA_PRIMER, REGEX_PATTERN_LIBRARY, REGEX_BEST_PRACTICES } from './modeRegex';
+// (bug 224) Năm mẫu bảng trạng thái rút từ 25 thẻ MVUZOD THẬT trong repo — xem đầu file đó.
+import { STATUS_BAR_PATTERNS } from './statusBarPatterns';
 import { buildSchemaContextForBatch } from '../lib/mvuzod/schemaContextBuilder';
 import type { MVUZODSchema } from '../types/mvuzod.types';
 import type { StudioComponent } from '../store/gameStudioStore';
@@ -123,6 +125,7 @@ export function buildGameUiSystemPrompt(
     REGEX_SCHEMA_PRIMER,
     REGEX_PATTERN_LIBRARY,
     REGEX_BEST_PRACTICES,
+    '\n' + STATUS_BAR_PATTERNS,
     '\n═══ SCHEMA BIẾN (dùng đúng tên, đừng bịa) ═══',
     schemaBlock,
     allowListBlock,

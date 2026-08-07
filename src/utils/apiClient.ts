@@ -3945,11 +3945,34 @@ export async function translateText(
     );
   }
   const finalChunks = translatedChunks.slice(0, chunks.length) as string[];
-  const verifiedChunks = await verifySeams(finalChunks, chunks, config, targetLang, signal, enableChunkVerification, isCodeHeavy);
 
   // For HTML and Code/Regex content, join without separator
   const isHtmlContent = /<[a-z][^>]*>/i.test(maskedText) && /<\/[a-z]+>/i.test(maskedText);
   const joiner = (isHtmlContent || isCodeHeavy) ? '' : '\n\n';
+
+  /**
+   * (bug 222) BẢN GHÉP THÔ — cứu cánh khi khâu hậu-xử-lý gãy.
+   * User: "retry xong 21/21 chunk mà tool không áp vào bản dịch, phải tự bấm Ghép lại thì
+   * 30k chữ Hán mới thành 251." Đúng bệnh: MỌI chunk đã dịch xong, nhưng một bước SAU khi ghép
+   * (verifySeams / bloat guard / postTranslationResidualCheck — mấy bước này còn gọi API nên
+   * rất dễ đứt mạng) ném lỗi ⇒ translateText ném theo ⇒ caller đánh field 'error' và KHÔNG ghi
+   * gì vào `translated`. Bản dịch đã có đủ trong completedChunks nhưng không ai ghép — nên user
+   * phải bấm tay.
+   *
+   * Từ nay: đã đủ chunk thì hàm này KHÔNG BAO GIỜ ném nữa. Hậu xử lý là phần LÀM ĐẸP, không
+   * phải cửa ải — gãy thì trả bản ghép thô (vẫn unmask đầy đủ để không lộ token che).
+   */
+  const rawJoinFallback = (): string => {
+    let s = finalChunks.join(joiner);
+    s = unmaskUrls(s, urlMap);
+    s = unmaskSecrets(s, secretMap);
+    s = unmaskCssCjkValues(s, cssCjkMap, cssCjkHandling || 'preserve');
+    return unmaskCodeBlocks(s, codeMap);
+  };
+
+  try {
+  const verifiedChunks = await verifySeams(finalChunks, chunks, config, targetLang, signal, enableChunkVerification, isCodeHeavy);
+
   const rawResult = verifiedChunks.join(joiner);
   let cleaned = unmaskUrls(rawResult, urlMap);
   cleaned = unmaskSecrets(cleaned, secretMap);
@@ -4027,6 +4050,18 @@ export async function translateText(
   );
   const cssCjkRestored = unmaskCssCjkValues(finalResult, cssCjkMap, cssCjkHandling || 'preserve');
   return unmaskCodeBlocks(cssCjkRestored, codeMap);
+  } catch (postErr) {
+    // (bug 222) Đủ chunk rồi thì công sức đã nằm trong tay — không được ném nó đi vì một bước
+    // làm đẹp bị đứt. Ghép thô, nói rõ đã bỏ bước nào, rồi trả về.
+    const why = postErr instanceof Error ? postErr.message : String(postErr);
+    const fallback = rawJoinFallback();
+    console.warn(
+      `[translateText] ${fieldName}: đủ ${chunks.length}/${chunks.length} chunk nhưng khâu hậu xử lý gãy (${why}) `
+      + `→ trả BẢN GHÉP THÔ ${fallback.length} ký tự thay vì ném lỗi (trước đây chỗ này làm mất trắng bản dịch, `
+      + `user phải bấm "Ghép lại" bằng tay — bug 222).`,
+    );
+    return fallback;
+  }
 }
 
 /* ─── Batch translate multiple fields in one API call ─── */

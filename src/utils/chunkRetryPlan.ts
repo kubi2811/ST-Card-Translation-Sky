@@ -59,6 +59,32 @@ export function findCjkHeavyChunks(rawChunks: string[], doneChunks: string[]): n
   return out;
 }
 
+/**
+ * (bug 219) Cell còn SÓT chữ Hán — dù chỉ một chữ.
+ *
+ * Khác hẳn findCjkHeavyChunks: hàm kia đòi >35% Hán sống sót nên nó chỉ bắt được cell "chưa
+ * dịch gì cả". Ca của user là 21 cell đều đã dịch tử tế, tổng còn 106 chữ Hán rải rác — mỗi
+ * cell chỉ vài chữ trên hàng nghìn, tỉ lệ ~1%, nên bộ cũ trả về RỖNG và tool đành dịch lại cả
+ * field 30k (rồi mất trắng khi chốt an toàn bắt lỗi). Đây là bộ dò đúng cho ca đó: cell nào
+ * còn Hán thì chính nó là cell cần dịch lại, các cell sạch không tốn một lượt gọi API nào.
+ */
+export function findResidualCjkChunks(
+  rawChunks: string[],
+  doneChunks: string[],
+  minHan = 1,
+): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < rawChunks.length; i++) {
+    const raw = rawChunks[i];
+    const done = doneChunks[i];
+    if (!raw?.trim() || !done?.trim()) continue;
+    // Nguồn vốn không có Hán ⇒ Hán trong bản dịch không phải "dịch sót" (tên riêng, thuật ngữ).
+    if (countHan(raw) === 0) continue;
+    if (countHan(done) >= minHan) out.push(i);
+  }
+  return out;
+}
+
 export interface ChunkProgressLike {
   rawChunks?: string[];
   completedChunks?: string[];
@@ -71,7 +97,7 @@ export interface ChunkProgressLike {
  */
 export function planTargetedChunkRetry(
   field: ChunkProgressLike,
-  kind: 'syntax' | 'cjk',
+  kind: 'syntax' | 'cjk' | 'residual',
 ): ChunkRetryPlan | null {
   const raw = field.rawChunks;
   const done = field.completedChunks;
@@ -79,14 +105,22 @@ export function planTargetedChunkRetry(
   if (done.some(c => !c)) return null;   // đã có ô trống → đường resume sẵn có tự xử
   const suspects = kind === 'syntax'
     ? findSyntaxBrokenChunks(raw, done)
-    : findCjkHeavyChunks(raw, done);
+    : kind === 'cjk'
+      ? findCjkHeavyChunks(raw, done)
+      : findResidualCjkChunks(raw, done);
   if (suspects.length === 0) return null;
-  if (suspects.length > Math.max(2, Math.floor(raw.length * 0.6))) return null; // hỏng quá nửa → thà dịch lại cả field
+  // (bug 219) 'residual' KHÔNG áp trần "hỏng quá nửa": chữ Hán sót thường rải khắp mọi cell, mà
+  // dịch lại đúng những cell đó vẫn rẻ và AN TOÀN hơn dịch tươi cả field — cell nào sạch thì
+  // giữ nguyên, không có đường nào để mất bản dịch cũ.
+  if (kind !== 'residual' && suspects.length > Math.max(2, Math.floor(raw.length * 0.6))) return null;
+  const list = suspects.map(i => i + 1).join(', ');
   return {
     suspects,
     reason: kind === 'syntax'
-      ? `cell ${suspects.map(i => i + 1).join(', ')} vỡ cú pháp`
-      : `cell ${suspects.map(i => i + 1).join(', ')} còn nguyên tiếng Trung`,
+      ? `cell ${list} vỡ cú pháp`
+      : kind === 'cjk'
+        ? `cell ${list} còn nguyên tiếng Trung`
+        : `cell ${list} còn sót chữ Hán`,
   };
 }
 

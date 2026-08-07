@@ -38,6 +38,10 @@ import { chunkCharsForField } from '../utils/chunking';
 import { finalizeRetryTranslation } from '../utils/retryGuards';
 import { isRefusalError } from '../utils/refusalGuard';
 import { collectProblemFields } from '../utils/problemFields';
+// (bug 219) Dịch lại không bao giờ được làm tệ hơn bản đang có.
+import { judgeRetryResult, regressionMessage } from '../utils/retryRegression';
+// (bug 221) Giữ tab sống khi Edge muốn cho nó đi ngủ.
+import { startKeepAlive, stopKeepAlive } from '../utils/keepAlive';
 
 /* ─── (bug 205) Wake lock trong lúc dịch ───
  * Edge/Chrome cho tab nền "ngủ" rất hăng khi máy tắt màn hình — user để tool chạy ngầm vài chục
@@ -2073,6 +2077,7 @@ export function useTranslation() {
     // (bug 205) Giữ màn hình thức suốt lượt dịch — tab nền + màn hình tắt là combo bị Edge cho
     // ngủ nhiều nhất. Nhả ở pause/cancel/kết thúc.
     void acquireWakeLock();
+    startKeepAlive();   // (bug 221) tab phat am thanh cam => Edge khong cho no ngu/discard
 
     // Bump the run token: any older loop still alive will see runIdRef change and bail
     // out at its next checkpoint, so two loops can never run concurrently.
@@ -3291,6 +3296,7 @@ export function useTranslation() {
     runningRef.current = false;
     flushEjsNameMappings();   // (bug 213) đẩy nốt các cặp tên entry còn trong hàng đợi
     releaseWakeLock();   // (bug 205) hết lượt dịch thì trả màn hình về bình thường
+    stopKeepAlive();     // (bug 221) nhả luôn dòng âm thanh câm
     store.setPhase('done');
     store.saveTranslationCache();
     // `store` là snapshot lúc render → store.fields còn status CŨ (pending). Phải đọc
@@ -3513,6 +3519,7 @@ export function useTranslation() {
 
   const pauseTranslation = useCallback(() => {
     releaseWakeLock();   // (bug 205) dung tay thi tra man hinh ve binh thuong
+    stopKeepAlive();     // (bug 221)
     // ═══ HARD, RESUMABLE PAUSE ═══
     // The user usually pauses to EDIT an entry. A cooperative pause would let the
     // in-flight entry (and concurrent batches) finish and advance first — that was the
@@ -3562,6 +3569,7 @@ export function useTranslation() {
 
   const cancelTranslation = useCallback(() => {
     releaseWakeLock();   // (bug 205) dung tay thi tra man hinh ve binh thuong
+    stopKeepAlive();     // (bug 221)
     // Invalidate any running loop so it bails at its next checkpoint
     runIdRef.current++;
     abortRef.current?.abort();
@@ -3648,6 +3656,30 @@ export function useTranslation() {
     const prevChunks = resume && freshField.completedChunks && freshField.completedChunks.length > 0
       ? freshField.completedChunks
       : undefined;
+
+    // (bug 219) ẢNH CHỤP TRƯỚC KHI ĐỘNG DAO. Lượt dịch lại nào cũng có thể chết giữa đường hoặc
+    // ra bản tệ hơn; không có ảnh chụp thì công sức 21 lượt gọi API của bản cũ mất trắng.
+    const snapshot = {
+      translated: freshField.translated,
+      completedChunks: freshField.completedChunks,
+      rawChunks: freshField.rawChunks,
+      totalChunks: freshField.totalChunks,
+    };
+    /** Trả field về đúng trạng thái trước lượt dịch lại này. */
+    const restoreSnapshot = (why: string) => {
+      store.updateField(path, {
+        status: 'done',
+        translated: snapshot.translated,
+        completedChunks: snapshot.completedChunks,
+        rawChunks: snapshot.rawChunks,
+        totalChunks: snapshot.totalChunks,
+        failedChunkIndex: undefined,
+        error: undefined,
+      });
+      store.addLog('warning', `🛡️ ${field.label}: ${why} — đã trả lại bản dịch cũ nguyên vẹn.`);
+      store.saveTranslationCache();
+    };
+    const hadTranslation = !!snapshot.translated && snapshot.translated !== field.original;
 
     if (prevChunks) {
       store.addLog('active', `Re-translating: ${field.label} (Resuming from chunk ${prevChunks.length + 1})`);
@@ -3779,6 +3811,23 @@ export function useTranslation() {
       for (const n of verdict.notes) store.addLog(n.level, n.msg);
       translated = verdict.text;
 
+      // ═══ (bug 219) CHỐT CUỐI: KHÔNG BAO GIỜ ĐỔI BẢN TỐT LẤY BẢN TỆ ═══
+      // Đây là chỗ tai nạn của user xảy ra: bản đang có sót 106 chữ Hán, chốt an toàn ở trên trả
+      // về bản GỐC (30.000 chữ Hán) vì lượt mới vỡ cú pháp, rồi ghi thẳng lên. So trước khi ghi.
+      if (hadTranslation) {
+        const reg = judgeRetryResult({
+          original: field.original,
+          previous: snapshot.translated,
+          next: translated,
+          cssCjkHandling: store.translationConfig.cssCjkHandling,
+        });
+        if (reg.worse) {
+          store.addLog('warning', regressionMessage(field.label, reg));
+          restoreSnapshot('bản vừa dịch lại tệ hơn bản đang có');
+          return;
+        }
+      }
+
       store.updateField(path, {
         status: 'done',
         translated,
@@ -3816,6 +3865,21 @@ export function useTranslation() {
         // Lỗi giữa chừng vẫn phải lưu: các chunk đã dịch xong là công sức thật, mất là dịch lại
         // từ đầu (và tốn tiền API lần nữa).
         store.saveTranslationCache();
+      } else if (hadTranslation) {
+        // (bug 219) Lượt dịch lại chết giữa đường: bản dịch cũ vẫn nguyên trong `translated`,
+        // nhưng 21 ô chunk thì đã bị xoá ở đầu hàm ⇒ trả chúng về, không thì bảng chunk trắng
+        // trơn và nút "Ghép lại"/"dịch lại 1 chunk" mất hết chỗ dựa.
+        store.updateField(path, {
+          status: 'done',
+          error: undefined,
+          translated: snapshot.translated,
+          completedChunks: snapshot.completedChunks,
+          rawChunks: snapshot.rawChunks,
+          totalChunks: snapshot.totalChunks,
+        });
+        store.addLog('warning',
+          `🛡️ ${field.label}: lượt dịch lại lỗi (${msg}) — GIỮ NGUYÊN bản dịch cũ và tiến trình chunk cũ, không mất gì.`);
+        store.saveTranslationCache();
       } else {
         store.updateField(path, { status: 'error', error: msg });
         store.addLog('error', `Re-translate failed: ${field.label} — ${msg}`);
@@ -3825,6 +3889,26 @@ export function useTranslation() {
       fieldAbortMap.current.delete(path);
       inFlightPaths.current.delete(path);   // (bug 213) nhả khoá chung
     }
+  }, [store]);
+
+  /**
+   * (bug 219) Chuẩn bị DỊCH LẠI NHẮM ĐÍCH cho field đã đủ chunk mà còn sót chữ Hán: xoá đúng
+   * các cell còn Hán rồi trả về true để caller gọi retranslateField(..., resume=true).
+   * Trả false khi không khoanh được (field không chia chunk, dữ liệu chunk lệch nhịp…) —
+   * caller cứ đi đường dịch tươi như cũ.
+   */
+  const armTargetedCjkResume = useCallback((path: string): boolean => {
+    const f = useStore.getState().fields.find(x => x.path === path);
+    if (!f?.rawChunks?.length || !f.completedChunks?.length) return false;
+    const plan = planTargetedChunkRetry(f, 'residual') ?? planTargetedChunkRetry(f, 'cjk');
+    if (!plan) return false;
+    const cur = [...f.completedChunks];
+    for (const i of plan.suspects) cur[i] = '';
+    store.updateField(path, { completedChunks: cur });
+    store.addLog('info',
+      `🎯 ${f.label}: chỉ dịch lại ${plan.suspects.length}/${f.rawChunks.length} phần (${plan.reason}) `
+      + `— ${f.rawChunks.length - plan.suspects.length} phần đã tốt giữ nguyên.`);
+    return true;
   }, [store]);
 
   /**
@@ -3881,7 +3965,10 @@ export function useTranslation() {
         shouldStop: () => !!checkAbort(),
         waitIfPaused: () => waitForPause(),
         runOne: async (i: number) => {
-          await retranslateField(hits[i].path, false, buildResidualRetryInstruction(hits[i]));
+          // (bug 219) Entry lớn chia chunk: khoanh đúng cell còn Hán rồi resume, thay vì gọi lại
+          // API cho cả 21 phần (đắt, chậm, và là chính đường làm mất bản dịch tốt).
+          const targeted = armTargetedCjkResume(hits[i].path);
+          await retranslateField(hits[i].path, targeted, buildResidualRetryInstruction(hits[i]));
           totalFixed++;
         },
       });
@@ -3899,7 +3986,7 @@ export function useTranslation() {
       store.addLog('success', `✅ Quét chữ Trung sót: đã dịch lại ${totalFixed} mục, giờ sạch hoàn toàn.`);
     }
     return totalFixed;
-  }, [store, retranslateField, checkAbort, waitForPause]);
+  }, [store, retranslateField, armTargetedCjkResume, checkAbort, waitForPause]);
 
   // startTranslation được khai báo TRƯỚC hàm này nên không gọi thẳng được → đi qua ref.
   useEffect(() => { residualSweepRef.current = residualCjkSweep; }, [residualCjkSweep]);
@@ -4069,8 +4156,17 @@ export function useTranslation() {
           // thật). Field 'done còn sót'/'skipped'/sau khi bị chốt chặn thì dịch TƯƠI — bản cũ
           // chính là thứ vừa bị chê, resume là ghép lại đúng cái sai cũ.
           const fresh = useStore.getState().fields.find(f => f.path === field.path) || field;
-          const resume = attempt === 0 && fresh.status === 'error'
+          let resume = attempt === 0 && fresh.status === 'error'
             && !!fresh.completedChunks && fresh.completedChunks.some(c => c && c.length > 0);
+
+          // ═══ (bug 219) FIELD 'done' CÒN SÓT CHỮ HÁN: KHOANH ĐÚNG CELL, ĐỪNG ĐỐT CẢ 21 CHUNK ═══
+          // User: "21/21 chunk sạch, chỉ sót 106 chữ Hán… bấm dịch lại thì tool xoá sạch bản dịch
+          // rồi dịch lại từ đầu". Dịch tươi cả field 30k là vừa đắt vừa nguy hiểm (một chốt an
+          // toàn bắt lỗi là mất trắng). Bộ khoanh vùng của bug 207 đã có sẵn — dùng đúng nó:
+          // xoá riêng cell còn nguyên tiếng Trung rồi resume, engine chỉ gọi lại 1-2 chunk.
+          if (attempt === 0 && !resume && fresh.status === 'done') {
+            resume = armTargetedCjkResume(field.path);
+          }
 
           await retranslateField(field.path, resume, extra);
 
@@ -4126,7 +4222,7 @@ export function useTranslation() {
     store.saveTranslationCache();
     store.addLog(failCount === 0 ? 'success' : 'warning', `Thử lại xong: ${successCount} đã sửa, ${failCount} vẫn lỗi`);
     store.addToast(failCount === 0 ? 'success' : 'error', `${verb}: ${successCount}/${errorFields.length} xong`);
-  }, [store, retranslateField]);
+  }, [store, retranslateField, armTargetedCjkResume]);
 
   /**
    * (bug 211) DANH SÁCH "MỤC CHƯA ĐẠT" — một nguồn sự thật cho cả UI lẫn nút dịch lại.

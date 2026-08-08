@@ -32,7 +32,7 @@ import { unifyCrossStrategyDicts } from '../utils/crossStrategySync';
 import { detectEjsCard, extractEjsEntryNames, extractEjsKeywords, aiTranslateEjsEntries, validateEjsSync, autoFixEjsEntryNames, autoFixEjsKeywords, enforceEjsEntryName, enforceEjsCovariance, enforceEjsKeywordCasing, autoFixEjsKeywordsExtended, enforceEjsDictConsistency } from '../utils/ejsSync';
 import { isEjsProseField, maskEjsCode, unmaskEjsCode, countEjsBlocks } from '../utils/ejsSegmenter';
 import { isLikelyJsScript, jsParseErrorAny, isImportOnlyScript, hasRealJsSignal, jsErrorFingerprint } from '../utils/scriptSafety';
-import { planTargetedChunkRetry, mergeChunkProgress } from '../utils/chunkRetryPlan';
+import { planTargetedChunkRetry, mergeChunkProgress, normalizeChunkCells } from '../utils/chunkRetryPlan';
 // (bug 226) Vá gộp: gom mọi vùng còn chữ Hán vào MỘT lượt gọi thay vì dịch lại từng cell.
 import {
   planFieldResidualPatch, patchEligibility, buildPatchJob, buildResidualPatchPrompt,
@@ -482,10 +482,23 @@ export function useTranslation() {
     // Mục >15k ký tự sẽ được cắt ~15k/phần (chunkText) rồi dịch SONG SONG qua pool → log cho user rõ.
     // (bug 207/L4) Ước lượng theo ĐÚNG cỡ chunk engine sẽ dùng (code-heavy = 12000, không phải 15000).
     const estimatedChunks = Math.ceil(charCount / chunkCharsForField(field.label, store.translationConfig.chunkSize));
+    // (bug 227) NÓI RÕ VÌ SAO mục này đang được dịch. User: "tool vẫn liên tục call API nhưng
+    // không báo là dịch vì lý do gì (lỗi, ghép lại, hay là kiểm tra)". Không có câu này thì lúc
+    // engine kẹt, người dùng chỉ thấy API chạy mà không có cách nào biết nó đang đuổi theo cái
+    // gì — và cũng không báo lại cho mình được là nó đuổi sai chỗ nào.
+    const before = useStore.getState().fields.find(f => f.path === field.path);
+    const doneCells = before?.completedChunks?.filter(Boolean).length ?? 0;
+    const why = before?.status === 'error'
+      ? `dịch lại vì lượt trước lỗi: ${(before.error || 'không rõ').slice(0, 90)}`
+      : (before?.retries ?? 0) > 0
+        ? `dịch lại lần ${before!.retries} (lý do gần nhất: ${before!.lastSoftGateFingerprint || 'không rõ'})`
+        : doneCells > 0
+          ? `dịch tiếp phần còn thiếu (${doneCells}/${before?.totalChunks ?? '?'} phần đã có)`
+          : 'dịch lần đầu';
     if (estimatedChunks > 1) {
-      store.addLog('active', `🔗 Mục lớn "${field.label}" (${charCount.toLocaleString()} ký tự) → chia ~${estimatedChunks} phần, dịch SONG SONG${targetModel !== store.proxy.model ? ` [Model: ${targetModel}]` : ''}`);
+      store.addLog('active', `🔗 Mục lớn "${field.label}" (${charCount.toLocaleString()} ký tự) → chia ~${estimatedChunks} phần, dịch SONG SONG — ${why}${targetModel !== store.proxy.model ? ` [Model: ${targetModel}]` : ''}`);
     } else {
-      store.addLog('active', `Đang dịch: ${field.label} (${charCount.toLocaleString()} ký tự)${targetModel !== store.proxy.model ? ` [Model: ${targetModel}]` : ''}`);
+      store.addLog('active', `Đang dịch: ${field.label} (${charCount.toLocaleString()} ký tự) — ${why}${targetModel !== store.proxy.model ? ` [Model: ${targetModel}]` : ''}`);
     }
 
     // IMPORTANT: read fresh retries from store (not stale `field` parameter) to prevent infinite retry loops
@@ -504,7 +517,25 @@ export function useTranslation() {
      * năng phát hiện), nhưng lần thứ hai cùng lý do là dừng, giữ bản dịch và ghi rõ cho user biết.
      * Bằng chứng CỨNG (rỗng, vỡ cú pháp JS, lỗi mạng/chunk) KHÔNG đi qua đây — vẫn thử lại như cũ.
      */
-    const softGate = (reasonKey: string, retryLog: string, stopLog: string, max?: number): boolean => {
+    /*
+     * (bug 227) Cổng này trả về BA kết cục, không phải hai — và đó là cả bản vá.
+     *
+     * Bản cũ trả boolean, nên hai kết cục "dừng" gộp làm một: `false`. Mọi nơi gọi đều hiểu
+     * `false` là "hết cách rồi" và đánh dấu field 'error'. Nhưng một trong hai kết cục lại vừa
+     * in ra câu "nên dừng thử lại (GIỮ BẢN DỊCH HIỆN CÓ)" — hứa một đằng, làm một nẻo.
+     *
+     * Hậu quả nặng hơn nhiều so với câu chữ: vòng dịch chọn field theo
+     * `status === 'pending' || status === 'error'`, nên field bị đánh 'error' sẽ được nhặt lại
+     * ở MỌI lượt Start/Tiếp tục sau đó. Với script 236KB chia 21 mảnh thì mỗi lượt là 21 lượt
+     * gọi API, ra đúng kết quả cũ, lại 'error', lại nhặt. Đúng cảnh user tả: "tool cố chấp
+     * dịch script này, loop vô hạn, không hề dịch entry nào khác dù bấm dừng hay tiếp tục".
+     *
+     *   'retry'   — thử lại (như cũ)
+     *   'keep'    — cùng một lý do hai lượt liền: GIỮ bản dịch, đánh 'done', rời hàng đợi
+     *   'give-up' — hết lượt thử: đường cũ (caller đánh 'error')
+     */
+    type GateOutcome = 'retry' | 'keep' | 'give-up';
+    const softGate = (reasonKey: string, retryLog: string, stopLog: string, max?: number): GateOutcome => {
       const decision = decideSoftGate({
         reasonKey,
         previousReasonKey: useStore.getState().fields.find(f => f.path === field.path)?.lastSoftGateFingerprint,
@@ -515,12 +546,30 @@ export function useTranslation() {
         store.addLog('warning',
           `⚠️ ${field.label}: ${stopLog} — lượt trước dịch lại đã ra ĐÚNG lý do này, nên dừng thử lại ` +
           `(giữ bản dịch hiện có). Nếu thấy chưa ổn, bấm dịch lại riêng entry này hoặc chỉnh từ điển.`);
-        return false;
+        return 'keep';
       }
-      if (decision === 'stop-out-of-retries') return false;
+      if (decision === 'stop-out-of-retries') return 'give-up';
       store.updateField(field.path, { retries: freshRetries() + 1, lastSoftGateFingerprint: reasonKey });
       store.addLog('retry', retryLog);
-      return true;
+      return 'retry';
+    };
+
+    /**
+     * (bug 227) Chốt lại field theo đúng lời hứa của cổng mềm: giữ bản dịch đang có, đánh
+     * 'done' để nó RỜI hàng đợi. Có `keptWithWarning` để bảng trạng thái và bộ quét chữ Hán
+     * biết đây là bản "đã chấp nhận có tì vết", không phải bản sạch — và không nhặt lại nữa.
+     */
+    const keepAsIs = (translatedNow: string, why: string): 'done' => {
+      store.updateField(field.path, {
+        status: 'done',
+        translated: translatedNow,
+        error: undefined,
+        keptWithWarning: why,
+      });
+      store.addLog('warning',
+        `🤝 ${field.label}: chấp nhận bản dịch hiện có (${why}). Sẽ KHÔNG dịch lại tự động nữa — ` +
+        `muốn thử tiếp thì bấm dịch lại riêng entry này.`);
+      return 'done';
     };
 
     try {
@@ -702,9 +751,11 @@ export function useTranslation() {
             const currentField = useStore.getState().fields.find(f => f.path === field.path);
             const currentCompleted = currentField?.completedChunks || [];
             // Index-based storage: safe for both sequential and parallel
-            const updatedChunks = [...currentCompleted];
-            // Extend array if needed (parallel may complete out-of-order)
-            while (updatedChunks.length <= chunkIdx) updatedChunks.push('');
+            // (bug 227) Ep ve DUNG so manh cua LUOT NAY. Ban cu chi NONG mang cho du chi so
+            // vua xong, khong bao gio CAT duoi thua cua luot truoc — nen mot lan chay ra 22
+            // manh la o thu 22 nam lai vinh vien, va luot sau thay 22 > 21 lien vut sach ban
+            // dich cu roi dich lai tu dau. Dich lai xong van con o thu 22 ⇒ vong khong day.
+            const updatedChunks = normalizeChunkCells(currentCompleted, Math.max(totalChunks, chunkIdx + 1));
             updatedChunks[chunkIdx] = translatedChunk;
             store.updateField(field.path, {
               completedChunks: updatedChunks,
@@ -1015,9 +1066,12 @@ export function useTranslation() {
         
         if (transLen < origLen * minRatio) {
           const pct = (transLen / origLen * 100).toFixed(0);
+          // (bug 227) `=== 'retry'` chứ không phải truthy: cổng nay trả BA kết cục, mà 'keep'
+          // và 'give-up' đều là chuỗi khác rỗng nên `if (softGate(...))` sẽ luôn đúng ⇒ thử lại
+          // vô tận. Nhánh else bên dưới vốn đã giữ bản dịch, đúng điều cần cho cả hai kết cục kia.
           if (softGate('short',
             `⚠️ Dịch thiếu nghiêm trọng: ${transLen}/${origLen} chars (${pct}% < ${(minRatio * 100).toFixed(0)}%). Auto-retry...`,
-            `vẫn ngắn (${pct}%)`, 1)) {
+            `vẫn ngắn (${pct}%)`, 1) === 'retry') {
             await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
             return 'retry';
           }
@@ -1076,13 +1130,17 @@ export function useTranslation() {
           // dich lai khi CHUA DICH that (echo / do nua chung, >35% Han song), bo qua vai chu con sot.
           const { suspect, transCjk, origCjk, survival } = detectResidualCjk(field.original, translated);
           if (suspect) {
-            if (softGate('cjk-script',
+            const gate = softGate('cjk-script',
               `⚠️ Script con ${transCjk}/${origCjk} chu Han (${(survival * 100).toFixed(0)}%) — nghi chua dich. Thu lai: ${field.label}…`,
-              `vẫn còn ${transCjk}/${origCjk} chữ Hán`)) {
+              `vẫn còn ${transCjk}/${origCjk} chữ Hán`);
+            if (gate === 'retry') {
               clearSuspectChunksForRetry('cjk');   // (bug 207) chỉ dịch lại cell chưa dịch
               await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
               return 'retry';
             }
+            // (bug 227) Cùng lý do hai lượt liền ⇒ giữ bản dịch và RỜI hàng đợi. Đánh 'error'
+            // ở đây là mời chính nó quay lại ở mọi lượt sau — vòng lặp vô tận của bug 227.
+            if (gate === 'keep') return keepAsIs(translated, `còn ${transCjk}/${origCjk} chữ Hán`);
             store.updateField(field.path, { status: 'error', error: `Script con ${transCjk}/${origCjk} chu Han sau ${store.proxy.maxRetries || 3} lan thu` });
             store.addLog('error', `Chinese remaining in TavernHelper for ${field.label} after retries.`);
             return 'error';
@@ -1093,12 +1151,14 @@ export function useTranslation() {
           const cjkRegex = /[一-鿿㐀-䶿]/;
           const translatedStripped = stripUrlsForCjkCheck(translated);
           if (cjkRegex.test(translatedStripped)) {
-            if (softGate('cjk-schema',
+            const gate = softGate('cjk-schema',
               `⚠️ Con chu Han trong Schema (${field.label}). Dang thu lai…`,
-              'vẫn còn chữ Hán trong Schema')) {
+              'vẫn còn chữ Hán trong Schema');
+            if (gate === 'retry') {
               await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
               return 'retry';
             }
+            if (gate === 'keep') return keepAsIs(translated, 'còn chữ Hán trong Schema');
             store.updateField(field.path, { status: 'error', error: 'Schema translation failed (Chinese characters remaining)' });
             store.addLog('error', `Chinese characters remaining in Schema for ${field.label} after retries.`);
             return 'error';
@@ -1123,13 +1183,15 @@ export function useTranslation() {
         if (suspect) {
           // (bug 198) Vân tay gồm cả TỈ LỆ còn sót: dịch lại mà tỉ lệ y hệt nghĩa là AI trả về
           // cùng một thứ — thử thêm lần nữa cũng thế. Tỉ lệ ĐỔI thì vẫn cho thử tiếp (đang tiến bộ).
-          if (softGate(`cjk-text:${transCjk}/${origCjk}`,
+          const gate = softGate(`cjk-text:${transCjk}/${origCjk}`,
             `⚠️ Nghi CHƯA DỊCH: còn ${(survival * 100).toFixed(0)}% chữ Hán (${transCjk}/${origCjk}) ở ${field.label}. AI có thể trả lại nguyên văn. Thử lại…`,
-            `vẫn còn ${(survival * 100).toFixed(0)}% chữ Hán (${transCjk}/${origCjk})`)) {
+            `vẫn còn ${(survival * 100).toFixed(0)}% chữ Hán (${transCjk}/${origCjk})`);
+          if (gate === 'retry') {
             clearSuspectChunksForRetry('cjk');   // (bug 207) entry lớn bị chunk: chỉ dịch lại cell chưa dịch
             await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
             return 'retry';
           }
+          if (gate === 'keep') return keepAsIs(translated, `còn ${(survival * 100).toFixed(0)}% chữ Hán`);
           store.updateField(field.path, {
             status: 'error',
             error: `Chưa dịch: còn ${transCjk}/${origCjk} chữ Hán (${(survival * 100).toFixed(0)}%) sau ${store.proxy.maxRetries || 3} lần thử`,
@@ -1154,7 +1216,7 @@ export function useTranslation() {
         if (responseRatio < ratio) {
           if (softGate('ratio',
             `⚠️ Translation too short for ${field.label}: ${translated.length}/${field.original.length} chars (${(responseRatio * 100).toFixed(0)}% ratio). Auto-retrying...`,
-            `bản dịch vẫn ngắn (${(responseRatio * 100).toFixed(0)}%)`, 1)) {
+            `bản dịch vẫn ngắn (${(responseRatio * 100).toFixed(0)}%)`, 1) === 'retry') {
             await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
             return 'retry'; // Signal to retry
           } else {
@@ -1175,7 +1237,7 @@ export function useTranslation() {
         if (origBlocks > 0 && transBlocks !== origBlocks) {
           if (softGate(`ejs-blocks:${transBlocks}/${origBlocks}`,
             `⚠️ EJS lệch khối: ${field.label} có ${transBlocks}/${origBlocks} khối <%…%> → dịch lại để không vỡ JS…`,
-            `vẫn lệch khối EJS (${transBlocks}/${origBlocks})`)) {
+            `vẫn lệch khối EJS (${transBlocks}/${origBlocks})`) === 'retry') {
             await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
             return 'retry';
           }
@@ -1286,7 +1348,7 @@ export function useTranslation() {
           // user thấy ở bug 199. Số vẫn nằm nguyên trong log cho người đọc; chỉ vân tay là bỏ số.
           if (softGate(`halluc:${why.replace(/\d+/g, '#')}`,
             `⚠️ ${label199} (${field.label}): ${why} → dịch lại (chỉ dịch chữ, không thêm code)…`,
-            `vẫn ${why}`)) {
+            `vẫn ${why}`) === 'retry') {
             await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
             return 'retry';
           }
@@ -2831,8 +2893,8 @@ export function useTranslation() {
                 (chunkIdx, translatedChunk, totalChunks) => {
                   const currentField = useStore.getState().fields.find(f => f.path === rf.path);
                   const currentCompleted = currentField?.completedChunks || [];
-                  const updatedChunks = [...currentCompleted];
-                  while (updatedChunks.length <= chunkIdx) updatedChunks.push('');
+                  // (bug 227) Cat duoi thua cua luot truoc — xem chu thich o cho ghi chinh.
+                  const updatedChunks = normalizeChunkCells(currentCompleted, Math.max(totalChunks, chunkIdx + 1));
                   updatedChunks[chunkIdx] = translatedChunk;
                   store.updateField(rf.path, { completedChunks: updatedChunks, totalChunks });
                 },
@@ -3672,7 +3734,13 @@ export function useTranslation() {
     }
     const controller = new AbortController();
     fieldAbortMap.current.set(path, controller);
-    store.updateField(path, { status: 'translating', error: undefined });
+    // (bug 227) Người dùng chủ động bắt dịch lại mục này ⇒ XOÁ dấu "đã chấp nhận có tì vết" và
+    // vân tay lý do cũ, để cổng mềm được thử lại từ đầu. Không xoá thì lượt này vừa chạy đã bị
+    // chính cái chốt vừa dựng chặn ngay — người dùng bấm mà không thấy gì xảy ra.
+    store.updateField(path, {
+      status: 'translating', error: undefined,
+      keptWithWarning: undefined, lastSoftGateFingerprint: undefined,
+    });
 
     // Read fresh field state from store to prevent stale reference
     const freshField = useStore.getState().fields.find(f => f.path === path) || field;
@@ -3789,8 +3857,8 @@ export function useTranslation() {
         (chunkIdx, translatedChunk, totalChunks) => {
           const currentField = useStore.getState().fields.find(f => f.path === field.path);
           const currentCompleted = currentField?.completedChunks || [];
-          const updatedChunks = [...currentCompleted];
-          while (updatedChunks.length <= chunkIdx) updatedChunks.push('');
+          // (bug 227) Cắt đuôi thừa của lượt trước — xem chú thích ở chỗ ghi chính.
+          const updatedChunks = normalizeChunkCells(currentCompleted, Math.max(totalChunks, chunkIdx + 1));
           updatedChunks[chunkIdx] = translatedChunk;
           store.updateField(field.path, {
             completedChunks: updatedChunks,
@@ -4079,6 +4147,25 @@ export function useTranslation() {
         store.addLog('info', `🩹 Sau vá gộp còn ${left.length} mục — những mục này đi đường dịch lại như cũ.`);
         hits.length = 0;
         hits.push(...left);
+      }
+
+      // (bug 227) Mục đã được CHẤP NHẬN có tì vết thì KHÔNG đi tiếp đường dịch lại đắt tiền.
+      // Cổng mềm vừa kết luận "thử lại ra đúng kết quả cũ" và đã hứa với user là dừng; để bộ
+      // quét lôi nó vào đây là mở lại đúng cái cửa vừa đóng — mỗi lượt thêm 21 lượt gọi API cho
+      // một kết quả đã biết trước. Lối VÁ GỘP ở trên vẫn được chạm vào chúng vì chỉ tốn 1 lượt.
+      const acceptedWithWarning = new Set(
+        useStore.getState().fields.filter(f => f.keptWithWarning).map(f => f.path));
+      if (acceptedWithWarning.size > 0) {
+        const before = hits.length;
+        const remaining = hits.filter(h => !acceptedWithWarning.has(h.path));
+        if (remaining.length !== before) {
+          store.addLog('info',
+            `🤝 Bỏ qua ${before - remaining.length} mục đã chấp nhận bản dịch hiện có — dịch lại đã ra đúng kết quả cũ, `
+            + 'thử nữa cũng thế. Muốn ép thì bấm dịch lại riêng entry đó.');
+          hits.length = 0;
+          hits.push(...remaining);
+        }
+        if (hits.length === 0) return totalFixed;
       }
 
       // (bug 211) SONG SONG qua pool thay vì nối đuôi từng mục: sweep cũ chạy `for … await`

@@ -137,3 +137,84 @@ export function mergeChunkProgress(
   if (!existing?.length || existing.length !== incoming.length) return incoming;
   return incoming.map((c, i) => (c && c.length > 0 ? c : (existing[i] ?? '')));
 }
+
+/* ═══════════ (bug 227) NHỊP CẮT ĐỔI GIỮA HAI LƯỢT — CHỖ SINH RA "22/21 CHUNK" ═══════════
+ *
+ * User: "báo lỗi 20k/30k chữ hán, 22/21 chunk, dịch lại từ chunk 22… sau đó tiếp tục dịch
+ * toàn bộ 21 chunk lại từ đầu (dịch lại từ đầu lần thứ N)".
+ *
+ * Con số 22/21 không phải lỗi hiển thị — mảng ô THẬT SỰ dài 22 trong khi lượt này chỉ cắt ra
+ * 21 mảnh. Nó tới từ hai chỗ nối nhau:
+ *
+ *  1. Cỡ chunk THÍCH ỨNG theo số lane API (apiClient tự chia nhỏ hơn khi pool nhiều lane) —
+ *     nên cùng một entry, chạy lúc cấu hình khác là ra số mảnh khác: hôm nay 22, mai 21.
+ *  2. Chỗ ghi tiến trình `onChunkComplete` chỉ biết NONG mảng ra cho đủ chỉ số vừa xong, không
+ *     bao giờ CẮT phần thừa của lượt trước. Lượt mới ghi đủ ô 0..20, còn ô thứ 22 của lượt cũ
+ *     nằm lại nguyên đó.
+ *
+ * Và cái ô thừa ấy là thuốc độc: lượt sau engine thấy `mảng cũ (22) > số mảnh (21)` nên kết
+ * luận "nhịp cắt đã đổi" rồi VỨT HẾT bản dịch cũ, dịch lại từ đầu. Dịch xong lại ghi 21 ô, ô
+ * thứ 22 vẫn còn ⇒ lượt sau lại vứt hết. Vòng lặp không có đáy, và người dùng thấy đúng cảnh
+ * "dịch lại từ đầu lần thứ N" dù bấm Dừng hay Tiếp tục bao nhiêu lần.
+ *
+ * Hai hàm dưới đây chữa cả hai đầu: cắt mảng về đúng nhịp ngay lúc GHI, và lúc ĐỌC thì phân
+ * biệt "nhịp cắt đổi thật" với "chỉ là mảng thừa đuôi".
+ */
+
+/**
+ * Ép mảng ô về ĐÚNG `total` ô: dài thì cắt, ngắn thì đệm rỗng. Gọi ở mọi chỗ ghi tiến trình.
+ */
+export function normalizeChunkCells(cells: (string | undefined)[] | undefined, total: number): string[] {
+  const n = Math.max(0, Math.floor(total) || 0);
+  const out: string[] = [];
+  for (let i = 0; i < n; i++) out.push(cells?.[i] ?? '');
+  return out;
+}
+
+export interface ChunkResumeDecision {
+  mode: 'fresh' | 'resume';
+  /** Mảng ô đã chuẩn hoá về đúng số mảnh của LƯỢT NÀY. */
+  cells: string[];
+  reason: string;
+}
+
+/**
+ * Quyết định dùng lại hay bỏ bản dịch cũ khi số mảnh thay đổi.
+ *
+ * Luật cũ: mảng cũ DÀI HƠN ⇒ coi như nhịp cắt đổi ⇒ vứt hết. Luật đó đúng ý định nhưng sai
+ * bằng chứng: mảng dài hơn có thể chỉ vì đuôi thừa chưa ai dọn, trong khi 21 mảnh đầu vẫn
+ * khớp từng ký tự với lượt này. Vứt đi là đốt lại toàn bộ tiền API cho thứ đã dịch xong.
+ *
+ * Luật mới: hỏi BẢN RAW. Có raw của lượt trước và tiền tố khớp ⇒ nhịp cắt KHÔNG đổi, chỉ cần
+ * cắt/đệm cho đúng số ô rồi dịch tiếp phần trống. Raw lệch thật, hoặc không có raw để đối
+ * chiếu mà số mảnh đã khác ⇒ mới bỏ (không đoán bừa: dán nhầm đoạn còn tệ hơn dịch lại).
+ */
+export function decideChunkResume(
+  prevCells: string[] | undefined,
+  prevRaw: string[] | undefined,
+  newRaw: string[],
+): ChunkResumeDecision {
+  const total = newRaw.length;
+  if (!prevCells?.length) return { mode: 'fresh', cells: normalizeChunkCells([], total), reason: 'chưa có bản dịch cũ' };
+
+  const overlap = Math.min(prevRaw?.length ?? 0, total);
+  if (overlap > 0) {
+    for (let i = 0; i < overlap; i++) {
+      if (prevRaw![i] !== newRaw[i]) {
+        return { mode: 'fresh', cells: normalizeChunkCells([], total), reason: `mảnh gốc số ${i + 1} khác lượt trước — nhịp cắt đã đổi thật` };
+      }
+    }
+    const note = prevCells.length > total
+      ? `cắt bỏ ${prevCells.length - total} ô thừa của lượt trước`
+      : prevCells.length < total
+        ? `đệm thêm ${total - prevCells.length} ô mới`
+        : 'nhịp cắt khớp';
+    return { mode: 'resume', cells: normalizeChunkCells(prevCells, total), reason: note };
+  }
+
+  // Không có raw cũ để đối chiếu: chỉ dám dùng lại khi số ô trùng khít.
+  if (prevCells.length !== total) {
+    return { mode: 'fresh', cells: normalizeChunkCells([], total), reason: `không có mảnh gốc cũ để đối chiếu mà số mảnh đã đổi (${prevCells.length} → ${total})` };
+  }
+  return { mode: 'resume', cells: normalizeChunkCells(prevCells, total), reason: 'số mảnh trùng khít' };
+}

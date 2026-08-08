@@ -158,6 +158,16 @@ export interface TranslationField {
    * cứu script lại bị bước sau vô hiệu hoá, vừa đốt token vừa có thể ghi code vỡ vào thẻ.
    */
   keptOriginalOnPurpose?: boolean;
+  /**
+   * (bug 227) Bản dịch được CHẤP NHẬN dù còn tì vết, kèm lý do — vì thử lại đã ra đúng kết
+   * quả cũ hai lượt liền.
+   *
+   * Trước đây ca này bị đánh 'error'. Mà vòng dịch nhặt field theo `pending | error`, nên
+   * field đó quay lại ở MỌI lượt Start/Tiếp tục — với script 236KB chia 21 mảnh thì mỗi lượt
+   * là 21 lượt gọi API cho đúng một kết quả đã biết trước. Cờ này để field rời hàng đợi mà
+   * vẫn nói được cho user biết nó chưa hoàn hảo.
+   */
+  keptWithWarning?: string;
   /** Previous translation for updating/merging */
   previousTranslation?: string;
   /** MVU entry classification for per-type translation strategy */

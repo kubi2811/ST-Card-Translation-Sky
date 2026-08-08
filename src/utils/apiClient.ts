@@ -45,6 +45,8 @@ interface TokenUsageSink {
 // chunkText tách sang ./chunking (Đợt tách monolith). Import để dùng nội bộ + RE-EXPORT
 // để các file khác vẫn `import { chunkText } from './apiClient'` như cũ (không phải sửa importer).
 import { chunkText } from './chunking';
+// (bug 227) Quyết định dùng lại bản dịch cũ khi số mảnh thay đổi — tách ra để test được.
+import { decideChunkResume } from './chunkRetryPlan';
 import { detectRefusal, RefusalError, isRefusalError } from './refusalGuard';
 import { hedgedRace } from './hedge';
 // (bug 193) Bác sĩ chunk: chẩn đoán 6 mặt + lượt SỬA có chẩn đoán + lọc/ép từ điển MVU theo chunk.
@@ -3510,16 +3512,19 @@ export async function translateText(
   // (bug 203) So với bản ĐÃ GỠ CHE — vì `previousRawChunks` được lưu ở dạng đã gỡ che (xem
   // onChunksReady). So với `chunks` (còn che) thì mọi field có URL đều lệch ⇒ guard luôn kêu
   // "nhịp cắt đổi" ⇒ resume chết hẳn, mỗi lần thử lại là dịch lại từ đầu.
-  const chunkingChanged = !!(previouslyCompletedChunks?.length)
-    && (previouslyCompletedChunks.length > chunks.length
-      || (!!previousRawChunks?.length && previousRawChunks.some((rc, i) => i < chunks.length && rc !== unmaskedChunks[i])));
+  // (bug 227) Luật cũ ở đây coi "mảng cũ DÀI HƠN số mảnh" là bằng chứng nhịp cắt đổi rồi vứt
+  // sạch bản dịch cũ. Nhưng mảng dài hơn thường chỉ là ĐUÔI THỪA chưa ai dọn (xem chú thích ở
+  // chunkRetryPlan): 21 mảnh đầu vẫn khớp từng ký tự, mà cả 21 vẫn bị đốt lại. Tệ hơn, ô thừa
+  // không bao giờ tự mất, nên lượt nào cũng vứt — thành vòng "dịch lại từ đầu lần thứ N".
+  // Nay hỏi thẳng bản RAW: tiền tố khớp thì chỉ cắt/đệm cho đúng nhịp rồi dịch tiếp phần trống.
+  const resumePlan = decideChunkResume(previouslyCompletedChunks, previousRawChunks, unmaskedChunks);
+  const chunkingChanged = resumePlan.mode === 'fresh' && !!previouslyCompletedChunks?.length;
   if (chunkingChanged) {
-    console.warn(`[translateText] ${fieldName}: nhịp cắt chunk đã đổi (${previouslyCompletedChunks!.length} → ${chunks.length}) — BỎ bản dịch cũ, dịch lại từ đầu để không ghép nhầm đoạn.`);
+    console.warn(`[translateText] ${fieldName}: BỎ bản dịch cũ (${previouslyCompletedChunks!.length} → ${chunks.length} mảnh) — ${resumePlan.reason}.`);
+  } else if (previouslyCompletedChunks?.length && previouslyCompletedChunks.length !== chunks.length) {
+    console.log(`[translateText] ${fieldName}: giữ bản dịch cũ, ${resumePlan.reason}.`);
   }
-  const hasResume = !chunkingChanged && !!(previouslyCompletedChunks && previouslyCompletedChunks.length > 0 && (
-    previouslyCompletedChunks.length < chunks.length ||
-    previouslyCompletedChunks.some(c => !c)
-  ));
+  const hasResume = resumePlan.mode === 'resume' && resumePlan.cells.some(c => !!c);
 
   if (hasResume) {
     console.log(`[translateText] ${fieldName}: RESUMING (${previouslyCompletedChunks!.filter(c => c).length} chunks already done)`);
@@ -3531,13 +3536,10 @@ export async function translateText(
   // Pre-fill results array with previously completed chunks
   const translatedChunks: (string | undefined)[] = new Array(chunks.length).fill(undefined);
   if (hasResume) {
-    // Chốt chặn thứ hai: KHÔNG bao giờ ghi quá chunks.length (ghi tràn làm mảng dài ra và
-    // đoạn thừa bị join vào kết quả cuối).
-    const upTo = Math.min(previouslyCompletedChunks!.length, chunks.length);
-    for (let ri = 0; ri < upTo; ri++) {
-      if (previouslyCompletedChunks![ri]) {
-        translatedChunks[ri] = previouslyCompletedChunks![ri];
-      }
+    // `resumePlan.cells` đã dài ĐÚNG chunks.length (cắt thừa, đệm thiếu) nên không còn đường
+    // ghi tràn — chốt chặn cũ nằm luôn trong phép chuẩn hoá.
+    for (let ri = 0; ri < chunks.length; ri++) {
+      if (resumePlan.cells[ri]) translatedChunks[ri] = resumePlan.cells[ri];
     }
   }
 

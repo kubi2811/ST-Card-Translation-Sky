@@ -13,7 +13,8 @@ import { Languages, FileJson, BookOpen, Plus, Trash2, Download, Upload, Bot, Loa
 import { recommendPreset } from '../utils/presetRecommend';
 import { GLOSSARY_PRESETS } from '../utils/glossaryPresets';
 import { mergeGlossary } from '../utils/nameGlossary';
-import { mergeGlossaries } from '../utils/glossaryIO';
+import { mergeGlossaries, parseGlossaryText, glossaryToJson, glossaryToCsv } from '../utils/glossaryIO';
+import { downloadText, safeFileName, stampSuffix } from '../utils/downloadFile';
 import { pushGlossaryToScript } from '../utils/glossaryBridge';
 import { safeSetItem } from '../utils/safeStorage';
 import { estimateLorebookBatchLoad } from '../utils/estimateBatchTokens';
@@ -210,35 +211,49 @@ export default function TranslateConfig() {
     addToast('success', fmt(ui.tcGlsSendOk, { count: usable.length }));
   };
 
-  const exportGlossary = () => {
-    const json = JSON.stringify(
-      translationConfig.glossary.filter(g => g.source.trim() || g.target.trim()).map(({ source, target }) => ({ source, target })),
-      null, 2);
-    const blob = new Blob([json], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'glossary.json';
-    a.click();
-    URL.revokeObjectURL(url);
+  /* ─────────── (bug 223) XUẤT / NHẬP TỪ ĐIỂN THUẬT NGỮ ───────────
+   * Bản cũ hỏng ở cả hai đầu:
+   *   • XUẤT gọi `URL.revokeObjectURL` ngay dòng dưới `a.click()`. Click mới chỉ ĐẶT lệnh tải;
+   *     trình duyệt đọc blob ở vòng lặp sau — thu hồi ngay là giật dữ liệu khỏi tay nó. Ai
+   *     thắng cuộc đua tuỳ máy, nên bệnh ra đúng kiểu "hình như xuất không được".
+   *   • NHẬP `JSON.parse` thẳng rồi `catch { }` BỎ TRỐNG: file sai một dấu phẩy, hay file xuất
+   *     từ tab Dịch Script (bọc trong khoá `glossary`), hay bảng chép từ Excel — tất cả đều
+   *     rơi vào im lặng tuyệt đối. Không báo lỗi, không thêm mục: y hệt "bấm không ăn gì".
+   * Nay đi qua bộ nạp dùng chung (JSON mọi biến thể + CSV/TSV) và LUÔN báo kết quả.
+   */
+  const exportGlossary = (format: 'json' | 'csv') => {
+    const usable = translationConfig.glossary.filter(g => g.source.trim() || g.target.trim());
+    if (usable.length === 0) { addToast('info', ui.tcGlsExportEmpty); return; }
+    const base = safeFileName(card?.name ? `glossary-${card.name}` : 'glossary');
+    const ok = format === 'csv'
+      ? downloadText(`${base}-${stampSuffix()}.csv`, glossaryToCsv(usable), 'text/csv;charset=utf-8')
+      : downloadText(`${base}-${stampSuffix()}.json`, glossaryToJson(usable));
+    addToast(ok ? 'success' : 'error',
+      ok ? fmt(ui.tcGlsExportOk, { count: usable.length, format: format.toUpperCase() }) : ui.tcGlsExportFail);
   };
 
   const importGlossary = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';   // đặt lại NGAY để chọn lại đúng file đó lần nữa vẫn kích hoạt
     if (!file) return;
     const reader = new FileReader();
+    reader.onerror = () => addToast('error', fmt(ui.tcGlsImportReadFail, { name: file.name }));
     reader.onload = (evt) => {
+      let incoming: GlossaryEntry[];
       try {
-        const imported = JSON.parse(evt.target?.result as string) as GlossaryEntry[];
-        if (Array.isArray(imported)) {
-          setTranslationConfig({ glossary: [...translationConfig.glossary, ...imported] });
-        }
-      } catch {
-        // silently fail
+        incoming = parseGlossaryText(String(evt.target?.result ?? ''));
+      } catch (err) {
+        addToast('error', (err as Error).message === 'NO_ENTRIES'
+          ? fmt(ui.tcGlsImportNoEntries, { name: file.name })
+          : fmt(ui.tcGlsImportBadFormat, { name: file.name }));
+        return;
       }
+      const { merged, added, conflicts, duplicates } = mergeGlossaries(translationConfig.glossary, incoming);
+      if (added > 0) setTranslationConfig({ glossary: merged });
+      addToast(added > 0 ? 'success' : 'info',
+        fmt(ui.tcGlsImportOk, { added, dup: duplicates, conflict: conflicts }));
     };
     reader.readAsText(file);
-    e.target.value = '';
   };
 
   const autoExtractGlossary = async () => {
@@ -546,27 +561,42 @@ export default function TranslateConfig() {
               )}
             </label>
             <div style={{ display: 'flex', gap: '4px' }}>
-              <label style={{
+              {/* (bug 223) Nhận cả .csv/.tsv/.txt: bảng thuật ngữ ngoài đời sống ở Excel. */}
+              <label title={ui.tcGlsImportTip} style={{
                 cursor: 'pointer', padding: '2px 6px', fontSize: '0.65rem',
                 border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)',
                 color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '3px',
               }}>
-                <Upload size={10} /> Import
-                <input type="file" accept=".json" style={{ display: 'none' }} onChange={importGlossary} />
+                <Upload size={10} /> {ui.tcGlsImportBtn}
+                <input type="file" accept=".json,.csv,.tsv,.txt,application/json,text/csv,text/plain"
+                  style={{ display: 'none' }} onChange={importGlossary} />
               </label>
-              {translationConfig.glossary.length > 0 && (
-                <button
-                  onClick={exportGlossary}
-                  style={{
-                    padding: '2px 6px', fontSize: '0.65rem', cursor: 'pointer',
-                    border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)',
-                    color: 'var(--text-muted)', background: 'transparent',
-                    display: 'flex', alignItems: 'center', gap: '3px',
-                  }}
-                >
-                  <Download size={10} /> Export
-                </button>
-              )}
+              {/* Luôn hiện, kể cả khi rỗng — nút biến mất lúc chưa có mục nào là đúng lúc user
+                  đi tìm chức năng xuất/nhập nhất, và tưởng tool không có. */}
+              <button
+                onClick={() => exportGlossary('json')}
+                title={ui.tcGlsExportTip}
+                style={{
+                  padding: '2px 6px', fontSize: '0.65rem', cursor: 'pointer',
+                  border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)',
+                  color: 'var(--text-muted)', background: 'transparent',
+                  display: 'flex', alignItems: 'center', gap: '3px',
+                }}
+              >
+                <Download size={10} /> {ui.tcGlsExportBtn}
+              </button>
+              <button
+                onClick={() => exportGlossary('csv')}
+                title={ui.tcGlsExportCsvTip}
+                style={{
+                  padding: '2px 6px', fontSize: '0.65rem', cursor: 'pointer',
+                  border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)',
+                  color: 'var(--text-muted)', background: 'transparent',
+                  display: 'flex', alignItems: 'center', gap: '3px',
+                }}
+              >
+                <Download size={10} /> CSV
+              </button>
               {/* Đẩy thẳng sang tab Dịch Script — khỏi phải xuất file rồi nhập lại */}
               {translationConfig.glossary.length > 0 && (
                 <button

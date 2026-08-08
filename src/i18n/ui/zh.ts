@@ -137,6 +137,21 @@ const ui: UiKeys = {
   tcGlsSendBtn: '发送到脚本',
   tcGlsSendTip: '把此词典发送到"脚本翻译"标签，让卡片与其脚本中的名字保持一致。',
   tcGlsSendOk: '已发送 {count} 条到脚本翻译。',
+  // (bug 226)
+  appAutoJoined: '🧩 已自动合并 {count} 个分块齐全但在标签页关闭前未合并的条目——比之前少 {han} 个汉字，无需手动点击"重新合并"。',
+  // (bug 223) 词典导入 / 导出
+  tcGlsImportBtn: '导入',
+  tcGlsExportBtn: '导出',
+  tcGlsImportTip: '从文件载入词典。支持 .json（各种常见结构）以及来自 Excel 的两列 .csv/.tsv/.txt。已有条目保持不变，只添加新条目。',
+  tcGlsExportTip: '将词典下载为 JSON——可重新导入本工具或"脚本翻译"标签。',
+  tcGlsExportCsvTip: '下载为 CSV，可用 Excel/Google 表格打开。',
+  tcGlsExportEmpty: '词典为空，没有可导出的内容。',
+  tcGlsExportOk: '已下载 {count} 条词典条目（{format}）。',
+  tcGlsExportFail: '浏览器拦截了下载。请为本页面允许弹出窗口后重试。',
+  tcGlsImportOk: '词典导入：新增 {added} 条 · 已存在 {dup} 条 · 同词不同译 {conflict} 条（保留现用译文）。',
+  tcGlsImportBadFormat: '无法读取 {name}：既不是有效 JSON，也不是两列表格。',
+  tcGlsImportNoEntries: '已读取 {name}，但其中没有找到词条对。',
+  tcGlsImportReadFail: '无法打开文件 {name}。',
   tcGlsSendEmpty: '没有可发送的条目（每行需填满两侧）。',
   // (bug 187) 脚本翻译大修：AST + 必备词典 + 四项校验器
   scrTrAnalyzing: '正在分析脚本中的数据键…',

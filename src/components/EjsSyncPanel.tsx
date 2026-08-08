@@ -5,6 +5,8 @@ import { useT, useUi } from '../i18n/useLocale';
 import { fmt } from '../i18n';
 import { detectEjsCard, extractEjsEntryNames, extractEjsKeywords, extractAllDecorators, aiTranslateEjsEntries, enforceEjsDictConsistency, autoFixEjsEntryNames, autoFixEjsKeywords, enforceEjsCovariance, enforceEjsKeywordCasing, autoFixEjsKeywordsExtended, detectEjsConflicts, aiResolveEjsConflicts } from '../utils/ejsSync';
 import { Settings, Plus, Trash2, Wand2, Loader2, Search, Download, Upload, Shield, Zap, Hash, BookOpen, Eye } from 'lucide-react';
+// (bug 223) Thu hoi blob URL SAU khi trinh duyet doc xong - revoke ngay sau click lam hut file.
+import { revokeSoon } from '../utils/downloadFile';
 
 export default function EjsSyncPanel() {
   // (bugNeedFix/39) selector hẹp + throttle fields — trước đây subscribe toàn store lúc dịch.
@@ -261,7 +263,7 @@ export default function EjsSyncPanel() {
     a.href = url;
     a.download = 'ejs-sync-dict.json';
     a.click();
-    URL.revokeObjectURL(url);
+    revokeSoon(url);
   };
 
   const importDict = () => {

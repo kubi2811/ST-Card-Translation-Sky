@@ -19,6 +19,8 @@ import TabGroup from './components/ui/TabGroup';
 import ToolButton from './components/ui/ToolButton';
 import { onPanelRequest } from './components/ui/panelNav';
 import { OPEN_AI_COMPANION_EVENT } from './hub/openAiCompanion';
+// (bug 226) Tab bị giết giữa khâu ghép chunk ⇒ mở lại phiên là tự ghép nốt.
+import { planAutoJoin } from './utils/chunkAudit';
 
 /** (bug 165) Tab của cột nội dung chính. */
 type MainTabId = 'fields' | 'verify' | 'export' | 'glossary';
@@ -126,6 +128,20 @@ export default function App() {
           // (bug 213) Trước đây câu này hardcode tiếng Việt nên user chạy UI English/中文 vẫn thấy
           // một dòng tiếng Việt chen ngang.
           useStore.getState().addLog('info', fmt(ui.appRestoredSession, { key }));
+        }
+        // (bug 226) Tab bị Edge giết ĐÚNG lúc đang ghép chunk: `completedChunks` còn nguyên
+        // trong bộ nhớ đã lưu, nhưng `translated` vẫn là bản gốc — nên bộ quét đọc bản gốc rồi
+        // báo "30k chữ Hán chưa dịch", trong khi bản dịch nằm ngay đó. Trước đây chỉ có nút
+        // ghép TAY mới cứu được; nay mở lại phiên là tự ghép, bằng đúng phép ghép ấy.
+        const st = useStore.getState();
+        const plans = planAutoJoin(st.fields);
+        for (const p of plans) {
+          st.updateField(p.path, { translated: p.joined, status: 'done', error: undefined });
+        }
+        if (plans.length > 0) {
+          const saved = plans.reduce((s, p) => s + Math.max(0, p.hanBefore - p.hanAfter), 0);
+          st.addLog('success', fmt(ui.appAutoJoined, { count: plans.length, han: saved }));
+          st.saveTranslationCache?.();
         }
       });
     }, 300); // nhường useEffect nạp card từ đường khác (nếu có) chạy trước

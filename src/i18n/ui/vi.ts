@@ -141,6 +141,19 @@ const ui: UiKeys = {
   tcGlsSendBtn: 'Sang Script',
   tcGlsSendTip: 'Gửi từ điển này sang tab Dịch Script để tên nhân vật trong thẻ và trong script khớp nhau.',
   tcGlsSendOk: 'Đã gửi {count} mục sang Dịch Script.',
+  // (bug 223) Xuất / nhập từ điển thuật ngữ
+  tcGlsImportBtn: 'Nhập',
+  tcGlsExportBtn: 'Xuất',
+  tcGlsImportTip: 'Nạp từ điển từ file. Nhận .json (mọi kiểu bố cục thường gặp) và .csv/.tsv/.txt hai cột kiểu Excel. Mục đã có được giữ nguyên, chỉ thêm mục mới.',
+  tcGlsExportTip: 'Tải từ điển về máy dạng JSON — nhập lại được vào tool này hoặc tab Dịch Script.',
+  tcGlsExportCsvTip: 'Tải về dạng CSV để mở bằng Excel/Google Sheets.',
+  tcGlsExportEmpty: 'Từ điển đang trống, chưa có gì để xuất.',
+  tcGlsExportOk: 'Đã tải về {count} mục từ điển ({format}).',
+  tcGlsExportFail: 'Trình duyệt chặn tải file. Thử tắt chặn pop-up cho trang này rồi bấm lại.',
+  tcGlsImportOk: 'Nhập từ điển: thêm {added} mục mới · {dup} mục đã có · {conflict} mục trùng tên nhưng khác nghĩa (giữ bản đang dùng).',
+  tcGlsImportBadFormat: 'Không đọc được {name}: không phải JSON hợp lệ, cũng không phải bảng hai cột.',
+  tcGlsImportNoEntries: 'Đọc được {name} nhưng không thấy cặp thuật ngữ nào bên trong.',
+  tcGlsImportReadFail: 'Không mở được file {name}.',
   tcGlsSendEmpty: 'Chưa có mục nào dùng được để gửi (mỗi dòng phải đủ cả 2 vế).',
   // (bug 187) Đại tu Dịch Script: AST + Từ Điển bắt buộc + verifier 4 phép kiểm
   scrTrAnalyzing: 'Đang phân tích khoá dữ liệu trong script…',
@@ -640,6 +653,8 @@ const ui: UiKeys = {
 
   // ─── CompareCardsPanel ───
   appRestoredSession: '🔄 Đã khôi phục phiên làm việc trước ("{key}") — tab trước đó bị đóng/cho ngủ. Muốn bắt đầu card khác thì cứ Import như thường; muốn xuất PNG thì import lại ảnh gốc.',
+  // (bug 226) Tự ghép nốt các mục đủ chunk mà chưa kịp ghép trước khi tab bị giết.
+  appAutoJoined: '🧩 Tự ghép lại {count} mục đã đủ chunk nhưng chưa kịp ghép trước khi tab bị đóng — bớt {han} chữ Hán so với trước, không phải bấm Ghép lại bằng tay.',
 
   ccSlotRaw: 'Card Raw',
   ccSlotTranslated: 'Card Đã Dịch',

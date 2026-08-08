@@ -11,6 +11,8 @@ import { chunkCharsForField } from '../utils/chunking';
 import { RotateCcw, AlertTriangle, CheckCircle2, Clock, ArrowLeftRight, BarChart3, Ban, Search, X, Copy, Check, Eye, Wand2, Zap, Brain, Download, Filter } from 'lucide-react';
 import { countCjkText } from '../utils/cjk';
 import { TranslatedTextarea } from './TranslatedTextarea';
+// (bug 223) Thu hoi blob URL SAU khi trinh duyet doc xong - revoke ngay sau click lam hut file.
+import { revokeSoon } from '../utils/downloadFile';
 
 const RAGDebugPanel = lazy(() => import('./RAGDebugPanel'));
 
@@ -324,7 +326,7 @@ function ChunkStatusAndResume({
     a.href = url;
     a.download = fileName;
     a.click();
-    URL.revokeObjectURL(url);
+    revokeSoon(url);
   };
 
   const renderDetailsButton = () => {

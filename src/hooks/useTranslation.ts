@@ -33,6 +33,12 @@ import { detectEjsCard, extractEjsEntryNames, extractEjsKeywords, aiTranslateEjs
 import { isEjsProseField, maskEjsCode, unmaskEjsCode, countEjsBlocks } from '../utils/ejsSegmenter';
 import { isLikelyJsScript, jsParseErrorAny, isImportOnlyScript, hasRealJsSignal, jsErrorFingerprint } from '../utils/scriptSafety';
 import { planTargetedChunkRetry, mergeChunkProgress } from '../utils/chunkRetryPlan';
+// (bug 226) Vá gộp: gom mọi vùng còn chữ Hán vào MỘT lượt gọi thay vì dịch lại từng cell.
+import {
+  planFieldResidualPatch, patchEligibility, buildPatchJob, buildResidualPatchPrompt,
+  parseResidualPatchReply, applyResidualPatches, type FieldResidualPlan,
+} from '../utils/residualPatch';
+import { joinChunks } from '../utils/chunkAudit';
 import { chunkCharsForField } from '../utils/chunking';
 // (bug 211) Chốt an toàn CHUNG cho mọi đường dịch lại + bộ gom "mục chưa đạt".
 import { finalizeRetryTranslation } from '../utils/retryGuards';
@@ -41,7 +47,7 @@ import { collectProblemFields } from '../utils/problemFields';
 // (bug 219) Dịch lại không bao giờ được làm tệ hơn bản đang có.
 import { judgeRetryResult, regressionMessage } from '../utils/retryRegression';
 // (bug 221) Giữ tab sống khi Edge muốn cho nó đi ngủ.
-import { startKeepAlive, stopKeepAlive } from '../utils/keepAlive';
+import { startKeepAlive, stopKeepAlive, measureKeepAliveDbfs, CHROMIUM_SILENCE_DBFS } from '../utils/keepAlive';
 
 /* ─── (bug 205) Wake lock trong lúc dịch ───
  * Edge/Chrome cho tab nền "ngủ" rất hăng khi máy tắt màn hình — user để tool chạy ngầm vài chục
@@ -2077,7 +2083,24 @@ export function useTranslation() {
     // (bug 205) Giữ màn hình thức suốt lượt dịch — tab nền + màn hình tắt là combo bị Edge cho
     // ngủ nhiều nhất. Nhả ở pause/cancel/kết thúc.
     void acquireWakeLock();
-    startKeepAlive();   // (bug 221) tab phat am thanh cam => Edge khong cho no ngu/discard
+    startKeepAlive();   // (bug 221) tab phat am thanh => Edge khong cho no ngu/discard
+    // (bug 225) Bản 221 phát ĐÚNG 0 nên trình duyệt không tính là đang phát, thanh địa chỉ
+    // không hiện biểu tượng loa, và tab vẫn bị ngủ — hỏng mà không ai biết. Nay ĐO lại chính
+    // dòng ra rồi báo con số, để lời hứa "đang giữ tab" có bằng chứng đối chiếu được.
+    setTimeout(() => {
+      const db = measureKeepAliveDbfs();
+      if (db === null) {
+        store.addLog('warning',
+          '🔇 Không bật được dòng âm thanh giữ tab. Trình duyệt có thể cho tab ngủ khi bạn sang tab khác — hãy để tab này hiện trên màn hình.');
+      } else if (db > CHROMIUM_SILENCE_DBFS) {
+        store.addLog('info',
+          `🔊 Đang phát dòng âm thanh giữ tab ở mức ${db.toFixed(0)} dBFS (tai người không nghe được). `
+          + 'Thanh địa chỉ sẽ hiện biểu tượng loa — đó là dấu hiệu Edge sẽ không cho tab ngủ.');
+      } else {
+        store.addLog('warning',
+          `🔇 Dòng âm thanh giữ tab quá nhỏ (${db.toFixed(0)} dBFS, cần trên ${CHROMIUM_SILENCE_DBFS}) — trình duyệt sẽ coi tab là im lặng và vẫn có thể cho ngủ.`);
+      }
+    }, 400);
 
     // Bump the run token: any older loop still alive will see runIdRef change and bail
     // out at its next checkpoint, so two loops can never run concurrently.
@@ -3912,6 +3935,91 @@ export function useTranslation() {
   }, [store]);
 
   /**
+   * ═══ (bug 226) VÁ GỘP: gom mọi vùng còn chữ Hán vào MỘT lượt gọi ═══
+   *
+   * User: "các vùng lỗi phân bố đồng đều ở 21 chunk, vì vậy AI bắt buộc phải call dịch lại 21
+   * chunk… nên có 1 quy trình quét và dò nhanh khi rà những lỗi dưới 1k chữ Hán và gộp chung
+   * nó lại thành 1 khối, dịch cả khối đó rồi phân phối về lại địa chỉ ban đầu."
+   *
+   * Đúng chỗ đau: `armTargetedCjkResume` làm việc theo ĐƠN VỊ CELL, nên 150 chữ Hán rải đều
+   * trên 21 cell là 21 cell đều "có Hán" ⇒ 21 lượt gọi, mỗi lượt gửi hơn chục nghìn ký tự để
+   * sửa bảy chữ. Ở đây đơn vị là VÙNG: khoanh từng cụm kèm địa chỉ, gộp hết vào một lượt, rồi
+   * dán trả về đúng chỗ. Không đủ điều kiện (sót quá nhiều, quá nhiều vùng, AI trả hỏng) thì
+   * trả về false và đường cũ chạy tiếp — không bao giờ tệ hơn hiện trạng.
+   */
+  const residualPatchPass = useCallback(async (paths: string[]): Promise<number> => {
+    const st = useStore.getState();
+    const fields = st.fields.filter(f => paths.includes(f.path) && !f.keptOriginalOnPurpose);
+    const plans = fields
+      .map(f => planFieldResidualPatch(f))
+      .filter((p): p is FieldResidualPlan => p !== null);
+
+    const notEligible = patchEligibility(plans);
+    if (notEligible) {
+      if (plans.length) store.addLog('info', `🧷 Không dùng lối vá gộp: ${notEligible}.`);
+      return 0;
+    }
+
+    const items = buildPatchJob(plans);
+    const totalHan = plans.reduce((s, p) => s + p.totalHan, 0);
+    store.addLog('info',
+      `🧷 Vá gộp: gom ${items.length} vùng còn sót (${totalHan} chữ Hán) của ${plans.length} mục vào MỘT lượt gọi `
+      + `— thay vì dịch lại từng phần lớn.`);
+
+    const prompt = buildResidualPatchPrompt(items, st.translationConfig.targetLanguage);
+    let reply: string;
+    try {
+      reply = await callProvider(
+        st.proxy,
+        'Bạn là biên dịch viên. Chỉ trả về các thẻ <m id="..">…</m>, không thêm lời nào khác.',
+        prompt,
+        abortRef.current?.signal,
+        undefined,
+        { label: 'Vá chữ Hán sót', charCount: prompt.length, preferSecondary: true },
+      );
+    } catch (e) {
+      store.addLog('warning', `🧷 Lượt vá gộp lỗi (${(e as Error).message}) — quay về dịch lại từng phần.`);
+      return 0;
+    }
+
+    const replies = parseResidualPatchReply(reply);
+    if (replies.size === 0) {
+      store.addLog('warning', '🧷 Lượt vá gộp không đọc được mẩu nào từ AI — quay về dịch lại từng phần.');
+      return 0;
+    }
+
+    let fixedFields = 0;
+    for (const plan of plans) {
+      const f = useStore.getState().fields.find(x => x.path === plan.path);
+      if (!f) continue;
+      const res = applyResidualPatches(f, items, replies, cells => joinChunks(cells, f.original));
+      if (res.applied === 0) continue;
+
+      // (bug 203) Chốt cú pháp: vá tại chỗ mà làm vỡ script thì thà không vá. Chỉ xét khi bản
+      // TRƯỚC khi vá vốn đã parse sạch — bản vốn đã vỡ thì không đổ lỗi cho lượt vá này được.
+      const before = f.translated ?? '';
+      const after = res.translated ?? before;
+      if (isLikelyJsScript(f.original) && jsParseErrorAny(before) === null && jsParseErrorAny(after) !== null) {
+        store.addLog('warning', `🧷 ${f.label}: bản vá làm vỡ cú pháp — BỎ nguyên lượt vá của mục này, giữ bản cũ.`);
+        continue;
+      }
+
+      store.updateField(plan.path, {
+        translated: after,
+        ...(res.completedChunks ? { completedChunks: res.completedChunks } : {}),
+        status: 'done',
+        error: undefined,
+      });
+      fixedFields++;
+      const rejectNote = res.rejected.length ? ` · bỏ ${res.rejected.length} mẩu (${res.rejected[0].why})` : '';
+      store.addLog('success', `🧷 ${f.label}: vá ${res.applied}/${plan.spans.length} vùng${rejectNote}.`);
+    }
+
+    if (fixedFields > 0) store.saveTranslationCache();
+    return fixedFields;
+  }, [store]);
+
+  /**
    * ═══ (User 2026 — việc 80) QUÉT CHỮ TRUNG CÒN SÓT SAU KHI DỊCH → TỰ DỊCH LẠI ═══
    *
    * Guard trong vòng dịch chỉ chặn theo TỶ LỆ sống sót (>35%, và nguồn phải ≥20 chữ Hán) — nó
@@ -3955,6 +4063,24 @@ export function useTranslation() {
       }
       if (hits.length > 10) store.addLog('info', `   … và ${hits.length - 10} mục nữa`);
 
+      // (bug 226) THỬ LỐI VÁ GỘP TRƯỚC. Sót lẻ vài trăm chữ rải khắp nơi là ca thường gặp nhất
+      // sau một lượt dịch dài, và cũng là ca mà lối cũ tốn kém nhất: mỗi mục còn một chữ Hán
+      // cũng kéo theo nguyên vòng dịch lại. Vá gộp xử xong thì vòng dưới không còn việc.
+      const patchedFields = await residualPatchPass(hits.map(h => h.path));
+      if (patchedFields > 0) {
+        totalFixed += patchedFields;
+        const left = scanFieldsForResidualCjk(useStore.getState().fields, { cssCjkHandling: cssMode })
+          .filter(h => !kept.has(h.path));
+        if (left.length === 0) {
+          store.addLog('success', '✅ Vá gộp xong: không còn chữ Hán sót, KHÔNG phải dịch lại phần nào.');
+          store.saveTranslationCache();
+          return totalFixed;
+        }
+        store.addLog('info', `🩹 Sau vá gộp còn ${left.length} mục — những mục này đi đường dịch lại như cũ.`);
+        hits.length = 0;
+        hits.push(...left);
+      }
+
       // (bug 211) SONG SONG qua pool thay vì nối đuôi từng mục: sweep cũ chạy `for … await`
       // nên lúc còn vài chục mục sót, cả dàn lane API ngồi không nhìn MỘT call chạy — đúng
       // đoạn "phí thời gian" user tả. retranslateField tự quản controller theo path nên chạy
@@ -3986,7 +4112,7 @@ export function useTranslation() {
       store.addLog('success', `✅ Quét chữ Trung sót: đã dịch lại ${totalFixed} mục, giờ sạch hoàn toàn.`);
     }
     return totalFixed;
-  }, [store, retranslateField, armTargetedCjkResume, checkAbort, waitForPause]);
+  }, [store, retranslateField, armTargetedCjkResume, residualPatchPass, checkAbort, waitForPause]);
 
   // startTranslation được khai báo TRƯỚC hàm này nên không gọi thẳng được → đi qua ref.
   useEffect(() => { residualSweepRef.current = residualCjkSweep; }, [residualCjkSweep]);

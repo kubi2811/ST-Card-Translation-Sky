@@ -149,3 +149,79 @@ export function summarizeAudit(a: ChunkAudit): string {
   const parts = [...byKind.entries()].map(([k, n]) => `${n} ${label[k]}`);
   return `${a.suspectIndices.length}/${a.total} chunk cần xem lại (${parts.join(', ')}) — chunk số ${a.suspectIndices.map(i => i + 1).join(', ')}.`;
 }
+
+/* ═══════ (bug 226) TỰ GHÉP LẠI SAU KHI TAB BỊ GIẾT GIỮA KHÂU GHÉP ═══════
+ *
+ * User: "nếu trong quá trình ghép lại 21/21 chunk đã được duyệt tự động mà bị tắt do lỗi tự
+ * động ngắt kết nối thì việc ghép sẽ không bao giờ được hoàn thành tự động (tool sẽ lấy bản
+ * gốc và bê y nguyên qua, từ đó báo lỗi 30k chữ Hán chưa được dịch), tuy nhiên bản dịch thực
+ * chất vẫn còn và được lưu trong bộ nhớ. Lúc này bấm nút ghép lại thủ công thì từ 30k chữ Hán
+ * xuống còn 100-200."
+ *
+ * Bản vá 222 đã lo ca "khâu hậu xử lý ném lỗi" — `translateText` không ném nữa khi đã đủ chunk.
+ * Nhưng nó không lo được ca này: tab bị TRÌNH DUYỆT giết, không có mã nào của tool chạy để mà
+ * cứu. Mở lại, `completedChunks` còn nguyên trong bộ nhớ đã lưu, còn `translated` thì vẫn là
+ * bản gốc — và bộ quét chữ Hán đọc đúng cái bản gốc ấy rồi kết luận "chưa dịch 30k chữ".
+ *
+ * Nên phép ghép phải chạy lại ở LÚC MỞ LẠI PHIÊN, tự động, bằng đúng `joinChunks` mà nút thủ
+ * công dùng. Điều kiện nhận rất chặt — chỉ ghép khi chắc chắn TỐT HƠN thứ đang có:
+ *   • đủ cell, không cell nào rỗng;
+ *   • và bản ghép hoặc thay cho chỗ trống, hoặc thay cho bản gốc bê nguyên, hoặc ít chữ Hán
+ *     hơn hẳn bản đang giữ.
+ * Không thoả thì để nguyên: thà người dùng bấm tay còn hơn tự động ghi đè bản đang tốt.
+ */
+
+/** Mục tối thiểu mà bộ tự-ghép cần — khai hẹp để test khỏi dựng cả TranslationField. */
+export interface JoinableField {
+  path: string;
+  label: string;
+  original: string;
+  translated?: string;
+  completedChunks?: string[];
+  totalChunks?: number;
+  keptOriginalOnPurpose?: boolean;
+}
+
+export interface AutoJoinPlan {
+  path: string;
+  label: string;
+  joined: string;
+  /** Số chữ Hán trước / sau khi ghép — để log nói được con số thật. */
+  hanBefore: number;
+  hanAfter: number;
+  reason: 'chưa có bản dịch' | 'đang là bản gốc' | 'bản ghép sạch hơn';
+}
+
+/**
+ * Lập danh sách mục nên tự ghép. KHÔNG tự ghi — caller quyết định, để test kiểm được phép
+ * quyết định tách khỏi việc chạm vào store.
+ */
+export function planAutoJoin(fields: JoinableField[]): AutoJoinPlan[] {
+  const out: AutoJoinPlan[] = [];
+  for (const f of fields || []) {
+    if (f.keptOriginalOnPurpose) continue;              // giữ nguyên bản gốc là CÓ CHỦ Ý
+    const cells = f.completedChunks;
+    const total = f.totalChunks ?? cells?.length ?? 0;
+    if (!cells?.length || total <= 1 || cells.length !== total) continue;
+    if (cells.some((c) => !c || !c.trim())) continue;   // còn ô trống ⇒ chưa đủ để ghép
+
+    const joined = joinChunks(cells, f.original);
+    if (!joined.trim()) continue;
+
+    const cur = f.translated ?? '';
+    const hanAfter = countHanForAudit(joined);
+    let reason: AutoJoinPlan['reason'] | null = null;
+    if (!cur.trim()) reason = 'chưa có bản dịch';
+    else if (cur === f.original) reason = 'đang là bản gốc';
+    else if (countHanForAudit(cur) > hanAfter) reason = 'bản ghép sạch hơn';
+    if (!reason) continue;
+
+    out.push({ path: f.path, label: f.label, joined, hanBefore: countHanForAudit(cur), hanAfter, reason });
+  }
+  return out;
+}
+
+/** Đếm chữ Hán cho phép so sánh trên — dùng chung thước với phần còn lại của file. */
+function countHanForAudit(s: string): number {
+  return ((s || '').match(/[一-鿿㐀-䶿]/g) || []).length;
+}

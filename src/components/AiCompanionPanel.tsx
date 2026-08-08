@@ -27,6 +27,8 @@ import { MVU_SCHEMA_GENERATION_PROMPT, MVU_RULES_GENERATION_PROMPT } from '../ut
 import { MVU_KNOWLEDGE_BASE, type MvuDoc } from '../utils/mvuKnowledgeBase';
 import { parseAiActions, executeAction, describeAction, type AiAction, type ActionResult } from '../utils/aiActions';
 import { analyzeReplaceString, getStructureSummary } from '../utils/regexInjector';
+// (bug 223) Thu hoi blob URL SAU khi trinh duyet doc xong - revoke ngay sau click lam hut file.
+import { revokeSoon } from '../utils/downloadFile';
 
 /* ════════════════════════════════════════════════════════════════════
    TYPES
@@ -549,7 +551,7 @@ const CodeSection = memo(({ language, code }: { language: string; code: string }
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    revokeSoon(url);
   };
 
   const handleAddToLorebook = () => {
@@ -2963,7 +2965,7 @@ function MemoryPanelModal({ onClose }: { onClose: () => void }) {
     const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
     const a = document.createElement('a');
     a.href = url; a.download = `tro-ly-ai-ky-uc-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click(); URL.revokeObjectURL(url);
+    a.click(); revokeSoon(url);
   };
   const doImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];

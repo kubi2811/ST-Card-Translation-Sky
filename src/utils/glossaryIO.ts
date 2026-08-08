@@ -126,3 +126,99 @@ export const glossaryToJson = (list: GlossaryEntry[]): string =>
       .map(({ source, target }) => ({ source, target })),
     null, 2,
   );
+
+/* ─────────────────── (bug 223) CSV/TSV — từ điển sống ở Excel ─────────────────── */
+
+/**
+ * Bảng thuật ngữ trong đời thật hay nằm ở Excel/Sheets chứ không phải JSON: hai cột, gõ tay,
+ * chia nhau qua Zalo. Bắt user tự đổi sang JSON mới nhập được là dựng thêm một bức tường cho
+ * đúng cái việc lẽ ra phải dễ nhất. Nên bộ nạp đọc luôn cả CSV/TSV.
+ *
+ * Đọc CSV thủ công chứ không tách bằng `split(',')`: thuật ngữ có dấu phẩy bên trong là chuyện
+ * thường (`"Thanh Vân môn, chi nhánh Nam"`), tách thô là vỡ dòng.
+ */
+function splitDelimited(line: string, sep: string): string[] {
+  const cells: string[] = [];
+  let cur = '';
+  let inQuote = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuote) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; }   // "" bên trong = một dấu nháy thật
+        else inQuote = false;
+      } else cur += ch;
+    } else if (ch === '"') {
+      inQuote = true;
+    } else if (ch === sep) {
+      cells.push(cur); cur = '';
+    } else cur += ch;
+  }
+  cells.push(cur);
+  return cells.map((c) => c.trim());
+}
+
+/** Dấu phân cách của cả FILE, chọn theo dòng nào tách được nhiều cột nhất — Tab thắng nếu hoà. */
+function detectSeparator(lines: string[]): string {
+  let best = '\t';
+  let bestScore = 0;
+  for (const sep of ['\t', ',', ';', '|']) {
+    const score = lines.slice(0, 20)
+      .reduce((s, l) => s + (splitDelimited(l, sep).length >= 2 ? 1 : 0), 0);
+    if (score > bestScore) { bestScore = score; best = sep; }
+  }
+  return best;
+}
+
+const HEADER_WORDS = new Set([
+  'source', 'target', 'src', 'dst', 'zh', 'vi', 'en', 'cn', 'from', 'to', 'key', 'value',
+  'term', 'translation', 'original', 'translated', 'chinese', 'vietnamese',
+  'thuật ngữ', 'bản dịch', 'gốc', 'dịch', 'nguồn', 'đích',
+]);
+
+/** Đọc từ điển dạng bảng (CSV/TSV). Ném NO_ENTRIES nếu không moi được cặp nào. */
+export function parseGlossaryDelimited(text: string): GlossaryEntry[] {
+  const lines = String(text || '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (!lines.length) throw new Error('NO_ENTRIES');
+
+  const sep = detectSeparator(lines);
+  const out: GlossaryEntry[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const cells = splitDelimited(lines[i], sep);
+    if (cells.length < 2) continue;
+    const [source, target] = cells;
+    if (!source || !target) continue;
+    // Dòng tiêu đề: bỏ, nhưng CHỈ ở dòng đầu — giữa file mà có chữ "source" thì đó là dữ liệu.
+    if (i === 0 && HEADER_WORDS.has(source.toLowerCase()) && HEADER_WORDS.has(target.toLowerCase())) continue;
+    out.push({ source, target });
+  }
+  if (!out.length) throw new Error('NO_ENTRIES');
+  return out;
+}
+
+/**
+ * Cửa vào DUY NHẤT cho mọi nút "Nhập từ điển": thử JSON trước, không phải JSON thì đọc như bảng.
+ * Nhờ vậy user kéo thả file gì cũng được — .json xuất từ tool, .csv xuất từ Excel, .txt chép tay.
+ */
+export function parseGlossaryText(text: string): GlossaryEntry[] {
+  try {
+    return parseGlossaryJson(text);
+  } catch (e) {
+    // Hỏng vì KHÔNG phải JSON ⇒ còn cửa bảng. Là JSON nhưng rỗng ruột ⇒ báo luôn, đọc kiểu
+    // bảng chỉ ra rác (mỗi dòng JSON thành một "thuật ngữ").
+    if ((e as Error).message === 'NO_ENTRIES') throw e;
+    return parseGlossaryDelimited(text);
+  }
+}
+
+/** Xuất dạng CSV cho ai muốn mở bằng Excel. BOM để Excel không đọc sai tiếng Việt. */
+export const glossaryToCsv = (list: GlossaryEntry[]): string => {
+  const esc = (s: string) => (/[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
+  const rows = list
+    .filter((g) => (g.source || '').trim() || (g.target || '').trim())
+    .map((g) => `${esc(g.source || '')},${esc(g.target || '')}`);
+  return '﻿' + ['source,target', ...rows].join('\r\n') + '\r\n';
+};

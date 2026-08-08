@@ -139,6 +139,21 @@ const ui = {
   tcGlsSendBtn: 'To Script',
   tcGlsSendTip: 'Send this glossary to the Script Translate tab so names stay consistent between the card and its script.',
   tcGlsSendOk: 'Sent {count} entries to Script Translate.',
+  // (bug 226)
+  appAutoJoined: '🧩 Auto-joined {count} entries that had all their chunks but were never merged before the tab closed — {han} fewer Chinese characters, no need to press Rejoin by hand.',
+  // (bug 223) Glossary import / export
+  tcGlsImportBtn: 'Import',
+  tcGlsExportBtn: 'Export',
+  tcGlsImportTip: 'Load a glossary from a file. Accepts .json (all common layouts) and two-column .csv/.tsv/.txt from Excel. Existing entries are kept; only new ones are added.',
+  tcGlsExportTip: 'Download the glossary as JSON — re-importable here or in the Script Translate tab.',
+  tcGlsExportCsvTip: 'Download as CSV to open in Excel/Google Sheets.',
+  tcGlsExportEmpty: 'The glossary is empty, nothing to export.',
+  tcGlsExportOk: 'Downloaded {count} glossary entries ({format}).',
+  tcGlsExportFail: 'The browser blocked the download. Allow pop-ups for this page and try again.',
+  tcGlsImportOk: 'Glossary import: {added} new · {dup} already present · {conflict} same term but different translation (kept the current one).',
+  tcGlsImportBadFormat: 'Could not read {name}: neither valid JSON nor a two-column table.',
+  tcGlsImportNoEntries: 'Read {name} but found no term pairs inside.',
+  tcGlsImportReadFail: 'Could not open the file {name}.',
   tcGlsSendEmpty: 'No usable entry to send (each row needs both sides filled).',
   // (bug 187) Script Translate overhaul: AST + mandatory dictionary + 4-check verifier
   scrTrAnalyzing: 'Analyzing data keys in the script…',

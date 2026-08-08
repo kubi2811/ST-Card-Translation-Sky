@@ -20,6 +20,8 @@ import { callProvider } from '../utils/apiClient';
 import type { ExportKeyMode, TranslationField } from '../types/card';
 import { useThrottledStore } from '../hooks/useThrottledStore';
 import { useIdleMemo } from '../hooks/useIdleMemo';
+// (bug 223) Thu hoi blob URL SAU khi trinh duyet doc xong - revoke ngay sau click lam hut file.
+import { revokeSoon } from '../utils/downloadFile';
 
 /** 1 dòng vấn đề trong báo cáo GỘP của "🩺 Kiểm tra tổng" (3 nguồn về chung 1 shape). */
 interface MergedIssue {
@@ -203,7 +205,7 @@ export default function ExportPanel() {
     a.href = url;
     a.download = worldInfoFileName(world);
     a.click();
-    URL.revokeObjectURL(url);
+    revokeSoon(url);
   };
   const repairBrokenEjs = () => {
     let reverted = 0;
@@ -266,7 +268,7 @@ export default function ExportPanel() {
     a.href = url;
     a.download = `${baseName}_bao-cao-dich.md`;
     a.click();
-    URL.revokeObjectURL(url);
+    revokeSoon(url);
   };
 
   const handleExport = () => {
@@ -305,7 +307,7 @@ export default function ExportPanel() {
     a.href = url;
     a.download = fileName;
     a.click();
-    URL.revokeObjectURL(url);
+    revokeSoon(url);
     // (bug 74) Chế độ worldbook vốn đã xuất ra file world rồi — không tải trùng thêm lần nữa.
     if (!isWorldbook) downloadLorebookSideFile(exportCard);
   };
@@ -503,7 +505,7 @@ export default function ExportPanel() {
     a.href = url;
     a.download = fileName;
     a.click();
-    URL.revokeObjectURL(url);
+    revokeSoon(url);
   };
 
   const handleExportAllRegex = () => {
@@ -519,7 +521,7 @@ export default function ExportPanel() {
     a.href = url;
     a.download = fileName;
     a.click();
-    URL.revokeObjectURL(url);
+    revokeSoon(url);
   };
 
   const handleExportSingleTavernHelper = (script: any, name: string) => {
@@ -535,7 +537,7 @@ export default function ExportPanel() {
     a.href = url;
     a.download = fileName;
     a.click();
-    URL.revokeObjectURL(url);
+    revokeSoon(url);
   };
 
   const handleExportAllTavernHelper = () => {
@@ -551,7 +553,7 @@ export default function ExportPanel() {
     a.href = url;
     a.download = fileName;
     a.click();
-    URL.revokeObjectURL(url);
+    revokeSoon(url);
   };
 
   return (

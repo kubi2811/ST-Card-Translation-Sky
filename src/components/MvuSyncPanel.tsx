@@ -41,6 +41,8 @@ import {
   ChevronDown,
   ChevronRight
 } from 'lucide-react';
+// (bug 223) Thu hồi blob URL SAU khi trình duyệt đọc xong — revoke ngay sau click làm hụt file.
+import { revokeSoon } from '../utils/downloadFile';
 
 // (bugNeedFix/5) Trần số DÒNG render mỗi nhóm từ điển. Dict MVU có thể vài nghìn biến; render hết
 // thành DOM khiến mở tab Chiến lược B / import dict đơ 10-50s. Phần vượt trần vẫn nằm trong dict
@@ -393,7 +395,7 @@ export default function MvuSyncPanel() {
     a.href = url;
     a.download = 'mvu_dictionary.json';
     a.click();
-    URL.revokeObjectURL(url);
+    revokeSoon(url);
   };
 
   const importDict = () => {

@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom';
 import { useState, useMemo, useRef, useCallback, useEffect, lazy, Suspense, memo } from 'react';
 import { useStore } from '../store';
 import { useThrottledStore } from '../hooks/useThrottledStore';
@@ -435,21 +436,65 @@ function ChunkStatusAndResume({
     </div>
   );
 
+  /**
+   * (bug 220) BẢNG CHUNK LÀ POPUP, KHÔNG NHÉT VÀO CỘT.
+   *
+   * User: "giao diện chỗ này nó bị chèn ép nhau quá cũng không xem được."
+   * Đúng vậy — bảng này nằm trong cột TRƯỜNG rộng chừng 180px, mà mỗi dòng phải chứa số chunk,
+   * hai khối RAW/BẢN DỊCH cạnh nhau và ba nút. Với entry 74 phần thì nó thành một cột chữ dựng
+   * đứng, mỗi ô một hai từ, cuộn trong khung cao 220px. Không đọc được, mà đây lại đúng là chỗ
+   * người dùng cần nhìn nhất khi đi soi xem chunk nào hỏng.
+   *
+   * Nay mở ra thành lớp phủ toàn màn hình: rộng hết bề ngang, RAW và BẢN DỊCH nằm hai cột thật,
+   * đóng bằng nút X hoặc bấm ra ngoài hoặc phím Esc.
+   */
   const renderDetailsList = () => {
     if (!expanded) return null;
-    return (
-      <div style={{
-        marginTop: '6px',
-        padding: '8px',
-        background: 'rgba(0,0,0,0.15)',
-        border: '1px solid var(--border-subtle)',
-        borderRadius: 'var(--radius-md)',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '8px',
-        maxHeight: '220px',
-        overflowY: 'auto'
-      }}>
+    // (bug 220) PHẢI đi qua portal ra thẳng <body>. Bảng field chạy ảo hoá bằng
+    // `transform: translateY(...)`, mà một tổ tiên có `transform` thì `position: fixed` KHÔNG
+    // còn neo vào khung nhìn nữa — nó neo vào chính hàng đó. Đo được: popup ra 383px thay vì
+    // ~930px, tức vẫn bị bóp trong cột như cũ, chỉ khác là nay nằm đè lên trang.
+    return createPortal((
+      <div
+        onClick={() => setExpanded(false)}
+        style={{
+          position: 'fixed', inset: 0, zIndex: 4000,
+          background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(2px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px',
+        }}
+      >
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            width: 'min(1200px, 96vw)', maxHeight: '88vh',
+            display: 'flex', flexDirection: 'column',
+            background: 'var(--bg-primary, #14161c)',
+            border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)',
+            boxShadow: '0 18px 50px rgba(0,0,0,0.5)',
+          }}
+        >
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '10px',
+            padding: '10px 14px', borderBottom: '1px solid var(--border-subtle)', flexShrink: 0,
+          }}>
+            <strong style={{ fontSize: '0.82rem' }}>{field.label}</strong>
+            <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+              {fmt(ui.feChunkDone, { done: completedCount, total: totalChunks })}
+            </span>
+            <span style={{ flex: 1 }} />
+            <button
+              onClick={() => setExpanded(false)}
+              style={{
+                padding: '3px 10px', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer',
+                background: 'transparent', color: 'var(--text-secondary)',
+                border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)',
+              }}
+            >✕</button>
+          </div>
+          <div style={{
+            padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: '8px',
+            overflowY: 'auto', flex: 1,
+          }}>
         {Array.from({ length: totalChunks }).map((_, idx) => {
           const raw = field.rawChunks?.[idx] || '';
           const trans = field.completedChunks?.[idx] || '';
@@ -534,7 +579,7 @@ function ChunkStatusAndResume({
                     fontFamily: 'monospace',
                     whiteSpace: 'pre-wrap',
                     wordBreak: 'break-word',
-                    maxHeight: '50px',
+                    maxHeight: '160px',
                     overflowY: 'auto',
                     color: 'var(--text-secondary)'
                   }}>
@@ -553,7 +598,7 @@ function ChunkStatusAndResume({
                     fontFamily: 'monospace',
                     whiteSpace: 'pre-wrap',
                     wordBreak: 'break-word',
-                    maxHeight: '50px',
+                    maxHeight: '160px',
                     overflowY: 'auto',
                     color: isDone ? 'var(--text-primary)' : 'var(--text-muted)'
                   }}>
@@ -564,8 +609,10 @@ function ChunkStatusAndResume({
             </div>
           );
         })}
+          </div>
+        </div>
       </div>
-    );
+    ), document.body);
   };
 
   // If status is translating, show current progress

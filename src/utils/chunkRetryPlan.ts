@@ -218,3 +218,41 @@ export function decideChunkResume(
   }
   return { mode: 'resume', cells: normalizeChunkCells(prevCells, total), reason: 'số mảnh trùng khít' };
 }
+
+/**
+ * (bug 220) KHOANH CHUNK HỎNG THEO MỘT PHÉP THỬ BẤT KỲ.
+ *
+ * User: "tớ dịch tavern helper lớn nó bị lặp nghi bịa AI giống cái này 74 chunk, sai có 1 chunk
+ * mà nó cứ dịch đi dịch lại toàn bộ 74 chunk."
+ *
+ * Bản 207 đã dạy engine khoanh vùng, nhưng chỉ cho HAI cổng: vỡ cú pháp và còn tiếng Trung.
+ * Các cổng còn lại — nghi bịa code, lệch khối EJS, bản dịch quá ngắn — vẫn trả 'retry' trần,
+ * và "retry" của một field đã đủ ô nghĩa là gọi AI lại TỪ ĐẦU cho từng ô một. Với bundle
+ * webpack 765KB chia 74 mảnh thì một lỗi ở mảnh thứ 40 kéo theo 74 lượt gọi, lặp tới khi hết
+ * lượt thử. Tiền và thời gian đổ vào 73 mảnh vốn đã đúng.
+ *
+ * Hàm này để mọi cổng đều khoanh được, bằng cách nhận VỊ TỪ thay vì tự biết cách kiểm: caller
+ * (nơi đã có sẵn bộ dò của cổng đó) truyền vào phép thử, ở đây chỉ lo phần đối chiếu từng cặp
+ * ô gốc/ô dịch và bỏ qua ô rỗng. Nhờ vậy module này không phải kéo theo bộ dò nào.
+ */
+export function findChunksFailing(
+  rawChunks: string[] | undefined,
+  doneChunks: string[] | undefined,
+  isBad: (raw: string, done: string, index: number) => boolean,
+): number[] {
+  if (!rawChunks?.length || !doneChunks?.length || rawChunks.length !== doneChunks.length) return [];
+  const out: number[] = [];
+  for (let i = 0; i < rawChunks.length; i++) {
+    const raw = rawChunks[i];
+    const done = doneChunks[i];
+    if (!raw?.trim() || !done?.trim()) continue;
+    // Ô trả về NGUYÊN bản gốc là ô chốt an toàn giữ lại — không phải ô hỏng.
+    if (done === raw) continue;
+    try {
+      if (isBad(raw, done, i)) out.push(i);
+    } catch {
+      /* bộ dò ném thì coi như không kết luận được — thà bỏ sót còn hơn xoá nhầm ô đang tốt */
+    }
+  }
+  return out;
+}

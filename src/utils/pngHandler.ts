@@ -106,15 +106,30 @@ export const extractCharaFromPNG = async (file: File): Promise<{json: string, da
 export const embedCharaToPNG = async (originalDataUrl: string | ArrayBuffer, newJson: string): Promise<string> => {
     let uint8: Uint8Array;
     if (typeof originalDataUrl === 'string') {
-        // 1. extract base64 from dataUrl
-        const commaIdx = originalDataUrl.indexOf(',');
-        if (commaIdx === -1) {
-            throw new Error('Invalid PNG data URL: missing base64 payload (no comma separator)');
+        // (bug 228) Ảnh thẻ KHÔNG phải lúc nào cũng là `data:` URL.
+        //
+        // Store giữ ảnh dưới dạng `blob:` URL (xem `_blobUrl`) cho nhẹ bộ nhớ, và sau khi khôi
+        // phục phiên thì `_pngArrayBuffer` không còn nên đường xuất rơi đúng vào chuỗi `blob:`.
+        // Hàm này trước đây chỉ biết cắt ở dấu phẩy của `data:` URL, gặp `blob:` là không thấy
+        // dấu phẩy nào và ném "Invalid PNG data URL" — người dùng chỉ thấy một alert tiếng Anh
+        // cụt lủn rồi đành tải JSON. Đó chính là "gần như không thể xuất card có ảnh".
+        //
+        // Nay cứ là URL (blob:/http:/https:) thì đọc thẳng ra ArrayBuffer; chỉ `data:` mới đi
+        // đường giải base64 như cũ.
+        if (/^(blob:|https?:)/i.test(originalDataUrl)) {
+            const res = await fetch(originalDataUrl);
+            if (!res.ok) throw new Error(`Không đọc được ảnh gốc (HTTP ${res.status}).`);
+            uint8 = new Uint8Array(await res.arrayBuffer());
+        } else {
+            const commaIdx = originalDataUrl.indexOf(',');
+            if (commaIdx === -1) {
+                throw new Error('Invalid PNG data URL: missing base64 payload (no comma separator)');
+            }
+            const b64 = originalDataUrl.slice(commaIdx + 1);
+            const binStr = atob(b64);
+            uint8 = new Uint8Array(binStr.length);
+            for(let i=0; i<binStr.length; i++) uint8[i] = binStr.charCodeAt(i);
         }
-        const b64 = originalDataUrl.slice(commaIdx + 1);
-        const binStr = atob(b64);
-        uint8 = new Uint8Array(binStr.length);
-        for(let i=0; i<binStr.length; i++) uint8[i] = binStr.charCodeAt(i);
     } else {
         uint8 = new Uint8Array(originalDataUrl);
     }

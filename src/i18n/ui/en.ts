@@ -139,6 +139,12 @@ const ui = {
   tcGlsSendBtn: 'To Script',
   tcGlsSendTip: 'Send this glossary to the Script Translate tab so names stay consistent between the card and its script.',
   tcGlsSendOk: 'Sent {count} entries to Script Translate.',
+  // (bug 228)
+  epPngAttachBtn: 'Pick the original image, then export PNG',
+  epPngAttachTip: 'The card image is no longer in memory (usually after the tab was closed and the session restored). Pick the original PNG and the tool will embed the translation into it and download it right away.',
+  epPngNoImage: 'No original image found for this card. Pick the original PNG to export with the image.',
+  epPngOk: 'Exported the card as PNG with its image.',
+  epPngFail: 'PNG export failed: {why}. Try picking the original PNG file.',
   // (bug 226)
   appAutoJoined: '🧩 Auto-joined {count} entries that had all their chunks but were never merged before the tab closed — {han} fewer Chinese characters, no need to press Rejoin by hand.',
   // (bug 223) Glossary import / export

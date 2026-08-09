@@ -32,7 +32,7 @@ import { unifyCrossStrategyDicts } from '../utils/crossStrategySync';
 import { detectEjsCard, extractEjsEntryNames, extractEjsKeywords, aiTranslateEjsEntries, validateEjsSync, autoFixEjsEntryNames, autoFixEjsKeywords, enforceEjsEntryName, enforceEjsCovariance, enforceEjsKeywordCasing, autoFixEjsKeywordsExtended, enforceEjsDictConsistency } from '../utils/ejsSync';
 import { isEjsProseField, maskEjsCode, unmaskEjsCode, countEjsBlocks } from '../utils/ejsSegmenter';
 import { isLikelyJsScript, jsParseErrorAny, isImportOnlyScript, hasRealJsSignal, jsErrorFingerprint } from '../utils/scriptSafety';
-import { planTargetedChunkRetry, mergeChunkProgress, normalizeChunkCells } from '../utils/chunkRetryPlan';
+import { planTargetedChunkRetry, mergeChunkProgress, normalizeChunkCells, findChunksFailing } from '../utils/chunkRetryPlan';
 // (bug 226) Vá gộp: gom mọi vùng còn chữ Hán vào MỘT lượt gọi thay vì dịch lại từng cell.
 import {
   planFieldResidualPatch, patchEligibility, buildPatchJob, buildResidualPatchPrompt,
@@ -1072,6 +1072,9 @@ export function useTranslation() {
           if (softGate('short',
             `⚠️ Dịch thiếu nghiêm trọng: ${transLen}/${origLen} chars (${pct}% < ${(minRatio * 100).toFixed(0)}%). Auto-retry...`,
             `vẫn ngắn (${pct}%)`, 1) === 'retry') {
+            // (bug 220) Khoanh o nao that su ngan bat thuong, thay vi dich lai ca field.
+            clearSuspectChunksBy('phần dịch thiếu',
+              (r, d) => d.length < r.length * minRatio);
             await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
             return 'retry';
           }
@@ -1117,6 +1120,40 @@ export function useTranslation() {
         return plan.suspects.length;
       };
 
+      /**
+       * (bug 220) Khoanh vùng cho các cổng KHÔNG có sẵn kiểu trong planTargetedChunkRetry.
+       *
+       * User: "sai có 1 chunk mà nó cứ dịch đi dịch lại toàn bộ 74 chunk." Đúng vậy — bản 207
+       * chỉ dạy hai cổng (cú pháp, tiếng Trung) biết khoanh; cổng nghi-bịa-code, lệch khối EJS
+       * và bản-dịch-quá-ngắn vẫn trả 'retry' trần, mà 'retry' của field đã đủ ô nghĩa là gọi
+       * lại AI cho TỪNG ô. Nay cổng nào cũng đưa được phép thử của mình vào đây.
+       *
+       * Chốt an toàn: chỉ xoá khi khoanh được ÍT HƠN 60% số ô. Khoanh gần hết nghĩa là phép thử
+       * đang nhìn cả field chứ không nhìn từng ô — lúc đó xoá là mất hết bản dịch mà chẳng nhắm
+       * trúng gì; thà đi đường cũ.
+       */
+      // Khai bao dang `function` CO CHU Y: no duoc cau hoi len dau khoi, nen cong "dich thieu"
+      // nam PHIA TREN cho nay van goi duoc. Dung `const` thi TS bao dung-truoc-khi-khai-bao.
+      function clearSuspectChunksBy(
+        label: string,
+        isBad: (raw: string, done: string) => boolean,
+      ): number {
+        const fresh = useStore.getState().fields.find(f => f.path === field.path);
+        const raws = fresh?.rawChunks;
+        const dones = fresh?.completedChunks;
+        if (!fresh || !raws?.length || !dones?.length || raws.length !== dones.length) return 0;
+        if (dones.some(c => !c)) return 0;   // còn ô trống → đường resume sẵn có tự lo
+        const suspects = findChunksFailing(raws, dones, isBad);
+        if (suspects.length === 0 || suspects.length > Math.floor(raws.length * 0.6)) return 0;
+        const cur = [...dones];
+        for (const i of suspects) cur[i] = '';
+        store.updateField(field.path, { completedChunks: cur, failedChunkIndex: undefined });
+        store.addLog('info',
+          `🎯 ${field.label}: khoanh được ${label} ở phần ${suspects.map(i => i + 1).join(', ')} — `
+          + `chỉ dịch lại ${suspects.length}/${raws.length} phần, ${raws.length - suspects.length} phần đã tốt giữ nguyên.`);
+        return suspects.length;
+      }
+
       // Schema CJK Validation: Ensure schema doesn't have any Chinese
       // Strip URLs before checking — CJK in URL paths (e.g. 骰子系统 in import paths) is intentional
       const isTargetNonCJK = !(/chinese|中文|japanese|日本語|korean|한국어/i.test(store.translationConfig.targetLanguage));
@@ -1155,6 +1192,9 @@ export function useTranslation() {
               `⚠️ Con chu Han trong Schema (${field.label}). Dang thu lai…`,
               'vẫn còn chữ Hán trong Schema');
             if (gate === 'retry') {
+              // (bug 220) Schema thuong khong chia chunk — co chia thi chi dich lai o con Han.
+              clearSuspectChunksBy('phần còn chữ Hán',
+                (_r, d) => /[一-鿿㐀-䶿]/.test(stripUrlsForCjkCheck(d)));
               await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
               return 'retry';
             }
@@ -1217,6 +1257,9 @@ export function useTranslation() {
           if (softGate('ratio',
             `⚠️ Translation too short for ${field.label}: ${translated.length}/${field.original.length} chars (${(responseRatio * 100).toFixed(0)}% ratio). Auto-retrying...`,
             `bản dịch vẫn ngắn (${(responseRatio * 100).toFixed(0)}%)`, 1) === 'retry') {
+            // (bug 220) Chi dich lai o ngan bat thuong.
+            clearSuspectChunksBy('phần dịch quá ngắn',
+              (r, d) => d.length < r.length * ratio);
             await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
             return 'retry'; // Signal to retry
           } else {
@@ -1238,6 +1281,9 @@ export function useTranslation() {
           if (softGate(`ejs-blocks:${transBlocks}/${origBlocks}`,
             `⚠️ EJS lệch khối: ${field.label} có ${transBlocks}/${origBlocks} khối <%…%> → dịch lại để không vỡ JS…`,
             `vẫn lệch khối EJS (${transBlocks}/${origBlocks})`) === 'retry') {
+            // (bug 220) Chi dich lai o nao that su roi khoi <% %>.
+            clearSuspectChunksBy('phần lệch khối EJS',
+              (raw, done) => countEjsBlocks(raw) > 0 && countEjsBlocks(done) !== countEjsBlocks(raw));
             await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
             return 'retry';
           }
@@ -1349,6 +1395,14 @@ export function useTranslation() {
           if (softGate(`halluc:${why.replace(/\d+/g, '#')}`,
             `⚠️ ${label199} (${field.label}): ${why} → dịch lại (chỉ dịch chữ, không thêm code)…`,
             `vẫn ${why}`) === 'retry') {
+            // (bug 220) Khoanh dung o hong roi moi retry. Cung phep thu ay, nhung chay tren
+            // TUNG cap o goc/o dich — o nao lam lech ngoac hoac de lo khai bao la thi chi o do
+            // bi xoa. Bundle 74 manh sai 1 manh thi ton 1 luot goi, khong phai 74.
+            clearSuspectChunksBy('phần bị nghi bịa code', (raw, done) => {
+              const p = verifyCodeStructureParity(raw, done);
+              const inv = detectInventedDeclarations(raw, done);
+              return p.maxDiff >= 4 || (inv.length > 0 && p.maxDiff >= 1);
+            });
             await new Promise((r) => setTimeout(r, store.proxy.retryDelay || 1000));
             return 'retry';
           }

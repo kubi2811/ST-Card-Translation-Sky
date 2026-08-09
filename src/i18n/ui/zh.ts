@@ -137,6 +137,12 @@ const ui: UiKeys = {
   tcGlsSendBtn: '发送到脚本',
   tcGlsSendTip: '把此词典发送到"脚本翻译"标签，让卡片与其脚本中的名字保持一致。',
   tcGlsSendOk: '已发送 {count} 条到脚本翻译。',
+  // (bug 228)
+  epPngAttachBtn: '选择原图后导出 PNG',
+  epPngAttachTip: '卡片图片已不在内存中（通常发生在标签页关闭后恢复会话）。请重新选择原始 PNG，工具会把译文嵌入其中并立即下载。',
+  epPngNoImage: '找不到该卡片的原图。请选择原始 PNG 以便连图导出。',
+  epPngOk: '已导出带图片的 PNG 卡片。',
+  epPngFail: 'PNG 导出失败：{why}。请尝试重新选择原始 PNG 文件。',
   // (bug 226)
   appAutoJoined: '🧩 已自动合并 {count} 个分块齐全但在标签页关闭前未合并的条目——比之前少 {han} 个汉字，无需手动点击"重新合并"。',
   // (bug 223) 词典导入 / 导出

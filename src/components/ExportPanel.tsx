@@ -66,6 +66,8 @@ export default function ExportPanel() {
   const setJumpToFieldPath = useStore((s) => s.setJumpToFieldPath);
   const updateField = useStore((s) => s.updateField);
   const addLog = useStore((s) => s.addLog);
+  // (bug 228) Bao ket qua xuat PNG bang toast thay vi alert tieng Anh cut lun.
+  const addToast = useStore((s) => s.addToast);
   const { getExportCard } = useTranslation();
   const t = useT();
   const ui = useUi();
@@ -312,33 +314,59 @@ export default function ExportPanel() {
     if (!isWorldbook) downloadLorebookSideFile(exportCard);
   };
 
-  const handleExportPng = async () => {
-    if (!originalImage) return;
-    // Auto-save translation cache
+  /**
+   * (bug 228) Xuất PNG có ảnh.
+   *
+   * User: "gần như không thể xuất card có ảnh mà chỉ có thể tải xuống bản json của card."
+   * Ba chỗ hỏng nối nhau, và cả ba đều im lặng:
+   *   • ảnh trong store là `blob:` URL, mà bộ nhúng chỉ biết đọc `data:` URL ⇒ ném (đã sửa ở
+   *     pngHandler);
+   *   • `if (!originalImage) return;` — bấm nút không ra gì, không một dòng báo;
+   *   • báo lỗi là `alert('Failed to export PNG')` tiếng Anh cụt, không nói được vì sao.
+   * Nay: nhận thêm ảnh do người dùng gắn lại, và mọi ngả đều nói rõ chuyện gì xảy ra.
+   */
+  const handleExportPng = async (overrideImage?: ArrayBuffer) => {
     saveTranslationCache();
 
     const exportCard = getExportCard();
     if (!exportCard) return;
 
+    const imageData = overrideImage || _pngArrayBuffer || originalImage;
+    if (!imageData) {
+      addToast('info', ui.epPngNoImage);
+      return;
+    }
+
     try {
       const json = JSON.stringify(exportCard);
-      // Prefer _pngArrayBuffer if available (especially after reload), fallback to originalImage
-      const imageData = _pngArrayBuffer || originalImage;
       const dataUrl = await embedCharaToPNG(imageData, json);
-      
+
       const baseName = cardFileName.replace(/\.(json|png)$/i, '');
       const langSuffix = translationConfig.targetLanguage === 'Tiếng Việt' ? 'vi' : 'translated';
-      const fileName = `${baseName}_${langSuffix}.png`;
-
       const a = document.createElement('a');
       a.href = dataUrl;
-      a.download = fileName;
+      a.download = `${baseName}_${langSuffix}.png`;
+      a.style.display = 'none';
+      document.body.appendChild(a);
       a.click();
+      a.remove();
       downloadLorebookSideFile(exportCard);
+      addToast('success', ui.epPngOk);
     } catch (e) {
       console.error('Failed to export PNG:', e);
-      alert('Failed to export PNG');
+      addToast('error', fmt(ui.epPngFail, { why: (e as Error).message || 'không rõ' }));
     }
+  };
+
+  /** Người dùng gắn lại ảnh gốc rồi xuất luôn — lối thoát khi ảnh trong bộ nhớ đã mất. */
+  const attachImageAndExportPng = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onerror = () => addToast('error', fmt(ui.epPngFail, { why: `không đọc được ${file.name}` }));
+    reader.onload = () => { void handleExportPng(reader.result as ArrayBuffer); };
+    reader.readAsArrayBuffer(file);
   };
 
   // Reconstruct translated regex scripts
@@ -812,16 +840,38 @@ export default function ExportPanel() {
           {t.downloadJson}
         </button>
 
-        {originalImage && !isWorldbook && (
-          <button
-            className="btn btn-secondary"
-            onClick={handleExportPng}
-            disabled={phase === 'translating' || doneCount === 0}
-            style={{ width: '100%', background: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)', color: 'var(--text-primary)' }}
-          >
-            <ImageIcon size={16} />
-            {t.downloadPng || 'Download PNG'}
-          </button>
+        {/* (bug 228) Nút này TRƯỚC ĐÂY chỉ hiện khi còn `originalImage`. Sau khi khôi phục
+            phiên (tab bị đóng/cho ngủ) thì ảnh không còn trong bộ nhớ ⇒ nút biến mất hẳn, và
+            người dùng kết luận "chỉ tải được JSON" mà không có gì gợi ý phải làm sao. Nay nút
+            luôn ở đó; mất ảnh thì đổi thành ô gắn lại ảnh gốc rồi xuất luôn. */}
+        {!isWorldbook && (
+          (_pngArrayBuffer || originalImage) ? (
+            <button
+              className="btn btn-secondary"
+              onClick={() => void handleExportPng()}
+              disabled={phase === 'translating' || doneCount === 0}
+              style={{ width: '100%', background: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)', color: 'var(--text-primary)' }}
+            >
+              <ImageIcon size={16} />
+              {t.downloadPng || 'Download PNG'}
+            </button>
+          ) : (
+            <label
+              title={ui.epPngAttachTip}
+              style={{
+                width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+                padding: '9px 12px', cursor: doneCount === 0 ? 'not-allowed' : 'pointer', opacity: doneCount === 0 ? 0.5 : 1,
+                background: 'var(--bg-secondary)', border: '1px dashed var(--border-subtle)',
+                borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: '0.8rem', fontWeight: 600,
+              }}
+            >
+              <ImageIcon size={16} />
+              {ui.epPngAttachBtn}
+              <input type="file" accept="image/png,.png" style={{ display: 'none' }}
+                disabled={phase === 'translating' || doneCount === 0}
+                onChange={attachImageAndExportPng} />
+            </label>
+          )
         )}
 
         {/* 📄 Báo cáo dịch — tổng quan + danh sách vấn đề (Markdown tải về) */}

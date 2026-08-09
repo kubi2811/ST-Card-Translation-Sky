@@ -87,8 +87,28 @@ const uiLoaders: Record<UiLang, () => Promise<{ default: UiKeys }>> = {
   zh: () => import('./ui/zh'),
 };
 
-let _t: TranslationKeys | null = null;
-let _ui: UiKeys | null = null;
+/**
+ * Bộ chuỗi đã nạp, cất trên `globalThis` chứ KHÔNG phải biến module.
+ *
+ * Vì sao phải lách như vậy: `loadI18n()` chỉ được gọi ĐÚNG MỘT LẦN, từ `main.tsx`, trước lần
+ * render đầu. Nếu bộ chuỗi nằm ở biến module thì mỗi lần module này được chạy lại là nó về
+ * `null` — mà chẳng ai gọi `loadI18n()` lần nữa để dựng lại, nên `useT()` ở component nào
+ * render ngay sau đó sẽ ném "Chưa nạp".
+ *
+ * Module chạy lại lúc nào? Lúc Vite thay module nóng (HMR) trong khi phát triển: chuỗi module
+ * phía dưới file vừa sửa được nạp lại, còn `main.tsx` thì không. Đó chính là lỗi
+ * "[i18n] Chưa nạp: phải gọi loadI18n() trước khi render" đọc được trong console — nó CHỈ
+ * xuất hiện kèm dòng `[vite] hot updated`, không bao giờ xuất hiện ở một lượt tải trang sạch.
+ * Nên nó vô hại với người dùng, nhưng lại làm console đầy lỗi đỏ giả mỗi khi lập trình, che
+ * mất lỗi thật — và bịt nó chỉ tốn đúng mấy dòng này.
+ *
+ * `globalThis` sống lâu hơn module, nên bộ chuỗi nạp một lần là dùng được cho mọi bản sao của
+ * module. Chốt chặn "chưa nạp mà đã render" vẫn còn nguyên cho ca thật (quên gọi loadI18n).
+ */
+interface I18nStore { t: TranslationKeys | null; ui: UiKeys | null }
+const I18N_KEY = '__stMultiTools_i18n__';
+const _g = globalThis as unknown as Record<string, I18nStore | undefined>;
+const _store: I18nStore = _g[I18N_KEY] ?? (_g[I18N_KEY] = { t: null, ui: null });
 
 /** Nạp bộ chuỗi cho ngôn ngữ đang chọn. PHẢI await xong TRƯỚC khi render (xem main.tsx). */
 export async function loadI18n(lang: UiLang): Promise<void> {
@@ -96,18 +116,21 @@ export async function loadI18n(lang: UiLang): Promise<void> {
     legacyLoaders[resolveLocale(lang)](),
     uiLoaders[lang](),
   ]);
-  _t = legacy.default;
-  _ui = uiMod.default;
+  _store.t = legacy.default;
+  _store.ui = uiMod.default;
 }
 
 export function getT(): TranslationKeys {
-  if (!_t) throw new Error('[i18n] Chưa nạp: phải gọi loadI18n() trước khi render.');
-  return _t;
+  if (!_store.t) throw new Error('[i18n] Chưa nạp: phải gọi loadI18n() trước khi render.');
+  return _store.t;
 }
 export function getUi(): UiKeys {
-  if (!_ui) throw new Error('[i18n] Chưa nạp: phải gọi loadI18n() trước khi render.');
-  return _ui;
+  if (!_store.ui) throw new Error('[i18n] Chưa nạp: phải gọi loadI18n() trước khi render.');
+  return _store.ui;
 }
+
+/** Cho test: đã nạp bộ chuỗi chưa (không ném). */
+export function isI18nLoaded(): boolean { return !!_store.t && !!_store.ui; }
 
 /** Thay {key} trong chuỗi bằng giá trị. VD: fmt(ui.acRunning, { count: 3 }). */
 export function fmt(tpl: string, vars: Record<string, string | number>): string {

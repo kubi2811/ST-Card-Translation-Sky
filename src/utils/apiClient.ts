@@ -732,6 +732,33 @@ async function postTranslationResidualCheck(
   const origChineseCount = countChineseChars(original);
   if (origChineseCount < 3) return translated;
 
+  /**
+   * (bug 229e) KHÔNG ĐƯỢC GỬI CẢ TÀI LIỆU KHỔNG LỒ ĐI VIẾT LẠI.
+   *
+   * Bộ quét này làm một việc rất thô: nhét TOÀN BỘ bản dịch vào một lượt gọi và bảo AI "trả lại
+   * đầy đủ văn bản, dịch nốt mấy chữ Hán còn sót". Với entry vừa thì được. Với entry khổng lồ
+   * thì hỏng theo ba đường cùng lúc:
+   *   • bản dịch tiếng Việt của 714.000 ký tự gốc dài tới hơn 1,5 triệu ký tự — vượt xa cửa sổ
+   *     ngữ cảnh, nên lượt gọi hoặc trượt hoặc trả về bản CỤT;
+   *   • hạn chờ ở đây là `requestTimeout × 3` = 30 PHÚT, nên nó treo rất lâu mới chịu bỏ;
+   *   • lượt gọi này không truyền nhãn, nên bảng luồng chỉ hiện "Đang dịch…" — người dùng thấy
+   *     74/74 mảnh đã xong mà thanh trạng thái vẫn quay, không biết đang chờ cái gì.
+   *
+   * Đo được trên máy user: entry tavernHelper[6] dịch xong đủ 74/74 mảnh lúc 21:57, tới 22:12
+   * vẫn còn treo ở đúng lượt gọi này.
+   *
+   * Với entry lớn đã có đường TỐT HƠN HẲN và bị bỏ quên: bộ vá cục bộ (xem residualPatch.ts,
+   * bug 226) — gom đúng những vùng còn chữ Hán, dịch một lượt DUY NHẤT chỉ mấy vùng đó, rồi dán
+   * về đúng vị trí cũ theo offset. Nên ở đây chỉ cần lùi lại và nhường cho nó.
+   */
+  const MAX_WHOLE_DOC_REWRITE = 60_000;
+  if (translated.length > MAX_WHOLE_DOC_REWRITE) {
+    const con = countChineseChars(translated);
+    console.log(`[ResidualCheck] ${fieldName}: bản dịch ${translated.length} ký tự (> ${MAX_WHOLE_DOC_REWRITE}) — BỎ QUA lượt viết lại cả tài liệu`
+      + `${con > 0 ? `, còn ${con} chữ Hán để bộ vá cục bộ lo` : ', không còn chữ Hán nào'}.`);
+    return translated;
+  }
+
   let currentResult = translated;
 
   for (let retry = 0; retry < 2; retry++) {
@@ -789,7 +816,12 @@ ${fragmentList}${mvuBlock}`;
         ? AbortSignal.any([signal, controller.signal])
         : controller.signal;
 
-      const cleanedResult = await callProvider(config, cleanupSystem, cleanupUser, combinedSignal);
+      // (bug 229e) Có NHÃN: không nhãn thì bảng luồng chỉ hiện "Đang dịch…", người dùng thấy
+      // 74/74 mảnh đã xong mà vẫn còn một luồng quay, không biết nó đang làm gì.
+      const cleanedResult = await callProvider(config, cleanupSystem, cleanupUser, combinedSignal, undefined, {
+        label: `${fieldName} — quét chữ Hán còn sót (lượt ${retry + 1}/2)`,
+        charCount: maskedResult.length,
+      });
       clearTimeout(timeout);
 
       if (cleanedResult && cleanedResult.trim()) {

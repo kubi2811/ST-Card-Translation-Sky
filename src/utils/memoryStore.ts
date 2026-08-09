@@ -22,6 +22,17 @@ export interface MemorySource {
   part?: string;        // "PHẦN 2/9"
   path?: string;        // "lorebook[4].content"
   turnId?: string;
+  /**
+   * (bug 218) CUỘC TRÒ CHUYỆN ĐẺ RA KÝ ỨC NÀY.
+   *
+   * User dặn: "phải làm sao khi mà bỏ ghim hay xóa chat thì AI sẽ không nhớ". Muốn làm được thì
+   * phải truy ngược được ký ức về đúng cuộc trò chuyện — mà trước đây KHÔNG thể: bộ trích ký ức
+   * chỉ ghi `turnId: 'turn-' + số tin nhắn`, tức mọi cuộc trò chuyện đều đẻ ra `turn-7`, `turn-9`
+   * giống hệt nhau. Xoá một chat thì không có cách nào biết ký ức nào là của nó.
+   *
+   * Nay mỗi ký ức sinh từ chat đều mang `conversationId`; xem `revokeMemoriesOfConversation`.
+   */
+  conversationId?: string;
 }
 
 export interface MemoryRecord {
@@ -48,6 +59,34 @@ export interface VectorRecord {
   embedder: string;     // 'hash-v1' | 'api:<model>' — đổi embedder ⇒ phải re-embed
 }
 
+/**
+ * (bug 218) MỘT CUỘC TRÒ CHUYỆN ĐÃ LƯU.
+ *
+ * Trước đây Trợ Lý AI không có khái niệm "cuộc trò chuyện": toàn bộ chat là MỘT mảng phẳng nằm
+ * trong localStorage khoá `ai_assistant_messages`. Không có nó thì không ghim được, không chọn
+ * lại chat cũ được, và cũng không thu hồi được ký ức sinh ra từ một chat cụ thể.
+ */
+export interface ConversationRecord {
+  id: string;
+  /** Tiêu đề hiện trong danh sách — lấy từ câu đầu của user, người dùng sửa được. */
+  title: string;
+  messages: { role: 'user' | 'assistant'; content: string; at?: number }[];
+  createdAt: number;
+  updatedAt: number;
+  /** GHIM: người dùng thích cuộc này, muốn Trợ Lý nhớ nó lâu dài. */
+  pinned?: boolean;
+  /**
+   * ĐANG ĐƯỢC NHỚ: cuộc này có được nạp vào prompt ở lượt sau hay không.
+   *
+   * Tách khỏi `pinned` có chủ ý: ghim là "đừng dọn cuộc này đi", còn nhớ là "đưa nó vào đầu
+   * Trợ Lý". Người dùng có thể chọn NHIỀU cuộc cũ để nhớ mà không cần ghim cuộc nào, và ngược
+   * lại giữ một cuộc yêu thích mà tạm thời không muốn nó chen vào ngữ cảnh.
+   */
+  remembered?: boolean;
+  /** Thẻ đang mở lúc trò chuyện — để lọc theo ngữ cảnh như ký ức. */
+  cardKey?: string;
+}
+
 export interface ConflictRecord {
   id?: number;
   memoryId: string;
@@ -62,6 +101,8 @@ class MemoryDB extends Dexie {
   memories!: Table<MemoryRecord, string>;
   vectors!: Table<VectorRecord, string>;
   conflicts!: Table<ConflictRecord, number>;
+  /** (bug 218) Hội thoại đã lưu — xem conversationStore.ts. */
+  conversations!: Table<ConversationRecord, string>;
 
   constructor(name = 'st_assistant_memory') {
     super(name);
@@ -69,6 +110,21 @@ class MemoryDB extends Dexie {
       memories: 'id, kind, cardKey, updatedAt, lastAccessAt, pinned',
       vectors: 'id, embedder',
       conflicts: '++id, memoryId, resolved, at',
+    });
+    /**
+     * (bug 218) v2 — thêm bảng `conversations` và đánh index `source.conversationId`.
+     *
+     * Index đó là thứ làm cho "bỏ ghim / xoá chat ⇒ AI quên" chạy được: không có nó thì mỗi lần
+     * thu hồi phải quét toàn bộ kho ký ức. Dexie cho phép đánh index trên đường dẫn lồng nhau
+     * bằng cú pháp `source.conversationId`.
+     *
+     * Bản ghi cũ (chưa có trường đó) vẫn nằm yên — Dexie chỉ bỏ chúng ra khỏi index, không xoá.
+     */
+    this.version(2).stores({
+      memories: 'id, kind, cardKey, updatedAt, lastAccessAt, pinned, source.conversationId',
+      vectors: 'id, embedder',
+      conflicts: '++id, memoryId, resolved, at',
+      conversations: 'id, updatedAt, pinned, remembered',
     });
   }
 }

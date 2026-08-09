@@ -6,6 +6,8 @@ import { callProvider, callProviderHedged, setExtraProviders } from '../utils/ap
 import { splitChatBlocks } from '../utils/chatMarkdown';
 import { splitAttachmentContent, attachmentLabel, ATTACH_TOTAL_WARN } from '../utils/attachmentParts';
 import { safeSetItem } from '../utils/safeStorage';
+// (bug 218) Ba panel mới đứng sát icon 🧠 Ký ức.
+import { PromptCoreModal, SkillStoreModal, RememberedChatsModal } from './AiCorePanels';
 import { 
   X, Send, Code2, Copy, Trash2, Upload, Loader2, Settings, Plus, FileText, 
   Sparkles, Check, Download, AlertCircle, RefreshCw, Eye, Flame, RotateCcw,
@@ -1524,6 +1526,25 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
   const ragIndexRef = useRef<import('../utils/ragEngine').RagIndex | null>(null);
   // (P2 roadmap) Panel 🧠 Ký ức: xem/pin/xoá/sao lưu kho trí nhớ dài hạn
   const [showMemoryPanel, setShowMemoryPanel] = useState(false);
+  // (bug 218) Ba cửa mới đứng sát 🧠 Ký ức — xem AiCorePanels.tsx.
+  const [showPromptCore, setShowPromptCore] = useState(false);
+  const [showSkillStore, setShowSkillStore] = useState(false);
+  const [showChatsPanel, setShowChatsPanel] = useState(false);
+  /**
+   * (bug 218) ID của cuộc trò chuyện ĐANG nói.
+   *
+   * Phải có nó thì ký ức trích ra mới buộc được vào đúng cuộc, và "bỏ ghim / xoá chat ⇒ AI quên"
+   * mới làm được. Trước đây bộ trích chỉ ghi `turn-<số tin nhắn>`, đụng nhau giữa mọi cuộc.
+   * Sinh MỘT lần cho mỗi phiên chat và giữ qua các lượt; bấm "Xoá chat" thì cấp id mới.
+   */
+  const convIdRef = useRef<string>('');
+  if (!convIdRef.current) {
+    convIdRef.current = `conv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+  /** Nguyên liệu prompt của lượt gần nhất — panel Prompt Core dựng lại đúng chuỗi sẽ gửi. */
+  const [coreSnapshot, setCoreSnapshot] = useState<import('../utils/promptCore').BuildLayersInput>(
+    { core: SYSTEM_INSTRUCTION },
+  );
   const [nsfwEnabled, setNsfwEnabled] = useState(() => {
     return localStorage.getItem('ai_assistant_nsfw') === 'true';
   });
@@ -1993,14 +2014,48 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
     // Build effective prompt
     // (User 19/07) Prompt Chỉ Thị đặt CUỐI CÙNG — vị trí ưu tiên cao nhất với LLM, khung
     // "TUÂN THỦ TUYỆT ĐỐI" để khoá chặt Trợ Lý vào khuôn khổ user đặt ra.
-    const directiveBlock = directivePrompt.trim()
-      ? `\n\n[📜 PROMPT CHỈ THỊ TỪ NGƯỜI DÙNG — TUÂN THỦ TUYỆT ĐỐI, ƯU TIÊN CAO HƠN MỌI HƯỚNG DẪN KHÁC Ở TRÊN. Nếu một yêu cầu trong hội thoại mâu thuẫn với chỉ thị này, PHẢI theo chỉ thị này và nói rõ cho người dùng biết lý do.]\n${directivePrompt.trim()}`
-      : '';
-    const systemPrompt = `${SYSTEM_INSTRUCTION}
-${agentDef.personaPrompt ? `\n${agentDef.personaPrompt}` : ''}
-${nsfwEnabled ? '\n[CẦN CHÚ Ý: ĐÃ BẬT CHẾ ĐỘ R18/NSFW. Cho phép xử lý nội dung nhạy cảm người lớn nếu người dùng yêu cầu.]' : ''}
-${contextBlock ? `\n[DANH SÁCH TÀI LIỆU NGỮ CẢNH HIỆN TẠI]:\n${contextBlock}` : ''}
-${ragBlock ? `\n${ragBlock}` : ''}${directiveBlock}`;
+    /**
+     * (bug 218) SYSTEM PROMPT CORE thay cho template literal cũ.
+     *
+     * Cùng những nguồn ấy, nhưng đi qua `promptCore`: tầng có tên, có thứ tự khai báo rõ ràng,
+     * bật/tắt được, và panel ⚙️ Prompt Core dựng lại đúng chuỗi này để người dùng nhìn thấy —
+     * dùng CHUNG một hàm ghép nên panel không bao giờ hiện bản gần đúng.
+     *
+     * Hai tầng mới so với bản cũ: KỸ NĂNG khớp từ khoá (kho skill) và HỘI THOẠI ĐÃ CHỌN NHỚ.
+     * Cả hai nạp không đồng bộ và nuốt lỗi — kho skill hay kho hội thoại hỏng thì cùng lắm là
+     * lượt này thiếu tầng đó, không được làm chết cả lượt chat.
+     */
+    let skillBlock = '';
+    try {
+      const sk = await import('../utils/skillStore');
+      const cardKeyNow = (card?.data?.name || (card as any)?.name || '') as string;
+      const matched = sk.matchSkills(textToSend, await sk.listSkills({}), { cardKey: cardKeyNow });
+      skillBlock = sk.buildSkillBlock(matched);
+      if (matched.length) console.log(`[skill] khớp ${matched.length} kỹ năng: ${matched.map(m => m.skill.name).join(', ')}`);
+    } catch (e) { console.warn('[skill] bỏ qua tầng kỹ năng:', e); }
+
+    let chatsBlock = '';
+    try {
+      const cs = await import('../utils/conversationStore');
+      chatsBlock = cs.buildRememberedBlock(await cs.listRememberedConversations({}));
+    } catch (e) { console.warn('[conv] bỏ qua tầng hội thoại đã nhớ:', e); }
+
+    const pc = await import('../utils/promptCore');
+    const { loadCoreSettings } = await import('./AiCorePanels');
+    const coreInput: import('../utils/promptCore').BuildLayersInput = {
+      core: SYSTEM_INSTRUCTION,
+      persona: agentDef.personaPrompt || '',
+      nsfw: nsfwEnabled,
+      skills: skillBlock,
+      // Ký ức dài hạn và đoạn tra cứu RAG vốn đã được gộp sẵn thành một khối ở trên.
+      memory: ragBlock || '',
+      chats: chatsBlock,
+      context: contextBlock || '',
+      directive: directivePrompt.trim(),
+      ...loadCoreSettings(),
+    };
+    setCoreSnapshot(coreInput);
+    const systemPrompt = pc.composeSystemPrompt(pc.buildLayers(coreInput));
 
     // (User 2026 — "thấu hiểu luồng hội thoại") Tab Trò Chuyện trước đây CHỈ gửi câu hiện tại →
     // AI quên sạch các lượt trước (tab MVU-Zod thì có history). Gửi kèm tối đa 10 lượt gần nhất;
@@ -2206,6 +2261,36 @@ ${ragBlock ? `\n${ragBlock}` : ''}${directiveBlock}`;
     setRetryText('');
     setHedged(false);
 
+    /**
+     * (bug 218) LƯU CUỘC ĐANG NÓI sau mỗi lượt xong.
+     *
+     * Phải lưu thì mới ghim được, mới tick "cho AI nhớ" được, và mới có chỗ để thu hồi ký ức khi
+     * người dùng đổi ý. Lưu ĐÈ theo `convIdRef` nên một cuộc chỉ có một bản ghi, không đẻ ra mỗi
+     * lượt một dòng trong danh sách.
+     *
+     * KHÔNG tự bật `pinned`/`remembered`: lưu là để có mặt trong danh sách, còn việc Trợ Lý có
+     * nhớ hay không phải do người dùng tự tick. Tự bật là biến mọi cuộc tán gẫu thành ngữ cảnh
+     * vĩnh viễn — đúng thứ user đang lo.
+     */
+    if (success) {
+      void (async () => {
+        try {
+          const cs = await import('../utils/conversationStore');
+          const cu = await cs.getConversation(convIdRef.current);
+          await cs.putConversation({
+            id: convIdRef.current,
+            title: cu?.title || cs.titleFromMessages(nextMessages),
+            messages: nextMessages.map((m) => ({ role: m.role, content: m.content })),
+            createdAt: cu?.createdAt ?? Date.now(),
+            updatedAt: Date.now(),
+            pinned: cu?.pinned,
+            remembered: cu?.remembered,
+            cardKey: (card?.data?.name || (card as any)?.name || '') as string,
+          });
+        } catch (e) { console.warn('[conv] không lưu được cuộc trò chuyện:', e); }
+      })();
+    }
+
     // (P2 roadmap) Trích ký ức tự động sau lượt thành công — throttle 90s, model PHỤ (flash),
     // chạy nền, lỗi nuốt hẳn (không được ảnh hưởng chat). Ký ức có source.turnId để truy vết.
     if (success && ragEnabled) {
@@ -2230,7 +2315,9 @@ ${ragBlock ? `\n${ragBlock}` : ''}${directiveBlock}`;
             const kind = (['fact', 'preference', 'glossary'].includes(f.kind) ? f.kind : 'fact') as import('../utils/memoryStore').MemoryKind;
             await memStore.putMemory({
               id: memStore.newMemoryId(), kind, text: f.text.trim(),
-              source: { origin: 'chat', turnId: `turn-${nextMessages.length}` }, cardKey,
+              // (bug 218) BUỘC ký ức vào ĐÚNG cuộc đã đẻ ra nó. Không có `conversationId` thì
+              // "bỏ ghim / xoá chat ⇒ AI quên" là lời hứa không giữ được — xem conversationStore.
+              source: { origin: 'chat', turnId: `turn-${nextMessages.length}`, conversationId: convIdRef.current }, cardKey,
               createdAt: now, updatedAt: now, accessCount: 0, lastAccessAt: now, version: 1,
             });
           }
@@ -2430,6 +2517,37 @@ ${ragBlock ? `\n${ragBlock}` : ''}${directiveBlock}`;
 
   const handleClearChat = () => {
     setMessages([]);
+    // (bug 218) Xoá chat là BẮT ĐẦU MỘT CUỘC KHÁC — phải cấp id mới, nếu không thì ký ức của
+    // cuộc mới lại dính vào bản ghi cuộc cũ, và bỏ ghim cuộc cũ sẽ quét luôn ký ức cuộc mới.
+    convIdRef.current = `conv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  };
+
+  /**
+   * (bug 218) GHIM NGAY CUỘC ĐANG NÓI — user: "thêm ghim chat mình thích để AI nhớ cuộc đó".
+   * Đặt ở khung chat để khỏi phải mở panel; lưu cuộc rồi bật cả `pinned` lẫn `remembered`, vì
+   * ở đây người dùng đang nói rõ "cuộc này tôi thích, nhớ nó đi".
+   */
+  const [dangGhim, setDangGhim] = useState(false);
+  const ghimCuocNay = async () => {
+    if (messages.length === 0) return;
+    try {
+      const cs = await import('../utils/conversationStore');
+      const cu = await cs.getConversation(convIdRef.current);
+      await cs.putConversation({
+        id: convIdRef.current,
+        title: cu?.title || cs.titleFromMessages(messages),
+        messages: messages.map((m) => ({ role: m.role, content: m.content })),
+        createdAt: cu?.createdAt ?? Date.now(),
+        updatedAt: Date.now(),
+        pinned: true,
+        remembered: true,
+        cardKey: (card?.data?.name || (card as any)?.name || '') as string,
+      });
+      setDangGhim(true);
+      addToast('success', 'Đã ghim cuộc trò chuyện này — Trợ Lý sẽ nhớ nó ở các lượt sau. Bỏ ghim trong panel 📌 Hội thoại là quên hẳn.');
+    } catch (e: any) {
+      addToast('error', `Không ghim được: ${e?.message || e}`);
+    }
   };
 
   return (
@@ -2464,13 +2582,46 @@ ${ragBlock ? `\n${ragBlock}` : ''}${directiveBlock}`;
             >
               🧠 {ui.acMemTitle}
             </button>
+            {/* (bug 218) User: "nếu có thì hiển thị icon sát bên icon Ký Ức" — ba cửa mới đứng
+                ngay cạnh 🧠, cùng một nhóm "những gì Trợ Lý biết và tuân theo". */}
+            <button
+              onClick={() => setShowPromptCore(true)}
+              className="btn btn-ghost btn-xs text-sky-300 hover:bg-sky-500/10"
+              title="System Prompt Core — xem đúng chuỗi chỉ dẫn sắp gửi cho Trợ Lý, tách theo tầng, bật/tắt và đổi thứ tự từng tầng."
+            >
+              ⚙️ Prompt Core
+            </button>
+            <button
+              onClick={() => setShowSkillStore(true)}
+              className="btn btn-ghost btn-xs text-emerald-300 hover:bg-emerald-500/10"
+              title="Kho Kỹ Năng — nạp gói skill từ repo GitHub hoặc dán tay; kỹ năng khớp từ khoá câu bạn hỏi sẽ tự được chèn vào prompt."
+            >
+              🧩 Kỹ Năng
+            </button>
+            <button
+              onClick={() => setShowChatsPanel(true)}
+              className="btn btn-ghost btn-xs text-amber-300 hover:bg-amber-500/10"
+              title="Hội thoại đã lưu — ghim cuộc bạn thích, tick nhiều cuộc cho Trợ Lý nhớ. Bỏ tick hoặc xoá là Trợ Lý quên thật."
+            >
+              📌 Hội thoại
+            </button>
             {activeTab === 'chat' && messages.length > 0 && (
-              <button
-                onClick={handleClearChat}
-                className="btn btn-ghost btn-xs text-rose-400 hover:bg-rose-500/10"
-              >
-                <RotateCcw size={12} className="mr-1" /> {ui.acClearChat}
-              </button>
+              <>
+                {/* (bug 218) Ghim ngay cuộc đang nói, không phải mở panel mới ghim được. */}
+                <button
+                  onClick={ghimCuocNay}
+                  className={`btn btn-ghost btn-xs ${dangGhim ? 'text-amber-300' : 'text-slate-400'} hover:bg-amber-500/10`}
+                  title="Ghim cuộc trò chuyện này để Trợ Lý nhớ nó ở các lượt sau. Bỏ ghim trong panel 📌 Hội thoại là Trợ Lý quên hẳn, kể cả những ký ức đã rút ra từ nó."
+                >
+                  📌 {dangGhim ? 'Đã ghim' : 'Ghim cuộc này'}
+                </button>
+                <button
+                  onClick={handleClearChat}
+                  className="btn btn-ghost btn-xs text-rose-400 hover:bg-rose-500/10"
+                >
+                  <RotateCcw size={12} className="mr-1" /> {ui.acClearChat}
+                </button>
+              </>
             )}
             <button 
               onClick={onClose}
@@ -2909,6 +3060,26 @@ ${ragBlock ? `\n${ragBlock}` : ''}${directiveBlock}`;
 
       {/* (P2 roadmap) Panel Ký ức — xem/pin/xoá/sao lưu kho trí nhớ dài hạn */}
       {showMemoryPanel && <MemoryPanelModal onClose={() => setShowMemoryPanel(false)} />}
+      {/* (bug 218) Ba panel mới — xem AiCorePanels.tsx */}
+      {showPromptCore && <PromptCoreModal onClose={() => setShowPromptCore(false)} snapshot={coreSnapshot} />}
+      {showSkillStore && (
+        <SkillStoreModal
+          onClose={() => setShowSkillStore(false)}
+          cardKey={(card?.data?.name || (card as any)?.name || '') as string}
+        />
+      )}
+      {showChatsPanel && (
+        <RememberedChatsModal
+          onClose={() => setShowChatsPanel(false)}
+          onOpenConversation={(c) => {
+            // Mở lại cuộc cũ: nạp nguyên tin nhắn vào khung chat và TIẾP TỤC dưới id của nó, để
+            // ký ức trích thêm từ lượt sau vẫn buộc đúng vào cuộc này chứ không rơi ra ngoài.
+            setMessages(c.messages.map((m) => ({ role: m.role, content: m.content })) as Message[]);
+            convIdRef.current = c.id;
+            setShowChatsPanel(false);
+          }}
+        />
+      )}
     </div>
   );
 }

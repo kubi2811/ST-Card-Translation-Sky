@@ -1419,9 +1419,50 @@ function recordRateLimitRequest(model: string): void {
 const LANE_FAILURE_COOLDOWN_MS = 15_000;
 const _laneFailures = new Map<string, { count: number; lastAt: number }>();
 
-function recordLaneFailure(rlKey: string): void {
+/* ─── (bug 229c) BÁO RA NGOÀI KHI MỘT KEY / PROVIDER HỎNG ───
+ *
+ * User: "key bị lỗi gì thì có thông báo không thì phải chạy chứ nhỉ, provider 2 im re luôn."
+ * Đúng — trước bản này `recordLaneFailure` chỉ tô đỏ ô trong bảng lane. 429, 401, 500 đều trôi
+ * qua không một dòng log, không toast. Người dùng ngồi nhìn một provider đứng im mà không có
+ * cách nào biết nó đang hỏng hay chỉ đang chờ tới lượt.
+ *
+ * Kênh báo là một CALLBACK do tầng React cắm vào, không phải import store — apiClient là util
+ * thuần, kéo store vào đây là tạo vòng phụ thuộc.
+ *
+ * Chặn spam: một entry lớn có 74 mảnh, một provider hỏng là 74 dòng log giống hệt nhau. Nên mỗi
+ * lane chỉ báo ở lần hỏng ĐẦU TIÊN, rồi im tối thiểu 60 giây; số lần hỏng cộng dồn đi kèm trong
+ * lần báo sau để người dùng thấy mức độ.
+ */
+export interface LaneIssue {
+  providerId: string;
+  model: string;
+  keyLabel: string;
+  keyMasked: string;
+  status: number;
+  message: string;
+  /** Số lần hỏng LIÊN TIẾP của lane này tính tới lúc báo. */
+  failCount: number;
+}
+const LANE_ISSUE_QUIET_MS = 60_000;
+let _laneIssueReporter: ((issue: LaneIssue) => void) | null = null;
+const _laneIssueLastAt = new Map<string, number>();
+/** Cắm kênh báo lỗi lane (tầng React gọi 1 lần). Truyền null để gỡ. */
+export function setLaneIssueReporter(fn: ((issue: LaneIssue) => void) | null): void {
+  _laneIssueReporter = fn;
+}
+function reportLaneIssue(rlKey: string, issue: LaneIssue): void {
+  if (!_laneIssueReporter) return;
+  const last = _laneIssueLastAt.get(rlKey) || 0;
+  if (issue.failCount > 1 && Date.now() - last < LANE_ISSUE_QUIET_MS) return;
+  _laneIssueLastAt.set(rlKey, Date.now());
+  try { _laneIssueReporter(issue); } catch { /* kênh báo hỏng thì thôi, không được làm chết lượt dịch */ }
+}
+
+function recordLaneFailure(rlKey: string): number {
   const cur = _laneFailures.get(rlKey);
-  _laneFailures.set(rlKey, { count: (cur?.count || 0) + 1, lastAt: Date.now() });
+  const count = (cur?.count || 0) + 1;
+  _laneFailures.set(rlKey, { count, lastAt: Date.now() });
+  return count;
 }
 function recordLaneSuccess(rlKey: string): void {
   if (_laneFailures.has(rlKey)) _laneFailures.delete(rlKey);
@@ -1556,8 +1597,31 @@ function _toPoolProvider(id: string, c: { provider: AIProvider; proxyUrl: string
     secondaryThreshold: c.secondaryModelThreshold || 0,
   };
 }
+/**
+ * (bug 229b) CẤU HÌNH SỐNG CỦA PROVIDER CHÍNH — vì `config` truyền xuống là ẢNH CHỤP.
+ *
+ * `callProvider(config, …)` nhận `config` do người gọi thread xuống, tức bản chụp `store.proxy`
+ * ở thời điểm vòng dịch KHỞI ĐỘNG. Một lượt dịch entry lớn chạy 20-40 phút, mà người dùng hay
+ * thêm key GIỮA CHỪNG để chạy nhanh hơn — key thêm vào không bao giờ tới được engine.
+ *
+ * Đo được trên máy user: bảng lane báo "4 API keys", trần RPM provider #1 là 5/15 (3 key × 5),
+ * nhưng SÁU call đang bay đều ghi `Key #1`. Nếu engine thật sự thấy 3 key thì call thứ 6 đã phải
+ * rơi sang Key #2 — mỗi key là một lane có bucket RPM riêng. Engine chỉ thấy 1 key vì lúc bấm
+ * nút, `apiKeys` còn rỗng. Bảng đọc store (sống), engine đọc ảnh chụp (chết) ⇒ hai bên lệch nhau
+ * mà không ai báo gì; hệ quả là trần luồng đứng ở 9 thay vì ~20.
+ *
+ * Nay giữ một bản SỐNG do tầng React đẩy xuống mỗi khi cấu hình đổi (xem `syncEngineSettings`),
+ * và `buildPool` ưu tiên nó. Chỉ phần DỰNG POOL (endpoint/model/key/RPM) lấy từ bản sống; những
+ * thứ toàn cục khác (temperature, maxTokens, prompt…) vẫn lấy từ `config` của người gọi, nên
+ * không đổi hành vi nào ngoài thành phần pool.
+ */
+export type MainPoolConfig = Parameters<typeof _toPoolProvider>[1];
+let _liveMainConfig: MainPoolConfig | null = null;
+export function setMainProviderConfig(c: MainPoolConfig | null): void {
+  _liveMainConfig = c;
+}
 function buildPool(base: ProxySettings): PoolProvider[] {
-  return [_toPoolProvider('default', base), ..._extraProviders.map((p) => _toPoolProvider(p.id, p))];
+  return [_toPoolProvider('default', _liveMainConfig ?? base), ..._extraProviders.map((p) => _toPoolProvider(p.id, p))];
 }
 /**
  * SỐ LUỒNG SONG SONG = tổng NGÂN SÁCH RPM của toàn pool. Mỗi provider (config chính + provider
@@ -1731,7 +1795,23 @@ export async function callProvider(
     }
     const isTransient = (err instanceof ApiError && (err.retryable || (err.statusCode || 0) === 429 || (err.statusCode || 0) >= 500))
       || /timeout|timed out|fetch failed|failed to fetch|network|econnreset|\b5\d\d\b/i.test(msg);
-    if (!isAbort && isTransient) recordLaneFailure(laneRlKey);
+    if (!isAbort && isTransient) {
+      const failCount = recordLaneFailure(laneRlKey);
+      reportLaneIssue(laneRlKey, {
+        providerId: lane.providerId, model: lane.model,
+        keyLabel: keyTotal > 1 ? `Key #${keyIndex + 1}/${keyTotal}` : 'Key #1',
+        keyMasked: maskKey(lane.key), status, message: msg, failCount,
+      });
+    }
+    // (bug 229c) Key SAI (401/403) không phải lỗi tạm — không cho lane nghỉ rồi thử lại vô ích,
+    // nhưng PHẢI báo, vì đây đúng là ca "provider im re mà không biết vì sao".
+    if (!isAbort && !isTransient && (status === 401 || status === 403)) {
+      reportLaneIssue(laneRlKey, {
+        providerId: lane.providerId, model: lane.model,
+        keyLabel: keyTotal > 1 ? `Key #${keyIndex + 1}/${keyTotal}` : 'Key #1',
+        keyMasked: maskKey(lane.key), status, message: msg, failCount: 1,
+      });
+    }
     throw err;
   } finally {
     CallMonitor.end(callId);

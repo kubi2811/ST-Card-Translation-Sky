@@ -8,7 +8,7 @@ import { enforceFormatTagSync, findFormatTagMismatches } from '../utils/formatTa
 import { restoreMacros } from '../utils/macroGuard';
 import { useCallback, useEffect, useRef } from 'react';
 import { useStore } from '../store';
-import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookEntries, ChunkError, ApiError, setExtraProviders, resetProviderPool, computePoolConcurrency, callProvider, setNameStyle, setFandomMode } from '../utils/apiClient';
+import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookEntries, ChunkError, ApiError, setExtraProviders, resetProviderPool, computePoolConcurrency, callProvider, setNameStyle, setFandomMode, setMainProviderConfig, setLaneIssueReporter } from '../utils/apiClient';
 import { extractNameCandidates, buildNameGlossaryPrompt, parseNameGlossaryResponse, mergeGlossary, harvestGlossaryFromFields } from '../utils/nameGlossary';
 import { GLOSSARY_PRESETS } from '../utils/glossaryPresets';
 import { extractTranslatableFields, applyTranslationsToCard, autoTranslateLorebookTriggerKeys, injectNewLorebookEntries, isMvuUpdateField } from '../utils/cardFields';
@@ -313,6 +313,79 @@ export function useTranslation() {
   const applyModRef = useRef<((isContinue: boolean) => void) | null>(null);
   // Per-field abort controllers: cancel previous in-flight translation for same field on retry
   const fieldAbortMap = useRef<Map<string, AbortController>>(new Map());
+
+  /**
+   * (bug 229) NẠP CÀI ĐẶT CẤP-ENGINE — PHẢI GỌI Ở MỌI CỬA VÀO CÓ GỌI API.
+   *
+   * `apiClient` giữ bốn thứ ở mức MODULE, không nằm trong store: danh sách provider phụ
+   * (`setExtraProviders`), kiểu tên riêng (`setNameStyle`), chế độ Đồng Nhân (`setFandomMode`)
+   * và con trỏ round-robin (`resetProviderPool`). Trước đây chỉ HAI vòng lớn — "Bắt đầu dịch" và
+   * vòng Mod — nạp chúng. Mọi cửa vào khác thì không: nút "Dịch lại mục này", "Dịch lại chunk
+   * này", "Dịch lại N chunk lỗi", "Thử lại tất cả", và bộ quét chữ Hán sót.
+   *
+   * Hậu quả đo được trên máy user (lượt dịch tavernHelper[6], 2 provider đều bật): tải lại trang
+   * rồi bấm thẳng "Dịch lại mục này" ⇒ 31 lượt gọi API DỒN HẾT vào Provider #1, Provider #2 đứng
+   * im ở 0/5 RPM, không một token nào. Vì `_extraProviders` lúc mới nạp trang là mảng RỖNG, mà
+   * đường dịch lại không nạp nó. Bảng lane vẫn vẽ đủ hai provider — nó đọc cấu hình trong store,
+   * không đọc pool thật — nên nhìn thì tưởng đang chạy hai, thực tế chạy một.
+   *
+   * Cái thứ hai còn kín hơn: kiểu tên riêng và Đồng Nhân cũng chưa nạp, nên một mục dịch lại sau
+   * khi F5 sẽ ra tên theo mặc định, LỆCH với phần còn lại của thẻ — hỏng đúng thứ mà cả hai tính
+   * năng đó sinh ra để giữ.
+   *
+   * `resetProviderPool()` cố tình KHÔNG nằm ở đây: nó tua con trỏ round-robin về 0, hợp lý khi
+   * bắt đầu một lượt lớn nhưng sai khi một nút lẻ chen ngang giữa lượt đang chạy.
+   */
+  const syncEngineSettings = useCallback(() => {
+    const s = useStore.getState();
+    setExtraProviders(s.providers);
+    setNameStyle(s.translationConfig.nameStyle);
+    setFandomMode(s.translationConfig.fandomMode, s.translationConfig.fandomName);
+    // (bug 229b) Đẩy cả cấu hình provider CHÍNH xuống dạng SỐNG — xem setMainProviderConfig.
+    setMainProviderConfig({
+      provider: s.proxy.provider, proxyUrl: s.proxy.proxyUrl,
+      apiKey: s.proxy.apiKey, apiKeys: s.proxy.apiKeys || [], model: s.proxy.model,
+      primaryModelRpm: s.proxy.primaryModelRpm, enableSecondaryModel: s.proxy.enableSecondaryModel,
+      secondaryModel: s.proxy.secondaryModel, secondaryModelRpm: s.proxy.secondaryModelRpm,
+      secondaryModelThreshold: s.proxy.secondaryModelThreshold,
+    });
+  }, []);
+
+  /**
+   * (bug 229b) GIỮ ENGINE LUÔN KHỚP VỚI CẤU HÌNH — kể cả khi đổi GIỮA LƯỢT DỊCH.
+   * Người dùng hay thêm key/provider trong lúc một entry lớn đang chạy 20-40 phút để nó nhanh
+   * hơn. Không có hiệu ứng này thì cái vừa thêm chỉ có tác dụng ở lượt sau.
+   */
+  useEffect(() => {
+    syncEngineSettings();
+  }, [syncEngineSettings, store.proxy, store.providers, store.translationConfig.nameStyle,
+      store.translationConfig.fandomMode, store.translationConfig.fandomName]);
+
+  /**
+   * (bug 229c) KEY / PROVIDER HỎNG THÌ PHẢI NÓI RA.
+   * User: "key bị lỗi gì thì có thông báo, không thì phải chạy chứ nhỉ — provider 2 im re luôn."
+   * Trước đây lỗi lane chỉ tô đỏ một ô trong bảng; 429/401/500 đều trôi qua không tiếng động.
+   */
+  useEffect(() => {
+    setLaneIssueReporter((issue) => {
+      const ten = issue.providerId === 'default' ? 'Provider #1' : `Provider phụ (${issue.providerId.slice(0, 8)})`;
+      const viCo = issue.status === 429 ? 'bị chặn vì gọi quá nhanh (429)'
+        : issue.status === 401 || issue.status === 403 ? 'KEY SAI hoặc hết hạn'
+        : issue.status >= 500 ? `máy chủ lỗi ${issue.status}`
+        : 'lỗi mạng/quá hạn chờ';
+      const lanNua = issue.failCount > 1 ? ` — hỏng ${issue.failCount} lần liên tiếp` : '';
+      const loi: 'error' | 'warning' = (issue.status === 401 || issue.status === 403) ? 'error' : 'warning';
+      useStore.getState().addLog(loi,
+        `🔌 ${ten} · ${issue.model} · ${issue.keyLabel} (${issue.keyMasked}): ${viCo}${lanNua}. `
+        + (issue.status === 401 || issue.status === 403
+          ? 'Lane này sẽ KHÔNG chạy được cho tới khi bạn thay key.'
+          : 'Lane nghỉ 15 giây rồi thử lại; các key/provider khác vẫn chạy bình thường.'));
+      if (issue.status === 401 || issue.status === 403) {
+        useStore.getState().addToast('error', `${ten}: ${issue.keyLabel} sai/hết hạn — hãy thay key.`);
+      }
+    });
+    return () => setLaneIssueReporter(null);
+  }, []);
 
   /**
    * Prepare fields for translation.
@@ -2236,12 +2309,10 @@ export function useTranslation() {
     }
     store.setPreprocessProgress(null);
     CallMonitor.reset();
-    // Nạp pool provider phụ + reset round-robin cho lượt dịch này.
-    setExtraProviders(store.providers);
+    // Nạp pool provider phụ + kiểu tên + Đồng Nhân (xem syncEngineSettings), rồi tua con trỏ
+    // round-robin về đầu cho lượt lớn này.
+    syncEngineSettings();
     resetProviderPool();
-    setNameStyle(store.translationConfig.nameStyle); // (User 2026) Kiểu tên riêng → mọi prompt dùng chung
-    // (User 19/07) 🎌 Đồng nhân → khối luật tên canon (cấm Hán-Việt hoá) áp cho mọi prompt.
-    setFandomMode(store.translationConfig.fandomMode, store.translationConfig.fandomName);
     if (store.providers.filter((p) => p.enabled).length > 0) {
       store.addLog('info', `🔀 Đa provider: ${1 + store.providers.filter((p) => p.enabled).length} provider chạy song song (rải đều).`);
     }
@@ -3768,6 +3839,10 @@ export function useTranslation() {
   const retranslateField = useCallback(async (path: string, resume = false, extraInstruction?: string) => {
     const field = store.fields.find((f) => f.path === path);
     if (!field) return;
+    // (bug 229) Đường này chạy được mà KHÔNG cần qua "Bắt đầu dịch" — nút "Dịch lại mục này",
+    // "Dịch lại chunk này", bộ quét chữ Hán sót đều vào thẳng đây. Không nạp lại thì pool chỉ
+    // có provider chính và kiểu tên về mặc định. Xem chú thích ở syncEngineSettings.
+    syncEngineSettings();
 
     // (bug 213) KHOÁ CHUNG VỚI VÒNG DỊCH CHÍNH.
     // Vòng chính chống dịch trùng bằng `inFlightPaths`, còn đường này chỉ quản `fieldAbortMap`
@@ -3827,7 +3902,22 @@ export function useTranslation() {
     const hadTranslation = !!snapshot.translated && snapshot.translated !== field.original;
 
     if (prevChunks) {
-      store.addLog('active', `Re-translating: ${field.label} (Resuming from chunk ${prevChunks.length + 1})`);
+      /**
+       * (bug 229d) DÒNG NÀY TỪNG NÓI SAI, VÀ NÓI SAI ĐÚNG KIỂU LÀM NGƯỜI DÙNG HOẢNG.
+       *
+       * Câu cũ là `Resuming from chunk ${prevChunks.length + 1}` — viết từ thời chunk còn dịch
+       * TUẦN TỰ, khi đó độ dài mảng đúng bằng số mảnh đã xong nên "mảnh kế tiếp" = length+1.
+       * Nay chunk chạy SONG SONG, mảng dài bằng TỔNG số mảnh và có lỗ ở giữa. Đo được trên máy
+       * user: entry 74 mảnh đã đủ 74/74 mà log vẫn ghi "Resuming from chunk 75" — nghe y hệt cái
+       * "22/21 chunk" của bug 227, tức là tưởng công cụ sắp dịch lại từ đầu lần thứ N.
+       *
+       * Nói đúng thứ đang xảy ra: còn bao nhiêu ô trống và là những ô nào.
+       */
+      const oTrong: number[] = [];
+      for (let i = 0; i < prevChunks.length; i++) if (!prevChunks[i]?.trim()) oTrong.push(i + 1);
+      store.addLog('active', oTrong.length
+        ? `🔁 Dịch lại ${field.label}: giữ ${prevChunks.length - oTrong.length}/${prevChunks.length} mảnh đã có, chỉ dịch ${oTrong.length} mảnh còn trống (số ${oTrong.join(', ')}).`
+        : `🔁 Dịch lại ${field.label}: cả ${prevChunks.length} mảnh đều đã có bản dịch — lượt này chỉ ghép và kiểm lại, không gọi API cho mảnh nào.`);
     } else {
       store.addLog('active', `Re-translating: ${field.label}`);
       // Clear chunk progress if we are translating from scratch
@@ -4376,6 +4466,10 @@ export function useTranslation() {
     pauseRef.current = false;
     runningRef.current = true;
     store.setPhase('translating');
+    // (bug 229) "Thử lại tất cả" / "Dịch lại N chunk lỗi" cũng là một lượt lớn — phải nạp pool
+    // provider phụ + kiểu tên như "Bắt đầu dịch", nếu không thì cả lượt chạy trên một provider.
+    syncEngineSettings();
+    resetProviderPool();
 
     store.addLog('info', `♻️ Đang ${verb} ${errorFields.length} mục bằng ${computePoolConcurrency(store.proxy)} luồng…`);
     let successCount = 0;
@@ -4946,11 +5040,8 @@ export function useTranslation() {
     }
     store.setPreprocessProgress(null);
     CallMonitor.reset();
-    setExtraProviders(store.providers);
+    syncEngineSettings();
     resetProviderPool();
-    setNameStyle(store.translationConfig.nameStyle); // (User 2026) Kiểu tên riêng → mọi prompt dùng chung
-    // (User 19/07) 🎌 Đồng nhân → khối luật tên canon (cấm Hán-Việt hoá) áp cho mọi prompt.
-    setFandomMode(store.translationConfig.fandomMode, store.translationConfig.fandomName);
 
     store.addLog('info', `🔧 Applying Mod to ${targetFields.length} field(s) [Language: ${effectiveLang}]`);
     store.addLog('info', `📝 Mod instructions: "${modInstructions.slice(0, 100)}${modInstructions.length > 100 ? '...' : ''}"`);

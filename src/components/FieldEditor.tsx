@@ -289,6 +289,10 @@ function ChunkStatusAndResume({
   const ui = useUi();
   const t = useT();
   const [expanded, setExpanded] = useState(false);
+  // (bug 220b) Popup chunk phải PHÂN TRANG + CẮT BỚT xem trước, xem giải thích ở renderDetailsList.
+  const [chunkPage, setChunkPage] = useState(0);
+  const [onlyIssues, setOnlyIssues] = useState(false);
+  const [openCells, setOpenCells] = useState<Record<string, boolean>>({});
 
   // (bug 207/L4) Ước lượng phải theo ĐÚNG cỡ chunk engine dùng cho field này (code-heavy như
   // tavernHelper là 12.000, không phải 15.000) — trước đây hai con số lệch nhau nên UI báo
@@ -301,6 +305,30 @@ function ChunkStatusAndResume({
     ? field.totalChunks
     : Math.max(1, Math.ceil(field.original.length / CHUNK_CHARS));
   const isChunked = totalChunks > 1 || completedCount > 0;
+
+  /**
+   * (bug 220b) PHÉP SOI CHUNK PHẢI ĐƯỢC NHỚ LẠI, KHÔNG CHẠY MỖI LẦN VẼ.
+   *
+   * `auditChunks` quét CJK bằng regex trên cả bản gốc lẫn bản dịch của TỪNG chunk. Với entry
+   * TavernHelper 716.000 ký tự chia 74 phần thì mỗi lượt soi là ~1,4 triệu ký tự phải quét. Mà
+   * hàng field này vẽ lại mỗi khi store nhúc nhích — trong lúc dịch thì cứ mỗi chunk xong là
+   * một lần. Nhân lên thành hàng chục lần quét 1,4 MB mỗi phút, đủ để cả trang giật.
+   *
+   * Chữ ký phụ thuộc chỉ gồm ĐỘ DÀI từng ô: nội dung ô chỉ đổi khi độ dài đổi (ô được ghi một
+   * lần rồi thôi), nên đây là chữ ký rẻ mà vẫn đúng.
+   */
+  const rawSig = (field.rawChunks || []).map((c: string | undefined) => (c ? c.length : 0)).join(',');
+  const doneSig = (field.completedChunks || []).map((c: string | undefined) => (c ? c.length : 0)).join(',');
+  const audit = useMemo(
+    () => auditChunks(
+      Array.from({ length: totalChunks }, (_, i) => field.rawChunks?.[i] || ''),
+      Array.from({ length: totalChunks }, (_, i) => field.completedChunks?.[i]),
+    ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [field.path, totalChunks, rawSig, doneSig],
+  );
+  const issueByIndex = useMemo(() => new Map(audit.issues.map(x => [x.index, x])), [audit]);
+
   if (!isChunked) return null;
   const failedIdx = field.failedChunkIndex !== undefined ? field.failedChunkIndex : (field.status === 'error' ? completedCount : undefined);
 
@@ -357,10 +385,8 @@ function ChunkStatusAndResume({
   // ═══ (bugNeedFix/144) SOI CHUNK + GHÉP LẠI + DỊCH LẠI TỪNG CHUNK ═══
   // User: "10-20 chunk mà chỉ 1-2 cái lỗi thì phải có nút soi ra cái nào lỗi để dịch lại
   // riêng nó, và nút ghép lại — chứ dịch lại cả entry rất mất thời gian."
-  const rawList: string[] = Array.from({ length: totalChunks }, (_, i) => field.rawChunks?.[i] || '');
+  // `audit` + `issueByIndex` đã được nhớ lại ở trên (bug 220b) — không tính lại ở đây nữa.
   const doneList: (string | undefined)[] = Array.from({ length: totalChunks }, (_, i) => field.completedChunks?.[i]);
-  const audit = auditChunks(rawList, doneList);
-  const issueByIndex = new Map(audit.issues.map(x => [x.index, x]));
 
   const copyText = async (text: string, what: string) => {
     try {
@@ -450,6 +476,74 @@ function ChunkStatusAndResume({
    */
   const renderDetailsList = () => {
     if (!expanded) return null;
+
+    /**
+     * (bug 220b) POPUP PHẢI PHÂN TRANG VÀ CẮT BỚT — NẾU KHÔNG THÌ MỞ RA LÀ TREO HẲN TRÌNH DUYỆT.
+     *
+     * Đo được trên chính entry TavernHelper 716.000 ký tự: bản trước vẽ CẢ 74 chunk, mỗi chunk
+     * hai ô `white-space: pre-wrap` chứa nguyên ~9.700 ký tự gốc và ~9.700 ký tự dịch. Tức là
+     * bắt trình duyệt dàn dòng ~1,4 TRIỆU ký tự chữ đơn cách cùng một lúc — tiến trình vẽ đứng
+     * hình, không phản hồi, phải giết tab.
+     *
+     * Mà cắt bớt cũng không mất gì: cái ô cao 160px kia có cuộn mấy cũng chẳng ai đọc hết 9.700
+     * ký tự, người dùng vào đây là để tìm xem CHUNK NÀO hỏng. Nên: mỗi trang 8 chunk, mỗi ô chỉ
+     * hiện 700 ký tự đầu kèm nút mở đủ cho riêng ô đó, thêm bộ lọc "chỉ chunk có vấn đề" để
+     * nhảy thẳng tới chỗ cần nhìn. Toàn văn vẫn lấy được nguyên vẹn qua nút 📋 và JSON.
+     */
+    const PAGE_SIZE = 8;
+    const PREVIEW_CHARS = 700;
+    const allIdx = Array.from({ length: totalChunks }, (_, i) => i);
+    const listIdx = onlyIssues ? allIdx.filter((i) => issueByIndex.has(i)) : allIdx;
+    const pageCount = Math.max(1, Math.ceil(listIdx.length / PAGE_SIZE));
+    const page = Math.min(Math.max(0, chunkPage), pageCount - 1);
+    const shownIdx = listIdx.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
+
+    const pagerBtn = (label: string, to: number, disabled: boolean) => (
+      <button
+        onClick={() => setChunkPage(to)}
+        disabled={disabled}
+        style={{
+          padding: '3px 9px', fontSize: '0.7rem', fontWeight: 700,
+          background: 'rgba(255,255,255,0.06)', color: 'var(--text-secondary)',
+          border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)',
+          cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.35 : 1,
+        }}
+      >{label}</button>
+    );
+
+    /** Ô xem trước: cắt ở 700 ký tự, có nút mở đủ cho RIÊNG ô này. */
+    const previewCell = (text: string, cellKey: string, done: boolean) => {
+      const isOpen = !!openCells[cellKey];
+      const tooLong = text.length > PREVIEW_CHARS;
+      const shown = !tooLong || isOpen ? text : text.slice(0, PREVIEW_CHARS);
+      return (
+        <div style={{
+          padding: '4px',
+          background: done ? 'rgba(76,175,80,0.04)' : 'rgba(0,0,0,0.2)',
+          borderLeft: done ? '1px solid var(--accent-success)' : 'none',
+          borderRadius: '3px', fontSize: '0.62rem', fontFamily: 'monospace',
+          whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          maxHeight: isOpen ? '340px' : '170px', overflowY: 'auto',
+          color: done ? 'var(--text-primary)' : 'var(--text-secondary)',
+        }}>
+          {shown}
+          {tooLong && (
+            <button
+              onClick={() => setOpenCells((m) => ({ ...m, [cellKey]: !isOpen }))}
+              style={{
+                display: 'block', marginTop: '4px', padding: '2px 7px', fontSize: '0.58rem',
+                fontWeight: 700, background: 'rgba(124,106,240,0.15)', color: 'var(--accent-primary)',
+                border: '1px solid rgba(124,106,240,0.3)', borderRadius: 'var(--radius-xs)', cursor: 'pointer',
+              }}
+            >
+              {isOpen
+                ? '▲ Thu gọn'
+                : `▼ Xem đủ (còn ${(text.length - PREVIEW_CHARS).toLocaleString()} ký tự)`}
+            </button>
+          )}
+        </div>
+      );
+    };
     // (bug 220) PHẢI đi qua portal ra thẳng <body>. Bảng field chạy ảo hoá bằng
     // `transform: translateY(...)`, mà một tổ tiên có `transform` thì `position: fixed` KHÔNG
     // còn neo vào khung nhìn nữa — nó neo vào chính hàng đó. Đo được: popup ra 383px thay vì
@@ -481,7 +575,33 @@ function ChunkStatusAndResume({
             <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
               {fmt(ui.feChunkDone, { done: completedCount, total: totalChunks })}
             </span>
+            <label
+              title="Lọc nhanh xuống đúng những chunk bộ soi cho là có vấn đề — khỏi lật từng trang đi tìm."
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.68rem',
+                color: audit.suspectIndices.length ? 'var(--warning, #f59e0b)' : 'var(--text-muted)',
+                cursor: audit.suspectIndices.length ? 'pointer' : 'not-allowed', userSelect: 'none',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={onlyIssues}
+                disabled={audit.suspectIndices.length === 0}
+                onChange={(e) => { setOnlyIssues(e.target.checked); setChunkPage(0); }}
+                style={{ cursor: 'inherit' }}
+              />
+              ⚠️ Chỉ chunk có vấn đề ({audit.suspectIndices.length})
+            </label>
             <span style={{ flex: 1 }} />
+            {pageCount > 1 && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+                {pagerBtn('‹', page - 1, page === 0)}
+                <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', minWidth: '92px', textAlign: 'center' }}>
+                  Trang {page + 1}/{pageCount} · chunk {shownIdx.length ? shownIdx[0] + 1 : 0}–{shownIdx.length ? shownIdx[shownIdx.length - 1] + 1 : 0}
+                </span>
+                {pagerBtn('›', page + 1, page >= pageCount - 1)}
+              </span>
+            )}
             <button
               onClick={() => setExpanded(false)}
               style={{
@@ -495,11 +615,16 @@ function ChunkStatusAndResume({
             padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: '8px',
             overflowY: 'auto', flex: 1,
           }}>
-        {Array.from({ length: totalChunks }).map((_, idx) => {
+        {shownIdx.length === 0 && (
+          <div style={{ padding: '18px', textAlign: 'center', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+            Không có chunk nào khớp bộ lọc.
+          </div>
+        )}
+        {shownIdx.map((idx) => {
           const raw = field.rawChunks?.[idx] || '';
           const trans = field.completedChunks?.[idx] || '';
           const isDone = !!trans;
-          
+
           return (
             <div key={idx} style={{
               padding: '6px',
@@ -570,40 +695,21 @@ function ChunkStatusAndResume({
               
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                  <span style={{ fontSize: '0.52rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Raw</span>
-                  <div style={{
-                    padding: '4px',
-                    background: 'rgba(0,0,0,0.2)',
-                    borderRadius: '3px',
-                    fontSize: '0.62rem',
-                    fontFamily: 'monospace',
-                    whiteSpace: 'pre-wrap',
-                    wordBreak: 'break-word',
-                    maxHeight: '160px',
-                    overflowY: 'auto',
-                    color: 'var(--text-secondary)'
-                  }}>
-                    {raw || <span style={{ fontStyle: 'italic', color: 'var(--text-muted)' }}>{t.emptyField}</span>}
-                  </div>
+                  <span style={{ fontSize: '0.52rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+                    Raw {raw ? `· ${raw.length.toLocaleString()} ký tự` : ''}
+                  </span>
+                  {raw
+                    ? previewCell(raw, `${idx}:raw`, false)
+                    : <div style={{ padding: '4px', fontSize: '0.62rem', fontStyle: 'italic', color: 'var(--text-muted)' }}>{t.emptyField}</div>}
                 </div>
-                
+
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                  <span style={{ fontSize: '0.52rem', textTransform: 'uppercase', color: isDone ? 'var(--accent-success)' : 'var(--text-muted)' }}>{t.translated}</span>
-                  <div style={{
-                    padding: '4px',
-                    background: isDone ? 'rgba(76,175,80,0.04)' : 'rgba(0,0,0,0.2)',
-                    borderLeft: isDone ? '1px solid var(--accent-success)' : 'none',
-                    borderRadius: '3px',
-                    fontSize: '0.62rem',
-                    fontFamily: 'monospace',
-                    whiteSpace: 'pre-wrap',
-                    wordBreak: 'break-word',
-                    maxHeight: '160px',
-                    overflowY: 'auto',
-                    color: isDone ? 'var(--text-primary)' : 'var(--text-muted)'
-                  }}>
-                    {trans || <span style={{ fontStyle: 'italic' }}>Pending...</span>}
-                  </div>
+                  <span style={{ fontSize: '0.52rem', textTransform: 'uppercase', color: isDone ? 'var(--accent-success)' : 'var(--text-muted)' }}>
+                    {t.translated} {trans ? `· ${trans.length.toLocaleString()} ký tự` : ''}
+                  </span>
+                  {trans
+                    ? previewCell(trans, `${idx}:done`, true)
+                    : <div style={{ padding: '4px', fontSize: '0.62rem', fontStyle: 'italic', color: 'var(--text-muted)' }}>Pending...</div>}
                 </div>
               </div>
             </div>

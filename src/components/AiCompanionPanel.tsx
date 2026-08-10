@@ -1524,12 +1524,15 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
   // (P1 roadmap) RAG trí nhớ: bật mặc định; index dựng lười lúc idle, query lúc gửi.
   const [ragEnabled, setRagEnabled] = useState(() => localStorage.getItem('ai_assistant_rag') !== '0');
   const ragIndexRef = useRef<import('../utils/ragEngine').RagIndex | null>(null);
-  // (P2 roadmap) Panel 🧠 Ký ức: xem/pin/xoá/sao lưu kho trí nhớ dài hạn
-  const [showMemoryPanel, setShowMemoryPanel] = useState(false);
-  // (bug 218) Ba cửa mới đứng sát 🧠 Ký ức — xem AiCorePanels.tsx.
-  const [showPromptCore, setShowPromptCore] = useState(false);
-  const [showSkillStore, setShowSkillStore] = useState(false);
-  const [showChatsPanel, setShowChatsPanel] = useState(false);
+  /**
+   * (bug 230) MỘT CỬA MỘT LÚC.
+   * Bốn panel này trước đây là bốn boolean độc lập, mà cả bốn cùng dựng lớp phủ ở z-[70] —
+   * mở hai cái là hai hộp đè lên nhau, chữ của hộp dưới xuyên qua hộp trên. Đúng cảnh chèn
+   * chữ mà user chụp lại. Nay chỉ một cửa mở được: bấm cửa khác là cửa cũ tự đóng.
+   */
+  type CompanionPanel = 'memory' | 'core' | 'skills' | 'chats';
+  const [openPanel, setOpenPanel] = useState<CompanionPanel | null>(null);
+  const closePanel = useCallback(() => setOpenPanel(null), []);
   /**
    * (bug 218) ID của cuộc trò chuyện ĐANG nói.
    *
@@ -2576,7 +2579,7 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
           
           <div className="flex items-center gap-3">
             <button
-              onClick={() => setShowMemoryPanel(true)}
+              onClick={() => setOpenPanel('memory')}
               className="btn btn-ghost btn-xs text-indigo-300 hover:bg-indigo-500/10"
               title={ui.acMemBtnTip}
             >
@@ -2585,21 +2588,21 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
             {/* (bug 218) User: "nếu có thì hiển thị icon sát bên icon Ký Ức" — ba cửa mới đứng
                 ngay cạnh 🧠, cùng một nhóm "những gì Trợ Lý biết và tuân theo". */}
             <button
-              onClick={() => setShowPromptCore(true)}
+              onClick={() => setOpenPanel('core')}
               className="btn btn-ghost btn-xs text-sky-300 hover:bg-sky-500/10"
               title="System Prompt Core — xem đúng chuỗi chỉ dẫn sắp gửi cho Trợ Lý, tách theo tầng, bật/tắt và đổi thứ tự từng tầng."
             >
               ⚙️ Prompt Core
             </button>
             <button
-              onClick={() => setShowSkillStore(true)}
+              onClick={() => setOpenPanel('skills')}
               className="btn btn-ghost btn-xs text-emerald-300 hover:bg-emerald-500/10"
               title="Kho Kỹ Năng — nạp gói skill từ repo GitHub hoặc dán tay; kỹ năng khớp từ khoá câu bạn hỏi sẽ tự được chèn vào prompt."
             >
               🧩 Kỹ Năng
             </button>
             <button
-              onClick={() => setShowChatsPanel(true)}
+              onClick={() => setOpenPanel('chats')}
               className="btn btn-ghost btn-xs text-amber-300 hover:bg-amber-500/10"
               title="Hội thoại đã lưu — ghim cuộc bạn thích, tick nhiều cuộc cho Trợ Lý nhớ. Bỏ tick hoặc xoá là Trợ Lý quên thật."
             >
@@ -3059,24 +3062,24 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
       </div>
 
       {/* (P2 roadmap) Panel Ký ức — xem/pin/xoá/sao lưu kho trí nhớ dài hạn */}
-      {showMemoryPanel && <MemoryPanelModal onClose={() => setShowMemoryPanel(false)} />}
+      {openPanel === 'memory' && <MemoryPanelModal onClose={closePanel} />}
       {/* (bug 218) Ba panel mới — xem AiCorePanels.tsx */}
-      {showPromptCore && <PromptCoreModal onClose={() => setShowPromptCore(false)} snapshot={coreSnapshot} />}
-      {showSkillStore && (
+      {openPanel === 'core' && <PromptCoreModal onClose={closePanel} snapshot={coreSnapshot} />}
+      {openPanel === 'skills' && (
         <SkillStoreModal
-          onClose={() => setShowSkillStore(false)}
+          onClose={closePanel}
           cardKey={(card?.data?.name || (card as any)?.name || '') as string}
         />
       )}
-      {showChatsPanel && (
+      {openPanel === 'chats' && (
         <RememberedChatsModal
-          onClose={() => setShowChatsPanel(false)}
+          onClose={closePanel}
           onOpenConversation={(c) => {
             // Mở lại cuộc cũ: nạp nguyên tin nhắn vào khung chat và TIẾP TỤC dưới id của nó, để
             // ký ức trích thêm từ lượt sau vẫn buộc đúng vào cuộc này chứ không rơi ra ngoài.
             setMessages(c.messages.map((m) => ({ role: m.role, content: m.content })) as Message[]);
             convIdRef.current = c.id;
-            setShowChatsPanel(false);
+            closePanel();
           }}
         />
       )}

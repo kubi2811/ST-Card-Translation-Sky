@@ -31,30 +31,75 @@ import {
 
 /* ═══════════════ khung chung ═══════════════ */
 
+/**
+ * (bug 230) KHUNG CHUNG — LÀM LẠI THEO ĐÚNG STYLE DỊCH CARD.
+ *
+ * Bản cũ tự pha màu riêng (bg-[var(--bg-secondary)], border-[var(--border-subtle)]) và chữ bé tới mức 9-10px, trong khi
+ * cả app Dịch Card đã có bộ token sẵn: --bg-secondary / --border-default / --text-primary,
+ * lớp .card, .btn .btn-sm, và cỡ chữ nhỏ nhất là 0.75rem = 12px. Panel vì thế trông như của
+ * app khác dán vào: tối hơn nền, viền mờ, chữ nhỏ hơn mọi chỗ còn lại — đúng lời user
+ * "bé quá không thấy gì, không nổi bật".
+ *
+ * Ba thay đổi bắt buộc:
+ *   • lớp phủ ĐẬM hơn + làm mờ nền (backdrop-blur): hộp nổi hẳn khỏi trang thay vì lẫn vào;
+ *   • dùng token/lớp của app, không pha màu riêng nữa;
+ *   • cỡ chữ tối thiểu 0.75rem, tiêu đề 1rem — bằng phần còn lại của Dịch Card.
+ */
 function Shell({ title, sub, onClose, children, footer, wide }: {
   title: string; sub?: string; onClose: () => void;
   children: React.ReactNode; footer?: React.ReactNode; wide?: boolean;
 }) {
   return (
-    <div className="fixed inset-0 z-[70] bg-black/60 flex items-center justify-center p-6" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center p-6"
+      style={{ background: 'rgba(6,6,10,0.78)', backdropFilter: 'blur(3px)' }}
+      onClick={onClose}
+    >
       <div
-        className={`bg-[#0b0b0f] border border-zinc-800 rounded-2xl w-full ${wide ? 'max-w-4xl' : 'max-w-2xl'} max-h-[85vh] flex flex-col shadow-2xl`}
+        className={`card w-full ${wide ? 'max-w-5xl' : 'max-w-3xl'} flex flex-col`}
+        style={{
+          maxHeight: '88vh',
+          background: 'var(--bg-elevated)',   // (bug 230) nâng hẳn khỏi nền trang, --bg-secondary quá sát
+          border: '1px solid var(--border-strong)',
+          boxShadow: 'var(--shadow-lg)',
+        }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between gap-2">
-          <span className="font-bold text-sm text-slate-200">{title}</span>
-          <button onClick={onClose} className="p-1 hover:bg-zinc-800 rounded text-slate-400 hover:text-white"><X size={14} /></button>
+        <div
+          className="flex items-center justify-between gap-3 px-5 py-3.5"
+          style={{ borderBottom: '1px solid var(--border-subtle)' }}
+        >
+          <span style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--text-primary)' }}>{title}</span>
+          <button
+            onClick={onClose}
+            className="btn btn-ghost btn-sm"
+            title="Đóng"
+          >
+            <X size={16} />
+          </button>
         </div>
-        {sub && <div className="text-[9px] text-slate-500 px-4 py-1.5 border-b border-zinc-850">{sub}</div>}
-        <div className="flex-1 overflow-y-auto p-3 custom-scrollbar">{children}</div>
-        {footer && <div className="px-4 py-2 border-t border-zinc-800">{footer}</div>}
+        {sub && (
+          <div
+            className="px-5 py-2.5"
+            style={{ fontSize: '0.75rem', lineHeight: 1.5, color: 'var(--text-muted)', borderBottom: '1px solid var(--border-subtle)' }}
+          >
+            {sub}
+          </div>
+        )}
+        <div className="flex-1 overflow-y-auto custom-scrollbar px-5 py-4" style={{ fontSize: '0.8125rem' }}>
+          {children}
+        </div>
+        {footer && (
+          <div className="px-5 py-3" style={{ borderTop: '1px solid var(--border-subtle)' }}>{footer}</div>
+        )}
       </div>
     </div>
   );
 }
 
-const btn = 'px-2 py-0.5 rounded text-[10px] border bg-zinc-800/40 border-zinc-700 hover:bg-zinc-700/50 text-slate-300 disabled:opacity-40 disabled:cursor-not-allowed';
-const btnDanger = 'px-2 py-0.5 rounded text-[10px] border bg-rose-500/10 border-rose-500/30 hover:bg-rose-500/20 text-rose-300 disabled:opacity-40 disabled:cursor-not-allowed';
+/* Nút dùng lớp của app thay vì tự pha màu — cùng cỡ, cùng hành vi hover với Dịch Card. */
+const btn = 'btn btn-secondary btn-xs';
+const btnDanger = 'btn btn-danger btn-xs';
 
 /* ═══════════════ ⚙️ SYSTEM PROMPT CORE ═══════════════ */
 
@@ -107,9 +152,9 @@ export function PromptCoreModal({ onClose, snapshot }: {
       onClose={onClose}
       footer={
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[10px] text-slate-500">
-            Tổng: <b className="text-slate-300">{totalChars.toLocaleString()}</b> ký tự ·
-            ~<b className="text-slate-300">{totalTokens.toLocaleString()}</b> token
+          <span className="text-[0.75rem] text-[var(--text-muted)]">
+            Tổng: <b className="text-[var(--text-secondary)]">{totalChars.toLocaleString()}</b> ký tự ·
+            ~<b className="text-[var(--text-secondary)]">{totalTokens.toLocaleString()}</b> token
           </span>
           <div className="flex gap-1.5">
             <button className={btn} onClick={() => { setDisabled([]); setOrder(DEFAULT_LAYER_ORDER); }}>
@@ -126,28 +171,28 @@ export function PromptCoreModal({ onClose, snapshot }: {
         {layers.map((l, idx) => {
           const st = rows.find((r) => r.id === l.id)!;
           return (
-            <div key={l.id} className={`border rounded-lg px-2.5 py-2 ${l.enabled ? 'bg-zinc-900/50 border-zinc-800/70' : 'bg-zinc-900/20 border-zinc-800/40 opacity-60'}`}>
+            <div key={l.id} className={`border rounded-lg px-2.5 py-2 ${l.enabled ? 'bg-[var(--bg-primary)]/50 border-[var(--border-subtle)]/70' : 'bg-[var(--bg-primary)]/20 border-[var(--border-subtle)]/40 opacity-60'}`}>
               <div className="flex items-start gap-2">
                 <div className="flex flex-col gap-0.5 pt-0.5">
-                  <button className="text-slate-600 hover:text-slate-300 leading-none disabled:opacity-20" disabled={idx === 0} onClick={() => move(l.id, -1)} title="Lên một bậc">▲</button>
-                  <button className="text-slate-600 hover:text-slate-300 leading-none disabled:opacity-20" disabled={idx === layers.length - 1} onClick={() => move(l.id, 1)} title="Xuống một bậc">▼</button>
+                  <button className="text-[var(--text-muted)] hover:text-[var(--text-secondary)] leading-none disabled:opacity-20" disabled={idx === 0} onClick={() => move(l.id, -1)} title="Lên một bậc">▲</button>
+                  <button className="text-[var(--text-muted)] hover:text-[var(--text-secondary)] leading-none disabled:opacity-20" disabled={idx === layers.length - 1} onClick={() => move(l.id, 1)} title="Xuống một bậc">▼</button>
                 </div>
-                <GripVertical size={12} className="text-slate-700 mt-1 flex-shrink-0" />
+                <GripVertical size={12} className="text-[var(--text-muted)] mt-1 flex-shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-[11px] font-bold text-slate-200">{idx + 1}. {l.label}</span>
+                    <span className="text-[0.8125rem] font-bold text-[var(--text-primary)]">{idx + 1}. {l.label}</span>
                     {l.locked && <span className="text-[8px] px-1 rounded border border-amber-500/30 bg-amber-500/10 text-amber-300">KHOÁ</span>}
                     {st.empty
-                      ? <span className="text-[8px] px-1 rounded border border-zinc-700 text-slate-500">lượt này trống</span>
+                      ? <span className="text-[8px] px-1 rounded border border-[var(--border-default)] text-[var(--text-muted)]">lượt này trống</span>
                       : <span className="text-[8px] px-1 rounded border border-sky-500/30 bg-sky-500/10 text-sky-300">
                           {st.chars.toLocaleString()} ký tự · ~{st.tokens.toLocaleString()} token · {st.percent}%
                         </span>}
                   </div>
-                  <div className="text-[9px] text-slate-500 mt-0.5">{l.why}</div>
+                  <div className="text-[0.75rem] text-[var(--text-muted)] mt-0.5">{l.why}</div>
                   {!st.empty && (
                     <details className="mt-1">
-                      <summary className="text-[9px] text-indigo-400 cursor-pointer select-none">Xem nội dung tầng này</summary>
-                      <pre className="text-[9px] text-slate-400 whitespace-pre-wrap break-words mt-1 max-h-40 overflow-y-auto custom-scrollbar bg-black/30 rounded p-1.5">
+                      <summary className="text-[0.75rem] text-indigo-400 cursor-pointer select-none">Xem nội dung tầng này</summary>
+                      <pre className="text-[0.75rem] text-[var(--text-muted)] whitespace-pre-wrap break-words mt-1 max-h-40 overflow-y-auto custom-scrollbar bg-black/30 rounded p-1.5">
                         {l.content}
                       </pre>
                     </details>
@@ -164,8 +209,8 @@ export function PromptCoreModal({ onClose, snapshot }: {
 
       {xemThat && (
         <div className="mt-3">
-          <div className="text-[10px] text-slate-400 mb-1">Chuỗi thật gửi kèm mọi tin nhắn ở lượt tới:</div>
-          <pre className="text-[9px] text-slate-300 whitespace-pre-wrap break-words bg-black/40 border border-zinc-800 rounded-lg p-2 max-h-72 overflow-y-auto custom-scrollbar">
+          <div className="text-[0.75rem] text-[var(--text-muted)] mb-1">Chuỗi thật gửi kèm mọi tin nhắn ở lượt tới:</div>
+          <pre className="text-[0.75rem] text-[var(--text-secondary)] whitespace-pre-wrap break-words bg-black/40 border border-[var(--border-subtle)] rounded-lg p-2 max-h-72 overflow-y-auto custom-scrollbar">
             {full || '(rỗng — mọi tầng đều tắt hoặc không có nội dung)'}
           </pre>
         </div>
@@ -253,13 +298,13 @@ export function SkillStoreModal({ onClose, cardKey }: { onClose: () => void; car
             value={repoUrl}
             onChange={(e) => setRepoUrl(e.target.value)}
             placeholder="https://github.com/yeachan-heo/oh-my-claudecode/tree/main/skills"
-            className="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-[11px] text-slate-200"
+            className="flex-1 bg-[var(--bg-primary)] border border-[var(--border-default)] rounded px-2 py-1 text-[0.8125rem] text-[var(--text-primary)]"
           />
           <button className={btn} disabled={busy || !repoUrl.trim()} onClick={napRepo}>
             {busy ? <Loader2 size={10} className="inline animate-spin" /> : <Download size={10} className="inline mr-1" />}Nạp từ repo
           </button>
         </div>
-        <div className="text-[9px] text-slate-500">
+        <div className="text-[0.75rem] text-[var(--text-muted)]">
           Dán link THƯ MỤC chứa các file .md (chỉ đọc một tầng, không đi sâu vào thư mục con).
         </div>
         <div className="flex gap-1.5">
@@ -269,32 +314,32 @@ export function SkillStoreModal({ onClose, cardKey }: { onClose: () => void; car
           <input ref={fileRef} type="file" accept=".md,.mdx" multiple className="hidden" onChange={napFile} />
         </div>
         <details>
-          <summary className="text-[10px] text-indigo-400 cursor-pointer select-none">Hoặc dán nội dung một kỹ năng</summary>
+          <summary className="text-[0.75rem] text-indigo-400 cursor-pointer select-none">Hoặc dán nội dung một kỹ năng</summary>
           <textarea
             value={paste}
             onChange={(e) => setPaste(e.target.value)}
             rows={6}
             placeholder={'---\nname: Sửa lỗi biến MVU\ndescription: khi thẻ báo 变量更新失败\ntriggers: ["mvu", "变量更新失败"]\n---\nKiểm [initvar] trước, đối chiếu tên biến với stat_data…'}
-            className="w-full mt-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-[10px] font-mono text-slate-200"
+            className="w-full mt-1 bg-[var(--bg-primary)] border border-[var(--border-default)] rounded px-2 py-1 text-[0.75rem] font-mono text-[var(--text-primary)]"
           />
           <button className={btn} disabled={busy || !paste.trim()} onClick={napDanTay}>Thêm kỹ năng này</button>
         </details>
         {msg && (
-          <div className={`text-[10px] px-2 py-1 rounded border ${msg.ok ? 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10' : 'text-rose-300 border-rose-500/30 bg-rose-500/10'}`}>
+          <div className={`text-[0.75rem] px-2 py-1 rounded border ${msg.ok ? 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10' : 'text-rose-300 border-rose-500/30 bg-rose-500/10'}`}>
             {msg.text}
           </div>
         )}
       </div>
 
       {loading ? (
-        <div className="text-center py-8 text-slate-500 text-xs"><Loader2 size={16} className="animate-spin inline mr-2" />…</div>
+        <div className="text-center py-8 text-[var(--text-muted)] text-xs"><Loader2 size={16} className="animate-spin inline mr-2" />…</div>
       ) : skills.length === 0 ? (
-        <div className="text-center py-8 text-slate-500 text-xs">Kho trống — nạp một gói ở trên để bắt đầu.</div>
+        <div className="text-center py-8 text-[var(--text-muted)] text-xs">Kho trống — nạp một gói ở trên để bắt đầu.</div>
       ) : (
         packs.map(([pack, list]) => (
           <div key={pack} className="mb-3">
             <div className="flex items-center justify-between mb-1">
-              <span className="text-[10px] font-bold text-slate-300">{pack} <span className="text-slate-600">({list.length})</span></span>
+              <span className="text-[0.75rem] font-bold text-[var(--text-secondary)]">{pack} <span className="text-[var(--text-muted)]">({list.length})</span></span>
               <button
                 className={btnDanger}
                 onClick={async () => {
@@ -306,23 +351,23 @@ export function SkillStoreModal({ onClose, cardKey }: { onClose: () => void; car
             </div>
             <div className="space-y-1">
               {list.map((s) => (
-                <div key={s.id} className="flex items-start gap-2 bg-zinc-900/50 border border-zinc-800/70 rounded-lg px-2.5 py-1.5 group">
+                <div key={s.id} className="flex items-start gap-2 bg-[var(--bg-primary)]/50 border border-[var(--border-subtle)]/70 rounded-lg px-2.5 py-1.5 group">
                   <input
                     type="checkbox" checked={s.enabled} className="mt-1"
                     title={s.enabled ? 'Đang bật' : 'Đang tắt — không bao giờ chèn vào prompt'}
                     onChange={async () => { await setSkillEnabled(s.id, !s.enabled); await reload(); }}
                   />
                   <div className="flex-1 min-w-0">
-                    <div className="text-[11px] text-slate-200 font-medium">{s.name}</div>
-                    {s.description && <div className="text-[9px] text-slate-500">{s.description}</div>}
-                    <div className="text-[8px] text-slate-600 mt-0.5">
+                    <div className="text-[0.8125rem] text-[var(--text-primary)] font-medium">{s.name}</div>
+                    {s.description && <div className="text-[0.75rem] text-[var(--text-muted)]">{s.description}</div>}
+                    <div className="text-[8px] text-[var(--text-muted)] mt-0.5">
                       {s.triggers.length
-                        ? <>từ khoá: {s.triggers.map((t) => <span key={t} className="inline-block px-1 mr-1 rounded bg-zinc-800 text-slate-400">{t}</span>)}</>
+                        ? <>từ khoá: {s.triggers.map((t) => <span key={t} className="inline-block px-1 mr-1 rounded bg-[var(--bg-tertiary)] text-[var(--text-muted)]">{t}</span>)}</>
                         : <span className="text-amber-500/80">chưa có từ khoá — kỹ năng này sẽ KHÔNG bao giờ tự chèn</span>}
                     </div>
                   </div>
                   <button
-                    className="text-slate-600 opacity-0 group-hover:opacity-100 hover:text-rose-400 flex-shrink-0"
+                    className="text-[var(--text-muted)] opacity-0 group-hover:opacity-100 hover:text-rose-400 flex-shrink-0"
                     title="Xoá kỹ năng này"
                     onClick={async () => { await deleteSkill(s.id); await reload(); }}
                   ><Trash2 size={11} /></button>
@@ -372,34 +417,34 @@ export function RememberedChatsModal({ onClose, onOpenConversation }: {
       onClose={onClose}
       footer={
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[10px] text-slate-500">
-            {rows.length} cuộc đã lưu · <b className="text-slate-300">{soNho}</b> cuộc đang được nhớ
+          <span className="text-[0.75rem] text-[var(--text-muted)]">
+            {rows.length} cuộc đã lưu · <b className="text-[var(--text-secondary)]">{soNho}</b> cuộc đang được nhớ
           </span>
-          {note && <span className="text-[10px] text-amber-300">{note}</span>}
+          {note && <span className="text-[0.75rem] text-amber-300">{note}</span>}
         </div>
       }
     >
       {loading ? (
-        <div className="text-center py-8 text-slate-500 text-xs"><Loader2 size={16} className="animate-spin inline mr-2" />…</div>
+        <div className="text-center py-8 text-[var(--text-muted)] text-xs"><Loader2 size={16} className="animate-spin inline mr-2" />…</div>
       ) : rows.length === 0 ? (
-        <div className="text-center py-8 text-slate-500 text-xs">Chưa có cuộc nào được lưu. Bấm ghim ở khung chat để lưu cuộc đang nói.</div>
+        <div className="text-center py-8 text-[var(--text-muted)] text-xs">Chưa có cuộc nào được lưu. Bấm ghim ở khung chat để lưu cuộc đang nói.</div>
       ) : (
         <div className="space-y-1.5">
           {rows.map((c) => (
-            <div key={c.id} className="flex items-start gap-2 bg-zinc-900/50 border border-zinc-800/70 rounded-lg px-2.5 py-1.5 group">
+            <div key={c.id} className="flex items-start gap-2 bg-[var(--bg-primary)]/50 border border-[var(--border-subtle)]/70 rounded-lg px-2.5 py-1.5 group">
               <button
                 title={c.pinned ? 'Đang ghim — bấm để bỏ ghim (Trợ Lý sẽ quên cuộc này)' : 'Ghim cuộc này'}
-                className={`text-[13px] flex-shrink-0 ${c.pinned ? 'text-amber-300' : 'text-slate-600 hover:text-slate-300'}`}
+                className={`text-[13px] flex-shrink-0 ${c.pinned ? 'text-amber-300' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}`}
                 onClick={async () => { bao(await setConversationPinned(c.id, !c.pinned)); await reload(); }}
               >📌</button>
               <div className="flex-1 min-w-0">
-                <div className="text-[11px] text-slate-200 break-words" style={{ overflowWrap: 'anywhere' }}>{c.title}</div>
-                <div className="text-[8px] text-slate-500 mt-0.5">
+                <div className="text-[0.8125rem] text-[var(--text-primary)] break-words" style={{ overflowWrap: 'anywhere' }}>{c.title}</div>
+                <div className="text-[8px] text-[var(--text-muted)] mt-0.5">
                   {c.messages.length} tin nhắn · {new Date(c.updatedAt).toLocaleString('vi-VN')}
                   {c.cardKey ? ` · ${c.cardKey}` : ''}
                 </div>
               </div>
-              <label className="flex items-center gap-1 text-[9px] text-slate-400 flex-shrink-0" title="Nạp cuộc này vào đầu Trợ Lý ở mọi lượt sau">
+              <label className="flex items-center gap-1 text-[0.75rem] text-[var(--text-muted)] flex-shrink-0" title="Nạp cuộc này vào đầu Trợ Lý ở mọi lượt sau">
                 <input
                   type="checkbox" checked={!!c.remembered}
                   onChange={async () => { bao(await setConversationRemembered(c.id, !c.remembered)); await reload(); }}
@@ -410,7 +455,7 @@ export function RememberedChatsModal({ onClose, onOpenConversation }: {
                 <button className={btn} onClick={() => onOpenConversation(c)} title="Mở lại cuộc này trong khung chat">Mở</button>
               )}
               <button
-                className="text-slate-600 opacity-0 group-hover:opacity-100 hover:text-rose-400 flex-shrink-0"
+                className="text-[var(--text-muted)] opacity-0 group-hover:opacity-100 hover:text-rose-400 flex-shrink-0"
                 title="Xoá hẳn cuộc này + mọi ký ức rút ra từ nó"
                 onClick={async () => {
                   if (!window.confirm(`Xoá "${c.title}"?\n\nTrợ Lý sẽ quên cả nội dung lẫn những ký ức đã rút ra từ cuộc này.`)) return;

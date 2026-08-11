@@ -125,8 +125,14 @@ export interface FetchClientOptions {
   fetchImpl?: FetchLike;
   /** Khoảng cách tối thiểu giữa 2 request tới CÙNG host (ms). */
   minHostIntervalMs?: number;
-  /** Số lần thử lại mỗi URL (tính cả các proxy khác nhau như một chuỗi thử). */
+  /** Hạn chờ cho MỘT đường đi. */
   timeoutMs?: number;
+  /**
+   * (bug 229) Trần thời gian cho TOÀN BỘ một URL, tính chung mọi đường đi.
+   * Không có nó thì một trang chết đốt 8 × timeoutMs — đo được 164 giây với timeout 20s — và
+   * người dùng thấy y như treo vì crawler chạy tuần tự.
+   */
+  urlBudgetMs?: number;
 }
 
 export class FetchClient {
@@ -135,6 +141,7 @@ export class FetchClient {
   private fetchImpl: FetchLike;
   private minInterval: number;
   private timeoutMs: number;
+  private urlBudgetMs: number;
   /** Đường nào vừa thành công thì ưu tiên dùng lại — đỡ đốt 20s timeout mỗi trang. */
   private preferred = 0;
   /** Lý do hỏng của lần get() gần nhất, theo từng đường — để báo lỗi nói được điều gì thật. */
@@ -146,6 +153,7 @@ export class FetchClient {
     this.fetchImpl = opts.fetchImpl ?? ((url, init) => fetch(url, init));
     this.minInterval = opts.minHostIntervalMs ?? 350;
     this.timeoutMs = opts.timeoutMs ?? 20000;
+    this.urlBudgetMs = opts.urlBudgetMs ?? 30000;
   }
 
   cacheSize(): number { return this.cache.size; }
@@ -153,14 +161,56 @@ export class FetchClient {
   failureReasons(): string[] { return [...this.lastFailures]; }
   successTransport(): string | null { return this.lastOkTransport; }
 
-  private async throttle(url: string): Promise<void> {
+  private async throttle(url: string, signal?: AbortSignal): Promise<void> {
     let host = '';
     try { host = new URL(url).host; } catch { /* url tương đối (local proxy) — không throttle */ }
     if (!host) return;
     const last = this.lastHitByHost.get(host) ?? 0;
     const wait = last + this.minInterval - Date.now();
     if (wait > 0) await new Promise(r => setTimeout(r, wait));
+    if (signal?.aborted) throw new Error('Cancelled');
     this.lastHitByHost.set(host, Date.now());
+  }
+
+  /**
+   * (bug 229) ĐỌC TRỌN phản hồi trong ĐÚNG MỘT hạn chờ — đây là gốc của "đang cào thì treo".
+   *
+   * Bản cũ đua `fetch()` với hạn chờ rồi mới `await res.text()` Ở NGOÀI cuộc đua. Với `fetch`,
+   * promise resolve NGAY KHI CÓ HEADER; thân phản hồi về sau. Proxy công cộng quá tải làm đúng
+   * cảnh đó: trả 200 tức thì rồi giữ kết nối không đẩy byte nào ⇒ `res.text()` chờ vĩnh viễn,
+   * KHÔNG hạn chờ nào phủ tới. Crawler chạy tuần tự nên cả lượt cào đứng im tại URL đó, thanh
+   * tiến trình treo nguyên ở tên trang — đúng triệu chứng user báo.
+   * Đo được trước khi vá: `timeoutMs` đặt 300ms mà `get()` vẫn chưa trả về sau 3007ms.
+   *
+   * Nay cả `fetch` LẪN `res.text()` nằm trong cuộc đua, hết giờ thì `ac.abort()` cắt hẳn socket
+   * (không cắt thì kết nối chết vẫn treo đó, ăn dần hạn ngạch kết nối của trình duyệt), và hẹn
+   * giờ luôn được `clearTimeout` để không rò một timer mỗi trang.
+   */
+  private async readWithin(
+    fetchUrl: string,
+    budgetMs: number,
+    signal?: AbortSignal,
+  ): Promise<{ ok: boolean; status: number; text: string }> {
+    const ac = new AbortController();
+    const onOuterAbort = () => ac.abort();
+    if (signal?.aborted) throw new Error('Cancelled');
+    signal?.addEventListener('abort', onOuterAbort, { once: true });
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const timeout = new Promise<never>((_, rej) => {
+        timer = setTimeout(() => { ac.abort(); rej(new Error('timeout')); }, Math.max(1, budgetMs));
+      });
+      const read = (async () => {
+        const res = await this.fetchImpl(fetchUrl, { signal: ac.signal });
+        if (!res.ok) return { ok: false, status: res.status, text: '' };
+        return { ok: true, status: res.status, text: await res.text() };
+      })();
+      return await Promise.race([read, timeout]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      signal?.removeEventListener('abort', onOuterAbort);
+    }
   }
 
   /**
@@ -172,6 +222,9 @@ export class FetchClient {
     if (cached !== undefined) return cached;
 
     this.lastFailures = [];
+    // (bug 229) NGÂN SÁCH cho cả URL này. Không có nó thì một trang chết đi hết 8 đường × 20s;
+    // đo được 164 giây cho MỘT trang — người dùng đọc là "treo, không cào nữa".
+    const deadline = Date.now() + this.urlBudgetMs;
     // Thử đường ưu tiên trước, rồi các đường còn lại theo thứ tự.
     const order = [
       this.preferred,
@@ -179,16 +232,19 @@ export class FetchClient {
     ];
     for (const idx of order) {
       if (signal?.aborted) throw new Error('Cancelled');
+      const left = deadline - Date.now();
+      if (left <= 0) {
+        this.lastFailures.push(`(hết ngân sách ${this.urlBudgetMs}ms cho trang này — bỏ các đường còn lại)`);
+        break;
+      }
       const t = TRANSPORTS[idx];
       const fetchUrl = t.build(url);
       if (!fetchUrl) continue;   // đường không áp dụng cho URL này (vd mw-api với Baidu)
       try {
-        await this.throttle(url);
-        const timeout = new Promise<never>((_, rej) =>
-          setTimeout(() => rej(new Error('timeout')), this.timeoutMs));
-        const res = await Promise.race([this.fetchImpl(fetchUrl, { signal }), timeout]);
+        await this.throttle(url, signal);
+        const res = await this.readWithin(fetchUrl, Math.min(this.timeoutMs, deadline - Date.now()), signal);
         if (!res.ok) { this.lastFailures.push(`${t.id}: HTTP ${res.status}`); continue; }
-        const text = await res.text();
+        const text = res.text;
         if (!text || text.trim().length < 50) { this.lastFailures.push(`${t.id}: phản hồi rỗng`); continue; }
 
         const body = t.unwrap ? t.unwrap(text, url) : text;
@@ -202,7 +258,7 @@ export class FetchClient {
         this.cache.set(url, body);
         return body;
       } catch (e) {
-        if ((e as Error).message === 'Cancelled' || signal?.aborted) throw new Error('Cancelled');
+        if ((e as Error).message === 'Cancelled' || signal?.aborted) throw new Error('Cancelled', { cause: e });
         // CORS bị chặn thì fetch ném TypeError "Failed to fetch" — ghi lại cho người dùng đọc.
         this.lastFailures.push(`${t.id}: ${(e as Error).message || 'lỗi mạng'}`);
       }

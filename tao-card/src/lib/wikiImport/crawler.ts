@@ -40,6 +40,11 @@ export async function crawlWiki(
   const wiki = detectPlatform(opts.startUrl);
   const visited = new Set(state.visited);
   const dead = new Set(state.dead);
+  // (bug 229) Hàng đợi trước đây nhận link TRÙNG thoải mái — chỉ lọc `visited`, mà trang chưa
+  // cào thì chưa visited nên mọi trang cùng trỏ tới một URL đều đẩy thêm một bản. Đo được: 200
+  // trang × ~120 link ⇒ hàng đợi 24.000 mục cho chưa tới 200 URL thật, và toàn bộ đống đó bị
+  // JSON.stringify lại sau MỖI trang để lưu resume. Một Set là đủ chặn.
+  const queued = new Set(state.queue.map(([u]) => u));
   const t0 = Date.now();
   let crawledThisRun = 0;
 
@@ -65,6 +70,7 @@ export async function crawlWiki(
     }
 
     const [url, depth] = state.queue.shift()!;
+    queued.delete(url);
     if (visited.has(url) || dead.has(url)) continue;
     visited.add(url);
 
@@ -107,9 +113,10 @@ export async function crawlWiki(
     const allowExpand = opts.autoExpand || depth === 0;
     if (allowExpand && nextDepth < opts.maxDepth + (isCategory ? 1 : 0)) {
       for (const link of doc.links) {
-        if (visited.has(link) || dead.has(link)) continue;
+        if (visited.has(link) || dead.has(link) || queued.has(link)) continue;
         if (!isArticleLink(link, wiki)) continue;
         state.queue.push([link, nextDepth]);
+        queued.add(link);
       }
     }
 

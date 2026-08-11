@@ -7,10 +7,19 @@
  * thì ghi chú nguồn chứ không tự phán.
  */
 
+import { buildLengthDirective } from '../ai/tokenBudget';
+
 export function buildWikiEntrySystemPrompt(tokensPerEntry: number): string {
   const lenRule = tokensPerEntry > 0
-    ? `Mỗi entry content dài KHOẢNG ${tokensPerEntry} token (≈ ${Math.round(tokensPerEntry * 3.5)} ký tự) — không ngắn hơn ${Math.round(tokensPerEntry * 0.7)}, không dài hơn ${Math.round(tokensPerEntry * 1.3)}.`
+    ? 'Độ dài mỗi entry theo mục §📏 ở cuối lời nhắc này — bám sát, viết hụt là lỗi nặng.'
     : 'Độ dài entry theo lượng thông tin thật — KHÔNG kéo dài bằng chữ thừa.';
+
+  // (bug 229) Luật độ dài cũ tự mâu thuẫn ĐƠN VỊ: "dài KHOẢNG 250 token (≈ 875 ký tự) — không
+  // ngắn hơn 175, không dài hơn 325". Hai con số cuối trần trụi, đứng ngay sau một con số KÝ TỰ,
+  // nên đọc kiểu nào cũng có lý — và model nào đọc thành ký tự thì viết ra entry ngắn bằng 1/5
+  // yêu cầu. `buildLengthDirective` (bug 194) nói bằng BA cách không thể hiểu nhầm: số token, số
+  // ký tự, và CẤU TRÚC (mấy đoạn, mấy câu) — cái cuối là thứ model bám theo tốt nhất.
+  const lengthDirective = buildLengthDirective(tokensPerEntry);
 
   return `Bạn là chuyên gia CHƯNG CẤT nội dung wiki thành Lorebook (World Info) cho SillyTavern.
 
@@ -31,7 +40,7 @@ NGUỒN DUY NHẤT là các trang wiki được cung cấp. LUẬT SẮT:
    tiếng Nhật/Trung/Anh nếu nguồn cung cấp. Key nhiều tiếng dùng KHOẢNG TRẮNG, không dùng _.
 
 CHỈ trả về MỘT MẢNG JSON: [{"comment":"Tên entry","keys":["..."],"secondary_keys":["..."],
-"content":"...","constant":false,"selective":true}]. KHÔNG markdown, KHÔNG lời dẫn.`;
+"content":"...","constant":false,"selective":true}]. KHÔNG markdown, KHÔNG lời dẫn.${lengthDirective}`;
 }
 
 export function buildWikiEntryUserPrompt(args: {

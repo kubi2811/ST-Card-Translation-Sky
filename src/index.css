@@ -47,10 +47,29 @@
 }
 
 /* ─── Base ─── */
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+/*
+ * (bug 230b) RESET PHẢI NẰM TRONG @layer base — KHÔNG ĐƯỢC để trần.
+ *
+ * Đây là gốc của "sao không có margin gì cả, chữ chạm vào cạnh viền hết rồi". Tailwind v4 đặt
+ * mọi utility trong @layer utilities, mà theo luật CSS Cascade Layers thì luật KHÔNG nằm trong
+ * layer LUÔN thắng luật nằm trong layer — bất kể specificity. Nên luật sao (padding: 0) để
+ * trần, specificity 0-0-0, vẫn đè bẹp lớp p-4 có specificity 0-1-0 nằm trong layer.
+ *
+ * Đo được trên trình duyệt trước khi vá: phần tử mang class p-4 / px-6 py-5 / mb-6 / gap-3 đều
+ * computed ra ĐÚNG 0px. Tức là mọi utility khoảng cách của Tailwind trong CẢ APP đã chết lặng
+ * từ trước tới nay — chỉ padding viết bằng CSS thủ công hoặc style inline mới có tác dụng. Đó
+ * là lý do panel Trợ Lý AI trông như chữ dán sát viền dù trong mã có đủ p-4.
+ *
+ * Bọc vào @layer base thì thứ tự layer của Tailwind (theme → base → components → utilities)
+ * cho utilities đứng sau, nên p-4 thắng lại đúng như tác giả định. Reset vẫn còn nguyên tác
+ * dụng với phần tử KHÔNG khai utility khoảng cách nào.
+ */
+@layer base {
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
 }
 
 html {
@@ -172,6 +191,26 @@ body {
   padding: 2px 8px;
   font-size: 0.75rem;
 }
+
+/* ─── (bug 230b) Trợ Lý AI: nút cỡ đọc được ───
+   KHÔNG sửa .btn-xs: lớp đó đang dùng ở 9 file / 47 chỗ khác, sửa nó là đổi giao diện cả app.
+   Thêm lớp riêng rồi bỏ modifier btn-xs trong đúng hai file của Trợ Lý AI.
+   32px = --control-medium của GitHub Primer, cũng là h-8 của shadcn. */
+.ai-btn {
+  padding: 7px 12px;      /* .btn base đã là font-size 0.875rem — chỉ siết padding ngang */
+  min-height: 32px;
+}
+.ai-icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0;   /* Primer --control-small */
+  border: none; background: transparent; cursor: pointer;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  transition: background 0.15s, color 0.15s;
+}
+.ai-icon-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
+.ai-icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.ai-icon-btn-xs { width: 24px; height: 24px; }   /* cặp ▲▼ xếp dọc — Primer --control-xsmall */
 
 /* ─── Inputs ─── */
 .input {
@@ -687,7 +726,7 @@ input[type="range"]::-webkit-slider-thumb {
 }
 
 /* ─── Responsive ─── */
-@media (max-width: 900px) {
+@media (max-width: 960px) {   /* (bug 230b) theo bề rộng sidebar mới */
   .app-layout {
     grid-template-columns: 1fr;
   }
@@ -881,7 +920,10 @@ input[type="range"]::-webkit-slider-thumb {
 
 .companion-chat-layout {
   display: grid;
-  grid-template-columns: 1fr 280px;
+  /* (bug 230b) 280 → 320px. Với chữ sàn 14px, 280px chỉ còn 216px cho chữ nên nhãn + công
+     tắc phải xuống hàng và mọi câu mô tả bị truncate. 320px là bề rộng Pane large của
+     GitHub Primer; trừ hai lớp p-4 còn 256px ≈ 42 ký tự một dòng. */
+  grid-template-columns: 1fr 320px;
   flex: 1;
   overflow: hidden;
 }
@@ -908,7 +950,14 @@ input[type="range"]::-webkit-slider-thumb {
   border-left: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  /* (bug 230b) BUG THẬT: overflow:hidden làm khối cài đặt cuối thanh bị CẮT, không cuộn tới
+     được. min-height:0 là bắt buộc, thiếu nó thì con flex không bao giờ cuộn. */
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+  /* SÀN CHỮ cho cả thanh — con nào không tự khai cỡ thì thừa hưởng mức đọc được. */
+  font-size: 0.875rem;
+  line-height: 1.55;
 }
 
 .companion-chat-header {
@@ -956,7 +1005,7 @@ input[type="range"]::-webkit-slider-thumb {
 }
 
 .companion-message-sender {
-  font-size: 0.65rem;
+  font-size: 0.8125rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -1039,10 +1088,10 @@ input[type="range"]::-webkit-slider-thumb {
   resize: none;
   outline: none;
   color: var(--text-primary);
-  font-size: 0.85rem;
-  line-height: 1.5;
-  padding: 8px 12px;
-  min-height: 50px;
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  padding: 12px 14px;
+  min-height: 58px;
   max-height: 200px;
 }
 
@@ -1052,9 +1101,9 @@ input[type="range"]::-webkit-slider-thumb {
   flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
-  gap: 6px;
-  padding: 4px 8px 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.03);
+  gap: 8px;
+  padding: 8px 12px 4px;
+  border-top: 1px solid var(--border-subtle);
 }
 
 /* Image attachment previews */
@@ -1104,8 +1153,8 @@ input[type="range"]::-webkit-slider-thumb {
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 3px;
-  padding: 1px 4px;
-  font-size: 0.65rem;
+  padding: 3px 6px;
+  font-size: 0.8125rem;
   font-family: var(--font-mono);
   color: var(--text-muted);
 }

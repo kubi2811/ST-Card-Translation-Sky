@@ -2570,17 +2570,17 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
               <Sparkles size={16} color="white" />
             </div>
             <div>
-              <div className="font-bold text-sm">{ui.acPanelTitle}</div>
-              <div className="text-[10px] text-slate-400">
-                Model: <span className="text-indigo-400 font-mono font-bold">{proxy.model || ui.acModelUnset}</span>
+              <div className="font-bold text-[1.125rem] leading-[1.3]">{ui.acPanelTitle}</div>
+              <div className="text-[0.875rem] text-[var(--text-muted)]">
+                Model: <span className="text-indigo-300 font-mono font-bold">{proxy.model || ui.acModelUnset}</span>
               </div>
             </div>
           </div>
           
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 flex-wrap justify-end">
             <button
               onClick={() => setOpenPanel('memory')}
-              className="btn btn-ghost btn-xs text-indigo-300 hover:bg-indigo-500/10"
+              className="btn btn-ghost ai-btn text-indigo-300 hover:bg-indigo-500/10"
               title={ui.acMemBtnTip}
             >
               🧠 {ui.acMemTitle}
@@ -2589,21 +2589,21 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
                 ngay cạnh 🧠, cùng một nhóm "những gì Trợ Lý biết và tuân theo". */}
             <button
               onClick={() => setOpenPanel('core')}
-              className="btn btn-ghost btn-xs text-sky-300 hover:bg-sky-500/10"
+              className="btn btn-ghost ai-btn text-sky-300 hover:bg-sky-500/10"
               title="System Prompt Core — xem đúng chuỗi chỉ dẫn sắp gửi cho Trợ Lý, tách theo tầng, bật/tắt và đổi thứ tự từng tầng."
             >
               ⚙️ Prompt Core
             </button>
             <button
               onClick={() => setOpenPanel('skills')}
-              className="btn btn-ghost btn-xs text-emerald-300 hover:bg-emerald-500/10"
+              className="btn btn-ghost ai-btn text-emerald-300 hover:bg-emerald-500/10"
               title="Kho Kỹ Năng — nạp gói skill từ repo GitHub hoặc dán tay; kỹ năng khớp từ khoá câu bạn hỏi sẽ tự được chèn vào prompt."
             >
               🧩 Kỹ Năng
             </button>
             <button
               onClick={() => setOpenPanel('chats')}
-              className="btn btn-ghost btn-xs text-amber-300 hover:bg-amber-500/10"
+              className="btn btn-ghost ai-btn text-amber-300 hover:bg-amber-500/10"
               title="Hội thoại đã lưu — ghim cuộc bạn thích, tick nhiều cuộc cho Trợ Lý nhớ. Bỏ tick hoặc xoá là Trợ Lý quên thật."
             >
               📌 Hội thoại
@@ -2613,22 +2613,22 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
                 {/* (bug 218) Ghim ngay cuộc đang nói, không phải mở panel mới ghim được. */}
                 <button
                   onClick={ghimCuocNay}
-                  className={`btn btn-ghost btn-xs ${dangGhim ? 'text-amber-300' : 'text-slate-400'} hover:bg-amber-500/10`}
+                  className={`btn btn-ghost ai-btn ${dangGhim ? 'text-amber-300' : 'text-[var(--text-muted)]'} hover:bg-amber-500/10`}
                   title="Ghim cuộc trò chuyện này để Trợ Lý nhớ nó ở các lượt sau. Bỏ ghim trong panel 📌 Hội thoại là Trợ Lý quên hẳn, kể cả những ký ức đã rút ra từ nó."
                 >
                   📌 {dangGhim ? 'Đã ghim' : 'Ghim cuộc này'}
                 </button>
                 <button
                   onClick={handleClearChat}
-                  className="btn btn-ghost btn-xs text-rose-400 hover:bg-rose-500/10"
+                  className="btn btn-ghost ai-btn text-rose-400 hover:bg-rose-500/10"
                 >
-                  <RotateCcw size={12} className="mr-1" /> {ui.acClearChat}
+                  <RotateCcw size={14} className="mr-1" /> {ui.acClearChat}
                 </button>
               </>
             )}
             <button 
               onClick={onClose}
-              className="p-1 hover:bg-zinc-800 rounded transition-colors text-slate-400 hover:text-white"
+              className="ai-icon-btn"
             >
               <X size={18} />
             </button>
@@ -2650,7 +2650,7 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
               className={`tab ${activeTab === 'chat' ? 'tab-active' : ''}`}
               onClick={() => setActiveTab('chat')}
             >
-              <Sparkles size={12} style={{ marginRight: 4, display: 'inline-block', verticalAlign: 'middle' }} />
+              <Sparkles size={14} style={{ marginRight: 4, display: 'inline-block', verticalAlign: 'middle' }} />
               <span style={{ verticalAlign: 'middle' }}>{ui.acTabChat}</span>
             </button>
             <button
@@ -2658,7 +2658,7 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
               className={`tab ${activeTab === 'sandbox' ? 'tab-active' : ''}`}
               onClick={() => setActiveTab('sandbox')}
             >
-              <Play size={12} style={{ marginRight: 4, display: 'inline-block', verticalAlign: 'middle' }} />
+              <Play size={14} style={{ marginRight: 4, display: 'inline-block', verticalAlign: 'middle' }} />
               <span style={{ verticalAlign: 'middle' }}>Sandbox</span>
             </button>
             <button
@@ -2666,7 +2666,7 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
               className={`tab ${activeTab === 'presets' ? 'tab-active' : ''}`}
               onClick={() => setActiveTab('presets')}
             >
-              <Languages size={12} style={{ marginRight: 4, display: 'inline-block', verticalAlign: 'middle' }} />
+              <Languages size={14} style={{ marginRight: 4, display: 'inline-block', verticalAlign: 'middle' }} />
               <span style={{ verticalAlign: 'middle' }}>Presets</span>
             </button>
             <button
@@ -2674,7 +2674,7 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
               className={`tab ${activeTab === 'mvu-zod' ? 'tab-active' : ''}`}
               onClick={() => setActiveTab('mvu-zod')}
             >
-              <Code2 size={12} style={{ marginRight: 4, display: 'inline-block', verticalAlign: 'middle' }} />
+              <Code2 size={14} style={{ marginRight: 4, display: 'inline-block', verticalAlign: 'middle' }} />
               <span style={{ verticalAlign: 'middle' }}>{ui.acTabMvu}</span>
             </button>
           </div>
@@ -2716,7 +2716,7 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
                   />
                   <div className="companion-input-actions">
                     <div className="flex items-center gap-1.5">
-                      <span className="text-[9px] text-slate-500 flex items-center gap-1 select-none">
+                      <span className="text-[0.8125rem] text-[var(--text-muted)] flex items-center gap-1 select-none">
                         <kbd className="kbd-key">Enter</kbd> {ui.acSend}
                       </span>
                     </div>
@@ -2726,7 +2726,7 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
                           onClick={handleContinue}
                           disabled={isGenerating}
                           title={ui.acContinueTitle}
-                          className="bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 rounded-lg px-2.5 py-1.5 flex items-center gap-1 text-[10px] font-bold transition-all whitespace-nowrap"
+                          className="bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 rounded-lg px-3 py-2 flex items-center gap-1 text-[0.875rem] font-bold transition-all whitespace-nowrap"
                         >
                           {ui.acContinue}
                         </button>
@@ -2735,7 +2735,7 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
                         onClick={handleCommand}
                         disabled={!inputValue.trim() || isGenerating}
                         title={ui.acCommandTitle}
-                        className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 rounded-lg px-2.5 py-1.5 flex items-center gap-1 text-[10px] font-bold transition-all"
+                        className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 rounded-lg px-3 py-2 flex items-center gap-1 text-[0.875rem] font-bold transition-all"
                       >
                         {ui.acCommandBtn}
                       </button>
@@ -2744,17 +2744,17 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
                         <button
                           onClick={handleStop}
                           title={ui.acStopTip}
-                          className="bg-rose-600 hover:bg-rose-500 text-white rounded-lg px-3.5 py-1.5 font-bold text-xs flex items-center gap-1 shadow-md active:scale-95 transition-all"
+                          className="bg-rose-600 hover:bg-rose-500 text-white rounded-lg px-4 py-2 font-bold text-[0.875rem] flex items-center gap-1 shadow-md active:scale-95 transition-all"
                         >
-                          {ui.acStopBtn} <Square size={11} fill="currentColor" />
+                          {ui.acStopBtn} <Square size={14} fill="currentColor" />
                         </button>
                       ) : (
                         <button
                           onClick={() => handleSend()}
                           disabled={!inputValue.trim()}
-                          className="bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg px-3.5 py-1.5 font-bold text-xs flex items-center gap-1 shadow-md active:scale-95 transition-all"
+                          className="bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg px-4 py-2 font-bold text-[0.875rem] flex items-center gap-1 shadow-md active:scale-95 transition-all"
                         >
-                          {ui.acSend} <Send size={12} />
+                          {ui.acSend} <Send size={14} />
                         </button>
                       )}
                     </div>
@@ -2766,17 +2766,17 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
             {/* ══════ RIGHT COLUMN: SIDEBAR ══════ */}
             <div className="companion-sidebar">
               {/* Card metadata (auto-loaded context) */}
-              <div className="p-4 border-bottom border-zinc-800">
-                <div className="text-[10px] uppercase font-bold text-indigo-400 tracking-wider mb-3 flex items-center gap-1">
-                  <Eye size={12} /> {ui.acCardContext}
+              <div className="p-4 border-b border-[var(--border-subtle)]">
+                <div className="text-[0.875rem] uppercase font-bold text-indigo-300 tracking-[0.02em] mb-3 flex items-center gap-1">
+                  <Eye size={14} /> {ui.acCardContext}
                 </div>
                 
                 {card ? (
-                  <div className="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-3 space-y-2">
-                    <div className="font-semibold text-xs text-slate-200 truncate" title={card.name || card.data?.name}>
+                  <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-xl p-4 space-y-3">
+                    <div className="font-semibold text-[0.875rem] text-[var(--text-primary)] truncate" title={card.name || card.data?.name}>
                       {card.name || card.data?.name || ui.acUnnamedCard}
                     </div>
-                    <div className="text-[10px] text-slate-400 space-y-1">
+                    <div className="text-[0.875rem] text-[var(--text-muted)] space-y-1">
                       <div>{ui.acCardType}<span className="font-mono text-indigo-300">{card.spec || 'Character'}</span></div>
                       <div>{ui.acCardLorebook}<span className="font-mono text-indigo-300">{card.data?.character_book?.entries?.length || 0}{ui.acEntriesSuffix}</span></div>
                       <div>Regex: <span className="font-mono text-indigo-300">{card.data?.extensions?.regex_scripts?.length || 0} script</span></div>
@@ -2784,69 +2784,69 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
                         <div className="text-emerald-400">{ui.acHasDepthPrompt}</div>
                       )}
                     </div>
-                    <div className="text-[9px] text-emerald-400/80 mt-1 flex items-center gap-1 font-medium bg-emerald-500/10 px-2 py-0.5 rounded-lg border border-emerald-500/10">
+                    <div className="text-[0.8125rem] text-emerald-300 mt-1 flex items-center gap-1 font-medium bg-emerald-500/10 px-2.5 py-1.5 rounded-lg border border-emerald-500/10">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                       {ui.acContextLoaded}
                     </div>
                   </div>
                 ) : (
-                  <div className="text-xs text-slate-500 text-center py-4 bg-zinc-900/20 border border-dashed border-zinc-800 rounded-xl">
+                  <div className="text-[0.875rem] text-[var(--text-muted)] text-center py-4 bg-[var(--bg-secondary)] border border-dashed border-[var(--border-subtle)] rounded-xl">
                     {ui.acNoCardLoaded}
                   </div>
                 )}
               </div>
 
               {/* Files Context Panel */}
-              <div className="p-4 flex-1 flex flex-col min-h-0 border-bottom border-zinc-800">
-                <div className="text-[10px] uppercase font-bold text-indigo-400 tracking-wider mb-2 flex justify-between items-center">
+              <div className="p-4 border-b border-[var(--border-subtle)]">
+                <div className="text-[0.875rem] uppercase font-bold text-indigo-300 tracking-[0.02em] mb-2 flex justify-between items-center">
                   <span>{ui.acAttachedDocs}</span>
                   {attachedFiles.length > 0 && (
                     <button 
                       onClick={handleClearContext}
-                      className="text-rose-400 hover:text-rose-300 transition-colors text-[9px] font-bold flex items-center gap-0.5"
+                      className="text-rose-400 hover:text-rose-300 transition-colors text-[0.8125rem] font-bold flex items-center gap-0.5"
                       title={ui.acClearAttachments}
                     >
-                      <Trash2 size={10} /> DỌN DẸP
+                      <Trash2 size={14} /> DỌN DẸP
                     </button>
                   )}
                 </div>
 
-                <div className="flex-1 overflow-y-auto space-y-1.5 custom-scrollbar mb-3">
+                <div className="max-h-[320px] overflow-y-auto space-y-2 custom-scrollbar mb-4">
                   {attachedFiles.length === 0 ? (
-                    <div className="h-full flex flex-col items-center justify-center text-center opacity-40 py-8 gap-2">
+                    <div className="h-full flex flex-col items-center justify-center text-center py-8 gap-2">
                       <Upload size={24} />
-                      <p className="text-[10px]">{ui.acNoAttachments}</p>
+                      <p className="text-[0.875rem]">{ui.acNoAttachments}</p>
                     </div>
                   ) : (
                     attachedFiles.map((file, idx) => (
                       <div 
                         key={idx} 
-                        className="flex items-center justify-between bg-zinc-900/60 border border-zinc-800/80 px-2 py-1.5 rounded-lg group"
+                        className="flex items-center justify-between bg-[var(--bg-secondary)] border border-[var(--border-subtle)] px-3 py-2.5 rounded-lg group"
                       >
                         <div className="flex items-center gap-2 overflow-hidden">
                           {file.isImage ? (
                             <img 
                               src={file.content} 
                               alt={file.name} 
-                              className="w-5 h-5 object-cover rounded border border-zinc-700 flex-shrink-0"
+                              className="w-5 h-5 object-cover rounded border border-[var(--border-default)] flex-shrink-0"
                             />
                           ) : (
-                            <FileText size={12} className="text-indigo-400 flex-shrink-0" />
+                            <FileText size={14} className="text-indigo-300 flex-shrink-0" />
                           )}
-                          <span className="text-[10px] font-mono truncate text-slate-300" title={attachmentLabel(file.name, file.part)}>
+                          <span className="text-[0.8125rem] font-mono truncate text-[var(--text-secondary)]" title={attachmentLabel(file.name, file.part)}>
                             {file.name}
                           </span>
                           {file.part && (
-                            <span className="text-[9px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded px-1 flex-shrink-0" title={ui.acPartBadgeTip}>
+                            <span className="text-[0.8125rem] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-md px-2 py-0.5 flex-shrink-0" title={ui.acPartBadgeTip}>
                               {file.part.index}/{file.part.total}
                             </span>
                           )}
                         </div>
                         <button
                           onClick={() => handleRemoveFile(idx)}
-                          className="opacity-0 group-hover:opacity-100 p-1 text-rose-500 transition-all hover:bg-rose-500/10 rounded"
+                          className="ai-icon-btn opacity-60 group-hover:opacity-100 focus-visible:opacity-100 hover:!text-rose-400"
                         >
-                          <Trash2 size={11} />
+                          <Trash2 size={14} />
                         </button>
                       </div>
                     ))
@@ -2854,20 +2854,20 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
                 </div>
 
                 {uploadError && (
-                  <div className="bg-rose-500/10 border border-rose-500/20 text-rose-300 text-[10px] p-2.5 rounded-xl leading-relaxed space-y-1 mb-2">
+                  <div className="bg-rose-500/10 border border-rose-500/20 text-rose-300 text-[0.875rem] p-3 rounded-xl leading-relaxed space-y-1 mb-2">
                     <div className="font-semibold flex items-center gap-1">
-                      <AlertCircle size={10} className="text-rose-400 shrink-0" />
+                      <AlertCircle size={14} className="text-rose-400 shrink-0" />
                       <span>{ui.acFileError}</span>
                     </div>
-                    <p className="break-all font-mono text-[9px] bg-black/20 p-1 rounded">{uploadError}</p>
+                    <p className="break-all font-mono text-[0.8125rem] bg-black/20 p-1 rounded">{uploadError}</p>
                   </div>
                 )}
 
                 <button
                   onClick={() => fileInputRef.current?.click()}
-                  className="w-full py-2 border border-dashed border-zinc-800 rounded-xl text-center text-[10px] font-semibold text-slate-400 hover:bg-zinc-800/50 hover:border-indigo-500 hover:text-indigo-400 transition-all flex items-center justify-center gap-1"
+                  className="w-full py-2 border border-dashed border-[var(--border-subtle)] rounded-xl text-center text-[0.875rem] font-semibold text-[var(--text-muted)] hover:bg-[var(--bg-hover)]/50 hover:border-indigo-500 hover:text-indigo-300 transition-all flex items-center justify-center gap-1"
                 >
-                  <Plus size={12} /> {ui.acAttachFile}
+                  <Plus size={14} /> {ui.acAttachFile}
                 </button>
                 <input 
                   type="file" 
@@ -2882,17 +2882,17 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
               {/* Settings Card */}
               <div className="p-4 space-y-4">
                 {/* (User 19/07) 📜 Prompt Chỉ Thị — khoá Trợ Lý vào khuôn khổ user đặt */}
-                <div className="bg-zinc-900/30 border border-zinc-800/60 rounded-xl p-3 flex flex-col gap-2">
+                <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-xl p-4 flex flex-col gap-3">
                   <button
                     type="button"
                     onClick={() => setShowDirective(v => !v)}
                     className="flex items-center justify-between cursor-pointer group select-none w-full bg-transparent border-0 p-0"
                   >
-                    <span className="flex items-center gap-1.5 text-[10px] uppercase font-bold text-slate-400 group-hover:text-emerald-400 transition-colors">
+                    <span className="flex items-center gap-1.5 text-[0.875rem] uppercase font-bold text-indigo-300 group-hover:text-emerald-400 transition-colors">
                       📜 {ui.acDirectiveTitle}
-                      {directivePrompt.trim() && <span className="normal-case font-normal text-emerald-500">● {ui.acDirectiveOn}</span>}
+                      {directivePrompt.trim() && <span className="normal-case font-normal text-emerald-300">● {ui.acDirectiveOn}</span>}
                     </span>
-                    <span className="text-slate-500 text-[10px]">{showDirective ? '▲' : '▼'}</span>
+                    <span className="text-[var(--text-muted)] text-[0.875rem]">{showDirective ? '▲' : '▼'}</span>
                   </button>
                   {showDirective && (
                     <>
@@ -2902,13 +2902,13 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
                         rows={5}
                         placeholder={ui.acDirectivePh}
                         spellCheck={false}
-                        className="w-full bg-zinc-950/60 border border-zinc-800 rounded-lg p-2 text-[11px] text-slate-300 leading-relaxed resize-y focus:outline-none focus:border-emerald-600/60"
+                        className="w-full bg-[var(--bg-primary)] border border-[var(--border-subtle)] rounded-lg p-3 text-[0.875rem] text-[var(--text-secondary)] leading-relaxed resize-y focus:outline-none focus:border-emerald-600/60"
                       />
                       <div className="flex items-center justify-between">
-                        <span className="text-[9px] text-slate-500 leading-relaxed">{ui.acDirectiveDesc}</span>
+                        <span className="text-[0.8125rem] text-[var(--text-muted)] leading-relaxed">{ui.acDirectiveDesc}</span>
                         {directivePrompt.trim() && (
                           <button type="button" onClick={() => saveDirective('')}
-                            className="text-[9px] text-rose-400/80 hover:text-rose-400 bg-transparent border-0 cursor-pointer shrink-0 ml-2">
+                            className="text-[0.8125rem] text-rose-300 hover:text-rose-400 bg-transparent border-0 cursor-pointer shrink-0 ml-2">
                             {ui.acDirectiveClear}
                           </button>
                         )}
@@ -2918,58 +2918,58 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
                 </div>
 
                 {/* (P1) RAG Memory Toggle */}
-                <div className="bg-zinc-900/30 border border-zinc-800/60 rounded-xl p-3 flex flex-col gap-2">
+                <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-xl p-4 flex flex-col gap-3">
                   <label className="flex items-center justify-between cursor-pointer group select-none">
-                    <span className="flex items-center gap-1.5 text-[10px] uppercase font-bold text-slate-400 group-hover:text-indigo-400 transition-colors">
-                      <Search size={12} className="opacity-70 group-hover:opacity-100" />
+                    <span className="flex items-center gap-1.5 text-[0.875rem] uppercase font-bold text-indigo-300 group-hover:text-indigo-300 transition-colors">
+                      <Search size={14} className="opacity-70 group-hover:opacity-100" />
                       {ui.acRagToggle}
                     </span>
                     <input
                       type="checkbox"
                       checked={ragEnabled}
                       onChange={e => setRagEnabled(e.target.checked)}
-                      className="accent-indigo-500 w-3.5 h-3.5 cursor-pointer"
+                      className="accent-indigo-500 w-4 h-4 cursor-pointer"
                     />
                   </label>
-                  <div className="text-[9px] text-slate-500 leading-relaxed">
+                  <div className="text-[0.8125rem] text-[var(--text-muted)] leading-relaxed">
                     {ui.acRagToggleDesc}
                   </div>
                 </div>
 
                 {/* NSFW Toggle */}
-                <div className="bg-zinc-900/30 border border-zinc-800/60 rounded-xl p-3 flex flex-col gap-2">
+                <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-xl p-4 flex flex-col gap-3">
                   <label className="flex items-center justify-between cursor-pointer group select-none">
-                    <span className="flex items-center gap-1.5 text-[10px] uppercase font-bold text-slate-400 group-hover:text-rose-400 transition-colors">
-                      <Flame size={12} className="opacity-70 group-hover:opacity-100" />
+                    <span className="flex items-center gap-1.5 text-[0.875rem] uppercase font-bold text-indigo-300 group-hover:text-rose-400 transition-colors">
+                      <Flame size={14} className="opacity-70 group-hover:opacity-100" />
                       {ui.acNsfwMode}
                     </span>
                     <input 
                       type="checkbox" 
                       checked={nsfwEnabled}
                       onChange={e => setNsfwEnabled(e.target.checked)}
-                      className="accent-rose-500 w-3.5 h-3.5 cursor-pointer"
+                      className="accent-rose-500 w-4 h-4 cursor-pointer"
                     />
                   </label>
-                  <div className="text-[9px] text-slate-500 leading-relaxed">
+                  <div className="text-[0.8125rem] text-[var(--text-muted)] leading-relaxed">
                     {ui.acNsfwDesc}
                   </div>
                 </div>
 
                 {/* Auto-Retry Toggle */}
-                <div className="bg-zinc-900/30 border border-zinc-800/60 rounded-xl p-3 flex flex-col gap-2">
+                <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-xl p-4 flex flex-col gap-3">
                   <label className="flex items-center justify-between cursor-pointer group select-none">
-                    <span className="flex items-center gap-1.5 text-[10px] uppercase font-bold text-slate-400 group-hover:text-amber-400 transition-colors">
-                      <RefreshCw size={12} className="opacity-70 group-hover:opacity-100" />
+                    <span className="flex items-center gap-1.5 text-[0.875rem] uppercase font-bold text-indigo-300 group-hover:text-amber-400 transition-colors">
+                      <RefreshCw size={14} className="opacity-70 group-hover:opacity-100" />
                       {ui.acAutoRetry}
                     </span>
                     <input 
                       type="checkbox" 
                       checked={autoRetry}
                       onChange={e => setAutoRetry(e.target.checked)}
-                      className="accent-amber-500 w-3.5 h-3.5 cursor-pointer"
+                      className="accent-amber-500 w-4 h-4 cursor-pointer"
                     />
                   </label>
-                  <div className="text-[9px] text-slate-500 leading-relaxed">
+                  <div className="text-[0.8125rem] text-[var(--text-muted)] leading-relaxed">
                     {ui.acAutoRetryDesc}
                   </div>
                 </div>
@@ -2977,18 +2977,18 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
                 {/* Auto-execute Actions */}
                 <div className="flex flex-col gap-1">
                   <label className="group flex items-center justify-between gap-2 cursor-pointer">
-                    <span className="flex items-center gap-1.5 text-[11px] font-bold text-slate-300">
-                      <Zap size={12} className="opacity-70 group-hover:opacity-100 text-purple-400" />
+                    <span className="flex items-center gap-1.5 text-[0.875rem] font-bold text-[var(--text-secondary)]">
+                      <Zap size={14} className="opacity-70 group-hover:opacity-100 text-purple-400" />
                       {ui.acAutoActions}
                     </span>
                     <input 
                       type="checkbox" 
                       checked={autoExecute}
                       onChange={e => setAutoExecute(e.target.checked)}
-                      className="accent-purple-500 w-3.5 h-3.5 cursor-pointer"
+                      className="accent-purple-500 w-4 h-4 cursor-pointer"
                     />
                   </label>
-                  <div className="text-[9px] text-slate-500 leading-relaxed">
+                  <div className="text-[0.8125rem] text-[var(--text-muted)] leading-relaxed">
                     {ui.acAutoActionsDesc}
                   </div>
                 </div>
@@ -2998,7 +2998,7 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
                   <button
                     onClick={handleUndo}
                     disabled={cardHistory.length === 0}
-                    className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-bold transition-all"
+                    className="flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-md text-[0.875rem] font-bold transition-all"
                     style={{
                       background: cardHistory.length > 0 ? 'rgba(99, 102, 241, 0.15)' : 'rgba(255,255,255,0.03)',
                       border: `1px solid ${cardHistory.length > 0 ? 'rgba(99, 102, 241, 0.3)' : 'rgba(255,255,255,0.05)'}`,
@@ -3006,10 +3006,10 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
                       cursor: cardHistory.length > 0 ? 'pointer' : 'not-allowed',
                     }}
                   >
-                    <Undo2 size={12} />
+                    <Undo2 size={14} />
                     {fmt(ui.acUndoBtn, { count: cardHistory.length, max: MAX_HISTORY })}
                   </button>
-                  <div className="text-[9px] text-slate-500 leading-relaxed">
+                  <div className="text-[0.8125rem] text-[var(--text-muted)] leading-relaxed">
                     {fmt(ui.acUndoDesc, { max: MAX_HISTORY })}
                   </div>
                 </div>

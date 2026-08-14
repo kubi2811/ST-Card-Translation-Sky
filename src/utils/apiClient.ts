@@ -733,8 +733,11 @@ async function postTranslationResidualCheck(
   const isTargetCJK = /chinese|japanese|korean/i.test(targetLang);
   if (isTargetCJK) return translated;
 
+  /* (bug 234) NGƯỠNG CŨ `< 3` NGHĨA LÀ: gốc có 1-2 chữ Hán thì miễn kiểm luôn.
+   * Đúng cỡ của "boss骇爪", "<道具>", "HP血量" — tức đúng ca user báo. Gốc có chữ Hán là có việc,
+   * không có mức "ít quá thì thôi". */
   const origChineseCount = countChineseChars(original);
-  if (origChineseCount < 3) return translated;
+  if (origChineseCount === 0) return translated;
 
   /**
    * (bug 229e) KHÔNG ĐƯỢC GỬI CẢ TÀI LIỆU KHỔNG LỒ ĐI VIẾT LẠI.
@@ -766,8 +769,16 @@ async function postTranslationResidualCheck(
   let currentResult = translated;
 
   for (let retry = 0; retry < 2; retry++) {
+    /* (bug 234) "≤ 2 chữ Hán thì coi như sạch" là chỗ lọt của cả một lớp lỗi.
+     * Một tiêu đề "<道具>" đúng 2 chữ, một nhãn "骇爪" đúng 2 chữ — vòng dọn này nhìn thấy chúng
+     * rồi tự tuyên bố sạch và trả về ngay, không gọi lượt dọn nào. Đó là lý do user thấy entry
+     * ghi XONG mà cột bản dịch vẫn mở đầu bằng chữ Hán.
+     * An toàn khi hạ về 0: tới đây URL đã bị `stripUrlsForCjkCheck` loại khỏi phép đếm và giá trị
+     * CSS giữ-nguyên đã được mask thành ASCII ở tầng trên, nên thứ còn đếm được đều là chữ THẬT
+     * chưa dịch. Vòng lặp vẫn chặn trần 2 lượt, và nếu dọn không giảm được thì nhánh bên dưới giữ
+     * nguyên bản cũ — không có đường nào lặp vô tận. */
     const residualCount = countChineseChars(currentResult);
-    if (residualCount <= 2) {
+    if (residualCount === 0) {
       if (retry > 0) console.log(`[ResidualCheck] ${fieldName}: Clean after ${retry} retry(ies)`);
       return currentResult;
     }
@@ -4460,7 +4471,9 @@ ${sectionList}
           if (results[ri] && results[ri].trim() && items[ri]) {
             const origChinese = countChineseChars(items[ri].text);
             const residual = countChineseChars(results[ri]);
-            if (origChinese >= 3 && residual > 0) {
+            // (bug 234) `>= 3` bỏ sót đúng các field NGẮN — mà field ngắn (tên, nhãn, comment)
+            // lại là loại đông nhất trong một lô gộp. Gốc có chữ Hán + bản dịch còn chữ Hán = dọn.
+            if (origChinese > 0 && residual > 0) {
               try {
                 results[ri] = await postTranslationResidualCheck(
                   items[ri].text, results[ri], items[ri].fieldName,

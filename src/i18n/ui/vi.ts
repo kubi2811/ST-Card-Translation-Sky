@@ -456,6 +456,10 @@ const ui: UiKeys = {
   epTotalChecking: 'Đang kiểm…',
   epTotalPass: '✅ Nghiệm thu ĐẠT — đã kiểm sâu, không phát hiện lỗi nặng. An toàn để xuất.',
   epTotalFail: '❌ Nghiệm thu: còn {count} lỗi nặng — nên sửa/dịch lại trước khi xuất.',
+  // (bug 234) Câu riêng cho ca "0 lỗi nặng nhưng thẻ vẫn đầy tiếng Trung" — trước đây ca này rơi
+  // vào nhánh ĐẠT và cho ra banner xanh, nên user xuất thẻ rồi mới phát hiện.
+  epHealthCjkLeft: '⚠️ Chưa nên xuất: còn {cjk} trường có chữ Hán chưa dịch{skipped} — bấm "Dịch lại mục chưa đạt" ở thanh tiến độ trước.',
+  epHealthCjkSkipped: ' và {n} trường bị tự động bỏ qua (chưa hề gửi cho AI)',
   epTotalHint: 'Chạy cả 3 bộ kiểm (đều tại máy, không tốn call AI): sức khoẻ thẻ + kiểm sâu nội dung từng field (macro hỏng, lệch ngoặc/HTML/JSON, cắt cụt…) + đối chiếu card gốc xem có mất macro/biến/Zod/EJS không.',
   epTotalDoneLine: 'Đã kiểm sâu lúc {time}: {deep} vấn đề nội dung · {macro} vấn đề macro/biến so với card gốc.',
   epSrcDeep: 'KIỂM SÂU',

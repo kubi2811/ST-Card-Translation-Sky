@@ -63,11 +63,31 @@ describe('scanFieldsHealth', () => {
     expect(r.ok).toBe(false);
   });
 
-  it('chữ Hán sót trong VĂN BẢN done → info (không chặn xuất)', () => {
+  /**
+   * (bug 234) HỢP ĐỒNG ĐỔI: 'info' → 'warning'.
+   * User: "Vẫn còn tiếng trung chưa dịch hết nhưng vẫn để là dịch xong."
+   * Banner sức khoẻ thẻ ở ExportPanel chỉ đếm severity==='error', nên mức 'info' làm một thẻ
+   * 80 entry còn nguyên tiếng Trung vẫn được đóng dấu XANH "An toàn để xuất". Nâng lên 'warning'
+   * để chốt xuất thẻ nhìn thấy được — nhưng vẫn KHÔNG phải 'error' vì chữ Hán trong văn xuôi có
+   * thể là tên riêng người dùng cố ý giữ, không đáng chặn cứng.
+   */
+  it('(bug 234) chữ Hán sót trong VĂN BẢN done → warning, ok vẫn true (không phải lỗi nặng)', () => {
     const r = scanFieldsHealth([mk({ translated: '主角是李明和王芳', status: 'done' })]);
     expect(r.counts.residualCjkText).toBe(1);
-    expect(r.ok).toBe(true); // info không phải error
-    expect(r.issues[0].severity).toBe('info');
+    expect(r.ok).toBe(true); // warning không phải error ⇒ không chặn cứng
+    expect(r.issues[0].severity).toBe('warning');
+  });
+
+  it('(bug 234) field bị TỰ ĐỘNG BỎ QUA cũng phải bị soi — trước đây chỉ soi status done', () => {
+    // prepareFields gán translated = original khi bỏ qua ⇒ "bản dịch" chính là nguyên văn tiếng Trung.
+    const r = scanFieldsHealth([mk({ original: '主角是李明', translated: '主角是李明', status: 'skipped' })]);
+    expect(r.counts.residualCjkText).toBe(1);
+    expect(r.issues[0].detail).toMatch(/TỰ ĐỘNG BỎ QUA/);
+  });
+
+  it('(bug 234) sót ĐÚNG 2 chữ Hán vẫn phải báo — ngưỡng cũ là 3 nên "<道具>" lọt', () => {
+    const r = scanFieldsHealth([mk({ translated: '<道具> Danh sách vật phẩm của nhân vật', status: 'done' })]);
+    expect(r.counts.residualCjkText).toBe(1);
   });
 });
 

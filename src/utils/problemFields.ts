@@ -54,15 +54,26 @@ export function collectProblemFields(
   opts: ScanOptions = {},
 ): ProblemSummary {
   const problems: ProblemField[] = [];
+  const byPath = new Map<string, ProblemField>();
 
   for (const f of fields || []) {
     if (f.status === 'error') problems.push({ path: f.path, label: f.label, kind: 'error' });
     else if (f.status === 'skipped') problems.push({ path: f.path, label: f.label, kind: 'skipped' });
   }
+  for (const p of problems) byPath.set(p.path, p);
 
   const residualHits = scanFieldsForResidualCjk(fields, opts);
   for (const h of residualHits) {
-    problems.push({ path: h.path, label: h.label, kind: 'residual', residual: h });
+    /* (bug 234) Bộ quét nay soi cả field 'skipped' (bản "dịch" của nó chính là bản gốc tiếng
+     * Trung). Một field như thế khớp CẢ HAI nguồn, nên nếu cứ push thêm là nó bị đếm hai lần —
+     * bảng "chưa đạt" phồng lên gấp đôi và user không hiểu con số ở đâu ra.
+     * Chỉ giữ MỘT dòng cho mỗi field, nhưng gắn kèm chứng cứ đoạn còn sót vào dòng đã có để lượt
+     * dịch lại vẫn được nhắc đích danh chỗ nào chưa dịch. */
+    const existing = byPath.get(h.path);
+    if (existing) { existing.residual = h; continue; }
+    const p: ProblemField = { path: h.path, label: h.label, kind: 'residual', residual: h };
+    problems.push(p);
+    byPath.set(h.path, p);
   }
 
   const counts = {

@@ -9,8 +9,8 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import type { FieldGroup, TranslationField, TranslationStatus } from '../types/card';
 import { auditChunks, joinChunks, summarizeAudit } from '../utils/chunkAudit';
 import { chunkCharsForField } from '../utils/chunking';
-import { RotateCcw, AlertTriangle, CheckCircle2, Clock, ArrowLeftRight, BarChart3, Ban, Search, X, Copy, Check, Eye, Wand2, Zap, Brain, Download, Filter } from 'lucide-react';
-import { countCjkText } from '../utils/cjk';
+import { RotateCcw, AlertTriangle, CheckCircle2, Clock, ArrowLeftRight, BarChart3, Ban, Search, X, Copy, Check, Eye, Wand2, Zap, Brain, Download, Filter, SkipForward } from 'lucide-react';
+import { countResidualHan } from '../utils/residualCjkScan';
 import { TranslatedTextarea } from './TranslatedTextarea';
 // (bug 223) Thu hoi blob URL SAU khi trinh duyet doc xong - revoke ngay sau click lam hut file.
 import { revokeSoon } from '../utils/downloadFile';
@@ -142,16 +142,27 @@ function CharRatio({ original, translated }: { original: string; translated: str
  * chỉ nút "Kiểm Tra Field" mới bắt (không tự động), nên user tưởng đã dịch xong. Ngưỡng khớp
  * verifyFields: origCJK>3 và (tỉ lệ >15% HOẶC >10 ký tự CJK còn lại). Bấm badge = nhảy tới field.
  */
+/**
+ * (bug 234) BADGE PHẢI NÓI CÙNG MỘT SỰ THẬT VỚI BẢNG ĐẾM "MỤC CHƯA ĐẠT".
+ *
+ * Bản cũ tự đặt ngưỡng riêng: `origCJK <= 3` bỏ qua, và `ratio <= 0.15 && transCJK <= 10` cũng
+ * bỏ qua — tức phải còn hơn 10 ký tự CJK HOẶC hơn 15% mới chịu hiện. Trong khi bộ quét được coi
+ * là nguồn chân lý của app (`scanFieldsForResidualCjk`) đếm từ 1 chữ. Hai thước đo lệch nhau đẻ
+ * ra đúng cảnh user chụp: entry còn tiêu đề "<道具>" nằm trong danh sách "mục chưa đạt", nhưng
+ * trên hàng của nó chỉ có một chữ XONG xanh, không dấu hiệu gì.
+ *
+ * Còn khác cả hàm đếm: badge cũ dùng `countCjkText` (KHÔNG bỏ URL) nên chữ Hán trong link cũng
+ * bị tính. Nay dùng chung `countResidualHan` — bỏ URL + mask CSS giữ-nguyên, y hệt bộ quét.
+ */
 function ResidualCjkBadge({ original, translated, t }: { original: string; translated: string; t: Record<string, string> }) {
   const info = useMemo(() => {
     if (!translated) return null;
-    const origCJK = countCjkText(original);
-    const transCJK = countCjkText(translated);
-    if (origCJK <= 3 || transCJK === 0) return null;
-    const ratio = transCJK / origCJK;
-    // Chỉ cảnh báo khi thật sự đáng ngờ (bỏ qua 1-2 ký tự lẻ như tên riêng giữ nguyên cố ý)
-    if (ratio <= 0.15 && transCJK <= 10) return null;
-    return { transCJK, pct: Math.round(ratio * 100) };
+    // Nguồn vốn không có chữ Hán ⇒ chữ Hán trong bản dịch không phải "dịch sót".
+    if (countResidualHan(original || '') === 0) return null;
+    const transCJK = countResidualHan(translated);
+    if (transCJK === 0) return null;
+    const origCJK = countResidualHan(original || '');
+    return { transCJK, pct: Math.max(1, Math.round((transCJK / origCJK) * 100)) };
   }, [original, translated]);
 
   if (!info) return null;
@@ -413,7 +424,10 @@ function ChunkStatusAndResume({
 
   /** Ghép lại từ các chunk đang có — đúng quy tắc engine dùng (HTML/code nối liền). */
   const rejoinFromChunks = () => {
-    if (audit.suspectIndices.length > 0) {
+    // (bug 234) Chặn theo mức 'block' (thiếu chunk / chép nguyên văn / cắt cụt), KHÔNG chặn ở mức
+    // 'warn' (sót lơ thơ vài chữ Hán) — chặn cứng cả hai thì một chunk AI chữa mãi không xong sẽ
+    // khoá luôn cả entry, đúng cảnh đã gặp ở chunk 24 của tavernHelper[6].
+    if (audit.blockingIndices.length > 0) {
       useStore.getState().addLog('warning',
         `⚠️ Chưa ghép: ${summarizeAudit(audit)} Ghép lúc này sẽ ra bản thiếu — dịch lại các chunk đó trước.`);
       return;
@@ -421,6 +435,14 @@ function ChunkStatusAndResume({
     const joined = joinChunks(doneList.map(c => c || ''), field.original);
     useStore.getState().updateField(field.path, { translated: joined, status: 'done' });
     useStore.getState().addLog('success', `🧩 Đã ghép lại ${totalChunks} chunk của ${field.label} (${joined.length.toLocaleString()} ký tự).`);
+    // (bug 234) Ghép xong PHẢI đếm lại chữ Hán trên chính bản ghép rồi nói ra. Trước đây nút này
+    // đóng dấu 'done' rồi im — người dùng chỉ thấy dòng xanh "Đã ghép lại" và tin là xong.
+    const leftover = countResidualHan(joined);
+    if (leftover > 0) {
+      useStore.getState().addLog('warning',
+        `⚠️ Bản ghép của ${field.label} còn ${leftover} chữ Hán chưa dịch. Mục này sẽ nằm trong `
+        + 'danh sách "mục chưa đạt" — bấm nút dịch lại ở thanh tiến độ để vá nốt trước khi xuất thẻ.');
+    }
   };
 
   const renderChunkToolbar = () => (
@@ -1226,7 +1248,11 @@ const VirtualFieldTableRow = memo(({
               {field.surgicalResult && <SurgicalResultBadge result={field.surgicalResult} />}
               {field.reusedFrom && <ReusedBadge source={field.reusedFrom} />}
               <CharRatio original={field.original} translated={field.translated} />
-              {field.status === 'done' && <ResidualCjkBadge original={field.original} translated={field.translated} t={t} />}
+              {/* (bug 234) Hiện cả với 'skipped': field bị auto-bỏ-qua có translated = nguyên văn
+                  bản gốc tiếng Trung, mà trước đây điều kiện `=== 'done'` khiến nó là thứ DUY NHẤT
+                  không bao giờ bị badge chỉ mặt — đúng ca tệ nhất. */}
+              {(field.status === 'done' || field.status === 'skipped')
+                && <ResidualCjkBadge original={field.original} translated={field.translated} t={t} />}
             </div>
             {field.error && (
               <div
@@ -1675,6 +1701,11 @@ const VirtualFieldCardRow = memo(({
           )}
           <StatusBadge status={field.status} t={t} />
           <CharRatio original={field.original} translated={field.translated} />
+          {/* (bug 234) Chế độ Diff trước đây KHÔNG có badge này — mà đây lại là chế độ hay dùng
+              nhất để đọc đối chiếu Gốc/Dịch. Chuyển sang Diff là mất sạch cảnh báo, chỉ còn nhãn
+              XONG xanh. Nay hai chế độ hiện giống nhau. */}
+          {(field.status === 'done' || field.status === 'skipped')
+            && <ResidualCjkBadge original={field.original} translated={field.translated} t={t} />}
         </div>
         <div style={{ display: 'flex', gap: '4px' }}>
           <button
@@ -2282,9 +2313,12 @@ function StatusBadge({ status, t }: { status: string; t: Record<string, string> 
     );
   }
   if (status === 'skipped') {
+    // (bug 234) Icon cũ là CheckCircle2 — Y HỆT dấu tích của trạng thái XONG. Nhìn lướt bảng
+    // field là thấy một rừng dấu tích và tưởng tất cả đã dịch, trong khi "Bỏ qua" nghĩa là
+    // CHƯA HỀ gửi cho AI lần nào. Đổi sang mũi tên nhảy cóc cho khác hẳn.
     return (
       <span className="badge badge-warning" style={{ fontSize: '0.65rem', background: 'var(--accent-warning)', color: '#fff', border: 'none' }}>
-        <CheckCircle2 size={8} /> {ui.feSkip}
+        <SkipForward size={8} /> {ui.feSkip}
       </span>
     );
   }

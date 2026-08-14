@@ -248,7 +248,14 @@ export default function ExportPanel() {
   }, [health, deepCheck]);
 
   const errCount = allIssues.filter((i) => i.severity === 'error').length;
-  const checkOk = errCount === 0;
+  /* (bug 234) BANNER XANH "AN TOÀN ĐỂ XUẤT" TỪNG MÙ HOÀN TOÀN VỚI CHỮ HÁN CÒN SÓT.
+   * Nó chỉ đếm severity==='error', mà issue "còn chữ Hán trong văn bản" sinh ra ở mức thấp hơn
+   * (cardHealth) — nên một thẻ 80 entry còn nguyên tiếng Trung vẫn được đóng dấu xanh, người dùng
+   * bấm Tải rồi nạp vào SillyTavern mới phát hiện. Nay chữ Hán sót và mục bị bỏ qua đều tính vào
+   * phép "đạt hay chưa". */
+  const residualCjkCount = health?.counts?.residualCjkText ?? 0;
+  const skippedCount = health?.counts?.skipped ?? 0;
+  const checkOk = errCount === 0 && residualCjkCount === 0 && skippedCount === 0;
 
   const handleExportReport = () => {
     let md = buildTranslationReport(fields, cardFileName || 'card', health);
@@ -607,9 +614,16 @@ export default function ExportPanel() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: allIssues.length || !deepCheck ? '8px' : 0, flexWrap: 'wrap' }}>
           <Activity size={15} style={{ flexShrink: 0, color: checkOk ? 'var(--accent-success)' : 'var(--accent-danger)' }} />
           <span style={{ fontWeight: 600, color: checkOk ? 'var(--accent-success)' : 'var(--accent-danger)', flex: 1, minWidth: '180px' }}>
-            {deepCheck
-              ? (checkOk ? ui.epTotalPass : fmt(ui.epTotalFail, { count: errCount }))
-              : (checkOk ? ui.epHealthOk : fmt(ui.epHealthBad, { count: errCount }))}
+            {checkOk
+              ? (deepCheck ? ui.epTotalPass : ui.epHealthOk)
+              /* (bug 234) errCount === 0 mà vẫn KHÔNG ĐẠT ⇒ thủ phạm là chữ Hán sót / mục bị bỏ
+                 qua. Câu cũ in "còn 0 lỗi nặng" — vô nghĩa và không chỉ được đường sửa. */
+              : errCount === 0
+                ? fmt(ui.epHealthCjkLeft, {
+                    cjk: residualCjkCount,
+                    skipped: skippedCount > 0 ? fmt(ui.epHealthCjkSkipped, { n: skippedCount }) : '',
+                  })
+                : (deepCheck ? fmt(ui.epTotalFail, { count: errCount }) : fmt(ui.epHealthBad, { count: errCount }))}
           </span>
           <button
             onClick={runTotalCheck}

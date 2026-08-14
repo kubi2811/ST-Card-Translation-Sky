@@ -459,6 +459,8 @@ const ui = {
   epTotalChecking: 'Checking…',
   epTotalPass: '✅ Acceptance PASSED — deep-checked, no critical issues. Safe to export.',
   epTotalFail: '❌ Acceptance: {count} critical issue(s) — fix/retranslate before exporting.',
+  epHealthCjkLeft: '⚠️ Not ready to export: {cjk} field(s) still contain untranslated Chinese{skipped} — run "Retranslate unfinished items" first.',
+  epHealthCjkSkipped: ' and {n} field(s) were auto-skipped (never sent to the AI)',
   epTotalHint: 'Runs all 3 checkers (all local, zero AI calls): card health + deep per-field content check (damaged macros, bracket/HTML/JSON mismatch, truncation…) + original-card diff for lost macros/variables/Zod/EJS.',
   epTotalDoneLine: 'Deep-checked at {time}: {deep} content issue(s) · {macro} macro/variable issue(s) vs original card.',
   epSrcDeep: 'DEEP',

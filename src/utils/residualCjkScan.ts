@@ -124,7 +124,14 @@ export function scanFieldsForResidualCjk(
 
   const hits: ResidualCjkHit[] = [];
   for (const f of fields || []) {
-    if (f.status !== 'done') continue;
+    /* (bug 234) QUÉT CẢ FIELD 'skipped', KHÔNG CHỈ 'done'.
+     * User: "lỗi tự động bỏ qua khi trường ngắn và có xen kẽ … không dịch mà xem nó như đã dịch."
+     * Khi bộ dò ngôn ngữ đoán nhầm, prepareFields đặt status='skipped' VÀ gán translated = original
+     * — tức cột BẢN DỊCH chứa nguyên văn tiếng Trung. Bản cũ bỏ ngay mọi field khác 'done' ở dòng
+     * đầu, nên chính những field tệ nhất lại tàng hình với lưới cuối cùng; tệ hơn, sweep đếm được
+     * 0 hit rồi in log MÀU XANH "sạch, không mục nào còn tiếng Trung".
+     * 'ignored' thì KHÔNG quét: đó là user chủ động không dịch, còn tiếng Trung là đúng ý họ. */
+    if (f.status !== 'done' && f.status !== 'skipped') continue;
     if (typeof f.translated !== 'string' || !f.translated) continue;
     if (skipLorebookKeys && f.group === 'lorebook_keys') continue;
     // Nguồn vốn không có chữ Hán thì bản dịch có chữ Hán cũng không phải "dịch sót".

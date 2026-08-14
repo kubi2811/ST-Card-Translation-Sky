@@ -1,6 +1,6 @@
 import { splitLorebookBatches } from '../utils/batchSplit';
 import { stripUrlsForCjkCheck } from '../utils/cjk';
-import { scanFieldsForResidualCjk, buildResidualRetryInstruction } from '../utils/residualCjkScan';
+import { scanFieldsForResidualCjk, buildResidualRetryInstruction, countResidualHan } from '../utils/residualCjkScan';
 import { buildLorebookRefDictionary, enforceLorebookRefs, validateLorebookRefs, getLockedBookName } from '../utils/lorebookRefSync';
 import { repairInitVarContent, isInitVarEntryText } from '../utils/initVarPreamble';
 import { enforceFormatTagSync, findFormatTagMismatches } from '../utils/formatTagSync';
@@ -3547,8 +3547,36 @@ export function useTranslation() {
       store.addLog('warning', `⚠️ Dịch xong: ${doneCount} thành công, ${failCount} lỗi — bấm “Dịch lại tất cả mục lỗi” để thử tiếp.`);
       store.addToast('info', `Xong ${doneCount}/${fields.length} trường, còn ${failCount} lỗi.`);
     } else {
-      store.addLog('info', `🎉 Dịch xong: ${doneCount} thành công, ${failCount} lỗi`);
-      store.addToast('success', `Translation complete! ${doneCount}/${fields.length} fields translated`);
+      /* ═══ (bug 234) KHÔNG ĐƯỢC BẮN TOAST XANH KHI THẺ VẪN CÒN TIẾNG TRUNG ═══
+       * Bản cũ chỉ nhìn `failCount` (số field status='error'). Chữ Hán còn sót KHÔNG làm field
+       * thành 'error', nên một thẻ 605 field còn 12 entry đầy tiếng Trung vẫn ra
+       * "🎉 Dịch xong: 605 thành công, 0 lỗi" + toast xanh "Translation complete!". Dòng đỏ mà
+       * bộ quét in ra trước đó đã trôi mất giữa hàng trăm dòng log — toast là thứ user nhìn cuối.
+       *
+       * Quét LẠI ở đây chứ không tin số của lượt sweep: sau sweep còn bốn khâu GHI ĐÈ `translated`
+       * (đồng nhất EJS, dọn [initvar], đồng bộ tham chiếu lorebook, ép mốc định dạng) — con số cũ
+       * đã lỗi thời trước khi tới dòng này. */
+      let leftoverFields = 0, leftoverHan = 0;
+      try {
+        const left = scanFieldsForResidualCjk(freshFields, {
+          cssCjkHandling: useStore.getState().translationConfig.cssCjkHandling || 'preserve',
+        });
+        leftoverFields = left.length;
+        leftoverHan = left.reduce((s, h) => s + h.count, 0);
+      } catch { /* đếm lại hỏng thì báo như cũ, không chặn hoàn tất */ }
+
+      if (leftoverFields > 0) {
+        store.addLog('warning',
+          `⚠️ Dịch xong ${doneCount} mục, KHÔNG có lỗi đỏ — nhưng còn ${leftoverFields} mục giữ tổng ${leftoverHan} chữ Hán chưa dịch. `
+          + 'Bấm “Dịch lại mục chưa đạt” ở thanh tiến độ trước khi xuất thẻ.');
+        // addToast chỉ nhận error/success/info — dùng 'info' cho cùng hạng với nhánh "còn lỗi API"
+        // ở trên; điều quan trọng là KHÔNG còn là toast MÀU XANH "complete".
+        store.addToast('info',
+          `Xong ${doneCount}/${fields.length} trường, nhưng còn ${leftoverFields} mục có tiếng Trung — chưa nên xuất thẻ.`);
+      } else {
+        store.addLog('info', `🎉 Dịch xong: ${doneCount} thành công, ${failCount} lỗi`);
+        store.addToast('success', `Translation complete! ${doneCount}/${fields.length} fields translated`);
+      }
     }
 
     // (User 2026) Dịch xong có kết quả thật → mở popup hướng dẫn bước tiếp (Sức khoẻ thẻ / Đồng nhất
@@ -4496,6 +4524,9 @@ export function useTranslation() {
     let bulkCancelled = false;
     // User chốt: lỗi thì tự dịch lại 3 lần rồi mới cho vào danh sách chờ nút bấm.
     const maxAttempts = Math.max(3, store.proxy.maxRetries || 3);
+    // (bug 234) Dùng CHUNG cờ CSS với bộ quét để phép đo "còn chữ Hán không" ở đây khớp đúng với
+    // phép đo đã đưa field vào danh sách — hai thước lệch nhau là sinh vòng lặp không bao giờ đạt.
+    const cssModeForBulk = useStore.getState().translationConfig.cssCjkHandling || 'preserve';
 
     await runWorkerPool({
       total: errorFields.length,
@@ -4548,6 +4579,27 @@ export function useTranslation() {
           if (!after || after.status === 'pending') { bulkCancelled = true; return; }
 
           if (after.status === 'done' && !after.keptOriginalOnPurpose) {
+            /* ═══ (bug 234) "XONG" KHÔNG PHẢI LÀ "ĐẠT" ═══
+             * Chốt cũ chỉ nhìn status. Mà `retranslateField` đặt 'done' cho MỌI đầu ra được nhận,
+             * kể cả bản dịch mới còn y nguyên mấy chữ Hán cũ. Hậu quả user thấy tận mắt: toast
+             * XANH "dịch lại mục chưa đạt: 12/12 xong" trong khi bảng ngay cạnh vẫn đếm "12 mục
+             * chưa đạt" — hai con số chọi nhau trên cùng một màn hình.
+             * Với mục vào đây VÌ còn chữ Hán, phải đo lại bằng chính thước đã đưa nó vào danh sách.
+             * Còn sót thì KHÔNG tính là xong, để vòng attempt tiếp theo thử lại thật. */
+            const wantedCjkGone = countResidualHan(field.original || '', cssModeForBulk) > 0;
+            if (wantedCjkGone) {
+              const stillHan = countResidualHan(after.translated || '', cssModeForBulk);
+              if (stillHan > 0) {
+                if (attempt < maxAttempts - 1) {
+                  store.addLog('warning',
+                    `⚠️ ${field.label}: dịch lại xong nhưng VẪN còn ${stillHan} chữ Hán — thử lượt ${attempt + 2}/${maxAttempts}.`);
+                  continue;
+                }
+                store.addLog('error',
+                  `❌ ${field.label}: sau ${maxAttempts} lượt vẫn còn ${stillHan} chữ Hán chưa dịch — cần sửa tay.`);
+                break;   // giữ success = false ⇒ đếm vào failCount, không báo xong giả
+              }
+            }
             success = true;
             break;
           }

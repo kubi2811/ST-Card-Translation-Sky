@@ -457,6 +457,8 @@ const ui: UiKeys = {
   epTotalChecking: '检查中…',
   epTotalPass: '✅ 验收通过 — 已深度检查，未发现严重问题，可安全导出。',
   epTotalFail: '❌ 验收：还有 {count} 个严重问题 — 建议先修复/重译再导出。',
+  epHealthCjkLeft: '⚠️ 暂不建议导出：仍有 {cjk} 个字段残留未翻译的汉字{skipped} — 请先点击"重译未达标条目"。',
+  epHealthCjkSkipped: '，另有 {n} 个字段被自动跳过（从未发给 AI）',
   epTotalHint: '一键运行全部 3 项检查（均在本地，不消耗 AI 调用）：卡片健康 + 逐字段深度检查（宏损坏、括号/HTML/JSON 不匹配、截断…）+ 与原卡对比宏/变量/Zod/EJS 是否丢失。',
   epTotalDoneLine: '深度检查于 {time}：内容问题 {deep} 个 · 与原卡对比宏/变量问题 {macro} 个。',
   epSrcDeep: '深检',

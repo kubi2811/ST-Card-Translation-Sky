@@ -25,6 +25,7 @@ import {
   AlertTriangle,
   FileText,
   BookPlus,
+  SkipForward,
 } from 'lucide-react';
 
 // ═══════════════════════════════════════════════
@@ -285,7 +286,12 @@ function ModModePanel() {
   const skippedFields = fields.filter((f) => f.status === 'skipped').length;
   const ignoredFields = fields.filter((f) => f.status === 'ignored').length;
   const translatingFields = fields.filter((f) => f.status === 'translating').length;
-  const progress = totalFields > 0 ? ((doneFields + skippedFields + ignoredFields) / totalFields) * 100 : 0;
+  /* (bug 234) KHÔNG cộng `skippedFields` vào tử số nữa.
+   * 'skipped' là field mà bộ dò ngôn ngữ tự quyết bỏ qua rồi gán translated = original — tức
+   * NGUYÊN VĂN TIẾNG TRUNG. Cộng nó vào đây làm thanh chạm 100% và ghi "605/605 trường" cho một
+   * thẻ còn 90 mục chưa dịch: đúng cái ấn tượng "xem như đã dịch" mà user báo.
+   * 'ignored' thì VẪN cộng — đó là user chủ động tick bỏ dịch, không dịch là đúng ý họ. */
+  const progress = totalFields > 0 ? ((doneFields + ignoredFields) / totalFields) * 100 : 0;
 
   const isTranslating = phase === 'translating';
   const isPaused = phase === 'paused';
@@ -374,7 +380,7 @@ function ModModePanel() {
         <div style={{ marginBottom: '12px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '6px' }}>
             <span style={{ color: 'var(--text-secondary)' }}>
-              {doneFields + skippedFields + ignoredFields} / {totalFields} {t.fields}
+              {doneFields + ignoredFields} / {totalFields} {t.fields}
             </span>
             <span style={{ fontWeight: 600, color: modAccent }}>{progress.toFixed(0)}%</span>
           </div>
@@ -411,7 +417,7 @@ function ModModePanel() {
         <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
           <MiniStat icon={<Wand2 size={12} />} value={doneFields} label={t.modded} color={modAccent} />
           {skippedFields > 0 && (
-            <MiniStat icon={<CheckCircle2 size={12} />} value={skippedFields} label={t.skipped} color="var(--accent-warning)" />
+            <MiniStat icon={<SkipForward size={12} />} value={skippedFields} label={t.skipped} color="var(--accent-warning)" />
           )}
           <MiniStat icon={<XCircle size={12} />} value={errorFields} label={t.error} color="var(--accent-danger)" />
           <MiniStat
@@ -626,7 +632,12 @@ function TranslationPanel() {
   const errorFields = fields.filter((f) => f.status === 'error').length;
   const skippedFields = fields.filter((f) => f.status === 'skipped').length;
   const ignoredFields = fields.filter((f) => f.status === 'ignored').length;
-  const progress = totalFields > 0 ? ((doneFields + skippedFields + ignoredFields) / totalFields) * 100 : 0;
+  /* (bug 234) KHÔNG cộng `skippedFields` vào tử số nữa.
+   * 'skipped' là field mà bộ dò ngôn ngữ tự quyết bỏ qua rồi gán translated = original — tức
+   * NGUYÊN VĂN TIẾNG TRUNG. Cộng nó vào đây làm thanh chạm 100% và ghi "605/605 trường" cho một
+   * thẻ còn 90 mục chưa dịch: đúng cái ấn tượng "xem như đã dịch" mà user báo.
+   * 'ignored' thì VẪN cộng — đó là user chủ động tick bỏ dịch, không dịch là đúng ý họ. */
+  const progress = totalFields > 0 ? ((doneFields + ignoredFields) / totalFields) * 100 : 0;
 
   const isIdle = phase === 'idle';
   const isTranslating = phase === 'translating';
@@ -716,7 +727,7 @@ function TranslationPanel() {
         <div style={{ marginBottom: '12px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '6px' }}>
             <span style={{ color: 'var(--text-secondary)' }}>
-              {doneFields + skippedFields + ignoredFields} / {totalFields} {t.fields}
+              {doneFields + ignoredFields} / {totalFields} {t.fields}
             </span>
             <span style={{ fontWeight: 600, color: 'var(--accent-primary)' }}>{progress.toFixed(0)}%</span>
           </div>
@@ -745,7 +756,7 @@ function TranslationPanel() {
         <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
           <MiniStat icon={<CheckCircle2 size={12} />} value={doneFields} label={t.done} color="var(--accent-success)" />
           {skippedFields > 0 && (
-            <MiniStat icon={<CheckCircle2 size={12} />} value={skippedFields} label={t.skipped} color="var(--accent-warning)" />
+            <MiniStat icon={<SkipForward size={12} />} value={skippedFields} label={t.skipped} color="var(--accent-warning)" />
           )}
           {ignoredFields > 0 && (
             <MiniStat icon={<Ban size={12} />} value={ignoredFields} label={t.ignored || 'Ignored'} color="var(--text-muted)" />

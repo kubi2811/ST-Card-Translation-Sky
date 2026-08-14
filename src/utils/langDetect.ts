@@ -1,4 +1,4 @@
-import { countHanStripped } from './cjk';
+import { countHanStripped, stripUrlsForCjkCheck } from './cjk';
 /**
  * Heuristic language detection optimized for Vietnamese + CJK detection.
  * Vietnamese is special: it uses Latin script + diacritics, so pure character
@@ -62,7 +62,13 @@ export function detectLanguage(text: string): string {
   if (isVietnamese) {
     // If it's Vietnamese BUT it also has a substantial amount of CJK/foreign text, it's mixed.
     // Example: A lorebook entry with Chinese headers and Vietnamese content.
-    if (cjkCount >= 5 || kanaCount >= 3 || hangulCount >= 3 || cyrillicCount >= 5) {
+    //
+    // (bug 234) NGƯỠNG HẠ TỪ 5 XUỐNG 1. Ngưỡng cũ nói rằng "tiếng Việt lẫn tối đa 4 chữ Hán thì
+    // vẫn coi là tiếng Việt xịn" — mà đúng cái kết luận đó lại được `shouldSkipTranslation` dùng
+    // để BỎ QUA cả field. Một entry dịch dở, còn nguyên tiêu đề Hán như "<道具>" ở đầu, vì thế
+    // được đóng dấu "đã đúng ngôn ngữ đích" và không bao giờ được dịch nốt.
+    // Còn chữ Hán = còn việc phải làm, không có mức "lẫn tí thì thôi".
+    if (cjkCount >= 1 || kanaCount >= 1 || hangulCount >= 1 || cyrillicCount >= 5) {
       return 'mixed';
     }
     return 'Tiếng Việt';
@@ -78,6 +84,23 @@ export function detectLanguage(text: string): string {
 
   // ── Priority 3: Cyrillic (Russian) ──
   if (cyrillicCount > 3) return 'Русский';
+
+  /* ═══ (bug 234) CÒN CHỮ HÁN/KANA/HANGUL MÀ ĐI KẾT LUẬN "TIẾNG ANH" LÀ SAI ═══
+   * User: "lỗi tự động bỏ qua khi trường ngắn và có xen kẽ như \"boss骇爪\" không dịch mà xem nó
+   * như đã dịch."
+   *
+   * Đây chính là chỗ đẻ ra lỗi đó. Xuống tới đây nghĩa là chữ Hán ĐÃ CÓ nhưng chưa đủ ngưỡng
+   * `cjkCount > 3` để gọi là 中文. Luật mặc định bên dưới chỉ hỏi "chữ Latin có chiếm >30% không";
+   * "boss骇爪" có 4/6 là Latin nên nó trả về 'English'. Rồi `shouldSkipTranslation` thấy English
+   * ≠ nguồn 中文, ≠ đích Tiếng Việt ⇒ kết luận "entry ngôn ngữ thứ ba, tôn trọng hợp đồng
+   * FROM/TO, không dịch" và đóng dấu XONG. Field không hề được gửi cho AI lần nào.
+   *
+   * Một chuỗi vừa có chữ Latin vừa có chữ Hán KHÔNG phải tiếng Anh — nó là TRỘN. Trả 'mixed' để
+   * mọi luật bỏ qua ở dưới tự động nhường đường (mixed luôn được dịch).
+   *
+   * Không đụng tới nhánh 中文/日本語/한국어 ở trên: chúng nằm TRƯỚC chốt này nên text thật sự
+   * thuộc mấy ngôn ngữ đó vẫn được nhận đúng tên, và luật "ngôn ngữ thứ ba" vẫn chạy như cũ. */
+  if (cjkCount > 0 || kanaCount > 0 || hangulCount > 0) return 'mixed';
 
   // ── Priority 4: Other Latin-script languages ──
   // German: ä, ö, ü, ß
@@ -131,10 +154,25 @@ export function shouldSkipTranslation(text: string, targetLanguage: string, sour
 
   const normalizedTarget = LANG_LABEL_MAP[targetLanguage] || targetLanguage;
 
+  /* ═══ (bug 234) LUẬT CHUNG: CÒN CHỮ CHƯA DỊCH THÌ KHÔNG ĐƯỢC BỎ QUA ═══
+   * Trước đây chốt này chỉ áp cho FIELD CODE (bug 108: vỏ JS là Latin, comment đã Việt, nhưng
+   * chuỗi hiển thị bên trong vẫn tiếng Trung). Hoá ra văn xuôi cũng dính đúng bệnh ấy — chỉ khác
+   * cái vỏ: "boss骇爪" đủ Latin để bị gọi là tiếng Anh, "Tân Thuận 骇爪" đủ dấu tiếng Việt để bị
+   * gọi là đã dịch xong. Cả hai đều bị bỏ qua với bản "dịch" chính là bản gốc.
+   *
+   * Nên nâng nó thành luật chung, đặt TRƯỚC mọi luật bỏ qua: còn ký tự thuộc hệ chữ nguồn mà
+   * ngôn ngữ đích không dùng ⇒ vẫn còn việc để làm ⇒ phải đưa cho AI.
+   *
+   * NGOẠI LỆ có chủ ý — text được nhận là một ngôn ngữ CJK KHÁC (Nhật/Hàn/Trung): kanji trong
+   * một entry tiếng Nhật là chữ của chính tiếng Nhật, không phải "chữ Trung còn sót". Bỏ ngoại lệ
+   * này là phá hợp đồng FROM/TO của yêu cầu #140 (card Trung có entry tiếng Nhật thì để yên). */
+  const detectedIsCjkLanguage = detected === '中文' || detected === '日本語' || detected === '한국어';
+  if (!detectedIsCjkLanguage && hasSourceScriptLeft(text, normalizedTarget)) return false;
+
   // (bugNeedFix/108) CODE có vỏ ngoài đánh lừa bộ đoán ngôn ngữ: từ khoá JS là Latin, comment
   // có thể đã là tiếng Việt — nên cả hai luật bỏ qua bên dưới đều dễ kết luận "xong rồi",
   // trong khi CHUỖI HIỂN THỊ và tên worldbook bên trong vẫn là tiếng Trung. Với code, chỉ được
-  // bỏ qua khi ruột đã SẠCH ký tự nguồn.
+  // bỏ qua khi ruột đã SẠCH ký tự nguồn. (Giữ nguyên: code tiếng Nhật vẫn phải dịch chuỗi.)
   if (looksLikeCodeField(text) && hasSourceScriptLeft(text, normalizedTarget)) return false;
 
   // Skip if text is definitively already in the target language
@@ -172,8 +210,14 @@ function hasSourceScriptLeft(text: string, normalizedTarget: string): boolean {
   // KHÔNG dùng cleanText ở đây: nó xoá `<…>` (để đoán ngôn ngữ văn xuôi cho chuẩn), mà khối
   // EJS `<%_ … _%>` cũng khớp luật đó ⇒ chữ Hán nằm TRONG code bị xoá sạch trước khi đếm,
   // thành ra "không còn gì để dịch" — đúng cái bẫy làm entry EJS bị bỏ qua (bug 108).
+  // Cùng cái bẫy ấy nuốt luôn tiêu đề dạng "<道具>" của bug 234.
   // Ở đây chỉ cần biết "còn ký tự hệ chữ nguồn hay không", nên đếm trên text THÔ (bỏ URL).
-  const t = (text || '').replace(/https?:\/\/\S+/g, '');
+  //
+  // (bug 234) Dùng CHUNG `stripUrlsForCjkCheck` với bộ quét chữ Hán sót thay vì tự viết một
+  // phép bỏ URL yếu hơn. Bản cũ chỉ bỏ `https?://…` nên chữ Hán trong `src="…"`, `url(…)`,
+  // `import('./骰子/x.js')` vẫn bị tính là "còn chưa dịch" ⇒ hai bên đo bằng hai thước khác nhau,
+  // và field cứ bị lôi đi dịch lại mãi vì cái không bao giờ dịch được.
+  const t = stripUrlsForCjkCheck(text || '');
   const cjk = (t.match(CJK_G) || []).length;
   const kana = (t.match(KANA_G) || []).length;
   const hangul = (t.match(HANGUL_G) || []).length;

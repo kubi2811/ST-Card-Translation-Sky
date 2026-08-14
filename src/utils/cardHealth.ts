@@ -57,7 +57,9 @@ export interface HealthReport {
 
 /** Bao nhiêu ký tự CJK còn sót trong 1 field 'done' thì mới coi là đáng chú ý (giảm nhiễu
  *  tên riêng để nguyên có chủ đích). */
-const RESIDUAL_TEXT_THRESHOLD = 3;
+// (bug 234) Hạ từ 3 xuống 1. Ngưỡng 3 nghĩa là "sót 1-2 chữ Hán thì không báo" — mà "<道具>" và
+// "骇爪" đều đúng 2 chữ, tức đúng ca user báo. Bộ quét chuẩn của app (residualCjkScan) dùng 1.
+const RESIDUAL_TEXT_THRESHOLD = 1;
 
 const CODE_ENTRY_TYPES = new Set(['json_patch', 'initvar', 'controller']);
 
@@ -166,13 +168,21 @@ export function scanFieldsHealth(fields: TranslationField[], glossary?: Glossary
         issues.push({ severity: 'error', kind: 'residual_cjk_code', label: f.label, path: f.path,
           detail: `Còn chữ Hán trong code: "…${chk.residual}…"` });
       }
-    } else if (f.status === 'done') {
-      // ─── Chữ Hán còn sót trong VĂN BẢN đã done (info: có thể tên riêng cố ý) ───
+    } else if (f.status === 'done' || f.status === 'skipped') {
+      /* ═══ (bug 234) HAI SỬA Ở ĐÂY ═══
+       * 1. Quét CẢ 'skipped', không riêng 'done'. Field bị auto-bỏ-qua có `translated` chính là
+       *    bản gốc tiếng Trung — nó là ca nặng nhất mà lại là ca duy nhất không được soi.
+       * 2. Nâng từ 'info' lên 'warning'. Banner sức khoẻ thẻ chỉ đếm severity==='error'
+       *    (ExportPanel: `errCount === 0` ⇒ "An toàn để xuất"), nên 80 entry còn tiếng Trung vẫn
+       *    cho ra một banner XANH. 'warning' để chốt xuất thẻ ở ExportPanel nhìn thấy được.
+       *    Vẫn KHÔNG dùng 'error': chữ Hán trong văn xuôi có thể là tên riêng người dùng cố ý
+       *    giữ, không đáng chặn cứng — chỉ đáng nói to. */
       const matches = trans.match(CJK_IDEOGRAPH);
       if (matches && matches.length >= RESIDUAL_TEXT_THRESHOLD) {
         residualCjkText++;
-        issues.push({ severity: 'info', kind: 'residual_cjk_text', label: f.label, path: f.path,
-          detail: `Còn ${matches.length} ký tự Hán chưa dịch (kiểm tra xem có phải tên riêng giữ nguyên không).` });
+        issues.push({ severity: 'warning', kind: 'residual_cjk_text', label: f.label, path: f.path,
+          detail: `Còn ${matches.length} ký tự Hán chưa dịch`
+            + (f.status === 'skipped' ? ' — mục này bị TỰ ĐỘNG BỎ QUA, chưa hề gửi cho AI lần nào.' : ' (kiểm tra xem có phải tên riêng giữ nguyên không).') });
       }
     }
 

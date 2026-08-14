@@ -19,6 +19,7 @@ import {
   Globe,
   Loader,
   Link as LinkIcon,
+  FileLock2,
 } from 'lucide-react';
 
 // Discord "media.discordapp.net" là proxy re-encode ảnh (format=webp + resize width/height) →
@@ -46,6 +47,8 @@ export default function FileUpload() {
   const cardFileName = useStore((s) => s.cardFileName);
   const contentType = useStore((s) => s.contentType);
   const originalWorldbook = useStore((s) => s.originalWorldbook);
+  const base64Report = useStore((s) => s.base64Report);
+  const setBase64NoticeSeen = useStore((s) => s.setBase64NoticeSeen);
   const loadTranslationCache = useStore((s) => s.loadTranslationCache);
   const reuseFromVersionCache = useStore((s) => s.reuseFromVersionCache);
   const triggerPresetRecommend = useStore((s) => s.triggerPresetRecommend);
@@ -340,6 +343,32 @@ export default function FileUpload() {
                   <StatItem icon={<Puzzle size={13} />} label="TavernHelper" value={`${summary?.tavernHelperCount}`} />
                 )}
               </div>
+            )}
+
+            {/* (việc 233) NHÃN THƯỜNG TRỰC: popup đóng rồi thì vẫn phải còn một chỗ ghi rõ thẻ này
+                thuộc loại "có tài liệu bị mã hoá bên trong" — bấm vào là mở lại bảng chi tiết. */}
+            {base64Report && base64Report.total > 0 && (
+              <button
+                onClick={() => setBase64NoticeSeen(false)}
+                title={fmt(ui.b64BadgeTip, {
+                  n: base64Report.total,
+                  t: base64Report.translatable,
+                  c: base64Report.hiddenCjk,
+                })}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '6px', width: '100%',
+                  margin: '8px 0 0', padding: '8px 10px', cursor: 'pointer', textAlign: 'left',
+                  borderRadius: 'var(--radius-sm)', fontSize: '0.8125rem', fontWeight: 600,
+                  background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.35)',
+                  color: '#fbbf24',
+                }}
+              >
+                <FileLock2 size={13} style={{ flexShrink: 0 }} />
+                <span style={{ flex: 1, minWidth: 0 }}>{ui.b64Badge}</span>
+                <span style={{ color: base64Report.translatable > 0 ? 'var(--accent-success)' : 'var(--text-muted)' }}>
+                  {base64Report.translatable}/{base64Report.total}
+                </span>
+              </button>
             )}
 
             {/* Replace / Update Actions */}

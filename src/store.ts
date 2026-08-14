@@ -19,6 +19,8 @@ import type {
   SavedPreset,
 } from './types/card';
 import type { Worldbook } from './utils/worldbookParser';
+import type { Base64Report } from './utils/base64Payload';
+import { scanCardForPayloads } from './utils/base64Payload';
 import { DEFAULT_FIELD_GROUPS, extractTranslatableFields } from './utils/cardFields';
 import { IDB } from './utils/idb';
 import { FsCache } from './utils/fsCache';
@@ -159,6 +161,12 @@ interface AppState {
   // Translation state
   fields: TranslationField[];
   setFields: (fields: TranslationField[]) => void;
+  /** (việc 233) Báo cáo khối base64 nhúng của thẻ vừa nhập — null = chưa quét/không có. */
+  base64Report: Base64Report | null;
+  setBase64Report: (r: Base64Report | null) => void;
+  /** Người dùng đã đóng popup báo thẻ mã hoá cho thẻ này chưa. */
+  base64NoticeSeen: boolean;
+  setBase64NoticeSeen: (v: boolean) => void;
   updateField: (path: string, update: Partial<TranslationField>) => void;
   phase: TranslationPhase;
   setPhase: (p: TranslationPhase) => void;
@@ -290,6 +298,17 @@ export const useStore = create<AppState>((set) => ({
       },
       mvuKeyMetadata: {},
       mvuDictionaryHistory: [],
+      // (việc 233) Quét tài liệu bị nhúng dạng base64 NGAY LÚC NHẬP THẺ. Đặt ở đây chứ không ở
+      // `useCardParser` vì thẻ nhỏ parse ở luồng chính thì mãi tới lúc bắt đầu dịch mới có
+      // `fields` — đúng lúc người dùng cần biết nhất thì báo cáo lại trống. Một chỗ móc phủ mọi
+      // đường nhập; quét hỏng thì thẻ vẫn nhập được như thường.
+      base64Report: (() => {
+        try {
+          const r = scanCardForPayloads(card);
+          return r.total > 0 ? r : null;
+        } catch { return null; }
+      })(),
+      base64NoticeSeen: false,
     }));
     // Clear Translation Memory on card load
     clearTranslationMemory().catch(e => console.warn('[TM] Clear error:', e));
@@ -352,6 +371,8 @@ export const useStore = create<AppState>((set) => ({
       contentType: 'card' as ContentType,
       originalWorldbook: null,
       fields: [],
+      base64Report: null,
+      base64NoticeSeen: false,
       phase: 'idle',
       logs: [],
       mvuConversionProgress: '',
@@ -994,6 +1015,10 @@ export const useStore = create<AppState>((set) => ({
 
   // ─── Translation State ───
   fields: [],
+  base64Report: null,
+  setBase64Report: (r) => set({ base64Report: r, base64NoticeSeen: false }),
+  base64NoticeSeen: false,
+  setBase64NoticeSeen: (v) => set({ base64NoticeSeen: v }),
   setFields: (fields) => {
     set({ fields });
   },

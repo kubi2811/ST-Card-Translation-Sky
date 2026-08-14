@@ -11,6 +11,7 @@ import { Languages, X, Globe, Settings2, Upload, Wrench, FileText, ShieldCheck, 
 import PresetImportPanel from './components/PresetImportPanel';
 import PresetRecommendModal from './components/PresetRecommendModal';
 import PostTranslateGuideModal from './components/PostTranslateGuideModal';
+import Base64NoticeModal from './components/Base64NoticeModal';
 import GlossaryVizPanel from './components/GlossaryVizPanel';
 import { APP_VERSION, APP_VERSION_NOTE } from './version';
 // (bug 165) Ba component dùng chung — NGUỒN DUY NHẤT cho style khối co giãn / tab / nút công cụ.
@@ -482,6 +483,8 @@ export default function App() {
 
       {/* Popup hướng dẫn bước tiếp theo sau khi dịch xong */}
       <PostTranslateGuideModal />
+      {/* (việc 233) Báo ngay lúc nhập thẻ khi thẻ có tài liệu bị nhúng dạng base64. */}
+      <Base64NoticeModal />
 
       {/* ─── Toasts ─── */}
       <div className="toast-container">

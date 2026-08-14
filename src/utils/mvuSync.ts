@@ -497,6 +497,264 @@ const normVarName = (s: string) => s.toLowerCase().normalize('NFC').replace(/[\s
  * Chỉ nhận khi số chuỗi hai bên KHỚP NHAU — lệch một cái là mất căn cứ vị trí, thà không sửa còn
  * hơn đoán bừa rồi ghi đè lên một giá trị hợp lệ.
  */
+/* ═══════════════════════════════════════════════════════════════════════════
+   (bug 232 — lượt 2) LUẬT CHUNG: TỪ ĐIỂN LÀ CHÂN LÝ, TÊN PHẢI SUY RA ĐƯỢC TỪ BẢN GỐC
+   ═══════════════════════════════════════════════════════════════════════════
+   User: "cậu chỉ sửa cho case tiền tài/tiền bạc. Phải có rule hay logic nào fix triệt để chứ,
+   lần sau card khác không còn bị bug kiểu này nữa."
+
+   Đúng. Đo lại trên THẺ THẬT của user (cặp PNG gốc + JSON đã dịch), bản vá lượt 1 hụt ở hai chỗ,
+   và cả hai đều là lỗ hổng NGUYÊN TẮC:
+
+     1. BỎ NGUYÊN TRƯỜNG KHI SỐ TÊN LỆCH. Lượt 1 chỉ ghép vị trí khi số chuỗi hai bên bằng nhau.
+        Đo được 31/71 trường (44%) có số tên lệch — AI thêm/bớt một chuỗi là cả trường mất trắng
+        cơ hội được sửa.
+     2. CHỈ KHỚP KHI CẢ TÊN ĐÚNG BẰNG MỤC TỪ ĐIỂN. Thực tế thuật ngữ nằm LỒNG trong tên dài hơn:
+          模块二_蝴蝶效应 → "Mô đun 2_Hiệu ứng cánh bướm"   (từ điển: 蝴蝶效应 → Hiệu Ứng Hồ Điệp)
+          业务能力曲线    → "Đường cong năng lực nghiệp vụ"  (từ điển: 业务能力 → Năng Lực Nghiệp Vụ)
+
+   Nguyên tắc thay cho việc vá từng ca: BẢN DỊCH CỦA MỘT CÁI TÊN PHẢI SUY RA ĐƯỢC TỪ BẢN GỐC +
+   TỪ ĐIỂN. Tên gốc chứa thuật ngữ nào thì bản dịch phải mang đúng bản dịch của thuật ngữ ấy — dù
+   nó nằm giữa tên, và dù chỗ khác trong trường có lệch nhịp. Không còn phụ thuộc trí nhớ mô hình. */
+
+/** Vị trí một cái TÊN trong text (khoá YAML/object, hoặc chuỗi trong nháy). */
+interface NameSlot { value: string; start: number; end: number }
+
+/**
+ * Quét mọi VỊ TRÍ TÊN theo đúng thứ tự tài liệu, không chồng lấn.
+ * Chuỗi trong nháy quét trước; khoá không nháy chỉ nhận khi không nằm đè lên chuỗi nào.
+ */
+function collectNameSlots(text: string): NameSlot[] {
+  const slots: NameSlot[] = [];
+  const taken: Array<[number, number]> = [];
+
+  for (const m of text.matchAll(/(['"])([^'"\n]{1,80})\1/g)) {
+    const inner = m[2];
+    const start = m.index + 1;
+    slots.push({ value: inner, start, end: start + inner.length });
+    taken.push([m.index, m.index + m[0].length]);
+  }
+  for (const m of text.matchAll(/^[ \t]*([^"':\s\n][^"':\n]*?)\s*:/gm)) {
+    const raw = m[1];
+    const start = m.index + m[0].indexOf(raw);
+    if (taken.some(([a, b]) => start >= a && start < b)) continue;
+    slots.push({ value: raw, start, end: start + raw.length });
+  }
+  return slots.sort((a, b) => a.start - b.start);
+}
+
+const normName = (s: string) => s.toLowerCase().normalize('NFC').replace(/[\s_-]+/g, ' ').trim();
+const hasCjkChar = (s: string) => /[一-鿿]/.test(s);
+
+/**
+ * Thay MỌI thuật ngữ của từ điển có mặt trong một cái tên, ưu tiên khớp DÀI NHẤT trước —
+ * nếu không thì 关系 sẽ ăn mất 关系簿 và ra bản dịch sai.
+ */
+function applyDictToName(name: string, sortedKeys: string[], dict: Record<string, string>): string {
+  let out = name;
+  for (const k of sortedKeys) {
+    if (!out.includes(k)) continue;
+    out = out.split(k).join(dict[k]);
+  }
+  return out;
+}
+
+/**
+ * Tách một cái tên theo dấu ngăn CẤU TRÚC để ghép từng khúc — dùng khi từ điển chỉ phủ MỘT PHẦN.
+ * CỐ Ý không tách theo khoảng trắng: tiếng Trung không có dấu cách còn tiếng Việt thì có, tách
+ * theo khoảng trắng là hai bên ra số khúc khác nhau ngay lập tức.
+ */
+const SEP_SPLIT = /([_·|/()[\]{}<>,;、。→]+)/;
+const splitTokens = (s: string) => s.split(SEP_SPLIT);
+
+/** Khoảng mã nằm GIỮA các tên: seg[i] đứng trước tên i, seg[n] là phần đuôi. */
+function segmentsAround(text: string, slots: NameSlot[]): string[] {
+  const segs: string[] = [];
+  let prev = 0;
+  for (const s of slots) { segs.push(text.slice(prev, s.start)); prev = s.end; }
+  segs.push(text.slice(prev));
+  return segs;
+}
+
+// Chỉ đổi xuống dòng thành một dấu neo, KHÔNG gộp khoảng trắng và KHÔNG cắt hai đầu: với khoá
+// YAML thì khung mã sau nó chỉ là ':' + thụt lề, gộp/cắt đi là mất sạch thứ để phân biệt.
+const normSeg = (s: string) => s.replace(new RegExp(String.fromCharCode(92) + 'r?' + String.fromCharCode(92) + 'n', 'g'), '⏎');
+
+/**
+ * Ghép hai danh sách tên. Ba tầng, tầng sau chỉ chạy cho phần tầng trước chưa giải được.
+ *
+ * Bản vá lượt 1 sai ở chỗ đòi hai bên có ĐÚNG BẰNG NHAU số tên rồi mới ghép — AI thêm/bớt một
+ * chuỗi là bỏ cả trường (đo trên thẻ thật: 44% số trường rơi vào cảnh này).
+ *
+ * Còn cách ghép thuần theo "khung mã xung quanh" cũng không đủ: với field lorebook thì GIÁ TRỊ
+ * cũng được dịch, nên đoạn mã sau một cái tên ở bản gốc là tiếng Trung còn ở bản dịch là tiếng
+ * Việt — không bao giờ bằng nhau. Đo được: field 51 tên chỉ ghép nổi 8 cặp.
+ *
+ *   Tầng 1 — MỎ NEO: cặp mà bản dịch ĐÃ ĐÚNG (bằng đúng kết quả áp từ điển lên tên gốc) hoặc hai
+ *            bên giống hệt (số, mã, tên không cần dịch). Chạy LCS để giữ đúng thứ tự.
+ *   Tầng 2 — LẤP KHOẢNG THEO VỊ TRÍ: giữa hai mỏ neo, nếu hai bên còn ĐÚNG BẰNG NHAU số tên thì
+ *            ghép theo thứ tự. Luật cấm sắp xếp lại code nên thứ tự khoá là bất biến.
+ *   Tầng 3 — DÒ THEO KHUNG MÃ: khoảng nào lệch số lượng (chính là chỗ AI thêm/bớt) thì dò bằng
+ *            chữ ký khung mã ngay sau tên, độ dài thích ứng, và CHỈ nhận khi duy nhất một chỗ khớp.
+ */
+function alignNamesByCodeShape(
+  original: string,
+  translated: string,
+  orig: NameSlot[],
+  trans: NameSlot[],
+  expected: string[],
+): Array<[number, number]> {
+  const n = orig.length, m = trans.length;
+  if (n === 0 || m === 0 || n * m > 400_000) return [];
+
+  const os = segmentsAround(original, orig).map(normSeg);
+  const ts = segmentsAround(translated, trans).map(normSeg);
+  const already = (i: number, j: number) =>
+    normName(expected[i]) === normName(trans[j].value) || orig[i].value === trans[j].value;
+
+  /* ── Tầng 1: mỏ neo ── */
+  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = already(i, j) ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const anchors: Array<[number, number]> = [];
+  for (let i = 0, j = 0; i < n && j < m;) {
+    if (already(i, j)) { anchors.push([i, j]); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) i++;
+    else j++;
+  }
+
+  /* ── Tầng 2 + 3: lấp từng khoảng giữa các mỏ neo ── */
+  const pairs: Array<[number, number]> = [...anchors];
+  const SIG_LENGTHS = [14, 10, 7, 5, 4];
+  const fillGap = (i0: number, i1: number, j0: number, j1: number) => {
+    const gapO = i1 - i0, gapT = j1 - j0;
+    if (gapO <= 0 || gapT <= 0) return;
+    if (gapO === gapT) {                       // tầng 2
+      for (let k = 0; k < gapO; k++) pairs.push([i0 + k, j0 + k]);
+      return;
+    }
+    for (let i = i0; i < i1; i++) {            // tầng 3
+      for (const len of SIG_LENGTHS) {
+        const sig = (os[i + 1] ?? '').slice(0, len);
+        if (sig.length < 4) break;
+        const cands: number[] = [];
+        for (let j = j0; j < j1; j++) if ((ts[j + 1] ?? '').slice(0, len) === sig) cands.push(j);
+        if (cands.length === 0) continue;      // chữ ký dài quá vì khoá kế bên đổi → rút ngắn
+        if (cands.length > 1) break;           // nhiều chỗ khớp như nhau → mơ hồ, không đoán bừa
+        pairs.push([i, cands[0]]);
+        break;
+      }
+    }
+  };
+  let pi = 0, pj = 0;
+  for (const [ai, aj] of [...anchors, [n, m] as [number, number]]) {
+    fillGap(pi, ai, pj, aj);
+    pi = ai + 1; pj = aj + 1;
+  }
+  return pairs.sort((a, b) => a[0] - b[0]);
+}
+
+export function enforceDictOnAlignedNames(
+  original: string,
+  translated: string,
+  mvuDictionary: Record<string, string>,
+): { text: string; fixes: { found: string; replaced: string }[] } {
+  const fixes: { found: string; replaced: string }[] = [];
+  if (!original || !translated || typeof original !== 'string' || typeof translated !== 'string') {
+    return { text: translated, fixes };
+  }
+  const sortedKeys = Object.keys(mvuDictionary)
+    .filter(k => k && hasCjkChar(k) && mvuDictionary[k]?.trim())
+    .sort((a, b) => b.length - a.length);
+  if (sortedKeys.length === 0) return { text: translated, fixes };
+
+  const origSlots = collectNameSlots(original);
+  const transSlots = collectNameSlots(translated);
+  if (origSlots.length === 0 || transSlots.length === 0) return { text: translated, fixes };
+
+  const expected = origSlots.map(s => applyDictToName(s.value, sortedKeys, mvuDictionary));
+  const pairs = alignNamesByCodeShape(original, translated, origSlots, transSlots, expected);
+
+  // Gom sửa đổi theo offset rồi áp từ CUỐI về ĐẦU để offset không xê dịch.
+  // Tên nào ĐANG LÀ một bản dịch hợp lệ của mục từ điển KHÁC thì cấm ghi đè: ghép nhầm mà xoá
+  // mất một tên biến vốn đã đúng là làm hỏng thẻ, tệ hơn hẳn việc bỏ sót một chỗ chưa đồng nhất.
+  const validTargets = new Set(
+    Object.values(mvuDictionary).filter(v => v?.trim()).map(normName),
+  );
+
+  const edits: Array<{ start: number; end: number; text: string }> = [];
+  for (const [i, j] of pairs) {
+    const o = origSlots[i].value;
+    if (!sortedKeys.some(k => o.includes(k))) continue;   // không có bằng chứng thì không đụng
+    const want = expected[i];
+    const got = transSlots[j].value;
+    if (normName(got) !== normName(want) && validTargets.has(normName(got))) continue;
+
+    if (!hasCjkChar(want)) {
+      // Từ điển phủ TRỌN tên → biết chính xác bản dịch phải là gì.
+      //
+      // Nhưng phải GIỮ NGUYÊN dấu đầu dòng của chính bản dịch. Bộ quét có lúc bắt tên gốc kèm
+      // `- ` (khoá YAML) trong khi bên bản dịch lại bắt phần trong nháy không kèm dấu — dán
+      // nguyên `want` vào là đẻ ra `- - Tên`, hỏng cấu trúc YAML. Lấy phần LÕI của want rồi ghép
+      // lại đúng dấu đầu dòng mà bản dịch đang có.
+      const LEAD = /^[\s\-*•·]+/;
+      const core = want.replace(LEAD, '');
+      const replacement = (got.match(LEAD)?.[0] ?? '') + core;
+      if (normName(replacement) !== normName(got)) {
+        edits.push({ start: transSlots[j].start, end: transSlots[j].end, text: replacement });
+        fixes.push({ found: got, replaced: replacement });
+      }
+      continue;
+    }
+
+    // ─── Từ điển phủ MỘT PHẦN tên ───
+    // (1) Ghép từng khúc theo dấu ngăn cấu trúc: `模块二_蝴蝶效应` ↔ `Mô đun 2_Hiệu ứng cánh bướm`
+    //     tách ra 3 khúc đều nhau, khúc nào từ điển biết chắc thì ép, khúc còn lại giữ nguyên
+    //     bản dịch của AI.
+    const ot = splitTokens(o), gt = splitTokens(got);
+    let merged = got;
+    let changed = false;
+    if (ot.length === gt.length) {
+      const next = gt.map((seg, k) => {
+        const src = ot[k];
+        if (!src || !sortedKeys.some(x => src.includes(x))) return seg;
+        const w = applyDictToName(src, sortedKeys, mvuDictionary);
+        if (hasCjkChar(w) || normName(w) === normName(seg)) return seg;
+        changed = true;
+        return w;
+      });
+      if (changed) merged = next.join('');
+    }
+    // (2) Không tách được đều khúc (vd `业务能力曲线` ↔ `Đường cong năng lực nghiệp vụ` — tiếng
+    //     Việt đảo trật tự từ) thì KHÔNG đoán chỗ chèn. Nhưng nếu bản dịch của thuật ngữ đã nằm
+    //     sẵn trong tên chỉ khác HOA/THƯỜNG thì vẫn gom về đúng dạng từ điển — việc này an toàn
+    //     tuyệt đối vì không đổi một chữ nào, chỉ đổi kiểu chữ.
+    for (const k of sortedKeys) {
+      if (!o.includes(k)) continue;
+      const want = mvuDictionary[k];
+      const idx = merged.toLowerCase().indexOf(want.toLowerCase());
+      if (idx < 0) continue;
+      const at = merged.slice(idx, idx + want.length);
+      if (at === want) continue;
+      merged = merged.slice(0, idx) + want + merged.slice(idx + want.length);
+      changed = true;
+    }
+    if (changed) {
+      edits.push({ start: transSlots[j].start, end: transSlots[j].end, text: merged });
+      fixes.push({ found: got, replaced: merged });
+    }
+  }
+
+  if (edits.length === 0) return { text: translated, fixes };
+  edits.sort((a, b) => b.start - a.start);
+  let out = translated;
+  for (const e of edits) out = out.slice(0, e.start) + e.text + out.slice(e.end);
+  return { text: out, fixes };
+}
+
 export function buildDictVariantAliases(
   fields: { original?: string; translated?: string; status?: string; group?: string; entryType?: string }[],
   mvuDictionary: Record<string, string>,
@@ -641,7 +899,16 @@ export function recanonicalizeMvuInFields(
     t = enforceInitvarCovariance(t, fixedDict, isLbNarr).text;
     // (bug 232) Biến thể chỉ ép ở field CODE. Văn xuôi thì "Tiền bạc" có thể là chữ dùng thật
     // trong truyện, ép sang tên biến ở đó là sửa hỏng bản dịch chứ không phải đồng nhất biến.
-    if (isCode) t = enforceDictVariants(t, variantAliases).text;
+    if (isCode) {
+      // (bug 232 lượt 2) LUẬT CHÍNH, chạy TRƯỚC: ép theo BẢN GỐC + từ điển. Đây là cửa duy nhất
+      // biết chắc "tên này lẽ ra phải là gì", kể cả khi thuật ngữ nằm lồng trong tên dài hơn và
+      // kể cả khi số tên hai bên lệch nhau.
+      if (typeof f.original === 'string' && f.original) {
+        t = enforceDictOnAlignedNames(f.original, t, fixedDict).text;
+      }
+      // Biến thể học được từ field KHÁC — dọn nốt những chỗ mà chính field này không đủ căn cứ.
+      t = enforceDictVariants(t, variantAliases).text;
+    }
     t = enforceVariableCasing(t, fixedDict).text;
     if (isCode) t = fixZodSyntaxErrors(t);
     if (t === f.translated) return f;

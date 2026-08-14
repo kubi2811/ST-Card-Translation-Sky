@@ -1111,6 +1111,7 @@ const ui: UiKeys = {
   acAttachedMsg: '📁 **Đã đính kèm {kind} thành công:** {names}.',
   acFileSplitNote: '🧩 File **{name}** khá lớn ({chars} ký tự) nên đã tự chia thành **{parts} PHẦN** (không mất ký tự nào). Mình sẽ đọc đủ tất cả các phần; nếu chỉ cần xử lý 1 phần, bạn gỡ (🗑) các phần còn lại để nhẹ hơn nhé.',
   acActionBlocked: '{n} action bị lớp bảo vệ chặn (ngoài phạm vi sub-agent hoặc sai schema) — không thực thi:',
+  acActionNeedCard: 'Trợ lý muốn thao tác lên thẻ nhưng CHƯA có thẻ nào đang mở — hãy nhập một thẻ rồi nhắn lại.',
   acDiagLine: 'Lỗi cú pháp gần dòng {line}',
   acDiagNoLine: 'Lỗi cú pháp',
   acDiagFix: 'AI sửa',

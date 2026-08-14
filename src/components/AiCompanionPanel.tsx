@@ -399,7 +399,9 @@ KHÔNG CÓ ACTION GHI VÀO REGEX (quan trọng):
 
 QUY TẮC QUAN TRỌNG KHI DÙNG ACTIONS:
 - Giải thích bằng text TRƯỚC khi đưa action block.
-- Có thể đưa NHIỀU actions trong 1 response.
+- Có thể đưa NHIỀU actions trong 1 response. NHIỀU ACTION THÌ VIẾT THÀNH MỘT MẢNG JSON trong một
+  block (xem "VÍ DỤ FORMAT — NHIỀU ACTION" bên dưới). Mỗi object phải là JSON HỢP LỆ: khoá có
+  nháy kép, không dấu phẩy thừa ở cuối, không chú thích.
 - Luôn thêm "reasoning" vào action block để giải thích tại sao chọn action này.
 - Nếu cần xem toàn bộ replaceString (bị truncate trong context), dùng VIEW_FULL_REGEX trước.
 - ĐỪNG BAO GIỜ kết luận về nội dung một entry lorebook khi chỉ thấy đoạn đầu. Ngữ cảnh có ghi rõ
@@ -417,6 +419,17 @@ Regex "Tô màu hội thoại" đang ở index 0, tôi đọc trọn nội dung 
 </AI_ACTION>
 
 (Sau khi có nội dung, đưa hàm hoàn chỉnh trong code block và chỉ chỗ dán trong tab "Regex".)
+
+VÍ DỤ FORMAT — NHIỀU ACTION (dùng MẢNG JSON, đây là dạng chuẩn):
+Tôi đọc trọn cả ba script #4, #5, #6 rồi rà một lượt.
+
+<AI_ACTION>
+[
+{"action":"VIEW_FULL_REGEX","params":{"scriptIndex":4},"reasoning":"Đọc trọn Script #4"},
+{"action":"VIEW_FULL_REGEX","params":{"scriptIndex":5},"reasoning":"Đọc trọn Script #5"},
+{"action":"VIEW_FULL_REGEX","params":{"scriptIndex":6},"reasoning":"Đọc trọn Script #6"}
+]
+</AI_ACTION>
 `;
 
 /** Max chars for regex replaceString preview in context (full content via VIEW_FULL_REGEX) */
@@ -2244,7 +2257,18 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
           setMessages([...nextMessages, { role: 'assistant', content: textContent }]);
         }
       } else {
-        setMessages([...nextMessages, { role: 'assistant', content: finalResult }]);
+        // (bug 231) TRƯỚC ĐÂY nhánh này in `finalResult` — chuỗi THÔ chưa gỡ khối lệnh. Nên hễ
+        // parser đọc không ra action nào (vd một block chứa ba object JSON, xem aiActions.ts) là
+        // cả khối <AI_ACTION>{"action":…}</AI_ACTION> hiện nguyên văn trong khung chat, đúng cảnh
+        // user báo "chỉ ghi ra chat thay vì tạo thành nút bấm xác nhận/từ chối".
+        // `textContent` đã gỡ khối lệnh và đã kèm sẵn lời báo nếu khối đó đọc không ra; khi phản
+        // hồi vốn KHÔNG có khối lệnh nào thì nó y hệt `finalResult`, nên đổi sang đây luôn đúng.
+        // Riêng ca "có action nhưng chưa mở thẻ nào" thì phải nói, không thì trợ lý như im lặng.
+        const noCard = parsedActions.length > 0 && !card;
+        setMessages([...nextMessages, {
+          role: 'assistant',
+          content: textContent + (noCard ? `\n\n> ⚠️ ${ui.acActionNeedCard}` : ''),
+        }]);
       }
     } else if (lastError?.message === '__ABORTED__') {
       // (bugNeedFix/4) User bấm Dừng — báo nhẹ nhàng, KHÔNG phải lỗi.

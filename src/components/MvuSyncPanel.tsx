@@ -647,8 +647,10 @@ export default function MvuSyncPanel() {
     }
     // 1. Field của phiên dịch hiện tại (bản dịch nằm ở fields, chưa bake vào card)
     const fieldRes = recanonicalizeMvuInFields(fields, dict, mvuKeyMetadata);
-    // 2. Card (bản đã bake / thẻ import dịch trước bản vá) — dùng dict đã làm sạch ở bước 1
-    const cardRes = recanonicalizeMvuInCard(card, fieldRes.dictionary);
+    // 2. Card (bản đã bake / thẻ import dịch trước bản vá) — dùng dict đã làm sạch ở bước 1, và
+    // (bug 232) CẢ các biến thể dịch lệch vừa học được từ fields: ruột thẻ đã mất bản gốc nên tự
+    // nó không bao giờ suy ra được "Tiền bạc" chính là 钱财.
+    const cardRes = recanonicalizeMvuInCard(card, fieldRes.dictionary, fieldRes.variantAliases);
     const cleanDict = cardRes.dictionary;
     // 3. (User 2026 — "biến không đồng nhất") ÉP HOA/THƯỜNG theo dict vào TEXT các field đã dịch:
     // recanonicalize chỉ lo _/-/space; còn "Tiến trình" vs "Tiến Trình" (Kiểm tra tổng báo mvu

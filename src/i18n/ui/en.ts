@@ -1097,6 +1097,7 @@ const ui = {
   acAttachedMsg: '📁 **Attached {kind} successfully:** {names}.',
   acFileSplitNote: '🧩 File **{name}** is large ({chars} chars) so it was auto-split into **{parts} PARTS** (no characters lost). I will read all parts; if you only need one part, remove (🗑) the others to keep the call light.',
   acActionBlocked: '{n} action(s) blocked by the guard layer (outside sub-agent scope or schema mismatch) — not executed:',
+  acActionNeedCard: 'The assistant wants to act on a card, but no card is open — import one and ask again.',
   acDiagLine: 'Syntax error near line {line}',
   acDiagNoLine: 'Syntax error',
   acDiagFix: 'AI fix',

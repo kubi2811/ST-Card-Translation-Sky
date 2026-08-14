@@ -3357,14 +3357,25 @@ export function useTranslation() {
           // (User 19/07) 🎌 Đồng nhân: sweep CHỈ đụng field code. Trước đây nó áp từ điển biến lên
           // cả văn xuôi lorebook ở CUỐI lượt dịch — đó chính là cơ chế "đã dịch đúng rồi sau một
           // hồi lại tự sửa thành sai" (Yukino ở narrative bị kéo về dạng trong dict biến).
+          // ═══ (bug 232) KHOÁ TỪ ĐIỂN TỪNG TỰ TẮT CHÍNH BỘ ÁP TỪ ĐIỂN ═══
+          // User: "Khoá từ điển bị lỗi… trong từ điển để là 'Tiền Tài' nhưng khi dịch ra lại sót
+          // rất nhiều." Bản cũ viết `if (writeMvuDictAuto(...) && fixCount > 0) setFields(...)`.
+          // `writeMvuDictAuto` trả FALSE khi dict đang KHOÁ — nên bật khoá là toàn bộ lượt sweep
+          // cuối pipeline KHÔNG BAO GIỜ ghi bản dịch xuống. Đúng cái tính năng sinh ra để "mọi
+          // nơi phải dùng dict của tôi" lại là cái tắt mất bộ ép nó.
+          // Khoá nghĩa là "đừng SỬA từ điển của tôi", không phải "đừng ÁP từ điển của tôi".
+          // Nên tách hẳn hai việc: ghi dict thì tôn trọng khoá, ép bản dịch thì LUÔN chạy — và
+          // khi khoá thì ép bằng ĐÚNG dict thô của user, không chuẩn hoá lại.
+          const locked = useStore.getState().translationConfig.mvuDictLocked;
           const { fields: sweptFields, dictionary: fixedDict, fixCount } = recanonicalizeMvuInFields(
             useStore.getState().fields, rawDict, useStore.getState().mvuKeyMetadata,
             store.translationConfig.fandomMode,
+            !locked,
           );
-          // (khoá dict) 🔒 → không chuẩn hoá lại dict (user chốt dạng nào giữ dạng đó, kể cả _/-).
-          if (writeMvuDictAuto(fixedDict, 'sweep chuẩn hoá dict (_/- → space)') && fixCount > 0) {
+          writeMvuDictAuto(fixedDict, 'sweep chuẩn hoá dict (_/- → space)');
+          if (fixCount > 0) {
             store.setFields(sweptFields);
-            store.addLog('success', `🔗 Đồng nhất tên biến MVU: chuẩn hoá ${fixCount} field về 1 dạng thống nhất (bỏ dấu _/-).`);
+            store.addLog('success', `🔗 Đồng nhất tên biến MVU: ép ${fixCount} field về đúng từ điển${locked ? ' (đang 🔒 khoá — dùng nguyên dict bạn chốt)' : ' (bỏ dấu _/-)'}.`);
           }
         }
       } catch { /* sweep chỉ tăng cường chất lượng — lỗi thì bỏ qua, không chặn hoàn tất */ }

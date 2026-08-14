@@ -78,6 +78,66 @@ export interface ParsedResponse {
 const ACTION_BLOCK_RE = /<AI_ACTION>\s*([\s\S]*?)\s*<\/AI_ACTION>/gi;
 
 /**
+ * ═══ (bug 231) MỘT BLOCK CÓ THỂ CHỨA NHIỀU ACTION ═══
+ * User: "Chức năng tạo action trong trợ lý bị lỗi, chỉ ghi ra chat thay vì tạo thành nút bấm
+ * xác nhận/từ chối."
+ *
+ * Bản cũ gọi `JSON.parse` trên TOÀN BỘ nội dung block, tức chỉ đọc được đúng MỘT object. Nhưng
+ * chính lời nhắc hệ thống lại dạy AI "có thể đưa NHIỀU actions trong 1 response" và "cần đọc
+ * nhiều entry thì đưa nhiều VIEW_FULL_ENTRY trong cùng một response" — trong khi ví dụ duy nhất
+ * chỉ có một object. Model làm đúng lời dặn theo cách tự nhiên nhất: ba object trên ba dòng
+ * trong một block. Với `JSON.parse` thì đó không phải JSON hợp lệ ⇒ ném lỗi ⇒ 0 action ⇒ panel
+ * rơi vào nhánh "không có action" và in nguyên chuỗi thô ra chat. App dạy một đằng, đọc một nẻo.
+ *
+ * Nay chấp nhận mọi cách viết mà model thực sự dùng: một object, mảng JSON, NDJSON (mỗi dòng
+ * một object), object nối nhau bằng dấu phẩy, và cả khi bị bọc trong hàng rào ```json.
+ */
+function extractActionObjects(block: string): { objs: any[]; badCount: number } {
+  // Model hay bọc thêm hàng rào code dù đã nằm trong thẻ <AI_ACTION>.
+  let t = block.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  if (!t) return { objs: [], badCount: 0 };
+
+  // Đường nhanh: cả block là JSON hợp lệ (một object, hoặc một mảng).
+  try {
+    const parsed = JSON.parse(t);
+    if (Array.isArray(parsed)) return { objs: parsed.filter(Boolean), badCount: 0 };
+    if (parsed && typeof parsed === 'object') return { objs: [parsed], badCount: 0 };
+  } catch { /* rơi xuống quét từng object */ }
+
+  // Bọc thử thành mảng — bắt được cả NDJSON lẫn kiểu nối bằng dấu phẩy.
+  try {
+    const asArray = JSON.parse(`[${t.replace(/}\s*(?=\{)/g, '},')}]`);
+    if (Array.isArray(asArray)) return { objs: asArray.filter(Boolean), badCount: 0 };
+  } catch { /* rơi xuống quét cân bằng ngoặc */ }
+
+  // Quét từng object `{…}` cân bằng ngoặc (tôn trọng chuỗi + escape) rồi parse riêng. Object nào
+  // hỏng thì đếm lại để BÁO, không nuốt im lặng.
+  const objs: any[] = [];
+  let badCount = 0;
+  let i = 0;
+  while (i < t.length) {
+    if (t[i] !== '{') { i++; continue; }
+    let depth = 0, inStr = false, esc = false, end = -1;
+    for (let j = i; j < t.length; j++) {
+      const c = t[j];
+      if (esc) { esc = false; continue; }
+      if (c === '\\') { if (inStr) esc = true; continue; }
+      if (c === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (c === '{') depth++;
+      else if (c === '}') { depth--; if (depth === 0) { end = j; break; } }
+    }
+    if (end === -1) { badCount++; break; }   // object cuối bị cụt
+    try {
+      const o = JSON.parse(t.slice(i, end + 1));
+      if (o && typeof o === 'object') objs.push(o);
+    } catch { badCount++; }
+    i = end + 1;
+  }
+  return { objs, badCount };
+}
+
+/**
  * Parse structured action blocks from an AI response string.
  *
  * AI embeds actions in `<AI_ACTION>{ ... }</AI_ACTION>` blocks.
@@ -87,6 +147,8 @@ export function parseAiActions(response: string): ParsedResponse {
   const actions: AiAction[] = [];
   const removed: string[] = [];
   let textContent = response;
+  /** Số khối/object đọc không ra — để BÁO thay vì im lặng (bug 231). */
+  let unreadable = 0;
 
   // Extract all action blocks
   let match: RegExpExecArray | null;
@@ -94,23 +156,26 @@ export function parseAiActions(response: string): ParsedResponse {
 
   while ((match = regex.exec(response)) !== null) {
     const rawJson = match[1].trim();
-    try {
-      const parsed = JSON.parse(rawJson);
-      if (parsed && typeof parsed.action === 'string') {
-        // (bug 132) Action ghi regex đã bị gỡ — KHÔNG đẩy vào hàng thực thi, nhưng cũng KHÔNG
-        // nuốt im lặng: gom lại để báo cho người dùng biết AI vừa định làm gì và làm ở đâu.
-        if (isRemovedRegexAction(parsed.action)) {
-          removed.push(parsed.action);
-          continue;
-        }
-        actions.push({
-          action: parsed.action as ActionType,
-          params: parsed.params || {},
-          reasoning: parsed.reasoning,
-        });
+    const { objs, badCount } = extractActionObjects(rawJson);
+    unreadable += badCount;
+    if (objs.length === 0 && badCount === 0 && rawJson) unreadable++;
+
+    for (const parsed of objs) {
+      if (!parsed || typeof parsed.action !== 'string') { unreadable++; continue; }
+      // (bug 132) Action ghi regex đã bị gỡ — KHÔNG đẩy vào hàng thực thi, nhưng cũng KHÔNG
+      // nuốt im lặng: gom lại để báo cho người dùng biết AI vừa định làm gì và làm ở đâu.
+      if (isRemovedRegexAction(parsed.action)) {
+        removed.push(parsed.action);
+        continue;
       }
-    } catch (err) {
-      console.warn('[aiActions] Failed to parse action block:', rawJson, err);
+      actions.push({
+        action: parsed.action as ActionType,
+        params: parsed.params || {},
+        reasoning: parsed.reasoning,
+      });
+    }
+    if (badCount > 0 || (objs.length === 0 && rawJson)) {
+      console.warn('[aiActions] khối lệnh đọc không trọn:', rawJson);
     }
   }
 
@@ -128,6 +193,14 @@ export function parseAiActions(response: string): ParsedResponse {
       `sửa kiểu đó vừa không hiện ra, vừa bị ghi đè lúc xuất thẻ.\n` +
       `> Cách làm đúng: mở tab **Regex**, chọn script rồi dùng **Dịch lại** / **AI Quét & Sửa**, ` +
       `hoặc chép đoạn code trợ lý đưa ở trên vào ô nội dung của script.`;
+  }
+
+  // (bug 231) Khối lệnh đọc không ra thì PHẢI NÓI. Trước đây chỉ có một dòng console.warn mà
+  // người dùng không bao giờ thấy, còn trên màn hình thì cả khối lệnh thô hiện nguyên văn —
+  // trông y như "trợ lý viết code ra chat" chứ không ai đoán được là app đọc hỏng.
+  if (unreadable > 0) {
+    textContent += `\n\n> ⚠️ Trợ lý gửi ${unreadable} khối lệnh **sai định dạng** nên app **không đọc được** ` +
+      `(đã bỏ qua, không có gì được thay đổi trên thẻ). Nhắn "làm lại bằng action" là trợ lý gửi lại đúng chuẩn.`;
   }
 
   return { textContent, actions };

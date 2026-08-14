@@ -386,6 +386,11 @@ export function unifyVietnameseUnderscoresInText(text: string): { text: string; 
 export function recanonicalizeMvuInCard(
   card: CharacterCard,
   mvuDictionary: Record<string, string>,
+  /**
+   * (bug 232) Biến thể dịch lệch đã học được từ `fields` (nơi CÒN bản gốc để đối chiếu). Ruột thẻ
+   * thì bản gốc đã bị ghi đè nên tự nó không suy ra được "Tiền bạc" là 钱财 — phải nhận từ ngoài.
+   */
+  variantAliases: Record<string, string> = {},
 ): { card: CharacterCard; dictionary: Record<string, string>; fixCount: number } {
   const { fixedDict } = enforceExactConsistency(mvuDictionary);
   const synced = syncMvuVariables(card, fixedDict);
@@ -396,6 +401,7 @@ export function recanonicalizeMvuInCard(
     // (bug #8) Sweep dict-less TRƯỚC — gom mọi biến thể `_` về space, kể cả khi dict trống/thiếu.
     let t = unifyVietnameseUnderscoresInText(text).text;
     t = enforceInitvarCovariance(t, fixedDict, false).text;
+    t = enforceDictVariants(t, variantAliases).text;
     t = enforceVariableCasing(t, fixedDict).text;
     t = fixZodSyntaxErrors(t);
     if (t !== text) fixCount++;
@@ -458,6 +464,144 @@ export function recanonicalizeMvuInCard(
  * `translated` của MỌI field code/lorebook đã 'done'. Trả về mảng field mới + dict sạch + số field đổi.
  * Dùng chung ở: sweep cuối pipeline (useTranslation) và nút "Đồng nhất tên biến MVU".
  */
+/* ═══════════════════════════════════════════════════════════════════════════
+   (bug 232) BIẾN THỂ DỊCH LỆCH — ĐỐI CHIẾU BẢN GỐC MỚI BIẾT "Tiền bạc" LÀ 钱财
+   ═══════════════════════════════════════════════════════════════════════════
+   User: từ điển ghi 钱财 → "Tiền Tài", nhưng bản dịch ra "Tiền bạc" ở chỗ này, "Tiền tài" ở chỗ
+   kia; bấm áp dụng chỉ sửa được 50~70%.
+
+   Phần "Tiền tài" là lệch HOA/THƯỜNG — `enforceVariableCasing` lo (xem Pass 7b). Phần "Tiền bạc"
+   thì ép casing KHÔNG BAO GIỜ cứu được, vì nó chuẩn hoá hoa/thường chứ không biết hai từ khác
+   nhau lại cùng chỉ một biến. Muốn biết điều đó thì phải nhìn BẢN GỐC: ở đúng vị trí đó bản gốc
+   ghi 钱财, mà từ điển bảo 钱财 = "Tiền Tài" ⇒ "Tiền bạc" là bản dịch lệch của chính biến ấy.
+
+   Bộ học ánh xạ theo vị trí vốn ĐÃ CÓ (`extractMappingFromTranslatedInitvar`) nhưng chỉ soi
+   initvar/controller/mvu_logic — trong khi chứng cứ user gửi nằm ở tavernHelper (schema zod) và
+   regex (thanh trạng thái). Nên nó không bao giờ nhìn thấy chỗ hỏng.
+
+   Hai hàm dưới đây: HỌC biến thể từ mọi field CODE có cả gốc lẫn dịch, rồi ÉP biến thể đó ở mọi
+   field code khác — kể cả field mà một mình nó không đủ căn cứ để tự suy ra. */
+
+/** Mọi chuỗi trong nháy, THEO THỨ TỰ, KHÔNG gộp trùng (gộp là lệch vị trí). */
+function extractQuotedLiteralsOrdered(text: string): string[] {
+  if (!text || typeof text !== 'string') return [];
+  const out: string[] = [];
+  for (const m of text.matchAll(/(['"])((?:[^'"\n\\])*)\1/g)) out.push(m[2]);
+  return out;
+}
+
+const normVarName = (s: string) => s.toLowerCase().normalize('NFC').replace(/[\s_-]+/g, ' ').trim();
+
+/**
+ * Học các BIẾN THỂ dịch lệch: `bản-dịch-AI-đã-viết` → `giá trị trong từ điển`.
+ * Chỉ nhận khi số chuỗi hai bên KHỚP NHAU — lệch một cái là mất căn cứ vị trí, thà không sửa còn
+ * hơn đoán bừa rồi ghi đè lên một giá trị hợp lệ.
+ */
+export function buildDictVariantAliases(
+  fields: { original?: string; translated?: string; status?: string; group?: string; entryType?: string }[],
+  mvuDictionary: Record<string, string>,
+): Record<string, string> {
+  const aliases: Record<string, string> = {};
+  const canonicalSet = new Set(
+    Object.values(mvuDictionary).filter(v => v && v.trim()).map(normVarName),
+  );
+  if (canonicalSet.size === 0) return aliases;
+
+  const learnPair = (orig: string, trans: string) => {
+    // Từ điển user có thể chốt cả dạng PATH ("财务.钱财") lẫn từng đoạn rời — thử nguyên chuỗi
+    // trước, không có mới tách theo dấu chấm.
+    const os = mvuDictionary[orig.trim()] ? [orig] : orig.split('.');
+    const ts = os.length === 1 ? [trans] : trans.split('.');
+    if (os.length !== ts.length) return;
+    for (let k = 0; k < os.length; k++) {
+      const wanted = mvuDictionary[os[k].trim()];
+      if (!wanted || !wanted.trim()) continue;
+      const got = ts[k].trim();
+      const gotNorm = normVarName(got);
+      if (!gotNorm || gotNorm === normVarName(wanted)) continue;
+      // Bỏ qua rác: quá ngắn, thuần số, hoặc trùng một tên biến ĐÚNG khác trong từ điển (ánh xạ
+      // tên đúng này sang tên đúng kia là phá dữ liệu, không phải sửa).
+      if (gotNorm.length < 2 || /^[\d\s.,%+-]+$/.test(gotNorm)) continue;
+      if (canonicalSet.has(gotNorm)) continue;
+      aliases[gotNorm] = wanted;
+    }
+  };
+
+  for (const f of fields) {
+    if (f.status !== 'done' || !f.original || !f.translated) continue;
+    const isCode =
+      f.entryType === 'initvar' || f.entryType === 'controller' || f.entryType === 'mvu_logic' ||
+      f.group === 'regex' || f.group === 'tavern_helper';
+    if (!isCode) continue;
+
+    for (const [ol, tl] of [
+      [extractQuotedLiteralsOrdered(f.original), extractQuotedLiteralsOrdered(f.translated)],
+      [extractYamlKeysOrdered(f.original), extractYamlKeysOrdered(f.translated)],
+      [extractMacroVarNamesOrdered(f.original), extractMacroVarNamesOrdered(f.translated)],
+    ] as [string[], string[]][]) {
+      if (ol.length === 0 || ol.length !== tl.length) continue;
+      for (let i = 0; i < ol.length; i++) learnPair(ol[i], tl[i]);
+    }
+  }
+  return aliases;
+}
+
+/** Ép các biến thể đã học vào ĐÚNG VỊ TRÍ TÊN BIẾN (chuỗi trong nháy, khoá YAML, macro). */
+export function enforceDictVariants(
+  text: string,
+  aliases: Record<string, string>,
+): { text: string; fixes: { found: string; replaced: string }[] } {
+  const fixes: { found: string; replaced: string }[] = [];
+  if (!text || typeof text !== 'string' || Object.keys(aliases).length === 0) {
+    return { text, fixes: [] };
+  }
+  const hit = (seg: string): string | null => {
+    const canonical = aliases[normVarName(seg)];
+    return canonical && canonical !== seg ? canonical : null;
+  };
+  const note = (found: string, replaced: string) => {
+    if (!fixes.some(f => f.found === found)) fixes.push({ found, replaced });
+  };
+
+  let result = text;
+
+  // Chuỗi trong nháy (tách theo dấu chấm để bắt cả path 'Tài Chính.Tiền bạc').
+  result = result.replace(/(['"])((?:[^'"\n\\])*)\1/g, (match, quote, inner: string) => {
+    if (!inner || inner.length < 2) return match;
+    const segs = inner.split('.');
+    let changed = false;
+    const next = segs.map((seg) => {
+      const canonical = hit(seg.trim());
+      if (!canonical) return seg;
+      changed = true;
+      note(seg.trim(), canonical);
+      return seg.replace(seg.trim(), canonical);
+    });
+    return changed ? `${quote}${next.join('.')}${quote}` : match;
+  });
+
+  // Khoá YAML/JS đầu dòng — `Tiền bạc: 5000`.
+  result = result.replace(/^(\s*)(["']?)([^"':\n]+?)(["']?)(\s*:)/gm, (match, indent, q1, key, q2, colon) => {
+    const canonical = hit(String(key).trim());
+    if (!canonical) return match;
+    note(String(key).trim(), canonical);
+    return `${indent}${q1}${canonical}${q2}${colon}`;
+  });
+
+  // Macro {{getvar::Tiền bạc}}
+  result = result.replace(
+    /(\{\{(?:get|set|add)(?:global)?var::\s*)([^:}]+)(}}|::)/g,
+    (match, prefix, name: string, suffix) => {
+      const canonical = hit(name.trim());
+      if (!canonical) return match;
+      note(name.trim(), canonical);
+      return `${prefix}${canonical}${suffix}`;
+    },
+  );
+
+  return { text: result, fixes };
+}
+
 export function recanonicalizeMvuInFields(
   fields: TranslationField[],
   mvuDictionary: Record<string, string>,
@@ -469,8 +613,19 @@ export function recanonicalizeMvuInFields(
    * văn xuôi — để nó quét narrative là ghi đè ngược lên bản dịch tên đã đúng ở cuối lượt dịch.
    */
   skipNarrative = false,
-): { fields: TranslationField[]; dictionary: Record<string, string>; fixCount: number } {
-  const { fixedDict } = enforceExactConsistency(mvuDictionary, keyMetadata as any);
+  /**
+   * (bug 232) Có được CHUẨN HOÁ chính từ điển không. Khi user bật 🔒 Khoá từ điển thì KHÔNG —
+   * dict của họ là chân lý, kể cả khi họ cố ý giữ `_`. Vẫn phải ÉP dict đó lên bản dịch; hai
+   * việc này là hai việc khác nhau, gộp làm một chính là lỗi của bản cũ.
+   */
+  normalizeDict = true,
+): { fields: TranslationField[]; dictionary: Record<string, string>; fixCount: number; variantAliases: Record<string, string> } {
+  const fixedDict = normalizeDict
+    ? enforceExactConsistency(mvuDictionary, keyMetadata as any).fixedDict
+    : mvuDictionary;
+  // (bug 232) HỌC biến thể dịch lệch TRƯỚC, trên TOÀN BỘ field — vì field biết sự thật (bản gốc
+  // có 钱财 ở đúng vị trí đó) và field bị lệch thường KHÔNG phải cùng một field.
+  const variantAliases = buildDictVariantAliases(fields as never, fixedDict);
   let fixCount = 0;
   const out = fields.map((f) => {
     if (f.status !== 'done' || typeof f.translated !== 'string' || !f.translated) return f;
@@ -484,13 +639,16 @@ export function recanonicalizeMvuInFields(
     // (bug #8) Sweep dict-less TRƯỚC — Lưu_Tam_Bảo → Lưu Tam Bảo kể cả khi dict trống/thiếu key.
     let t = unifyVietnameseUnderscoresInText(f.translated).text;
     t = enforceInitvarCovariance(t, fixedDict, isLbNarr).text;
+    // (bug 232) Biến thể chỉ ép ở field CODE. Văn xuôi thì "Tiền bạc" có thể là chữ dùng thật
+    // trong truyện, ép sang tên biến ở đó là sửa hỏng bản dịch chứ không phải đồng nhất biến.
+    if (isCode) t = enforceDictVariants(t, variantAliases).text;
     t = enforceVariableCasing(t, fixedDict).text;
     if (isCode) t = fixZodSyntaxErrors(t);
     if (t === f.translated) return f;
     fixCount++;
     return { ...f, translated: t };
   });
-  return { fields: out, dictionary: fixedDict, fixCount };
+  return { fields: out, dictionary: fixedDict, fixCount, variantAliases };
 }
 
 /**
@@ -1026,6 +1184,43 @@ export function enforceVariableCasing(
       return seg;
     });
     return changed ? `${prefix}${newSegments.join('.')}${suffix}` : match;
+  });
+
+  // ─── Pass 7b: (bug 232) MỌI CHUỖI TRONG NHÁY đứng đúng bằng một tên biến ───
+  // Bảy pass trên là một DANH SÁCH TRẮNG các ngữ cảnh cú pháp: macro, obj['k'], getvar(), ===,
+  // khoá YAML, lodash… Thẻ thật lại gọi qua hàm CỦA RIÊNG NÓ và dùng tên biến làm GIÁ TRỊ chuỗi:
+  //     const money = getVal(sd, 'Tài chính.Tiền tài', 0);
+  //     rows.push({k: 'Tiền tài', v: '¥ ' + fmtMoney(money)});
+  // `getVal` không nằm trong danh sách trắng nào, còn `k: '…'` là VỊ TRÍ GIÁ TRỊ chứ không phải
+  // khoá — nên cả hai chỗ không pass nào chạm tới. Đo trên sáu chuỗi thật user gửi: chỉ 2/6 được
+  // vá, đúng con số "50~70%" user cảm nhận.
+  //
+  // AN TOÀN: `getCasingFix` chỉ trả kết quả khi chuỗi (hoặc từng đoạn của path) CHUẨN HOÁ RA
+  // ĐÚNG một mục trong từ điển — tức chỉ lệch hoa/thường hoặc dấu nối. Câu văn có CHỨA tên biến
+  // ("Số Tiền tài của ngươi…") không chuẩn hoá ra tên biến nào nên không bị đụng; chuỗi lạ như
+  // '¥ ' hay 'px' cũng vậy. Không khớp qua xuống dòng và bỏ qua chuỗi có escape để không cắt nhầm.
+  const anyLiteralRegex = /(['"])((?:[^'"\n\\])*)\1/g;
+  result = result.replace(anyLiteralRegex, (match, quote, inner: string) => {
+    if (!inner || inner.length < 2) return match;
+    // Từ điển của user có thể chốt cả DẠNG PATH ("财务.钱财" → "Tài Chính.Tiền Tài") lẫn từng
+    // đoạn rời — thử nguyên chuỗi trước, không khớp mới tách theo dấu chấm.
+    const whole = getCasingFix(inner.trim());
+    if (whole) {
+      if (!fixes.some(f => f.found === inner.trim())) fixes.push({ found: inner.trim(), replaced: whole });
+      return `${quote}${whole}${quote}`;
+    }
+    const segments = inner.split('.');
+    let changed = false;
+    const newSegments = segments.map((seg: string) => {
+      const canonical = getCasingFix(seg.trim());
+      if (!canonical) return seg;
+      changed = true;
+      if (!fixes.some(f => f.found === seg.trim())) {
+        fixes.push({ found: seg.trim(), replaced: canonical });
+      }
+      return seg.replace(seg.trim(), canonical);
+    });
+    return changed ? `${quote}${newSegments.join('.')}${quote}` : match;
   });
 
   // ─── Pass 8: NHÃN HIỂN THỊ trong HTML — <td>Cảnh giới</td> ───

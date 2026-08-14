@@ -1092,6 +1092,7 @@ const ui: UiKeys = {
   acAttachedMsg: '📁 **已成功附上{kind}：** {names}。',
   acFileSplitNote: '🧩 文件 **{name}** 较大（{chars} 字符），已自动拆分为 **{parts} 个部分**（不丢失任何字符）。我会读取全部部分；如只需处理某一部分，可删除（🗑）其余部分以减轻负担。',
   acActionBlocked: '{n} 个 action 被防护层拦截（超出子代理权限或参数不符 schema）——未执行：',
+  acActionNeedCard: '助手想操作角色卡，但当前没有打开任何卡片——请先导入一张再重试。',
   acDiagLine: '第 {line} 行附近语法错误',
   acDiagNoLine: '语法错误',
   acDiagFix: 'AI 修复',

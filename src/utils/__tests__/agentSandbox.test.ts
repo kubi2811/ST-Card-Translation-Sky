@@ -16,10 +16,18 @@ describe('routeIntent — heuristic, mơ hồ thì về general', () => {
 });
 
 describe('validateAgentAction — whitelist + zod chặn action lệch chuẩn', () => {
-  it('translator bị CHẶN action xoá regex (ngoài whitelist)', () => {
+  /**
+   * (bug 236) CÂU TỪ CHỐI ĐỔI CHO ĐÚNG BỆNH. Trước đây mọi thứ không chạy được đều gom vào một
+   * câu chung chung ("ngoài phạm vi" / "Action lạ"), nên trợ lý không phân biệt được "viết sai"
+   * với "thứ này đã bị bỏ" và cứ thử lại mãi. DELETE_REGEX không phải bị hạn chế theo sub-agent —
+   * nó đã bị GỠ HẲN ở bug 132, và câu báo phải nói đúng thế kèm đường đi tiếp.
+   */
+  it('translator bị CHẶN action xoá regex, và được nói rõ là action ĐÃ GỠ (không phải "action lạ")', () => {
     const r = validateAgentAction('translator', 'DELETE_REGEX', { scriptIndex: 0 });
     expect(r.ok).toBe(false);
-    expect(r.reason).toContain('ngoài phạm vi');
+    expect(r.reason).toMatch(/đã được GỠ/);
+    expect(r.reason).toMatch(/tab "Regex"/);          // chỉ đường làm đúng
+    expect(r.reason).not.toMatch(/Action lạ/);
   });
   // (bug 132) Nhóm action GHI regex đã gỡ khỏi engine — không agent nào còn quyền, kể cả
   // codefixer (trước đây nó được cấp đủ 5 action này) lẫn general.

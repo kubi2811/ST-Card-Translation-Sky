@@ -67,6 +67,15 @@ const KEYWORD_HINTS: Array<[RegExp, AppId]> = [
   // ra bản dịch và ghi ngược vào thẻ. Thêm vì loạt commit bug 213 tả việc bằng đúng mấy chữ này
   // mà không nêu tên app, nên rơi hết vào "Khác".
   [/(bản dịch|ban dich|hỏng thẻ|hong the|vào thẻ|vao the|dịch thẻ|dich the)/i, 'dich-card'],
+  /**
+   * (bug 236) BA TÍNH NĂNG LỚN CỦA DỊCH CARD KHÔNG CÓ TỪ KHOÁ NÀO NHẬN RA.
+   * "So Sánh Card", "Trợ Lý AI" và bảng tiến độ/provider đều là panel NẰM TRONG Dịch Card, nhưng
+   * commit về chúng hiếm khi nhắc chữ "dịch" nên rơi hết vào "Khác" — đúng lúc test đối chiếu
+   * lịch sử thật tụt xuống dưới ngưỡng 80%. Thêm đúng tên các panel đó, không nới lỏng ngưỡng:
+   * ngưỡng hạ xuống là bộ lọc theo app thành đồ trang trí, còn lỗi thì vẫn nguyên.
+   */
+  [/(so sánh card|so sanh card|trợ lý ai|tro ly ai|ký ức|ky uc|prompt core)/i, 'dich-card'],
+  [/(provider|thanh trạng thái|thanh trang thai|api key|đa luồng|da luong)/i, 'dich-card'],
   [/\b(hub|header|rail|phiên bản|version)\b/i, 'hub'],
 ];
 

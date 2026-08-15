@@ -1557,6 +1557,11 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
   if (!convIdRef.current) {
     convIdRef.current = `conv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   }
+  /**
+   * (bug 236) Vân tay các action bị chặn ở lượt TRƯỚC — để nhận ra trợ lý đang gửi lại đúng thứ
+   * vừa bị chặn và nói thẳng "đừng gửi nữa", thay vì để nó lặp vô hạn như trong ảnh user gửi.
+   */
+  const lastBlockedSigRef = useRef<string>('');
   /** Nguyên liệu prompt của lượt gần nhất — panel Prompt Core dựng lại đúng chuỗi sẽ gửi. */
   const [coreSnapshot, setCoreSnapshot] = useState<import('../utils/promptCore').BuildLayersInput>(
     { core: SYSTEM_INSTRUCTION },
@@ -2173,6 +2178,21 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
         textContent += `\n\n🛡️ ${fmt(ui.acActionBlocked, { n: blockedActions.length })}\n` +
           blockedActions.map(b => `• ${b.a.action}: ${b.chk.reason}`).join('\n');
         console.warn('[Orchestrator] chặn action:', blockedActions.map(b => b.a.action).join(', '));
+
+        /* (bug 236) CHỐNG VÒNG LẶP "bị chặn → xin lỗi → gửi lại y hệt".
+         * Ảnh user gửi: trợ lý bị chặn, nói "tôi định dạng sai khối lệnh", rồi gửi lại ĐÚNG action
+         * đó — và bị chặn tiếp, mãi không thoát. Nó không cố chấp; nó chỉ không có cách nào biết
+         * rằng vấn đề nằm ở app chứ không ở cú pháp của nó.
+         * Nên khi thấy ĐÚNG một action bị chặn hai lượt liên tiếp thì nói thẳng: đừng gửi lại nữa. */
+        const sig = blockedActions.map(b => b.a.action).sort().join('|');
+        if (sig && sig === lastBlockedSigRef.current) {
+          textContent += `\n\n⛔ Lượt trước cũng bị chặn đúng ${blockedActions.length > 1 ? 'những' : ''} action này. `
+            + 'ĐỪNG gửi lại nó lần nữa — gửi lại cũng bị chặn y hệt. Hãy đọc lý do ở trên: nếu là sai tham số '
+            + 'thì sửa tham số, nếu action nằm ngoài quyền thì làm việc đó bằng lời (mô tả cho người dùng tự thao tác).';
+        }
+        lastBlockedSigRef.current = sig;
+      } else {
+        lastBlockedSigRef.current = '';
       }
 
       if (parsedActions.length > 0 && card) {

@@ -24,6 +24,8 @@ import { validateMvuVariables, autoFixMvuVariables, generateSyncReport, buildEnt
 import { buildEffectivePrompt } from '../utils/promptBuilder';
 import { applyRegexAlternation } from '../scriptTranslate/regexAlternation';
 import { surgicalTranslate, verifyCodeStructureParity, detectInventedDeclarations } from '../utils/surgical';
+// (bug 237) Vỏ base64 dùng chung — nhánh phẫu thuật cũng phải đi qua, không riêng translateText.
+import { translateThroughBase64Shell } from '../utils/base64Payload';
 import { decideSoftGate } from '../utils/softGate';
 import { repairUnquotedObjectKeys, repairUnquotedObjectKeysInHtml } from '../utils/repairObjectKeys';
 import { parsePatchOutput, applyPatches, validatePatchResult } from '../utils/patchEngine';
@@ -761,23 +763,58 @@ export function useTranslation() {
       if (isEligibleForSurgical) {
         usedSurgical = true;
         store.addLog('active', `🔪 Dịch phẫu thuật (chỉ sửa phần cần) cho ${field.label}…`);
-        const sResult = await surgicalTranslate(
-          field.original,
-          effectiveProxy,
-          store.translationConfig.targetLanguage,
-          abortRef.current?.signal,
-          store.translationConfig.glossary,
-          currentMvuDict,
-          true,
-          undefined,
-          'preserve',
-          store.translationConfig.customSchema,
-          promptResult.effectivePrompt,
-          field.label
-        );
-        translated = sResult.translated;
+        /**
+         * (bug 237) NHÁNH NÀY PHẢI ĐI QUA VỎ BASE64 — trước đây nó không.
+         *
+         * `translateText` có sẵn đường ống base64 của việc 233, nhưng mọi field nhóm
+         * regex/tavern_helper lại rẽ thẳng vào `surgicalTranslate` ở đây, tức là né sạch. Với thẻ
+         * nhét cả trang HTML vào chuỗi base64 thì việc 233 coi như chưa từng tồn tại — đo trên
+         * bugNeedFix/237: 12.923 chữ Hán, quá nửa số chữ Hán của toàn bộ script, nằm ở đúng hai
+         * màn hình người chơi nhìn thấy (khai màn + thanh trạng thái) và không bao giờ được dịch.
+         *
+         * Và nó còn là chốt chặn TỐC ĐỘ: cho surgical nhai trọn khối base64 nửa triệu ký tự thì
+         * `reinsertTranslations` treo cứng tab (đo được: 115ms trên bản đã che, quá 5 phút chưa
+         * về trên bản thô), kéo theo toàn bộ hàng đợi field đứng im.
+         */
+        let sResult!: Awaited<ReturnType<typeof surgicalTranslate>>;
+        translated = await translateThroughBase64Shell(field.original, field.label, {
+          signal: abortRef.current?.signal,
+          /**
+           * (bug 237) NHẬT KÝ PHẢI VÀO APP, KHÔNG PHẢI CHỈ VÀO CONSOLE.
+           * Chạy thật thẻ 237: sau dòng "🔪 Dịch phẫu thuật…" là IM LẶNG hơn 10 phút, trong khi
+           * engine đang cắt mảnh và dịch 370.898 ký tự HTML nằm trong khối base64. Đúng lời than
+           * của bug 227: "tool vẫn liên tục call API nhưng không báo là dịch vì lý do gì".
+           */
+          log: (m) => { console.log(m); store.addLog('info', m.replace(/^\[base64\] /, '🧬 base64 · ')); },
+          outer: async (masked) => {
+            sResult = await surgicalTranslate(
+              masked,
+              effectiveProxy,
+              store.translationConfig.targetLanguage,
+              abortRef.current?.signal,
+              store.translationConfig.glossary,
+              currentMvuDict,
+              true,
+              undefined,
+              'preserve',
+              store.translationConfig.customSchema,
+              promptResult.effectivePrompt,
+              field.label
+            );
+            return sResult.translated;
+          },
+          // Ruột giải ra là một TÀI LIỆU hoàn chỉnh, không phải một mẩu code — cho nó đi trọn
+          // đường ống chuẩn (che URL, cắt mảnh, quét chữ Hán sót) chứ không phải một lần gọi trần.
+          inner: (decoded, innerName) => translateText(
+            decoded, innerName, effectiveProxy,
+            store.translationConfig.targetLanguage, store.translationConfig.sourceLanguage,
+            promptResult.effectivePrompt, store.translationConfig.customSchema,
+            abortRef.current?.signal, undefined, store.translationConfig.glossary,
+            undefined, resolvedFieldType, currentMvuDict,
+          ),
+        });
         translated = patchScriptRegexAfterTranslate(translated, sResult.dict, field.label, store.addLog);
-        
+
         if (sResult.success) {
           store.updateField(field.path, { 
             surgicalResult: { type: 'success', info: 'Successfully extracted and reinserted CJK without touching code structure.' } 
@@ -1495,13 +1532,33 @@ export function useTranslation() {
       // tiếng Trung chạy được còn hơn nhét bản dịch làm vỡ script". Không đánh dấu thì bộ quét
       // chữ Trung sót lôi đúng field đó đi dịch lại 2 lượt nữa, trên một đường KHÔNG có chốt
       // cú pháp — vừa đốt token vừa có thể ghi code vỡ vào thẻ.
+      const keptOriginal = translated === field.original;
       store.updateField(field.path, {
         status: 'done',
         translated,
         failedChunkIndex: undefined,
-        keptOriginalOnPurpose: translated === field.original ? true : undefined,
+        keptOriginalOnPurpose: keptOriginal ? true : undefined,
       });
-      store.addLog('success', `✅ Đã dịch: ${field.label} (${translated.length} ký tự)`);
+      /**
+       * (bug 237) GIỮ NGUYÊN BẢN GỐC THÌ ĐỪNG NÓI LÀ "ĐÃ DỊCH".
+       *
+       * Chạy thật thẻ 237: `tavernHelper[3].content` (141.037 ký tự) dịch ra làm vỡ cú pháp JS,
+       * chốt bug 128/227 thử lại một lượt, ra ĐÚNG lỗi cũ, nên quyết định giữ bản gốc — quyết định
+       * ĐÚNG, và nó có in ra đúng câu đó. Nhưng ngay dòng sau lại ghi "✅ Đã dịch: … (141037 ký tự)".
+       * Bản "dịch" ấy giống bản gốc TỪNG BYTE: 3.877 chữ Hán thấy được + 5.010 chữ Hán trong khối
+       * base64, tổng 8.887 chữ chưa dịch nằm gọn dưới nhãn XONG.
+       *
+       * Đúng luận điểm bug 234: chốt an toàn thì không sai, cái nói dối là DÒNG BÁO. Cờ
+       * keptOriginalOnPurpose đã có sẵn để bộ đếm "chưa đạt" tóm lại — nhật ký phải nói cùng một
+       * sự thật với nó, chứ không được khoe xanh.
+       */
+      if (keptOriginal && field.original.trim()) {
+        store.addLog('warning',
+          `⚠️ ${field.label}: GIỮ NGUYÊN bản gốc — không nhận được bản dịch nào an toàn (${translated.length} ký tự). ` +
+          `Mục này nằm trong danh sách "chưa đạt", chưa dịch được chữ nào.`);
+      } else {
+        store.addLog('success', `✅ Đã dịch: ${field.label} (${translated.length} ký tự)`);
+      }
       // Store to Translation Memory (non-blocking)
       if (store.translationConfig.enableTranslationMemory) {
         storeTranslation({ ...field, translated, status: 'done' }, store.cardFileName || 'unknown').catch(() => {});

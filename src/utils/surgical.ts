@@ -26,7 +26,8 @@ export interface CJKToken {
   fromDictionary?: boolean;
   /** (bug 161) Dấu nháy đang BAO chuỗi chứa cụm này (nếu cụm nằm trong chuỗi). Reinsert dùng nó để
    *  vô hiệu hoá dấu nháy mà bản dịch tự mọc thêm — thêm đúng dấu này là xẻ đôi chuỗi, chết script. */
-  inStringQuote?: "'" | '"';
+  /** (bug 237) Backtick cũng đóng được template literal nên phải nằm trong tập này. */
+  inStringQuote?: "'" | '"' | '`';
 }
 
 /**
@@ -369,19 +370,58 @@ export function isInsideStringAtEnd(lineBefore: string): boolean {
  * bao chuỗi thì xẻ đôi chuỗi; mọc thêm dấu nháy loại KHÁC thì hoàn toàn vô hại (nháy kép nằm
  * trong chuỗi nháy đơn là hợp lệ). Không phân biệt được thì hoặc bỏ sót lỗi, hoặc sửa oan.
  */
-export function enclosingQuoteAtEnd(lineBefore: string): "'" | '"' | null {
-  let quote: "'" | '"' | null = null;
+export function enclosingQuoteAtEnd(lineBefore: string): "'" | '"' | '`' | null {
+  let quote: "'" | '"' | '`' | null = null;
+  /**
+   * (bug 237) Độ sâu ngoặc nhọn của phần NỘI SUY `${…}` đang mở trong template literal.
+   * Bên trong `${…}` là CODE chứ không phải chuỗi — `` `${f.心声 || "vô"}` `` thì `f.心声` là
+   * truy cập thuộc tính thật và PHẢI được đổi sang bracket. Bỏ qua chi tiết này thì mọi token nằm
+   * trong nội suy bị chấm là "trong chuỗi" và mất hết lớp bảo vệ cú pháp (chính là hồi quy đã bắt
+   * được ở test bug 171a).
+   */
+  let interp = 0;
   for (let i = 0; i < lineBefore.length; i++) {
     const c = lineBefore[i];
+    if (quote === '`' && interp > 0) {
+      // Đang ở trong `${…}`: đếm ngoặc để biết lúc nào quay lại phần chuỗi của template.
+      if (c === '{') interp++;
+      else if (c === '}') interp--;
+      else if (c === "'" || c === '"') {       // chuỗi lồng trong nội suy — nhảy qua trọn vẹn
+        const q = c;
+        for (i++; i < lineBefore.length; i++) {
+          if (lineBefore[i] === '\\') { i++; continue; }
+          if (lineBefore[i] === q) break;
+        }
+      }
+      continue;
+    }
     if (quote) {
       if (c === '\\') { i++; continue; }      // bỏ qua ký tự escape kế tiếp
+      if (quote === '`' && c === '$' && lineBefore[i + 1] === '{') { interp = 1; i++; continue; }
       if (c === quote) quote = null;           // đóng chuỗi
       // dấu nháy loại KHÁC bên trong chuỗi → chỉ là ký tự thường, KHÔNG đổi trạng thái
     } else {
-      if (c === "'" || c === '"') quote = c;   // mở chuỗi
+      /* ═══ (bug 237) CHÚ THÍCH VÀ TEMPLATE LITERAL CŨNG LÀM LỆCH PHÉP ĐẾM ═══
+       * Bản cũ chỉ biết ' và ". Trong code MINIFY, một dấu nháy đơn nằm trong chú thích
+       * (`// don't`) hay trong template literal (`` `it's ${x}` ``) sẽ MỞ một chuỗi không bao
+       * giờ đóng, và mọi token phía sau — có thể hàng trăm nghìn ký tự — đều bị kết luận nhầm
+       * là "đang trong chuỗi". Đó là cách khoá đối tượng của thẻ 237 mất lớp bọc nháy.
+       * Nhảy qua hai loại chú thích và theo dõi cả backtick thì phép đếm khớp thực tế hơn hẳn. */
+      if (c === '/' && lineBefore[i + 1] === '/') {
+        const nl = lineBefore.indexOf('\n', i);
+        if (nl === -1) break;                  // chú thích chạy tới hết đoạn đang xét
+        i = nl; continue;
+      }
+      if (c === '/' && lineBefore[i + 1] === '*') {
+        const end = lineBefore.indexOf('*/', i + 2);
+        if (end === -1) break;
+        i = end + 1; continue;
+      }
+      if (c === "'" || c === '"' || c === '`') quote = c;   // mở chuỗi
     }
   }
-  return quote;
+  // Đang đứng GIỮA phần nội suy `${…}` thì vị trí đó là code, không phải chuỗi.
+  return quote === '`' && interp > 0 ? null : quote;
 }
 
 /**
@@ -741,7 +781,28 @@ export function extractCJKTokens(
     // điểm mù: với `{_开场标识: …}` thì ký tự ngay trước cụm Hán là `_` chứ không phải `{`, nên
     // mẫu dưới đây trượt → coi là văn xuôi → dịch ra cụm CÓ DẤU CÁCH mà KHÔNG bọc nháy →
     // SyntaxError. Trong khi `当前日期` sát ngay `{` thì thoát. Chênh nhau đúng một ký tự `_`.
-    const isObjectKey = !insideStringLiteral &&
+    /* ═══ (bug 237) BẰNG CHỨNG NGAY CẠNH THẮNG PHÉP ĐOÁN TẦM XA ═══
+     * `insideStringLiteral` được tính bằng cách đếm nháy TỪ ĐẦU DÒNG. Với script minify — thẻ 237
+     * có khối <script> 329.091 ký tự nằm gọn trên MỘT dòng 131.766 ký tự — phép đếm đó phải đi qua
+     * hàng trăm nghìn ký tự code, và chỉ cần một dấu nháy lẻ trong regex literal là sai từ đó về sau.
+     *
+     * Đo trên đúng thẻ đó: token `雪之下雪乃` trong `…,laff:5e4},p={hachiman:{雪之下雪乃:{display:…`
+     * bị chấm là "đang trong chuỗi nháy kép" ⇒ isObjectKey=false ⇒ reinsert KHÔNG bọc nháy ⇒ xuất ra
+     * `{Yukinoshita Yukino:{…}}` = SyntaxError. Cả 14 khoá đối tượng Hán của thẻ đều dính, và màn
+     * khai mạc chết hẳn khi nạp vào SillyTavern.
+     *
+     * Nên khi bối cảnh SÁT token đọc ra rành mạch là "khoá đối tượng trần" — ngay trước là `{`/`,`
+     * KHÔNG kèm nháy, ngay sau là `:` KHÔNG kèm nháy — thì tin bằng chứng đó.
+     *
+     * HAI CÁI SAI KHÔNG NGANG NHAU, và đó là toàn bộ lý lẽ của chốt này:
+     *   • đoán nhầm khoá-thật thành trong-chuỗi ⇒ để khoá trần có dấu cách ⇒ SCRIPT CHẾT;
+     *   • đoán nhầm chuỗi-thật thành khoá ⇒ thừa một cặp nháy BÊN TRONG chuỗi ⇒ chữ hơi xấu,
+     *     cú pháp vẫn nguyên.
+     * Chọn phía không giết thẻ.
+     */
+    const _bareKeyShape = /[{,]\s*$/.test(_beforeId) && /^\s*:/.test(contextAfter)
+      && !/^['"`]/.test(contextAfter) && !/['"`]\s*$/.test(_beforeId);
+    const isObjectKey = (!insideStringLiteral || _bareKeyShape) &&
                         /(?:[{,]\s*|\n\s*|^['"\s]*)['"]?$/.test(_beforeId) &&
                         /^['"]?\s*:/.test(contextAfter) &&
                         !/^['"]?\s*:\/\//.test(contextAfter);
@@ -807,7 +868,9 @@ export function extractCJKTokens(
       isObjectKey,
       isCssClass,
       isHtmlAttr,
-      ...(_enclosingQuote ? { inStringQuote: _enclosingQuote } : {}),
+      // (bug 237) Đã nhận là khoá đối tượng trần thì token KHÔNG nằm trong chuỗi — để lại
+      // inStringQuote ở đây sẽ khiến reinsert đi bẻ nháy trong một bản dịch vốn không ở trong chuỗi.
+      ...(_enclosingQuote && !_bareKeyShape ? { inStringQuote: _enclosingQuote } : {}),
       ...(isMvuVariable ? { translated: isMvuVariable, fromDictionary: true } : {}),
     });
   }
@@ -883,6 +946,42 @@ export function repairScriptSyntaxCorruption(original: string, translated: strin
  * Processes tokens right-to-left so earlier position indices remain valid
  * even when translated text has a different byte length.
  */
+/**
+ * (bug 237) Độ dài dải `[\w$]` NẰM NGAY TRƯỚC vị trí `at` — đọc lùi, không quét cả tiền tố.
+ *
+ * Bản cũ viết là `/[\w$]*$/.exec(text.slice(0, at))`. Về nghĩa thì đúng, nhưng đó là một regex
+ * NEO CUỐI chạy trên chuỗi dài tuỳ ý: máy regex thử khớp lần lượt tại MỌI vị trí bắt đầu, mỗi lần
+ * lại ngốn `[\w$]*` tới hết chuỗi rồi mới kiểm `$`. Với chuỗi toàn ký tự từ — mà một khối base64
+ * nửa triệu ký tự thì đúng là như vậy — đó là O(n²).
+ *
+ * Đo trên thẻ thật bugNeedFix/237, script khai màn 562.791 ký tự / 485 token:
+ *     bản đã che base64 (42.772 ký tự): reinsertTranslations 115ms
+ *     bản thô          (562.791 ký tự): CHƯA VỀ sau hơn 5 phút — tab đơ cứng, cả 569 field còn
+ *                                        lại xếp hàng phía sau, không một lượt gọi API nào.
+ *
+ * Che base64 (xem base64Payload.translateThroughBase64Shell) đã đủ chữa ca này, nhưng cái bẫy
+ * O(n²) vẫn nằm đó chờ bất kỳ field lớn nào khác. Đọc lùi thì tuyến tính theo ĐỘ DÀI DẢI chứ
+ * không theo độ dài chuỗi, mà nghĩa vẫn y hệt — không phải chặn cứng số ký tự nhìn lại.
+ */
+function wordRunLengthBefore(text: string, at: number): number {
+  let i = at;
+  while (i > 0) {
+    const c = text.charCodeAt(i - 1);
+    const isWord =
+      (c >= 48 && c <= 57) ||       // 0-9
+      (c >= 65 && c <= 90) ||       // A-Z
+      (c >= 97 && c <= 122) ||      // a-z
+      c === 95 || c === 36;         // _ $
+    if (!isWord) break;
+    i--;
+  }
+  return at - i;
+}
+
+/** Đuôi ngắn trước vị trí `at` — đủ cho các phép thử NEO CUỐI khớp tối đa vài ký tự. */
+const LOOKBEHIND = 80;
+const tailBefore = (text: string, at: number): string => text.slice(Math.max(0, at - LOOKBEHIND), at);
+
 export function reinsertTranslations(original: string, tokens: CJKToken[]): string {
   let result = original;
   const sorted = [...tokens].sort((a, b) => b.start - a.start);
@@ -940,7 +1039,7 @@ export function reinsertTranslations(original: string, tokens: CJKToken[]): stri
       if (token.inStringQuote && !token.text.includes(token.inStringQuote)) {
         const q = token.inStringQuote;
         if (finalTranslation.includes(q)) {
-          finalTranslation = finalTranslation.split(q).join(q === "'" ? '’' : '”');
+          finalTranslation = finalTranslation.split(q).join(q === "'" ? '’' : '”');   // backtick → '”' cũng an toàn
         }
       }
 
@@ -989,8 +1088,8 @@ export function reinsertTranslations(original: string, tokens: CJKToken[]): stri
           // Bọc mỗi phần Hán sẽ ra `_'Định danh khởi đầu'` — vẫn vỡ, mà còn khó nhìn ra hơn.
           // Và tên khoá phải khớp ĐÚNG với chỗ đọc `['_Định danh khởi đầu']` do nhánh
           // dot-notation ở trên sinh ra, không thì đọc/ghi lệch ô, hỏng âm thầm.
-          const kb = original.slice(0, replaceStart);
-          const keyPrefix = /[\w$]*$/.exec(kb)?.[0] ?? '';
+          const prefixLen = wordRunLengthBefore(original, replaceStart);
+          const keyPrefix = prefixLen ? original.slice(replaceStart - prefixLen, replaceStart) : '';
           if (keyPrefix) replaceStart -= keyPrefix.length;
           finalTranslation = `'${keyPrefix}${finalTranslation}'`;
         }
@@ -1064,9 +1163,12 @@ export function reinsertTranslations(original: string, tokens: CJKToken[]): stri
       // hết văn xuôi đánh số ('1. Thế cục' — chấm có khoảng trắng theo sau, lại nằm trong
       // chuỗi) vốn được phép thay chữ thuần tuý.
       if (/\s/.test(finalTranslation) && !/^[['"`.]/.test(finalTranslation)) {
-        const head = result.slice(0, replaceStart);
-        const bare = head.slice(0, head.length - (/[\w$]*$/.exec(head)?.[0].length ?? 0));
-        const lineHead = head.slice(head.lastIndexOf('\n') + 1);
+        // (bug 237) Cả ba phép dưới đây đều NEO CUỐI và khớp tối đa vài ký tự, nên chỉ cần cái
+        // đuôi ngắn — cắt `head` nguyên vẹn ra khỏi chuỗi nửa triệu ký tự là tự chuốc O(n²).
+        const bareEnd = replaceStart - wordRunLengthBefore(result, replaceStart);
+        const bare = tailBefore(result, bareEnd);
+        const lineStart = result.lastIndexOf('\n', Math.max(0, replaceStart - 1)) + 1;
+        const lineHead = result.slice(lineStart, replaceStart);
         if (/[\w$\])}'"一-鿿㐀-䶿]\??\.$/.test(bare) && !/[0-9]\??\.$/.test(bare) && !isInsideStringAtEnd(lineHead)) {
           continue;
         }

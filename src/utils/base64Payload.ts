@@ -387,3 +387,85 @@ export function judgeInnerPayload(original: string, translated: string): { ok: b
   if (t.includes('__B64_PAYLOAD_')) return { ok: false, why: 'còn sót ô giữ chỗ trong bản dịch' };
   return { ok: true, why: '' };
 }
+
+/**
+ * (bug 237) VỎ BASE64 DÙNG CHUNG — che → dịch vỏ → dịch ruột → mã hoá lại → gỡ che.
+ *
+ * Việc 233 dựng đúng quy trình này, nhưng chôn nó bên trong `translateText`. Hoá ra `translateText`
+ * KHÔNG phải cửa duy nhất: `useTranslation` rẽ mọi field nhóm regex/tavern_helper thẳng sang
+ * `surgicalTranslate`, nên với những cửa đó việc 233 coi như chưa từng tồn tại. Đo trên thẻ thật
+ * bugNeedFix/237: 12.923 chữ Hán — quá nửa số chữ Hán của toàn bộ script, và là đúng hai màn hình
+ * người chơi nhìn thấy (khai màn + thanh trạng thái) — nằm trong base64 và không được dịch.
+ *
+ * Nên tách quy trình ra thành hàm nhận HAI callback, để mọi đường dịch dùng chung MỘT bản logic
+ * thay vì mỗi đường chép lại một kiểu (chép lại là cách bug này sinh ra).
+ *
+ * `outer` dịch bản ĐÃ CHE — nhẹ hơn hẳn, và cũng là chốt chặn hiệu năng: `reinsertTranslations`
+ * của surgical quét ngược không giới hạn, cho nó nhai nửa triệu ký tự base64 là treo hẳn tab.
+ * `inner` nên là ĐƯỜNG ỐNG ĐẦY ĐỦ chứ không phải một lần gọi AI trần: ruột giải ra là một tài liệu
+ * hoàn chỉnh, cần che URL, cắt mảnh, quét chữ Hán sót y như một field độc lập.
+ */
+export interface Base64ShellHooks {
+  /** Dịch phần vỏ (đã che). */
+  outer: (maskedText: string) => Promise<string>;
+  /** Dịch ruột một payload nhóm (c) đã giải. */
+  inner: (decodedText: string, label: string) => Promise<string>;
+  /** Tầng lồng hiện tại — chốt MAX_NESTING đúng như chỉ dẫn việc 233. */
+  depth?: number;
+  /** Ghi lại quyết định cho người dùng soi được (log/console). */
+  log?: (message: string) => void;
+  /** Người dùng bấm Dừng — lỗi do abort phải ném tiếp, không được nuốt thành "giữ nguyên". */
+  signal?: AbortSignal;
+}
+
+export async function translateThroughBase64Shell(
+  text: string,
+  fieldName: string,
+  hooks: Base64ShellHooks,
+): Promise<string> {
+  const { maskedText, map } = maskBase64Payloads(text);
+  const entries = Object.entries(map);
+  if (entries.length === 0) return hooks.outer(text);
+
+  const depth = hooks.depth ?? 0;
+  const say = hooks.log ?? (() => {});
+  const textPayloads = entries.filter(([, p]) => p.kind === 'text');
+  say(
+    `[base64] ${fieldName}: ${entries.length} khối nhúng — ${textPayloads.length} sẽ dịch, ` +
+    `${entries.length - textPayloads.length} giữ nguyên. Che đi ${text.length - maskedText.length} ký tự khỏi lượt gọi AI.`,
+  );
+
+  const outer = await hooks.outer(maskedText);
+
+  const translatedByPh: Record<string, string> = {};
+  for (const [ph, p] of textPayloads) {
+    if (depth >= MAX_NESTING) {
+      say(`[base64] ${fieldName}: đã sâu ${depth} tầng — để nguyên "${p.label ?? ph}" cho an toàn.`);
+      continue;
+    }
+    const innerName = `${fieldName} → ${p.label ?? 'base64'}`;
+    try {
+      const innerTranslated = await hooks.inner(p.decoded!, innerName);
+      const verdict = judgeInnerPayload(p.decoded!, innerTranslated);
+      if (!verdict.ok) {
+        say(`[base64] ${innerName}: KHÔNG nhận bản dịch — ${verdict.why}. Giữ nguyên khối gốc.`);
+        continue;
+      }
+      const reencoded = encodeBase64Text(innerTranslated);
+      // Chốt chặn cuối: mã hoá xong phải giải lại ra ĐÚNG bản vừa dịch. Sai một byte là hỏng thẻ.
+      if (decodeBase64Text(reencoded) !== innerTranslated) {
+        say(`[base64] ${innerName}: mã hoá lại không khép kín — giữ nguyên khối gốc.`);
+        continue;
+      }
+      translatedByPh[ph] = reencoded;
+      say(`[base64] ${innerName}: xong (${p.decoded!.length} → ${innerTranslated.length} ký tự).`);
+    } catch (err) {
+      // Dịch được vỏ mà hỏng ruột thì THÀ giữ nguyên khối gốc — thẻ thiếu một mảng bản dịch vẫn
+      // chạy được, thẻ hỏng thì không. Trừ khi người dùng bấm Dừng: lúc đó phải dừng thật.
+      if (hooks.signal?.aborted) throw err;
+      say(`[base64] ${innerName}: lỗi (${(err as Error).message}) — giữ nguyên khối gốc.`);
+    }
+  }
+
+  return unmaskBase64Payloads(outer, map, (_p, ph) => translatedByPh[ph]);
+}

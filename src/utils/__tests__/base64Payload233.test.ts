@@ -252,39 +252,54 @@ describe('(233) báo cáo lúc nhập thẻ — trả lời "thẻ có mã hoá 
  * Nối vào đường ống: `translateText` phải là VỎ che base64 rồi mới gọi lõi, và ruột payload phải
  * đi qua ĐÚNG đường ống đó một lần nữa. Khoá bằng mã nguồn vì luồng này cần API thật mới chạy.
  */
+/**
+ * (bug 237) Quy trình base64 đã dời khỏi `apiClient.ts` sang `base64Payload.ts` thành MỘT hàm
+ * dùng chung. Lý do dời: `translateText` không phải cửa duy nhất — `useTranslation` rẽ mọi field
+ * regex/tavern_helper thẳng sang `surgicalTranslate`, nên toàn bộ việc 233 bị né sạch ở nhánh đó.
+ * Nhóm test này vì thế đổi chỗ neo, và siết thêm: MỌI cửa dịch đều phải đi qua vỏ chung.
+ */
 describe('(233) nối vào đường ống dịch', () => {
-  const SRC = fs.readFileSync(path.resolve(__dirname, '../apiClient.ts'), 'utf8');
+  const SHELL = fs.readFileSync(path.resolve(__dirname, '../base64Payload.ts'), 'utf8');
+  const API = fs.readFileSync(path.resolve(__dirname, '../apiClient.ts'), 'utf8');
+  const HOOK = fs.readFileSync(path.resolve(__dirname, '../../hooks/useTranslation.ts'), 'utf8');
 
-  it('translateText che base64 TRƯỚC, rồi mới gọi lõi cũ (lõi không bị sửa)', () => {
-    expect(SRC).toContain('async function translateTextCore(');
-    expect(SRC).toMatch(/const \{ maskedText, map \} = maskBase64Payloads\(text\);/);
-    // Không còn payload thì đi thẳng lõi — không thêm chi phí cho thẻ bình thường.
-    expect(SRC).toMatch(/if \(entries\.length === 0\) \{\s*\n\s*return translateTextCore\(/);
+  it('vỏ chung che base64 TRƯỚC, rồi mới gọi phần dịch ngoài (lõi cũ không bị sửa)', () => {
+    expect(API).toContain('async function translateTextCore(');
+    expect(SHELL).toMatch(/const \{ maskedText, map \} = maskBase64Payloads\(text\);/);
+    // Không còn payload thì đi thẳng, không thêm chi phí cho thẻ bình thường.
+    expect(SHELL).toMatch(/if \(entries\.length === 0\) return hooks\.outer\(text\);/);
+    expect(API).toContain('return translateThroughBase64Shell(text, fieldName, {');
+  });
+
+  it('MỌI cửa dịch đều qua vỏ chung — kể cả nhánh phẫu thuật của useTranslation (bug 237)', () => {
+    expect(HOOK).toContain('translateThroughBase64Shell(field.original, field.label, {');
+    // Phẫu thuật chỉ được nhìn thấy BẢN ĐÃ CHE, không phải field.original thô.
+    expect(HOOK).toMatch(/outer: async \(masked\) => \{\s*\n\s*sResult = await surgicalTranslate\(\s*\n\s*masked,/);
   });
 
   it('ruột payload gọi ĐỆ QUY translateText (để base64 lồng nhau cũng được xử lý) và có trần tầng', () => {
-    expect(SRC).toMatch(/const innerTranslated = await translateText\(/);
-    expect(SRC).toContain('b64Depth + 1');
-    expect(SRC).toContain('b64Depth >= MAX_NESTING');
+    expect(API).toMatch(/inner: \(decoded, innerName\) => translateText\(/);
+    expect(API).toContain('b64Depth + 1');
+    expect(SHELL).toContain('depth >= MAX_NESTING');
   });
 
   it('KHÔNG truyền callback/resume của field cha xuống lượt dịch ruột (nhịp cắt khác nhau)', () => {
-    const inner = SRC.slice(SRC.indexOf('const innerTranslated = await translateText('));
-    const call = inner.slice(0, inner.indexOf(');'));
+    const inner = API.slice(API.indexOf('inner: (decoded, innerName) => translateText('));
+    const call = inner.slice(0, inner.indexOf('),'));
     expect(call).toContain('undefined, undefined, parallelChunks');
     expect(call).not.toContain('onChunkComplete');
     expect(call).not.toContain('previouslyCompletedChunks');
   });
 
   it('bản dịch ruột phải qua cửa judgeInnerPayload VÀ kiểm mã hoá khép kín trước khi nhận', () => {
-    expect(SRC).toContain('judgeInnerPayload(p.decoded!, innerTranslated)');
-    expect(SRC).toContain('decodeBase64Text(reencoded) !== innerTranslated');
+    expect(SHELL).toContain('judgeInnerPayload(p.decoded!, innerTranslated)');
+    expect(SHELL).toContain('decodeBase64Text(reencoded) !== innerTranslated');
   });
 
   it('hỏng phần ruột thì GIỮ NGUYÊN khối gốc, không làm hỏng thẻ', () => {
-    expect(SRC).toContain('giữ nguyên khối gốc');
+    expect(SHELL).toContain('Giữ nguyên khối gốc');
     // Người dùng bấm Dừng thì vẫn phải dừng thật, không nuốt.
-    expect(SRC).toMatch(/if \(signal\?\.aborted\) throw err;/);
+    expect(SHELL).toMatch(/if \(hooks\.signal\?\.aborted\) throw err;/);
   });
 });
 

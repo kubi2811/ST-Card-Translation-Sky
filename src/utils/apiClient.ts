@@ -49,10 +49,7 @@ import { chunkText } from './chunking';
 import { decideChunkResume } from './chunkRetryPlan';
 import { detectRefusal, RefusalError, isRefusalError } from './refusalGuard';
 import { hedgedRace } from './hedge';
-import {
-  maskBase64Payloads, unmaskBase64Payloads, encodeBase64Text, decodeBase64Text, MAX_NESTING,
-  judgeInnerPayload,
-} from './base64Payload';
+import { translateThroughBase64Shell } from './base64Payload';
 // (bug 193) Bác sĩ chunk: chẩn đoán 6 mặt + lượt SỬA có chẩn đoán + lọc/ép từ điển MVU theo chunk.
 import {
   diagnoseChunk, buildChunkRepairInstruction, filterDictForChunk, applyDictCasing,
@@ -3480,70 +3477,33 @@ export async function translateText(
 ): Promise<string> {
   if (!text || text.trim() === '') return '';
 
-  const { maskedText, map } = maskBase64Payloads(text);
-  const entries = Object.entries(map);
-  if (entries.length === 0) {
-    return translateTextCore(
-      text, fieldName, config, targetLang, sourceLang, customPrompt, customSchema, signal,
+  /**
+   * (bug 237) Quy trình base64 giờ nằm ở `translateThroughBase64Shell` — MỘT bản logic dùng chung.
+   * Trước đây nó nằm ngay tại đây, nên đường nào không đi qua `translateText` là mất trắng tính
+   * năng (xem useTranslation: mọi field regex/tavern_helper rẽ thẳng sang surgical).
+   *
+   * Vỏ ngoài chạy trên bản ĐÃ CHE — nhẹ hơn hẳn, và resume/chunk của field vẫn tính trên bản này
+   * một cách tất định (cùng đầu vào ⇒ cùng ô giữ chỗ ⇒ cùng nhịp cắt).
+   * Ruột payload đi TRỌN VẸN đường ống như một field riêng — KHÔNG truyền callback/resume của
+   * field cha xuống, vì nhịp cắt của cha tính trên bản đã che, dùng lẫn là dán nhầm chỗ.
+   */
+  return translateThroughBase64Shell(text, fieldName, {
+    depth: b64Depth,
+    signal,
+    log: (m) => console.log(m),
+    outer: (masked) => translateTextCore(
+      masked, fieldName, config, targetLang, sourceLang, customPrompt, customSchema, signal,
       contextHint, glossary, previousTranslationToUpdate, fieldType, mvuDictionary, chunkSize,
       previouslyCompletedChunks, onChunkComplete, parallelChunks, enableChunkVerification,
       onChunksReady, cssCjkHandling, preferSecondary, previousRawChunks,
-    );
-  }
-
-  const textPayloads = entries.filter(([, p]) => p.kind === 'text');
-  console.log(
-    `[base64] ${fieldName}: ${entries.length} khối nhúng — ${textPayloads.length} sẽ dịch, ` +
-    `${entries.length - textPayloads.length} giữ nguyên. Che đi ${text.length - maskedText.length} ký tự khỏi lượt gọi AI.`,
-  );
-
-  // Vỏ ngoài chạy trên bản ĐÃ CHE — nhẹ hơn hẳn, và resume/chunk của field vẫn tính trên bản này
-  // một cách tất định (cùng đầu vào ⇒ cùng ô giữ chỗ ⇒ cùng nhịp cắt).
-  const outer = await translateTextCore(
-    maskedText, fieldName, config, targetLang, sourceLang, customPrompt, customSchema, signal,
-    contextHint, glossary, previousTranslationToUpdate, fieldType, mvuDictionary, chunkSize,
-    previouslyCompletedChunks, onChunkComplete, parallelChunks, enableChunkVerification,
-    onChunksReady, cssCjkHandling, preferSecondary, previousRawChunks,
-  );
-
-  const translatedByPh: Record<string, string> = {};
-  for (const [ph, p] of textPayloads) {
-    if (b64Depth >= MAX_NESTING) {
-      console.warn(`[base64] ${fieldName}: đã sâu ${b64Depth} tầng — để nguyên "${p.label ?? ph}" cho an toàn.`);
-      continue;
-    }
-    const innerName = `${fieldName} → ${p.label ?? 'base64'}`;
-    try {
-      // Ruột payload đi trọn vẹn đường ống như một field riêng — KHÔNG truyền callback/resume của
-      // field cha xuống, vì nhịp cắt của cha tính trên bản đã che, dùng lẫn là dán nhầm chỗ.
-      const innerTranslated = await translateText(
-        p.decoded!, innerName, config, targetLang, sourceLang, customPrompt, customSchema, signal,
-        contextHint, glossary, undefined, fieldType, mvuDictionary, chunkSize,
-        undefined, undefined, parallelChunks, enableChunkVerification,
-        undefined, cssCjkHandling, preferSecondary, undefined, b64Depth + 1,
-      );
-      const verdict = judgeInnerPayload(p.decoded!, innerTranslated);
-      if (!verdict.ok) {
-        console.warn(`[base64] ${innerName}: KHÔNG nhận bản dịch — ${verdict.why}. Giữ nguyên khối gốc.`);
-        continue;
-      }
-      const reencoded = encodeBase64Text(innerTranslated);
-      // Chốt chặn cuối: mã hoá xong phải giải lại ra ĐÚNG bản vừa dịch. Sai một byte là hỏng thẻ.
-      if (decodeBase64Text(reencoded) !== innerTranslated) {
-        console.warn(`[base64] ${innerName}: mã hoá lại không khép kín — giữ nguyên khối gốc.`);
-        continue;
-      }
-      translatedByPh[ph] = reencoded;
-      console.log(`[base64] ${innerName}: xong (${p.decoded!.length} → ${innerTranslated.length} ký tự).`);
-    } catch (err) {
-      // Dịch được phần ngoài mà hỏng phần trong thì THÀ giữ nguyên khối gốc — thẻ thiếu một mảng
-      // bản dịch vẫn chạy được, thẻ hỏng thì không.
-      if (signal?.aborted) throw err;
-      console.warn(`[base64] ${innerName}: lỗi (${(err as Error).message}) — giữ nguyên khối gốc.`);
-    }
-  }
-
-  return unmaskBase64Payloads(outer, map, (_p, ph) => translatedByPh[ph]);
+    ),
+    inner: (decoded, innerName) => translateText(
+      decoded, innerName, config, targetLang, sourceLang, customPrompt, customSchema, signal,
+      contextHint, glossary, undefined, fieldType, mvuDictionary, chunkSize,
+      undefined, undefined, parallelChunks, enableChunkVerification,
+      undefined, cssCjkHandling, preferSecondary, undefined, b64Depth + 1,
+    ),
+  });
 }
 
 async function translateTextCore(

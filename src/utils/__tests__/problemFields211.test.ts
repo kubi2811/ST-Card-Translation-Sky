@@ -17,19 +17,44 @@ const f = (over: Partial<ProblemScanField>): ProblemScanField => ({
 });
 
 describe('(bug 211) collectProblemFields', () => {
-  it('gom đủ ba loại: lỗi + bỏ qua + done-còn-chữ-Hán; mục sạch không bị lôi vào', () => {
+  /**
+   * (bug 237) HỢP ĐỒNG ĐỔI: field 'skipped' chỉ vào danh sách khi CÒN chữ nguồn.
+   * Field bị bỏ qua thì bản "dịch" của nó CHÍNH LÀ bản gốc — nên fixture cũ ("bỏ qua" mà lại có
+   * bản dịch tiếng Việt sạch) là một trạng thái không tồn tại ngoài đời. Bản mới dựng đúng thực tế:
+   * `skipSach` = tên riêng "Counterfeit" (không có gì để dịch), `skipBan` = còn nguyên tiếng Trung.
+   */
+  it('gom đủ ba loại: lỗi + bỏ-qua-còn-chữ-Hán + done-còn-chữ-Hán; mục sạch không bị lôi vào', () => {
     const { problems, counts } = collectProblemFields([
       f({ path: 'err', status: 'error' }),
-      f({ path: 'skip', status: 'skipped' }),
+      f({ path: 'skipBan', status: 'skipped', original: '这是一段中文', translated: '这是一段中文' }),
       f({ path: 'sot', translated: 'Dịch dở: 还有中文没翻译 nằm giữa câu.' }),
       f({ path: 'sach' }),
       f({ path: 'pending', status: 'pending' }),
       f({ path: 'ignored', status: 'ignored' }),
     ]);
     expect(problems.map(p => `${p.kind}:${p.path}`).sort()).toEqual([
-      'error:err', 'residual:sot', 'skipped:skip',
+      'error:err', 'residual:sot', 'skipped:skipBan',
     ]);
     expect(counts).toEqual({ error: 1, skipped: 1, residual: 1, total: 3 });
+  });
+
+  /**
+   * (bug 237) Chạy thật thẻ 237: `data.name` = "Counterfeit" và `tavernHelper[0].content` =
+   * `import 'https://…/bundle.js'` bị đẩy vào danh sách sửa, mỗi cái đốt 5 lượt gọi AI rồi in
+   * dòng đỏ "✗ vẫn chưa đạt sau 5 lượt" — trong khi ba entry còn nguyên 2.975 chữ Hán phải chờ.
+   * Hại thật nằm ở chỗ dấu ✗ mất nghĩa, chứ không phải mấy lượt gọi phí.
+   */
+  it('bỏ qua mà KHÔNG còn chữ nguồn thì KHÔNG phải "chưa đạt" — không đốt lượt gọi, không báo ✗', () => {
+    const { problems, counts } = collectProblemFields([
+      f({ path: 'data.name', status: 'skipped', original: 'Counterfeit', translated: 'Counterfeit' }),
+      f({
+        path: 'tavernHelper[0].content', group: 'tavern_helper', status: 'skipped',
+        original: "import 'https://testingcf.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate/artifact/bundle.js'",
+        translated: "import 'https://testingcf.jsdelivr.net/gh/MagicalAstrogy/MagVarUpdate/artifact/bundle.js'",
+      }),
+    ]);
+    expect(problems).toHaveLength(0);
+    expect(counts.total).toBe(0);
   });
 
   it('ĐÚNG CA TRONG ẢNH: chốt an toàn giữ nguyên gốc (translated === original toàn chữ Hán, status done) vẫn bị tóm', () => {

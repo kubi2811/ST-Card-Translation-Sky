@@ -56,13 +56,31 @@ export function collectProblemFields(
   const problems: ProblemField[] = [];
   const byPath = new Map<string, ProblemField>();
 
+  const residualHits = scanFieldsForResidualCjk(fields, opts);
+  /* ═══ (bug 237) BỎ QUA MÀ KHÔNG CÒN CHỮ NGUỒN THÌ KHÔNG PHẢI "CHƯA ĐẠT" ═══
+   * Bản cũ đẩy MỌI field 'skipped' vào danh sách, bất kể còn ký tự hệ chữ nguồn hay không.
+   * Chạy thật thẻ 237: `data.name` = "Counterfeit" và `tavernHelper[0].content` =
+   * `import 'https://…/bundle.js'` — cả hai KHÔNG có một chữ Hán nào — bị lôi vào, mỗi cái đốt
+   * 5 lượt gọi AI, rồi in dòng đỏ "✗ vẫn chưa đạt sau 5 lượt". Trong khi đó ba entry lorebook
+   * còn nguyên 2.975 chữ Hán phải xếp hàng chờ.
+   *
+   * Hại thật sự không phải mấy lượt gọi phí, mà là DẤU ✗ MẤT NGHĨA: user thấy "thất bại" trên
+   * một cái tên riêng không có gì để dịch thì lần sau sẽ bỏ qua cả dấu ✗ thật — đúng cái cách
+   * lớp bug 234 ẩn mình.
+   *
+   * Nên 'skipped' chỉ vào danh sách khi bộ quét chữ Hán sót cũng gọi tên nó. Muốn soi lại MỌI
+   * mục bị máy tự bỏ (kể cả loại sạch) thì đã có chip lọc "Bỏ qua" riêng của bug 176 — hai việc
+   * khác nhau, không nên nhét vào một nút.
+   * `error` thì giữ nguyên: lỗi mạng là lỗi thật, không phụ thuộc còn chữ Hán hay không. */
+  const residualPaths = new Set(residualHits.map(h => h.path));
   for (const f of fields || []) {
     if (f.status === 'error') problems.push({ path: f.path, label: f.label, kind: 'error' });
-    else if (f.status === 'skipped') problems.push({ path: f.path, label: f.label, kind: 'skipped' });
+    else if (f.status === 'skipped' && residualPaths.has(f.path)) {
+      problems.push({ path: f.path, label: f.label, kind: 'skipped' });
+    }
   }
   for (const p of problems) byPath.set(p.path, p);
 
-  const residualHits = scanFieldsForResidualCjk(fields, opts);
   for (const h of residualHits) {
     /* (bug 234) Bộ quét nay soi cả field 'skipped' (bản "dịch" của nó chính là bản gốc tiếng
      * Trung). Một field như thế khớp CẢ HAI nguồn, nên nếu cứ push thêm là nó bị đếm hai lần —

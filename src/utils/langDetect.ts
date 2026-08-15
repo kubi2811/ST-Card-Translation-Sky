@@ -74,11 +74,32 @@ export function detectLanguage(text: string): string {
     return 'Tiếng Việt';
   }
 
-  // ── Priority 2: CJK-based languages ──
-  // Japanese: has kana OR mixed CJK+kana
-  if (kanaCount > 0 && (kanaCount + cjkCount) > 3) return '日本語';
+  /* ═══ (bug 237) KANA/HANGUL PHẢI THỰC SỰ GÁNH CHỮ, KHÔNG PHẢI ĐIỂM XUYẾT ═══
+   * Luật cũ: `kanaCount > 0` — CHỈ CẦN MỘT ký tự kana là cả field được gọi là tiếng Nhật.
+   *
+   * Bằng chứng thẻ thật (bugNeedFix/237, lorebook[71].content — hồ sơ 材木座义辉): 398 ký tự,
+   * 272 chữ HÁN, và đúng 2 kana — đến từ một chú thích furigana `我（われ）` lọt giữa đoạn văn
+   * Trung. Bộ dò kết luận 日本語, rồi `shouldSkipTranslation` thấy "日本語 ≠ nguồn 中文, ≠ đích
+   * Tiếng Việt" nên áp luật NGÔN NGỮ THỨ BA của yêu cầu #140 và BỎ QUA cả entry. 272 chữ Hán
+   * không hề được gửi cho AI một lần nào, mà bảng vẫn ghi là đã xử lý.
+   *
+   * Chú ý ngoại lệ CJK của bug 234 nằm NGAY SAU chỗ này và cố ý cho 日本語 đi qua chốt "còn chữ
+   * nguồn thì phải dịch" — nên nếu ở đây gọi nhầm tên ngôn ngữ thì không còn lưới nào đỡ.
+   *
+   * Sửa tại GỐC PHÉP ĐO thay vì thêm lưới thứ hai: tiếng Nhật KHÔNG viết được nếu thiếu kana
+   * (trợ từ は/を/に/の, okurigana), nên văn bản Nhật thật luôn có tỉ lệ kana đáng kể trong khối
+   * kana+Hán — kể cả nhan đề ngắn (`鋼の錬金術師` 1/6 ≈ 17%, `進撃の巨人` 1/5 = 20%). Còn văn bản
+   * Trung lỡ dính một chú thích kana thì tỉ lệ đó là 2/274 ≈ 0,7%. Ngưỡng 12% tách sạch hai ca.
+   *
+   * Không đạt ngưỡng thì rơi xuống chốt 'mixed' phía dưới (kanaCount>0 chặn nhánh 中文 thuần),
+   * mà 'mixed' thì LUÔN được dịch — nghiêng về phía dịch thừa, không nghiêng về phía bỏ sót.
+   * Cùng một cái bẫy với 한국어 nên áp cùng một luật, không đợi nó nổ lần nữa.
+   */
+  const KANA_SHARE_MIN = 0.12;
+  const cjkMass = kanaCount + cjkCount;
+  if (kanaCount > 0 && cjkMass > 3 && kanaCount / cjkMass >= KANA_SHARE_MIN) return '日本語';
   // Korean
-  if (hangulCount > 3) return '한국어';
+  if (hangulCount > 3 && hangulCount / (hangulCount + cjkCount) >= KANA_SHARE_MIN) return '한국어';
   // Chinese: only CJK, no kana/hangul
   if (cjkCount > 3 && kanaCount === 0 && hangulCount === 0) return '中文';
 

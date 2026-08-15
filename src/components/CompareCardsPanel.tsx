@@ -25,7 +25,15 @@ import { embedCharaToPNG } from '../utils/pngHandler';
 import {
   buildCompareDiffMessages, parseCompareDiffResponse, verifyPatched, type CompareDiffInput,
 } from '../utils/aiCompareDiff';
-import { callProvider } from '../utils/apiClient';
+import { callProvider, computePoolConcurrency } from '../utils/apiClient';
+// (bug 235) Ghép entry bằng TÊN do AI đối chiếu — thay cho ghép bằng chỗ ngồi entries[i].
+import {
+  collectMatchUnits, matchUnitsByRule, buildNameMatchMessages, parseNameMatchResponse,
+  buildContentVerdictMessages, parseContentVerdictResponse, batchContentJobs,
+  buildFieldReusePlan, defaultReuse,
+  type MatchUnit, type MatchRow, type ContentJob, type ContentAnswer,
+} from '../utils/aiEntryMatch';
+import { runWorkerPool } from '../utils/runWorkerPool';
 import type { CompareEntry } from '../utils/compareCards';
 import type { CharacterCard, FieldGroup, TranslationField } from '../types/card';
 
@@ -294,6 +302,181 @@ export function CompareCardsPanel({ onClose }: Props) {
     }
   }, [proxy, addToast]);
 
+  /* ═══ (bug 235) GHÉP ENTRY BẰNG TÊN — AI ĐỐI CHIẾU, KHÔNG ĐI THEO CHỖ NGỒI ═══
+   * User: "so bằng UID nó sai bét nhè… Đầu tiên là so sánh xem các entry có tên gốc tiếng Trung
+   * của bản raw nếu dịch ra sẽ giống các tên entry nào của bản đã dịch. Sau đó tới khâu so sánh
+   * nội dung… AI tự phát hiện entry lorebook/schema/regex/script nào có thể tái sử dụng."
+   *
+   * Ba tầng, rẻ trước đắt sau (xem aiEntryMatch.ts để biết vì sao lối cũ gãy):
+   *   0. Luật máy — key Hán / tên trùng / nội dung trùng. Miễn phí, chắc chắn, không tốn call.
+   *   1. AI ghép TÊN — MỘT lượt gọi cho cả danh sách còn lại.
+   *   2. AI so NỘI DUNG từng cặp — chia lô, chạy song song qua pool như vòng dịch chính.
+   * Kết quả ra BẢNG DUYỆT: người dùng thấy từng cặp ghép với ai, độ tin, kết luận, rồi tự tick.
+   */
+  interface AiMatchState {
+    status: 'running' | 'done' | 'error';
+    phase: string;
+    error?: string;
+    rows: MatchRow[];
+    /** Đơn vị bên bản mới không ghép được với ai — entry tác giả mới thêm. */
+    unmatchedNew: MatchUnit[];
+    done: number;
+    total: number;
+  }
+  const [aiMatch, setAiMatch] = useState<AiMatchState | null>(null);
+  const aiMatchAbortRef = useRef<AbortController | null>(null);
+
+  const runAiMatch = useCallback(async () => {
+    const oldFields = slots.translated.fields;
+    const newFields = slots.final.fields;
+    if (!oldFields.length || !newFields.length) {
+      addToast('error', 'Cần nạp cả cột "Card Đã Dịch" (bản cũ) lẫn "Card Final" (bản raw mới).');
+      return;
+    }
+    aiMatchAbortRef.current?.abort();
+    const ac = new AbortController();
+    aiMatchAbortRef.current = ac;
+
+    const oldUnits = collectMatchUnits(oldFields);
+    const newUnits = collectMatchUnits(newFields);
+    if (!newUnits.length) {
+      addToast('error', 'Bản Final không có entry lorebook / regex / script nào để ghép.');
+      return;
+    }
+    setAiMatch({ status: 'running', phase: `Đang ghép bằng luật (${newUnits.length} mục)…`, rows: [], unmatchedNew: [], done: 0, total: 0 });
+
+    try {
+      // ── Tầng 0: luật máy ──
+      const rule = matchUnitsByRule(oldUnits, newUnits);
+      const pairs = [...rule.pairs];
+
+      // ── Tầng 1: AI ghép tên cho phần còn lại ──
+      if (rule.restNew.length > 0 && rule.restOld.length > 0) {
+        setAiMatch((s) => s && { ...s, phase: `Pha 1 — AI đối chiếu TÊN cho ${rule.restNew.length} mục còn lại…` });
+        const { system, user } = buildNameMatchMessages(rule.restOld, rule.restNew);
+        const text = await callProvider(proxy, system, user, ac.signal, undefined,
+          { label: `Ghép tên entry (${rule.restNew.length} mục)`, charCount: user.length });
+        pairs.push(...parseNameMatchResponse(text, rule.restOld, rule.restNew));
+      }
+
+      const oldById = new Map(oldUnits.map((u) => [u.id, u]));
+      const newById = new Map(newUnits.map((u) => [u.id, u]));
+
+      // ── Tầng 2: AI so nội dung từng cặp ──
+      // Cặp ghép bằng luật "nội dung trùng y hệt" thì KHỎI hỏi AI — máy đã biết chắc là giống.
+      const needVerdict = pairs.filter((p) => p.method !== 'noi-dung-trung');
+      const jobs: ContentJob[] = needVerdict.map((p) => ({
+        newId: p.newId,
+        name: newById.get(p.newId)?.name || p.newId,
+        rawContent: newById.get(p.newId)?.content || '',
+        oldTranslated: oldById.get(p.oldId)?.content || '',
+      })).filter((j) => j.rawContent.trim() && j.oldTranslated.trim());
+
+      const batches = batchContentJobs(jobs);
+      const answers = new Map<string, ContentAnswer>();
+      if (batches.length > 0) {
+        setAiMatch((s) => s && { ...s, phase: `Pha 2 — AI so NỘI DUNG ${jobs.length} cặp (${batches.length} lô)…`, total: batches.length, done: 0 });
+        await runWorkerPool({
+          total: batches.length,
+          concurrency: Math.max(1, Math.min(computePoolConcurrency(proxy), batches.length)),
+          shouldStop: () => ac.signal.aborted,
+          runOne: async (i: number) => {
+            const batch = batches[i];
+            try {
+              const { system, user } = buildContentVerdictMessages(batch);
+              const text = await callProvider(proxy, system, user, ac.signal, undefined,
+                { label: `So nội dung lô ${i + 1}/${batches.length}`, charCount: user.length });
+              for (const a of parseContentVerdictResponse(text, batch)) answers.set(a.newId, a);
+            } catch (e) {
+              // Lô hỏng KHÔNG được kéo cả lượt xuống — mọi cặp trong lô về "chưa chắc" (⇒ dịch lại).
+              const why = e instanceof Error ? e.message : String(e);
+              for (const j of batch) {
+                answers.set(j.newId, { newId: j.newId, verdict: 'khong-chac', note: `Lô so nội dung lỗi (${why.slice(0, 60)}) — coi là chưa chắc.` });
+              }
+            }
+            setAiMatch((s) => s && { ...s, done: s.done + 1 });
+          },
+        });
+      }
+      if (ac.signal.aborted) { setAiMatch(null); return; }
+
+      // ── Dựng bảng duyệt ──
+      const rows: MatchRow[] = pairs.map((p) => {
+        const a = answers.get(p.newId);
+        const verdict = p.method === 'noi-dung-trung' ? 'giong' as const : (a?.verdict ?? 'khong-chac');
+        const note = p.method === 'noi-dung-trung'
+          ? 'Nội dung hai bên trùng y hệt — máy đối chiếu, không cần AI.'
+          : (a?.note || '');
+        return {
+          pair: p,
+          newName: newById.get(p.newId)?.name || p.newId,
+          oldName: oldById.get(p.oldId)?.name || p.oldId,
+          verdict, note, reuse: defaultReuse(verdict),
+        };
+      }).sort((a, b) => a.pair.newId.localeCompare(b.pair.newId, undefined, { numeric: true }));
+
+      const matchedNew = new Set(rows.map((r) => r.pair.newId));
+      setAiMatch({
+        status: 'done', phase: '', rows,
+        unmatchedNew: newUnits.filter((u) => !matchedNew.has(u.id)),
+        done: batches.length, total: batches.length,
+      });
+      addToast('success', `Ghép xong: ${rows.length}/${newUnits.length} mục tìm được bản dịch cũ.`);
+    } catch (e) {
+      if (ac.signal.aborted) { setAiMatch(null); return; }
+      setAiMatch({
+        status: 'error', phase: '', error: e instanceof Error ? e.message : String(e),
+        rows: [], unmatchedNew: [], done: 0, total: 0,
+      });
+    }
+  }, [slots, proxy, addToast]);
+
+  /**
+   * Áp bảng ghép vào kế hoạch gộp.
+   *
+   * KHÔNG vứt bỏ kế hoạch cũ: `planMergeTwoCard` vẫn lo phần field ĐƠN LẺ (mô tả, lời mở đầu,
+   * system prompt) — những chỗ khớp theo path là ĐÚNG vì chúng không nằm trong mảng. Bản đồ AI
+   * chỉ ĐÈ LÊN phần entry/script, tức đúng chỗ lối cũ sai.
+   */
+  const applyAiMatch = useCallback(() => {
+    if (!aiMatch || aiMatch.status !== 'done') return;
+    const base = planMergeTwoCard(slots.translated.valueByPath, slots.final.valueByPath);
+    const fieldPlan = buildFieldReusePlan(aiMatch.rows, slots.translated.fields, slots.final.fields);
+
+    // Mọi path thuộc một đơn vị bên bản mới — vùng do AI quản.
+    const newUnits = collectMatchUnits(slots.final.fields);
+    const pathsById = new Map(newUnits.map((u) => [u.id, u.paths]));
+    const unitPaths = new Set<string>(newUnits.flatMap((u) => u.paths));
+
+    const reused = new Map(base.reused);
+    const changed = new Set(base.changed);
+    for (const p of unitPaths) { reused.delete(p); changed.add(p); }   // xoá phán quyết cũ trong vùng
+    for (const [p, v] of fieldPlan.reused) { reused.set(p, v); changed.delete(p); }
+
+    // Cặp "chưa chắc"/"khác" mà người dùng VẪN tick tái dùng → tô vàng để họ còn nhìn lại.
+    const suspect = new Set<string>();
+    for (const r of aiMatch.rows) {
+      if (!r.reuse || r.verdict === 'giong') continue;
+      for (const p of pathsById.get(r.pair.newId) ?? []) if (reused.has(p)) suspect.add(p);
+    }
+
+    setMerge({
+      reused, changed, suspect, mode: '2card',
+      counts: { reused: reused.size, changed: changed.size, suspect: suspect.size, total: slots.final.valueByPath.size },
+    });
+    setAiMatch(null);
+    setDiffOnly(false);
+    addToast('success', `Đã áp: tái dùng ${fieldPlan.counts.units} mục (${fieldPlan.counts.fields} ô), ${fieldPlan.counts.skipped} mục bỏ qua.`);
+  }, [aiMatch, slots, addToast]);
+
+  /** Bật/tắt tái dùng cho MỘT dòng trong bảng duyệt. */
+  const toggleMatchRow = useCallback((newId: string) => {
+    setAiMatch((s) => s && ({
+      ...s,
+      rows: s.rows.map((r) => (r.pair.newId === newId ? { ...r, reuse: !r.reuse } : r)),
+    }));
+  }, []);
+
   /** Áp bản vá vào một cột (thường là Final — chính là card sẽ xuất ra). */
   const applyAiPatch = useCallback((target: SlotId) => {
     if (!aiDiff || aiDiff.status !== 'done' || !aiDiff.patched) return;
@@ -435,6 +618,18 @@ export function CompareCardsPanel({ onClose }: Props) {
                   {allThree ? ui.ccMergeMode3 : ui.ccMergeMode2}
                 </span>
               )}
+              {/* (bug 235) Ghép bằng TÊN do AI — lối đúng khi tác giả đảo/chèn/bỏ entry, lúc đó
+                  ghép theo chỗ ngồi entries[i] là sai bét. Chỉ cần bản dịch cũ + bản raw mới. */}
+              <button onClick={() => void runAiMatch()} disabled={!canMerge2 || aiMatch?.status === 'running'}
+                title={canMerge2
+                  ? 'AI đối chiếu TÊN entry hai bản (tên tiếng Trung của bản raw ứng với tên tiếng Việt nào), rồi so NỘI DUNG từng cặp để chỉ ra entry nào tái dùng được. Dùng khi tác giả đã đảo thứ tự / thêm / bớt entry — lúc đó ghép theo vị trí là sai.'
+                  : 'Cần nạp "Card Đã Dịch" (bản cũ) và "Card Final" (bản raw mới).'}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '7px 14px', borderRadius: 'var(--radius-sm)',
+                  border: '1px solid rgba(124,106,240,0.5)', background: canMerge2 ? 'rgba(124,106,240,0.12)' : 'var(--bg-elevated)',
+                  color: canMerge2 ? 'var(--accent-primary)' : 'var(--text-muted)', fontWeight: 700, fontSize: '0.78rem',
+                  cursor: canMerge2 && aiMatch?.status !== 'running' ? 'pointer' : 'default' }}>
+                🤖 Ghép entry bằng TÊN (AI)
+              </button>
               <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
                 {ui.ccMergeHint}
               </span>
@@ -580,6 +775,130 @@ export function CompareCardsPanel({ onClose }: Props) {
       {/* ═══ (bugNeedFix/184) Modal kết quả "AI soi khác" ═══
           Làm MODAL chứ không xoè inline trong hàng: bảng đang ảo hoá theo chiều cao ước lượng,
           hàng tự phình to giữa chừng là các hàng dưới đè lên nhau. */}
+      {/* ═══ (bug 235) BẢNG DUYỆT CẶP GHÉP ═══
+          Không áp thẳng kết quả AI vào thẻ: người dùng phải nhìn được "entry nào của bản mới đang
+          định lấy bản dịch của entry nào bên bản cũ", vì ghép sai là dán nhầm bản dịch của người
+          khác — hỏng âm thầm, khó phát hiện hơn nhiều so với dịch lại thừa. */}
+      {aiMatch && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}
+          onClick={() => { if (aiMatch.status !== 'running') setAiMatch(null); }}>
+          <div onClick={(ev) => ev.stopPropagation()}
+            style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-default)', borderRadius: 'var(--radius-lg)', width: '100%', maxWidth: '1000px', maxHeight: '86vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 16px', borderBottom: '1px solid var(--border-default)' }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>🤖 Ghép entry bằng TÊN — kết quả AI đối chiếu</div>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                  Bên trái là mục của bản RAW MỚI, bên phải là mục của bản ĐÃ DỊCH CŨ sẽ được lấy bản dịch.
+                </div>
+              </div>
+              <button onClick={() => { aiMatchAbortRef.current?.abort(); setAiMatch(null); }}
+                style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '6px 11px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-default)', background: 'var(--bg-primary)', color: 'var(--text-secondary)', fontSize: '0.75rem', cursor: 'pointer' }}>
+                <X size={13} /> {aiMatch.status === 'running' ? 'Dừng' : 'Đóng'}
+              </button>
+            </div>
+
+            {aiMatch.status === 'running' && (
+              <div style={{ padding: '28px 18px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.82rem' }}>
+                {aiMatch.phase}
+                {aiMatch.total > 0 && (
+                  <div style={{ marginTop: '10px', fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                    Đã xong {aiMatch.done}/{aiMatch.total} lô
+                  </div>
+                )}
+              </div>
+            )}
+
+            {aiMatch.status === 'error' && (
+              <div style={{ padding: '20px 18px', color: 'var(--accent-danger)', fontSize: '0.8rem' }}>
+                Lỗi gọi AI: {aiMatch.error}
+              </div>
+            )}
+
+            {aiMatch.status === 'done' && (
+              <>
+                <div style={{ display: 'flex', gap: '10px', padding: '9px 16px', borderBottom: '1px solid var(--border-default)', flexWrap: 'wrap', alignItems: 'center', fontSize: '0.74rem' }}>
+                  <span style={{ color: '#22c55e', fontWeight: 700 }}>
+                    ✅ {aiMatch.rows.filter((r) => r.verdict === 'giong').length} giống — tái dùng được
+                  </span>
+                  <span style={{ color: 'var(--accent-warning)', fontWeight: 700 }}>
+                    ✏️ {aiMatch.rows.filter((r) => r.verdict === 'khac').length} tác giả đã sửa
+                  </span>
+                  <span style={{ color: 'var(--text-muted)', fontWeight: 700 }}>
+                    ❓ {aiMatch.rows.filter((r) => r.verdict === 'khong-chac').length} chưa chắc
+                  </span>
+                  <span style={{ color: 'var(--accent-primary)', fontWeight: 700 }}>
+                    ➕ {aiMatch.unmatchedNew.length} mục mới (không có bản dịch cũ)
+                  </span>
+                  <span style={{ marginLeft: 'auto', display: 'flex', gap: '6px' }}>
+                    <button onClick={() => setAiMatch((s) => s && ({ ...s, rows: s.rows.map((r) => ({ ...r, reuse: true })) }))}
+                      style={{ padding: '4px 9px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-default)', background: 'transparent', color: 'var(--text-secondary)', fontSize: '0.7rem', cursor: 'pointer' }}>
+                      Tick hết
+                    </button>
+                    <button onClick={() => setAiMatch((s) => s && ({ ...s, rows: s.rows.map((r) => ({ ...r, reuse: defaultReuse(r.verdict) })) }))}
+                      title="Chỉ tick những mục AI kết luận GIỐNG — đây là lựa chọn an toàn."
+                      style={{ padding: '4px 9px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-default)', background: 'transparent', color: 'var(--text-secondary)', fontSize: '0.7rem', cursor: 'pointer' }}>
+                      Về mặc định an toàn
+                    </button>
+                  </span>
+                </div>
+
+                <div style={{ flex: 1, overflow: 'auto', padding: '4px 0' }}>
+                  {aiMatch.rows.length === 0 && (
+                    <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                      Không ghép được mục nào — hai thẻ này gần như không có entry chung.
+                    </div>
+                  )}
+                  {aiMatch.rows.map((r) => {
+                    const color = r.verdict === 'giong' ? '#22c55e' : r.verdict === 'khac' ? 'var(--accent-warning)' : 'var(--text-muted)';
+                    const kl = r.verdict === 'giong' ? 'GIỐNG' : r.verdict === 'khac' ? 'ĐÃ SỬA' : 'CHƯA CHẮC';
+                    return (
+                      <label key={r.pair.newId}
+                        style={{ display: 'grid', gridTemplateColumns: '26px 1fr 1fr 110px', gap: '8px', alignItems: 'start', padding: '8px 16px', borderBottom: '1px solid var(--border-subtle)', cursor: 'pointer', background: r.reuse ? 'rgba(34,197,94,0.05)' : 'transparent' }}>
+                        <input type="checkbox" checked={r.reuse} onChange={() => toggleMatchRow(r.pair.newId)} style={{ marginTop: '3px' }} />
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>{r.pair.newId} · bản RAW MỚI</div>
+                          <div style={{ fontSize: '0.78rem', color: 'var(--text-primary)', wordBreak: 'break-word' }}>{r.newName || '(không tên)'}</div>
+                        </div>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>{r.pair.oldId} · bản ĐÃ DỊCH</div>
+                          <div style={{ fontSize: '0.78rem', color: 'var(--accent-primary)', wordBreak: 'break-word' }}>{r.oldName || '(không tên)'}</div>
+                        </div>
+                        <div style={{ textAlign: 'right' }}>
+                          <div style={{ fontSize: '0.66rem', fontWeight: 700, color }}>{kl}</div>
+                          <div style={{ fontSize: '0.58rem', color: 'var(--text-muted)' }}>
+                            {r.pair.method === 'ai-ten' ? `AI · tin ${r.pair.confidence}` : r.pair.method}
+                          </div>
+                        </div>
+                        {(r.note || r.pair.why) && (
+                          <div style={{ gridColumn: '2 / -1', fontSize: '0.64rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                            {r.note || r.pair.why}
+                          </div>
+                        )}
+                      </label>
+                    );
+                  })}
+                </div>
+
+                <div style={{ display: 'flex', gap: '8px', padding: '11px 16px', borderTop: '1px solid var(--border-default)', flexWrap: 'wrap' }}>
+                  <button onClick={applyAiMatch} disabled={aiMatch.rows.every((r) => !r.reuse)}
+                    title="Đắp bản dịch cũ của các mục đã tick vào bản Final, phần còn lại để dịch mới."
+                    style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '8px 15px', borderRadius: 'var(--radius-sm)', border: 'none',
+                      background: aiMatch.rows.some((r) => r.reuse) ? '#22c55e' : 'var(--bg-elevated)',
+                      color: aiMatch.rows.some((r) => r.reuse) ? '#052e12' : 'var(--text-muted)',
+                      fontWeight: 700, fontSize: '0.78rem', cursor: aiMatch.rows.some((r) => r.reuse) ? 'pointer' : 'default' }}>
+                    Áp {aiMatch.rows.filter((r) => r.reuse).length} mục vào kế hoạch gộp
+                  </button>
+                  <button onClick={() => void runAiMatch()}
+                    style={{ padding: '8px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-default)', background: 'var(--bg-primary)', color: 'var(--text-secondary)', fontSize: '0.75rem', cursor: 'pointer' }}>
+                    Chạy lại
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {aiDiff && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}
           onClick={() => { if (aiDiff.status !== 'running') setAiDiff(null); }}>

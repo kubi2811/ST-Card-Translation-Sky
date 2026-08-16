@@ -68,3 +68,28 @@ describe('(bug 237) khoá đối tượng trần trong code minify', () => {
     expect(parses(out), 'chuỗi thật không được vỡ').toBe(true);
   });
 });
+
+describe('(bug 237) chuỗi trong code minify — bản dịch tự mọc dấu nháy không được xẻ đôi chuỗi', () => {
+  /**
+   * Ca thứ hai đo được trên thẻ 237, cùng gốc rễ với ca khoá đối tượng: token nằm TRONG chuỗi
+   * `…,'剧情：《错位的日常》','玩家视点…` nhưng phép đếm nháy cả dòng không thấy, nên lưới bug 161
+   * (bản dịch mọc thêm nháy đóng) không nổ. AI trả về bản dịch có kèm dấu nháy đơn ⇒ chuỗi bị xẻ
+   * đôi ⇒ SyntaxError, cả khối script của màn khai mạc chết.
+   * Ký tự SÁT hai bên token thì không cần đếm cũng thấy: nháy mở ngay trước, đúng loại đó ngay sau.
+   */
+  it('nháy ôm sát token thì token PHẢI được coi là nằm trong chuỗi', () => {
+    const noise = "var re=/it's|don't/g;" + 'x=1;'.repeat(3000);
+    const src = `${noise}var arr=['剧情：《错位的日常》','玩家视点'];`;
+    expect(parses(src), 'bản gốc phải hợp lệ đã').toBe(true);
+    const toks = extractCJKTokens(src);
+    const t = toks.find(x => x.text.includes('剧情'));
+    expect(t, 'phải tách được token trong chuỗi').toBeTruthy();
+    expect(t!.inStringQuote, 'phải biết mình đang trong chuỗi nháy đơn').toBe("'");
+
+    // Giả lập ĐÚNG thứ AI trả về ở lượt chạy thật: bản dịch tự kèm một dấu nháy đơn.
+    toks.forEach(x => { x.translated = x.text.includes('剧情') ? "Câu chuyện': 《cuộc sống thường ngày sai lệch》" : 'Góc nhìn'; });
+    const out = reinsertTranslations(src, toks);
+    expect(parses(out), 'chuỗi không được xẻ đôi').toBe(true);
+    expect(out).not.toContain("Câu chuyện':");     // dấu nháy đã bị vô hiệu hoá thành nháy in
+  });
+});

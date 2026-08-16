@@ -634,7 +634,23 @@ export function extractCJKTokens(
     // dấu " nằm trong chuỗi '…' KHÔNG tính là mở chuỗi (và ngược lại), có xử lý \escape.
     const _lineStart = text.lastIndexOf('\n', mStart - 1) + 1;
     const _lineBefore = text.slice(_lineStart, mStart);
-    const _enclosingQuote = enclosingQuoteAtEnd(_lineBefore);
+    /**
+     * (bug 237) HAI DẤU NHÁY ÔM SÁT TOKEN LÀ BẰNG CHỨNG MẠNH HƠN PHÉP ĐẾM CẢ DÒNG.
+     *
+     * `enclosingQuoteAtEnd` phải lội từ đầu dòng; với script minify (thẻ 237: một dòng 131.766 ký
+     * tự) thì regex literal, chuỗi lồng nhau… đều có thể làm lệch phép đếm, và lệch một lần là sai
+     * tới hết dòng. Hậu quả đo được: token `剧情：《错位的日常》` trong `…,'剧情：《错位的日常》','玩家视点…`
+     * KHÔNG được đánh dấu là nằm trong chuỗi, nên lưới bug 161 (bản dịch tự mọc thêm dấu nháy đóng)
+     * không nổ; AI trả về bản dịch có kèm dấu `'` và chuỗi bị xẻ đôi ⇒ SyntaxError, cả khối script
+     * của màn khai mạc chết.
+     *
+     * Ký tự SÁT hai bên token thì không cần đếm gì cũng thấy: nháy mở ngay trước + ĐÚNG loại nháy
+     * đó ngay sau ⇒ token nằm trong chuỗi. Tin bằng chứng đó trước.
+     */
+    const _qBefore = text[mStart - 1];
+    const _hugQuote = (_qBefore === "'" || _qBefore === '"' || _qBefore === '`') && text[mEnd] === _qBefore
+      ? (_qBefore as "'" | '"' | '`') : null;
+    const _enclosingQuote = _hugQuote ?? enclosingQuoteAtEnd(_lineBefore);
     const insideStringLiteral = _enclosingQuote !== null;
 
     // ═══ (bugNeedFix/128) ĐỊNH DANH JS TRẦN → KHÔNG DỊCH ═══

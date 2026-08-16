@@ -59,6 +59,21 @@ describe('(bug 237) khoá đối tượng trần trong code minify', () => {
     expect(parses(out), 'script sau dịch phải còn parse được').toBe(true);
   });
 
+
+  it('token chỉ là MỘT KHÚC của chuỗi dài (phía sau còn chữ) vẫn phải biết mình trong chuỗi', () => {
+    // Ca đo được trên thẻ 237: mảng chuỗi mà mỗi phần tử là một câu Hán dài; bộ tách CJK cắt ra
+    // nhiều khúc, khúc đầu bắt đầu ngay sau dấu nháy nhưng KHÔNG kết thúc ở dấu nháy.
+    const noise = "var re=/it's|don't/g;" + 'x=1;'.repeat(3000);
+    const src = `${noise}var a=['剧情：《错位的日常》','玩家视点：比企谷八幡'];`;
+    expect(parses(src)).toBe(true);
+    const toks = extractCJKTokens(src);
+    expect(toks.length).toBeGreaterThan(0);
+    for (const t of toks) expect(t.inStringQuote, JSON.stringify(t.text)).toBe("'");
+    // AI trả về bản dịch có kèm sẵn dấu nháy đơn — đúng thứ đã làm vỡ script thật.
+    toks.forEach(t => { t.translated = "Câu chuyện': 《Cuộc sống thường ngày sai lệch》"; });
+    expect(parses(reinsertTranslations(src, toks)), 'chuỗi không được xẻ đôi').toBe(true);
+  });
+
   it('AN TOÀN: chuỗi THẬT chứa dấu hai chấm không bị biến thành khoá', () => {
     const src = "var msg='ghi chu: 雪之下雪乃 la ban cua toi';";
     const toks = extractCJKTokens(src);

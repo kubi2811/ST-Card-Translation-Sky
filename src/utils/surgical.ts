@@ -647,9 +647,15 @@ export function extractCJKTokens(
      * Ký tự SÁT hai bên token thì không cần đếm gì cũng thấy: nháy mở ngay trước + ĐÚNG loại nháy
      * đó ngay sau ⇒ token nằm trong chuỗi. Tin bằng chứng đó trước.
      */
+    const _isQ = (c: string | undefined): c is "'" | '"' | '`' => c === "'" || c === '"' || c === '`';
     const _qBefore = text[mStart - 1];
-    const _hugQuote = (_qBefore === "'" || _qBefore === '"' || _qBefore === '`') && text[mEnd] === _qBefore
-      ? (_qBefore as "'" | '"' | '`') : null;
+    const _qAfter = text[mEnd];
+    /* Nháy NGAY TRƯỚC là bằng chứng mạnh nhất: chuỗi vừa mở ra thì ký tự kế tiếp nằm trong nó.
+     * KHÔNG đòi phải có nháy cùng loại ngay sau — token thường chỉ là một KHÚC của chuỗi dài
+     * (`'场景1剧情插图：…J班，…'`), lúc đó phía sau còn chữ chứ chưa tới dấu đóng. Bản đầu của chốt này
+     * đòi cả hai đầu nên trượt đúng những ca đó, và ca trượt đầu tiên đo được đã làm vỡ script.
+     * Nháy ngay SAU cũng tính: một định danh trần đứng sát dấu nháy không phải JS hợp lệ. */
+    const _hugQuote = _isQ(_qBefore) ? _qBefore : (_isQ(_qAfter) ? _qAfter : null);
     const _enclosingQuote = _hugQuote ?? enclosingQuoteAtEnd(_lineBefore);
     const insideStringLiteral = _enclosingQuote !== null;
 

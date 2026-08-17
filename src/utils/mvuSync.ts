@@ -51,6 +51,69 @@ function parseJsonFromAi(responseText: string): any {
   }
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   (bug 238) VẾ TRÁI CỦA DẤU CHẤM: BỘ NHẬN JS, HAY ĐOẠN ĐẦU CỦA MỘT PATH MVU?
+   ═══════════════════════════════════════════════════════════════════════════
+   Đổi `obj.Tên Nhiều Từ` → `obj['Tên Nhiều Từ']` là bắt buộc trong JS (việc 119). Nhưng cùng hình
+   dạng "chữ · chấm · chữ" còn là cách MVU viết ĐƯỜNG DẪN BIẾN trong entry quy tắc:
+
+       - `[Thế Giới.Thời Gian Hiện Tại]`: giờ trong game
+
+   Chốt cũ chỉ đòi MỘT ký tự `[\w$\])]` ngay trước dấu chấm. `\w` trong JS là ASCII, nhưng chữ Việt
+   có dấu vẫn KẾT THÚC bằng ký tự ASCII rất thường xuyên ("Giới" → `i`), nên chốt đó khớp luôn — và
+   token path bị xẻ thành biểu thức JS:
+
+       `[Thế Giới.Thời Gian Hiện Tại]`  →  `[Thế Giới['Thời Gian Hiện Tại']]`
+
+   Sau đó AI trong game copy đúng hình dạng đó vào lệnh cập nhật, ra `_.set('Thế Giới['…']', …)` —
+   nháy đơn lồng nháy đơn, vỡ chuỗi. (`fixNestedQuoteBracketPaths` sinh ra để dọn đúng đống này;
+   nó chữa triệu chứng, còn đây là nơi bệnh phát ra.)
+
+   Chốt mới: vế trái phải là một BỘ NHẬN JS THẬT — định danh ASCII TRỌN VẸN (`base`, `detail`,
+   `stat_data`, `mpPool`), hoặc `]`/`)` (`arr[0].`, `fn().`). Lookbehind chặn ca "định danh giả":
+   `Giới` bị loại vì ngay trước `i` là `ớ`. Chữ Việt/CJK trước dấu chấm ⇒ đó là path, chừa lại.
+*/
+const JS_RECEIVER = String.raw`(?:(?<![\w$À-ỹĐđ぀-ヿ一-鿿])[A-Za-z_$][\w$]*|[\]\)])`;
+
+/**
+ * (bug 238) TỰ LÀNH dot-access ĐÃ vỡ từ lượt dịch trước — `base.Lời Tiên Tri Và Tin Đồn`.
+ *
+ * Trước đây việc này nằm trong vòng lặp từ điển của {@link applyMvuToText}, mỗi tên một lượt
+ * `replace`. Path NHIỀU TẦNG thì hỏng theo thứ tự: tầng sau chỉ hợp lệ SAU KHI tầng trước đã thành
+ * bracket (`stat_data.A.B` → `stat_data['A'].B` → `stat_data['A']['B']`), mà thứ tự vòng lặp lại
+ * theo độ dài tên GỐC nên có card rơi vào đúng thứ tự sai. Quét LẶP tới khi không đổi nữa thì
+ * không còn phụ thuộc may rủi.
+ *
+ * `names` là các giá trị ĐÃ DỊCH trong từ điển — biết chính xác ranh giới tên nên không đoán mò.
+ */
+export function bracketizeDotAccess(text: string, names: Iterable<string>): string {
+  if (!text || typeof text !== 'string') return text;
+  const targets = [...new Set(names)]
+    // Tên là định danh ASCII hợp lệ (`Level`) thì dot-access vốn đã đúng cú pháp — chừa ra.
+    .filter((n) => n && !/^[A-Za-z_$][\w$]*$/.test(n))
+    .sort((a, b) => b.length - a.length);
+  if (targets.length === 0) return text;
+
+  let out = text;
+  for (let round = 0; round < 6; round++) {
+    let changed = false;
+    for (const name of targets) {
+      // Từ điển thẻ lớn có vài trăm tên, mà một field chỉ dùng vài chục. Chặn bằng `includes`
+      // (rẻ, không dựng RegExp) để lượt quét lặp không thành hàng giây cho mỗi field.
+      if (!out.includes(name)) continue;
+      const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const bracket = `['${name.replace(/'/g, "\\'")}']`;
+      // Hàm thay (không dùng chuỗi `$1`) để `$` trong tên biến không bị đọc thành mẫu thay thế.
+      const next = out
+        .replace(new RegExp(`(${JS_RECEIVER})\\.${esc}(?![\\w$])`, 'g'), (_m, recv: string) => recv + bracket)
+        .replace(new RegExp(`\\?\\.${esc}(?![\\w$])`, 'g'), () => `?.${bracket}`);
+      if (next !== out) { out = next; changed = true; }
+    }
+    if (!changed) break;
+  }
+  return out;
+}
+
 /**
  * Áp dụng logic thay thế biến MVU/Zod vào một đoạn văn bản (text).
  * @param text Văn bản cần xử lý
@@ -76,6 +139,8 @@ export function applyMvuToText(
   const safeReplacement = (str: string) => str.replace(/\$/g, '$$$$');
   
   let newText = text;
+  /** (bug 238) Tên đã dịch cần soát dot-access ở lượt cuối — xem {@link bracketizeDotAccess}. */
+  const dotHealNames: string[] = [];
   for (const [original, translated] of entries) {
     const escaped = escapeRegExp(original);
     const safeTranslated = safeReplacement(translated);
@@ -143,24 +208,13 @@ export function applyMvuToText(
         const bracket = `['${safeTranslated.replace(/'/g, "\\'")}']`;
         // Dot thường: obj.KEY / arr[0].KEY / fn().KEY
         newText = newText.replace(
-          new RegExp(`([\\w$\\]\\)])\\.${escaped}`, 'g'),
+          new RegExp(`(${JS_RECEIVER})\\.${escaped}`, 'g'),
           `$1${bracket}`
         );
         // Optional chaining: obj?.KEY — dạng bracket đúng là obj?.['KEY'] (file bug/119 dòng 940:
         // detail.能量池?.当前值 — vá tầng đầu xong thì tầng sau đứng sau `?.`).
         newText = newText.replace(
           new RegExp(`\\?\\.${escaped}`, 'g'),
-          `?.${bracket}`
-        );
-        // TỰ LÀNH bản ĐÃ vỡ từ lượt dịch trước: obj.Tên Nhiều Từ (AI/fallback cũ đã ghi ra
-        // dạng dot vỡ). Có từ điển nên biết CHÍNH XÁC ranh giới tên — thay không đoán mò.
-        const escapedTranslated = escapeRegExp(translated);
-        newText = newText.replace(
-          new RegExp(`([\\w$\\]\\)])\\.${escapedTranslated}(?![\\w$])`, 'g'),
-          `$1${bracket}`
-        );
-        newText = newText.replace(
-          new RegExp(`\\?\\.${escapedTranslated}(?![\\w$])`, 'g'),
           `?.${bracket}`
         );
       }
@@ -183,6 +237,7 @@ export function applyMvuToText(
       
       const regex = new RegExp(pattern, 'g');
       newText = newText.replace(regex, safeTranslated);
+      dotHealNames.push(translated);
     } else {
       // ── Non-aggressive: chỉ thay thế trong cấu trúc cụ thể ──
       
@@ -219,7 +274,13 @@ export function applyMvuToText(
       );
     }
   }
-  
+
+  // (bug 238) Lượt CUỐI, chạy một lần trên cả đoạn: dọn dot-access nhiều tầng còn sót — kể cả
+  // những chỗ vốn đã vỡ từ lượt dịch trước. Đặt ngoài vòng lặp để không phụ thuộc thứ tự từ điển.
+  if (aggressive && dotHealNames.length > 0) {
+    newText = bracketizeDotAccess(newText, dotHealNames);
+  }
+
   return newText;
 }
 
@@ -431,9 +492,25 @@ export function recanonicalizeMvuInCard(
     if (Array.isArray(legacy)) data.extensions!.TavernHelper_scripts = legacy.map(fixScript);
 
     // Regex scripts (HTML/UI code)
+    // (bug 238) `findRegex` cũng phải theo từ điển: khối `<statusbar>` mà script bắt được thường
+    // nêu thẳng tên biến, nên MẪU TÌM lệch một chữ hoa là regex không khớp gì và bảng trạng thái
+    // trắng trơn — đúng "không đúng y chang ở regex" mà user báo. `syncMvuVariables` ở trên đã
+    // dịch CJK→Việt trong findRegex rồi; chỉ riêng lượt ép hoa/thường + biến thể là bỏ sót nó.
+    //
+    // Ép HẸP HƠN `replaceString`: chỉ đổi TÊN BIẾN (casing + biến thể + path). Không chạy
+    // `unifyVietnameseUnderscoresInText` (nó bọc nháy khoá sau `{`/`,` — mà `{`/`,` trong mẫu tìm
+    // là lượng từ regex) và không chạy `fixZodSyntaxErrors` (`.default` → `.default()` là phá mẫu).
+    const enforcePattern = (text: unknown): string => {
+      if (typeof text !== 'string' || !text) return text as string;
+      let t = enforceDictVariants(text, variantAliases).text;
+      t = enforceVariableCasing(t, fixedDict).text;
+      if (t !== text) fixCount++;
+      return t;
+    };
     if (data.extensions?.regex_scripts) {
       data.extensions.regex_scripts = data.extensions.regex_scripts.map((s) => ({
         ...s,
+        findRegex: typeof s.findRegex === 'string' ? enforcePattern(s.findRegex) : s.findRegex,
         replaceString: typeof s.replaceString === 'string' ? enforceCode(s.replaceString) : s.replaceString,
       }));
     }
@@ -815,7 +892,9 @@ export function enforceDictVariants(
   }
   const hit = (seg: string): string | null => {
     const canonical = aliases[normVarName(seg)];
-    return canonical && canonical !== seg ? canonical : null;
+    // (bug 238) So `!== seg.trim()`: đoạn `" Tiền bạc"` (thừa khoảng trắng sau dấu chấm) vẫn phải
+    // được nhận là tên biến để `canonicalizeDotPath` dán lại cho sạch.
+    return canonical && canonical !== seg.trim() ? canonical : null;
   };
   const note = (found: string, replaced: string) => {
     if (!fixes.some(f => f.found === found)) fixes.push({ found, replaced });
@@ -823,19 +902,20 @@ export function enforceDictVariants(
 
   let result = text;
 
+  // (bug 238) PATH MVU — `[Nhân Vật Chính.Sổ Ghi Nhớ]` trong văn quy tắc và macro có path. Biến
+  // thể NHÓM 2 ("Sổ Ghi Nhớ" thay vì "Bản Ghi Nhớ") nằm rải rác đúng ở những chỗ này, mà ba pass
+  // dưới chỉ soi nháy / khoá YAML / macro một đoạn nên không thấy.
+  result = enforceMvuPathTokens(result, (seg) => aliases[normVarName(seg)] ?? null, note);
+
   // Chuỗi trong nháy (tách theo dấu chấm để bắt cả path 'Tài Chính.Tiền bạc').
   result = result.replace(/(['"])((?:[^'"\n\\])*)\1/g, (match, quote, inner: string) => {
     if (!inner || inner.length < 2) return match;
-    const segs = inner.split('.');
-    let changed = false;
-    const next = segs.map((seg) => {
-      const canonical = hit(seg.trim());
-      if (!canonical) return seg;
-      changed = true;
-      note(seg.trim(), canonical);
-      return seg.replace(seg.trim(), canonical);
-    });
-    return changed ? `${quote}${next.join('.')}${quote}` : match;
+    // (bug 238) `canonicalizeDotPath` dán lại bằng đúng một dấu chấm — không giữ khoảng trắng
+    // quanh dấu chấm, vì `' Tiền Tài'` là một khoá khác với `'Tiền Tài'` khi `_.get` tra.
+    const res = canonicalizeDotPath(inner, (seg) => hit(seg));
+    if (!res.changed) return match;
+    for (const h of res.hits) note(h.found, h.replaced);
+    return `${quote}${res.text}${quote}`;
   });
 
   // Khoá YAML/JS đầu dòng — `Tiền bạc: 5000`.
@@ -1042,12 +1122,37 @@ export function enforceInitvarCovariance(
 
   // ─── Pass 2: Macro variable covariance ───
   // Fix {{getvar::KEY}} / {{setvar::KEY::}} where KEY is a mismatched translation
+  //
+  // (bug 238) Macro có PATH được tách theo dấu chấm TRƯỚC — giống Pass 4 (getvar) và Pass 6
+  // (_.get) vốn đã làm vậy từ lâu. Bỏ sót ở đây không chỉ là "không sửa được": vòng dưới tra fuzzy
+  // NGUYÊN chuỗi, và nhánh so-khớp-chuỗi-con của `findClosestDictValue` chỉ cần tỉ lệ > 0.85 — nên
+  // một path kiểu `Ngày.Thời Gian Hiện Tại` có thể bị đổi thẳng thành `Thời Gian Hiện Tại`, ăn mất
+  // đoạn cha mà không báo gì. Tách trước là chặn luôn ca đó.
+  result = result.replace(
+    /(\{\{(?:getvar|setvar|addvar|getglobalvar|setglobalvar|addglobalvar)::)([^:}\n]*\.[^:}\n]*)(}}|::)/g,
+    (match, prefix: string, name: string, suffix: string) => {
+      const res = canonicalizeDotPath(name, (seg) => {
+        if (!seg || seg.length < 2) return null;
+        if (originalToTranslated.has(seg)) return null;               // còn chữ gốc — applyMvuToText lo
+        if (translatedToOriginal.has(seg.toLowerCase())) return seg;  // đã đúng — giữ nguyên
+        return closest(seg);
+      });
+      if (!res.changed) return match;
+      for (const h of res.hits) {
+        if (!fixes.some(f => f.found === h.found)) fixes.push(h);
+      }
+      return `${prefix}${res.text}${suffix}`;
+    },
+  );
+
   const macroRegex = /(\{\{(?:getvar|setvar|addvar|getglobalvar|setglobalvar|addglobalvar)::)([^:}]+)(}}|::)/g;
   let macroMatch;
   const macroFixes: { from: string; to: string }[] = [];
   while ((macroMatch = macroRegex.exec(result)) !== null) {
     const varName = macroMatch[2].trim();
     if (!varName) continue;
+    // (bug 238) Path đã do enforceMvuPathTokens lo theo từng đoạn — đừng cho fuzzy nguyên chuỗi.
+    if (varName.includes('.')) continue;
     // Skip if already correct
     if (translatedToOriginal.has(varName.toLowerCase())) continue;
     // Skip if it's still a CJK original
@@ -1285,14 +1390,22 @@ export function enforceVariableCasing(
   const escapeRegExp = (str: string) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const safeReplacement = (str: string) => str.replace(/\$/g, '$$$$');
 
+  // (bug 238) Dạng CHUẨN của một tên biến, kể cả khi nó đã đúng sẵn. Cần cho việc ép path: đoạn
+  // `" AI Tiếp Quản"` đúng chính tả nhưng thừa khoảng trắng, `getCasingFix` trả null vì so bằng
+  // `!==` với chuỗi đã trim ⇒ không đủ để biết "đây là một tên biến".
+  const canonicalOf = (varName: string): string | null => {
+    if (!varName || varName.length < 2) return null;
+    return canonicalMap.get(normVar(varName)) ?? null;
+  };
+
   // Helper: check if a variable name needs casing/separator fix
   const getCasingFix = (varName: string): string | null => {
-    if (!varName || varName.length < 2) return null;
-    const canonical = canonicalMap.get(normVar(varName));
-    if (canonical && canonical !== varName) {
-      return canonical;
-    }
-    return null;
+    const canonical = canonicalOf(varName);
+    return canonical && canonical !== varName ? canonical : null;
+  };
+
+  const note = (found: string, replaced: string) => {
+    if (!fixes.some(f => f.found === found)) fixes.push({ found, replaced });
   };
 
   // ─── Pass 1: Macro variables {{getvar::KEY}} / {{setvar::KEY::}} ───
@@ -1321,6 +1434,11 @@ export function enforceVariableCasing(
       }
     }
   }
+
+  // ─── Pass 1b: (bug 238) PATH MVU — `[Thế Giới.Thời Gian Hiện Tại]`, macro có path, khoá là
+  // path. Xem chú thích khối của {@link enforceMvuPathTokens}: đây là ba ngữ cảnh mà tám pass
+  // còn lại không chạm tới, và cũng là nơi sai hoa/thường gây hại nhất. ───
+  result = enforceMvuPathTokens(result, canonicalOf, note);
 
   // ─── Pass 2: data-var="KEY" ───
   const dataVarRegex = /(data-var\s*=\s*["'])([^"']+)(["'])/g;
@@ -1466,28 +1584,17 @@ export function enforceVariableCasing(
   // ĐÚNG một mục trong từ điển — tức chỉ lệch hoa/thường hoặc dấu nối. Câu văn có CHỨA tên biến
   // ("Số Tiền tài của ngươi…") không chuẩn hoá ra tên biến nào nên không bị đụng; chuỗi lạ như
   // '¥ ' hay 'px' cũng vậy. Không khớp qua xuống dòng và bỏ qua chuỗi có escape để không cắt nhầm.
+  //
+  // (bug 238) Ghi lại qua `canonicalizeDotPath`: bản cũ `seg.replace(seg.trim(), canonical)` GIỮ
+  // khoảng trắng quanh dấu chấm, nên `'Nhân mạch. AI tiếp quản'` chỉ được sửa hoa/thường thành
+  // `'Nhân Mạch. AI Tiếp Quản'` — vẫn tra ra khoá `' AI Tiếp Quản'` và vẫn trả undefined.
   const anyLiteralRegex = /(['"])((?:[^'"\n\\])*)\1/g;
   result = result.replace(anyLiteralRegex, (match, quote, inner: string) => {
     if (!inner || inner.length < 2) return match;
-    // Từ điển của user có thể chốt cả DẠNG PATH ("财务.钱财" → "Tài Chính.Tiền Tài") lẫn từng
-    // đoạn rời — thử nguyên chuỗi trước, không khớp mới tách theo dấu chấm.
-    const whole = getCasingFix(inner.trim());
-    if (whole) {
-      if (!fixes.some(f => f.found === inner.trim())) fixes.push({ found: inner.trim(), replaced: whole });
-      return `${quote}${whole}${quote}`;
-    }
-    const segments = inner.split('.');
-    let changed = false;
-    const newSegments = segments.map((seg: string) => {
-      const canonical = getCasingFix(seg.trim());
-      if (!canonical) return seg;
-      changed = true;
-      if (!fixes.some(f => f.found === seg.trim())) {
-        fixes.push({ found: seg.trim(), replaced: canonical });
-      }
-      return seg.replace(seg.trim(), canonical);
-    });
-    return changed ? `${quote}${newSegments.join('.')}${quote}` : match;
+    const res = canonicalizeDotPath(inner, canonicalOf);
+    if (!res.changed) return match;
+    for (const h of res.hits) note(h.found, h.replaced);
+    return `${quote}${res.text}${quote}`;
   });
 
   // ─── Pass 8: NHÃN HIỂN THỊ trong HTML — <td>Cảnh giới</td> ───
@@ -1512,6 +1619,139 @@ export function enforceVariableCasing(
   });
 
   return { text: result, fixes };
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   (bug 238) BA NGỮ CẢNH "PATH MVU" MÀ MỌI PASS ÉP TÊN BIẾN ĐỀU BỎ SÓT
+   ═══════════════════════════════════════════════════════════════════════════
+   Từ điển chốt `当前时间 → "Thời Gian Hiện Tại"` (Title Case). Trong entry quy tắc, cùng biến đó
+   lại được gọi bằng ĐƯỜNG DẪN, và AI dịch gõ thường lộn xộn:
+
+       - `[Thế giới.Thời gian hiện tại]`   ← đúng ra `[Thế Giới.Thời Gian Hiện Tại]`
+       - `{{getvar::Thế giới.Thời gian hiện tại}}`
+       - `Thế giới.Thời gian hiện tại: mô tả`
+
+   Ba chỗ này KHÔNG phải chuỗi trong nháy, KHÔNG phải khoá YAML một đoạn, KHÔNG phải node HTML —
+   nên tám pass của `enforceVariableCasing` không chạm tới chỗ nào cả (đo trên 12 ca user gửi:
+   0/12 được sửa). Mà đây lại là chỗ ĐẮT NHẤT: entry quy tắc là bản hướng dẫn AI trong game viết
+   lệnh cập nhật, sai hoa/thường ở đây là sai khoá ở MỌI lượt chơi về sau — Zod strict chặn, ra
+   đúng "lỗi json" user gặp.
+
+   Pass macro cũ còn hỏng theo cách riêng: nó tra NGUYÊN chuỗi, nên path nhiều đoạn không bao giờ
+   khớp một mục từ điển. Hai pass tương đương — `getvar('A.B')` (Pass 4) và `_.get(x,'A.B')`
+   (Pass 7) — đã tách theo dấu chấm từ lâu; macro chỉ là chỗ bị bỏ quên.
+*/
+
+/** Trả về dạng CHUẨN của một đoạn tên biến, hoặc null nếu đoạn đó không phải tên biến nào. */
+type SegResolver = (segment: string) => string | null;
+
+/**
+ * (bug 238) Chuẩn hoá MỘT path MVU dạng `A.B.C` theo từ điển.
+ *
+ * Dán lại bằng ĐÚNG một dấu chấm, KHÔNG giữ khoảng trắng quanh dấu chấm. Đây là lỗi thật chứ
+ * không phải chuyện thẩm mỹ: `[Nhân mạch. AI tiếp quản]` tách ra đoạn `" AI tiếp quản"`, mà
+ * `_.get` tra khoá theo nguyên văn nên `" AI Tiếp Quản"` ≠ `"AI Tiếp Quản"` — biến trả về
+ * undefined. (Pass 7b cũ có `trim()` khi TRA nhưng lại `seg.replace(seg.trim(), …)` khi GHI, nên
+ * khoảng trắng sống sót và path vẫn hỏng dù đã "sửa xong".)
+ */
+function canonicalizeDotPath(
+  raw: string,
+  resolve: SegResolver,
+): { text: string; changed: boolean; hits: { found: string; replaced: string }[] } {
+  const hits: { found: string; replaced: string }[] = [];
+  // Từ điển có thể chốt cả DẠNG PATH ("财务.钱财" → "Tài Chính.Tiền Tài") — thử nguyên chuỗi trước.
+  const whole = resolve(raw.trim());
+  if (whole) {
+    if (whole === raw) return { text: raw, changed: false, hits };
+    return { text: whole, changed: true, hits: [{ found: raw.trim(), replaced: whole }] };
+  }
+  const segs = raw.split('.');
+  if (segs.length < 2) return { text: raw, changed: false, hits };
+
+  let changed = false;
+  const out = segs.map((seg) => {
+    const bare = seg.trim();
+    const canonical = resolve(bare);
+    if (!canonical) return seg;
+    if (canonical !== seg) {
+      changed = true;
+      hits.push({ found: seg.trim() === canonical ? seg : bare, replaced: canonical });
+    }
+    return canonical;
+  });
+  return { text: out.join('.'), changed, hits };
+}
+
+/**
+ * (bug 238) Ép từ điển lên PATH MVU ở ba ngữ cảnh trên. Dùng chung cho cả ba bộ ép tên biến
+ * (`enforceVariableCasing`, `enforceDictVariants`, `enforceInitvarCovariance`) nên không còn cảnh
+ * bộ này biết ngữ cảnh mà bộ kia không.
+ *
+ * AN TOÀN cho token `[…]` và `A.B:` — hai chỗ này nằm giữa văn xuôi nên phải qua HAI cửa:
+ *   1. MỌI đoạn có DÁNG một tên biến: chỉ chữ/số/khoảng trắng/`_`, và có ít nhất một chữ cái.
+ *      Loại thẳng mọi biểu thức JS có thật trong thẻ mẫu — `[talent.thresholds.length - 1]` (dấu
+ *      `-`), `[z.string(), z.number()]` (ngoặc, phẩy), `[data-zone="${x}"]` (`-`, `"`, `=`), `[0,1]`.
+ *   2. ÍT NHẤT MỘT đoạn tra ra một tên biến trong từ điển. Cửa này loại phần còn lại:
+ *      `[userData.name]`, `[item.name]`, `[talent.key]`, `[tier.title]` — không đoạn nào là tên
+ *      biến MVU nên token không bị đụng.
+ * (Không thể đòi MỌI đoạn đều tra ra: với bộ ép BIẾN THỂ, đoạn nào ĐÚNG SẴN thì vắng mặt trong
+ * bảng biến thể — `[Nhân Vật Chính.Sổ Ghi Nhớ]` chỉ có đoạn sau cần sửa.)
+ */
+const MVU_NAME_SHAPE = /^[\p{L}\p{N}_ ]+$/u;
+const HAS_LETTER = /\p{L}/u;
+
+/** Một đoạn CÓ DÁNG tên biến MVU (chưa cần có trong từ điển) — cửa 1 ở chú thích trên. */
+const looksLikeMvuName = (seg: string): boolean => {
+  const s = seg.trim();
+  return s.length >= 2 && MVU_NAME_SHAPE.test(s) && HAS_LETTER.test(s);
+};
+
+/** Path giữa văn xuôi mới đáng ép: mọi đoạn có dáng tên, và ít nhất một đoạn có trong từ điển. */
+function isProsePath(segs: string[], resolve: SegResolver): boolean {
+  if (segs.length < 2) return false;
+  if (!segs.every(looksLikeMvuName)) return false;
+  return segs.some((s) => resolve(s.trim()));
+}
+
+function enforceMvuPathTokens(
+  text: string,
+  resolve: SegResolver,
+  note: (found: string, replaced: string) => void,
+): string {
+  let out = text;
+
+  // (a) Token đường dẫn trong văn quy tắc: `[Thế Giới.Thời Gian Hiện Tại]`
+  out = out.replace(/\[([^[\]\n]+)\]/g, (match, inner: string) => {
+    if (!isProsePath(inner.split('.'), resolve)) return match;
+    const res = canonicalizeDotPath(inner, resolve);
+    if (!res.changed) return match;
+    for (const h of res.hits) note(h.found, h.replaced);
+    return `[${res.text}]`;
+  });
+
+  // (b) Macro có path: {{getvar::Thế Giới.Thời Gian Hiện Tại}}
+  out = out.replace(
+    /(\{\{(?:get|set|add)(?:global)?var::\s*)([^:}\n]+?)(\s*)(\}\}|::)/g,
+    (match, prefix: string, name: string, _trail: string, suffix: string) => {
+      if (!name.includes('.')) return match;
+      const res = canonicalizeDotPath(name, resolve);
+      if (!res.changed) return match;
+      for (const h of res.hits) note(h.found, h.replaced);
+      return `${prefix}${res.text}${suffix}`;
+    },
+  );
+
+  // (c) Khoá YAML/dòng quy tắc là một path: `Thế Giới.Thời Gian Hiện Tại: mô tả`.
+  // Qua đúng hai cửa của isProsePath — nên `1.5:` (không có chữ cái) hay `http://x.y:` không dính.
+  out = out.replace(/^([ \t]*[-*]?[ \t]*)(["'`]?)([^"'`:\n]+)(["'`]?)([ \t]*:)/gm, (match, lead, q1, key: string, q2, colon) => {
+    if (!isProsePath(String(key).split('.'), resolve)) return match;
+    const res = canonicalizeDotPath(key, resolve);
+    if (!res.changed) return match;
+    for (const h of res.hits) note(h.found, h.replaced);
+    return `${lead}${q1}${res.text}${q2}${colon}`;
+  });
+
+  return out;
 }
 
 /**

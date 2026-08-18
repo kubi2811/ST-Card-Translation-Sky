@@ -52,6 +52,15 @@ describe('alternateRegexBody', () => {
     expect(twice).toBe(once);
   });
 
+  it('không bỏ qua nhầm khi bản dịch giống nhãn ở gần đó', () => {
+    const dict = { 甲: 'Chung', 乙: 'Chung' };
+    // 甲 đã vá sẵn, còn 乙 chưa vá. Kiểm tra kiểu `window.includes("Chung")` cũ thấy chữ
+    // Chung của 甲 ở gần 乙 rồi kết luận nhầm rằng 乙 cũng đã được xử lý.
+    const r = alternateRegexBody('(?:甲|Chung)|乙', dict);
+    expect(r.body).toBe('(?:甲|Chung)|(?:乙|Chung)');
+    expect(r.changed).toBe(true);
+  });
+
   it('bản dịch chứa ký tự đặc biệt của regex → được escape', () => {
     const r = alternateRegexBody('测试', { 测试: 'a.b(c)' });
     expect(r.body).toBe('(?:测试|a\\.b\\(c\\))');

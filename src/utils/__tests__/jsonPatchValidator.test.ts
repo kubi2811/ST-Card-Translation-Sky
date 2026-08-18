@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractJsonPatches, hasJsonPatchOps, extractPatchFieldNames } from '../jsonPatchValidator';
+import { extractJsonPatches, hasJsonPatchOps, extractPatchFieldNames, translatePatchPaths } from '../jsonPatchValidator';
 
 /**
  * Trích JSON Patch từ nội dung entry [mvu_update] — hàm parse "khoan dung" (bắt được cả
@@ -63,5 +63,16 @@ describe('hasJsonPatchOps', () => {
     expect(hasJsonPatchOps('{"op":"add"}')).toBe(false);
     expect(hasJsonPatchOps('{"path":"/hp"}')).toBe(false);
     expect(hasJsonPatchOps('văn xuôi thường')).toBe(false);
+  });
+});
+
+describe('translatePatchPaths — chỉ dịch đường dẫn', () => {
+  it('không đổi string value/enum và giữ escape RFC 6901', () => {
+    const [op] = translatePatchPaths(
+      [{ op: 'replace', path: '/a~1b/状态', value: '状态' }],
+      { 'a/b': 'Mục/Con', 状态: 'Trạng Thái' },
+    );
+    expect(op.path).toBe('/Mục~1Con/Trạng Thái');
+    expect(op.value).toBe('状态');
   });
 });

@@ -3,7 +3,7 @@ import { extractTranslationFromResponse } from './masterPrompt';
 import { fandomNameOverride } from './fandomMode';
 import type { ProxySettings, GlossaryEntry } from '../types/card';
 import { writeDebugLog } from './debugLogger';
-import { extractScriptBodies, jsParseError } from './scriptSafety';
+import { extractScriptBodies, hasRealJsSignal, jsParseError } from './scriptSafety';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Public types
@@ -364,6 +364,52 @@ export function isInsideStringAtEnd(lineBefore: string): boolean {
 }
 
 /**
+ * Heuristic used only by the quote-state scanner below: decide whether `/` starts a
+ * regular-expression literal or is the division operator.  We do not need to parse the
+ * expression; we only need to avoid treating quotes inside `/.../` as JavaScript strings.
+ *
+ * JavaScript permits a regex after expression-prefix punctuation and a small set of
+ * keywords (`return /x/`, `throw /x/`, ...).  After an identifier, number, closing bracket,
+ * or string it is division.  This deliberately prefers "division" in ambiguous positions:
+ * skipping ordinary code as a regex would hide a real opening quote from the safety guard.
+ */
+function isLikelyRegexLiteralStart(source: string, slashAt: number): boolean {
+  let i = slashAt - 1;
+  while (i >= 0 && /\s/.test(source[i])) i--;
+  if (i < 0) return true;
+
+  const previous = source[i];
+  if ('=([{,:;!?&|+-*%^~<>'.includes(previous)) return true;
+
+  if (/[A-Za-z_$]/.test(previous)) {
+    let start = i;
+    while (start > 0 && /[A-Za-z0-9_$]/.test(source[start - 1])) start--;
+    const keyword = source.slice(start, i + 1);
+    return /^(?:return|throw|case|delete|void|typeof|instanceof|in|of|yield|await|new)$/.test(keyword);
+  }
+  return false;
+}
+
+/** Return the inclusive end offset of a regex literal, or -1 when `/` is division/unclosed. */
+function regexLiteralEnd(source: string, slashAt: number): number {
+  if (!isLikelyRegexLiteralStart(source, slashAt)) return -1;
+  let inClass = false;
+  for (let i = slashAt + 1; i < source.length; i++) {
+    const c = source[i];
+    if (c === '\n' || c === '\r') return -1; // JS regex literals cannot cross a raw newline
+    if (c === '\\') { i++; continue; }
+    if (c === '[') { inClass = true; continue; }
+    if (c === ']' && inClass) { inClass = false; continue; }
+    if (c === '/' && !inClass) {
+      // Consume flags so a quote-looking character immediately after a flag is scanned normally.
+      while (i + 1 < source.length && /[A-Za-z]/.test(source[i + 1])) i++;
+      return i;
+    }
+  }
+  return -1;
+}
+
+/**
  * (bug 161) Như isInsideStringAtEnd nhưng trả về CHÍNH dấu nháy đang bao chuỗi.
  *
  * Cần biết là dấu nào, không chỉ "có hay không": bản dịch mọc thêm dấu nháy CÙNG LOẠI với dấu đang
@@ -384,6 +430,22 @@ export function enclosingQuoteAtEnd(lineBefore: string): "'" | '"' | '`' | null 
     const c = lineBefore[i];
     if (quote === '`' && interp > 0) {
       // Đang ở trong `${…}`: đếm ngoặc để biết lúc nào quay lại phần chuỗi của template.
+      // Regex literal trong nội suy vẫn là code.  Một dấu nháy trong /['"]/ không được phép
+      // đánh lừa bộ đếm thành chuỗi lồng rồi làm sai toàn bộ phần còn lại của dòng minify.
+      if (c === '/' && lineBefore[i + 1] === '/') {
+        const nl = lineBefore.indexOf('\n', i);
+        if (nl === -1) break;
+        i = nl; continue;
+      }
+      if (c === '/' && lineBefore[i + 1] === '*') {
+        const end = lineBefore.indexOf('*/', i + 2);
+        if (end === -1) break;
+        i = end + 1; continue;
+      }
+      if (c === '/') {
+        const end = regexLiteralEnd(lineBefore, i);
+        if (end !== -1) { i = end; continue; }
+      }
       if (c === '{') interp++;
       else if (c === '}') interp--;
       else if (c === "'" || c === '"') {       // chuỗi lồng trong nội suy — nhảy qua trọn vẹn
@@ -416,6 +478,15 @@ export function enclosingQuoteAtEnd(lineBefore: string): "'" | '"' | '`' | null 
         const end = lineBefore.indexOf('*/', i + 2);
         if (end === -1) break;
         i = end + 1; continue;
+      }
+      // (bug 239) Quotes inside a REGEX LITERAL are pattern characters, not JS string
+      // delimiters.  Without this, `const r=/'/; obj.中文` leaves the scanner "inside" a
+      // single-quoted string, so surgical fails to rewrite the following dot property and can
+      // emit `obj.Trạng thái` (SyntaxError).  Skip the full regex, including escaped slashes and
+      // character classes, before considering quote delimiters.
+      if (c === '/') {
+        const end = regexLiteralEnd(lineBefore, i);
+        if (end !== -1) { i = end; continue; }
       }
       if (c === "'" || c === '"' || c === '`') quote = c;   // mở chuỗi
     }
@@ -1257,6 +1328,23 @@ export function verifySurgicalResult(original: string, translated: string): bool
   if (countPair(original, '(', '\uff08') !== countPair(translated, '(', '\uff08')) return false;
   if (countPair(original, ')', '\uff09') !== countPair(translated, ')', '\uff09')) return false;
 
+  // JSON gốc hợp lệ thì kết quả bắt buộc vẫn phải parse được. Đếm ngoặc cân bằng không bắt được
+  // nháy/escape hỏng, dấu phẩy thừa hoặc key bị đổi thành nháy đơn.
+  const originalTrimmed = original.trim();
+  if (originalTrimmed.startsWith('{') || originalTrimmed.startsWith('[')) {
+    try {
+      JSON.parse(originalTrimmed);
+      try { JSON.parse(translated.trim()); } catch { return false; }
+    } catch { /* gốc không phải JSON nghiêm ngặt */ }
+  }
+
+  // Script JS trần ngắn (đặc biệt `const re = /.../`) trước đây lọt vì bộ nhận script dài.
+  // Chỉ bật khi gốc có tín hiệu JS thật để không coi YAML/văn xuôi CJK là JavaScript.
+  const serializedRegex = /^\s*\/[\s\S]+\/[a-z]*\s*$/i.test(original);
+  if (!serializedRegex && hasRealJsSignal(original) && jsParseError(original) === null && jsParseError(translated) !== null) {
+    return false;
+  }
+
   // ── CSS declaration count (only when <style> is present) ─────────────────
   if (/<style[\s>]/i.test(original)) {
     const countDecls = (str: string): number => {
@@ -1814,9 +1902,17 @@ export async function surgicalTranslate(
 
   const pendingTokens = tokens.filter(t => !t.translated);
   if (pendingTokens.length === 0) {
-    const { text: reinserted } = repairScriptSyntaxCorruption(text, reinsertTranslations(text, tokens));
+    const rawReinserted = reinsertTranslations(text, tokens);
+    const normalized = normalizeFullwidthPunctuation(rawReinserted);
+    const cssValidated = postValidateCSSProperties(text, normalized);
+    const { text: reinserted } = repairScriptSyntaxCorruption(text, cssValidated);
+    const isValid = verifySurgicalResult(text, reinserted);
     onProgress?.(tokens.length, tokens.length, 'Done (local)');
-    return { translated: reinserted, success: true, fallbackTriggered: false, dict: dictOf(tokens) };
+    if (isValid || !strictVerification) {
+      return { translated: reinserted, success: true, fallbackTriggered: false, dict: dictOf(tokens) };
+    }
+    writeDebugLog('[surgicalTranslate] Local-only verification FAILED (strict). Returning original.');
+    return { translated: text, success: false, fallbackTriggered: true };
   }
 
   // ── Step 3: Deduplicate pending tokens ────────────────────────────────────

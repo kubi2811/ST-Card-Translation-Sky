@@ -166,6 +166,14 @@ export function translatePatchPaths(
 ): JsonPatchOp[] {
   const entries = Object.entries(dictionary)
     .filter(([k, v]) => k && v && k !== v)
+    .map(([k, v]) => {
+      const sourceDepth = k.split('.').length;
+      const targetDepth = v.split('.').length;
+      const safe = sourceDepth === targetDepth && sourceDepth > 1
+        ? v.split('.').map(s => s.trim()).join('.')
+        : v.replace(/\s*\.\s*/g, ' ');
+      return [k, safe] as [string, string];
+    })
     .sort((a, b) => b[0].length - a[0].length);
 
   if (entries.length === 0) return ops;
@@ -181,14 +189,8 @@ export function translatePatchPaths(
       translated.from = translateJsonPointer(op.from, entries);
     }
 
-    // Translate string values (for add/replace/test)
-    if (typeof op.value === 'string') {
-      let val = op.value;
-      for (const [original, replacement] of entries) {
-        val = val.split(original).join(replacement);
-      }
-      translated.value = val;
-    }
+    // `value` là dữ liệu/enum, KHÔNG phải tên biến. Thay từ điển vào đây từng làm đổi ngầm
+    // giá trị schema dù JSON vẫn parse được — chỉ path/from mới mang ngữ nghĩa đường dẫn.
 
     return translated;
   });
@@ -201,16 +203,23 @@ function translateJsonPointer(
   pointer: string,
   entries: [string, string][]
 ): string {
-  const segments = pointer.split('/');
-  return segments.map(seg => {
-    if (!seg) return seg; // leading empty segment
-    // Don't translate numeric indices
-    if (/^\d+$/.test(seg)) return seg;
-    // Find matching dictionary entry
-    for (const [original, translated] of entries) {
-      if (seg === original) return translated;
+  const decode = (s: string) => s.replace(/~1/g, '/').replace(/~0/g, '~');
+  const encode = (s: string) => s.replace(/~/g, '~0').replace(/\//g, '~1');
+  const segmentEntries = new Map<string, string>(entries);
+  for (const [original, translated] of entries) {
+    const op = original.split('.').map(s => s.trim());
+    const tp = translated.split('.').map(s => s.trim());
+    if (op.length > 1 && op.length === tp.length) {
+      op.forEach((part, i) => { if (!segmentEntries.has(part)) segmentEntries.set(part, tp[i]); });
     }
-    return seg;
+  }
+  const segments = pointer.split('/');
+  return segments.map((raw, index) => {
+    if (index === 0) return raw; // leading empty segment
+    // Don't translate numeric indices
+    if (/^\d+$/.test(raw) || raw === '-') return raw;
+    const decoded = decode(raw);
+    return encode(segmentEntries.get(decoded) ?? decoded);
   }).join('/');
 }
 

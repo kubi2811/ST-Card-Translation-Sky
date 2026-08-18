@@ -63,6 +63,27 @@ describe('scanFieldsHealth', () => {
     expect(r.ok).toBe(false);
   });
 
+  it('JSON Patch gốc lành nhưng bản dịch vỡ → chặn xuất', () => {
+    const r = scanFieldsHealth([mk({
+      path: 'book[0].content', entryType: 'json_patch',
+      original: '[{"op":"replace","path":"/状态","value":1}]',
+      translated: '[{"op":"replace","path":"/Trạng Thái","value":1,}]', status: 'done',
+    })]);
+    expect(r.counts.brokenJson).toBe(1);
+    expect(r.issues.some(i => i.kind === 'broken_json')).toBe(true);
+    expect(r.ok).toBe(false);
+  });
+
+  it('findRegex hỏng sau dịch → chặn xuất', () => {
+    const r = scanFieldsHealth([mk({
+      path: 'data.extensions.regex_scripts[0].findRegex', label: 'regex[0].findRegex',
+      original: '/<状态>([\\s\\S]*?)<\\/状态>/g', translated: '/[Trạng Thái/g', status: 'done',
+    })]);
+    expect(r.counts.invalidRegex).toBe(1);
+    expect(r.issues.some(i => i.kind === 'invalid_find_regex')).toBe(true);
+    expect(r.ok).toBe(false);
+  });
+
   /**
    * (bug 234) HỢP ĐỒNG ĐỔI: 'info' → 'warning'.
    * User: "Vẫn còn tiếng trung chưa dịch hết nhưng vẫn để là dịch xong."

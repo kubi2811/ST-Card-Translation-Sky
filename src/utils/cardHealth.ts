@@ -9,6 +9,7 @@
 import { checkCodeFieldForCjk } from './mvuValidator';
 import { restoreMacros } from './macroGuard';
 import { extractScriptBodies, isJsSyntaxOk, isLikelyJsScript, jsParseErrorAny } from './scriptSafety';
+import { parseFindRegex } from './stPreview';
 import type { TranslationField, GlossaryEntry } from '../types/card';
 
 /** Ideograph CJK (Trung/Nhật/Hàn) — dùng để phát hiện chữ chưa dịch còn sót. */
@@ -20,6 +21,8 @@ export type HealthKind =
   | 'field_pending'      // trường chưa dịch xong
   | 'broken_script'      // <script> gốc lành mà bản dịch vỡ cú pháp → nút bấm liệt
   | 'source_script_broken' // script GỐC đã vỡ SẴN (card import bị lỗi từ trước, không phải do dịch)
+  | 'broken_json'        // JSON/JSON Patch gốc lành nhưng bản dịch không parse được
+  | 'invalid_find_regex' // findRegex gốc hợp lệ nhưng bản dịch không biên dịch được
   | 'residual_cjk_code'  // chữ Hán còn trong field code (json_patch/initvar/controller)
   | 'residual_cjk_text'  // chữ Hán còn sót trong văn bản đã "done" (có thể là tên riêng cố ý)
   | 'empty_bracket'      // (bugNeedFix/178) 【nhãn】 ở gốc thành 【】 RỖNG ở bản dịch — mất chữ
@@ -42,6 +45,8 @@ export interface HealthReport {
     pending: number;
     skipped: number;
     brokenScripts: number;
+    brokenJson: number;
+    invalidRegex: number;
     residualCjkCode: number;
     residualCjkText: number;
     /** (bugNeedFix/178) Số chỗ 【…】 bị rỗng ruột sau dịch. */
@@ -97,7 +102,8 @@ export function countEmptiedBrackets(original: string, translated: string): stri
 
 export function scanFieldsHealth(fields: TranslationField[], glossary?: GlossaryEntry[]): HealthReport {
   const issues: HealthIssue[] = [];
-  let brokenScripts = 0, residualCjkCode = 0, residualCjkText = 0, glossaryUnapplied = 0;
+  let brokenScripts = 0, brokenJson = 0, invalidRegex = 0;
+  let residualCjkCode = 0, residualCjkText = 0, glossaryUnapplied = 0;
   let emptyBrackets = 0;
   let renamedMacros = 0;
   let done = 0, error = 0, pending = 0, skipped = 0;
@@ -144,6 +150,28 @@ export function scanFieldsHealth(fields: TranslationField[], glossary?: Glossary
 
     const trans = f.translated;
     if (!trans) continue;
+
+    // ─── JSON/JSON Patch gốc lành nhưng bản dịch vỡ ───
+    if (f.entryType === 'json_patch') {
+      let originalJsonOk = false;
+      try { JSON.parse(orig.trim()); originalJsonOk = true; } catch { /* nguồn đã không phải JSON chuẩn */ }
+      if (originalJsonOk) {
+        try { JSON.parse(trans.trim()); }
+        catch (e) {
+          brokenJson++;
+          issues.push({ severity: 'error', kind: 'broken_json', label: f.label, path: f.path,
+            detail: `JSON Patch vỡ cú pháp SAU DỊCH (${String((e as Error)?.message || e).slice(0, 100)}). Gốc vẫn hợp lệ nên không nên xuất bản dịch này.` });
+        }
+      }
+    }
+
+    // findRegex hỏng không làm app chính crash nhưng SillyTavern sẽ bỏ script/không render UI.
+    const isFindRegex = /(?:^|\.)findRegex$/.test(f.path) || /findRegex/i.test(f.label);
+    if (isFindRegex && orig.trim() && parseFindRegex(orig) && !parseFindRegex(trans)) {
+      invalidRegex++;
+      issues.push({ severity: 'error', kind: 'invalid_find_regex', label: f.label, path: f.path,
+        detail: 'Mẫu findRegex không còn biên dịch được sau dịch — regex script sẽ không chạy trong SillyTavern.' });
+    }
 
     // ─── <script> vỡ cú pháp DO DỊCH (gốc lành → bản dịch vỡ) ───
     if (trans.includes('<script') && orig.includes('<script')) {
@@ -236,7 +264,7 @@ export function scanFieldsHealth(fields: TranslationField[], glossary?: Glossary
   issues.sort((a, b) => rank[a.severity] - rank[b.severity]);
 
   return {
-    counts: { total: fields.length, done, error, pending, skipped, brokenScripts, residualCjkCode, residualCjkText, emptyBrackets, renamedMacros, glossaryUnapplied },
+    counts: { total: fields.length, done, error, pending, skipped, brokenScripts, brokenJson, invalidRegex, residualCjkCode, residualCjkText, emptyBrackets, renamedMacros, glossaryUnapplied },
     issues,
     ok: !issues.some((i) => i.severity === 'error'),
   };
@@ -262,6 +290,8 @@ export function buildTranslationReport(
   lines.push('');
   lines.push('## Sức khoẻ thẻ');
   lines.push(`- Script vỡ cú pháp: **${c.brokenScripts}**`);
+  lines.push(`- JSON/JSON Patch vỡ cú pháp: **${c.brokenJson}**`);
+  lines.push(`- findRegex không hợp lệ: **${c.invalidRegex}**`);
   lines.push(`- Chữ Hán còn trong field code: **${c.residualCjkCode}**`);
   lines.push(`- Trường còn chữ Hán (văn bản): **${c.residualCjkText}**`);
   lines.push(`- Thuật ngữ chưa áp bản dịch: **${c.glossaryUnapplied}**`);

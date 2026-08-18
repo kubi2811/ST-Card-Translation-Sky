@@ -130,14 +130,14 @@ export function alternateRegexBody(body: string, dict: Record<string, string>): 
     const { start, end, run } = hits[i];
     if (inClass(start)) { skippedInClass.add(run); continue; }
 
-    // IDEMPOTENT đúng nghĩa: chỉ bỏ qua khi BẢN DỊCH của chính run này đã nằm sát bên
-    // (tức đã được thêm nhánh ở lần chạy trước). Trước đây chỉ cần thấy ký tự `|` là bỏ qua
-    // ⇒ regex kiểu /秋青子|明月/ (khớp nhiều tên — rất phổ biến) KHÔNG bao giờ được thêm
-    // nhánh tiếng Việt, tính năng im lặng không chạy. (Bug do review chéo phát hiện.)
+    // IDEMPOTENT đúng nghĩa: chỉ bỏ qua khi CHÍNH run này đã nằm trong đúng nhóm
+    // `(?:nguồn|bản dịch)`. Kiểm tra cũ dùng `window.includes(vi)`: nếu một nhãn hàng xóm có
+    // cùng bản dịch (hoặc bản dịch ngắn tình cờ xuất hiện gần đó), nhãn hiện tại bị bỏ qua dù
+    // chưa hề được vá. Regex vẫn compile nhưng mất chức năng một cách im lặng.
     const vi = dict[run]?.trim();
     if (vi) {
-      const win = out.slice(Math.max(0, start - vi.length - 8), Math.min(out.length, end + vi.length + 8));
-      if (win.includes(vi)) continue;
+      const exact = `(?:${run}|${escapeForRegex(vi)})`;
+      if (start >= 3 && out.slice(start - 3, start - 3 + exact.length) === exact) continue;
     }
 
     const rewritten = rewriteRun(run);

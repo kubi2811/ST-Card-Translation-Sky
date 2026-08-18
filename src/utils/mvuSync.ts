@@ -75,6 +75,159 @@ function parseJsonFromAi(responseText: string): any {
 */
 const JS_RECEIVER = String.raw`(?:(?<![\w$À-ỹĐđ぀-ヿ一-鿿])[A-Za-z_$][\w$]*|[\]\)])`;
 
+/** Một mục từ path `A.B` phải được hiểu là HAI đoạn path, không phải một key chứa dấu chấm. */
+function normalizeMvuPathDots(source: string, target: string): string {
+  const sourceParts = source.split('.');
+  const targetParts = target.trim().split('.');
+  if (sourceParts.length > 1 && sourceParts.length === targetParts.length) {
+    return targetParts.map(part => part.trim()).join('.');
+  }
+  return target.trim().replace(/\s*\.\s*/g, ' ');
+}
+
+function expandMvuDictionarySegments(dict: Record<string, string>): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const [source, target] of Object.entries(dict)) {
+    if (!source || !target || source === target) continue;
+    // JSON/JSON Pointer tự escape được nháy, slash và `~`; ở đây chỉ xử lý dấu chấm mang nghĩa path.
+    const safeTarget = normalizeMvuPathDots(source, target);
+    if (!safeTarget) continue;
+    out.set(source, safeTarget);
+    const sourceParts = source.split('.').map(s => s.trim());
+    const targetParts = safeTarget.split('.').map(s => s.trim());
+    if (sourceParts.length > 1 && sourceParts.length === targetParts.length &&
+        sourceParts.every(Boolean) && targetParts.every(Boolean)) {
+      sourceParts.forEach((part, i) => {
+        // Mục từ riêng cho một đoạn cụ thể có độ tin cậy cao hơn mục được suy ra từ path.
+        if (!out.has(part)) out.set(part, targetParts[i]);
+      });
+    }
+  }
+  return out;
+}
+
+const decodeJsonPointerSegment = (segment: string): string => segment.replace(/~1/g, '/').replace(/~0/g, '~');
+const encodeJsonPointerSegment = (segment: string): string => segment.replace(/~/g, '~0').replace(/\//g, '~1');
+
+/** Dịch JSON Pointer theo TỪNG đoạn và giữ đúng escape RFC 6901 (`~0`, `~1`). */
+export function translateMvuJsonPointer(pointer: string, dict: Record<string, string>): string {
+  if (typeof pointer !== 'string' || !pointer.startsWith('/')) return pointer;
+  const lookup = expandMvuDictionarySegments(dict);
+  return pointer.split('/').map((raw, index) => {
+    if (index === 0 || /^\d+$/.test(raw) || raw === '-') return raw;
+    const decoded = decodeJsonPointerSegment(raw);
+    const translated = lookup.get(decoded) ?? decoded;
+    return encodeJsonPointerSegment(translated);
+  }).join('/');
+}
+
+function jsonIndentOf(text: string): string | number | undefined {
+  if (!/[\r\n]/.test(text)) return undefined;
+  const m = text.match(/\r?\n([ \t]+)["}\]]/);
+  if (!m) return 2;
+  return m[1].includes('\t') ? '\t' : Math.min(10, m[1].length);
+}
+
+function parseJsonDocument(text: string): unknown | undefined {
+  const trimmed = text.trim();
+  if (!trimmed || (!trimmed.startsWith('{') && !trimmed.startsWith('['))) return undefined;
+  try { return JSON.parse(trimmed) as unknown; } catch { return undefined; }
+}
+
+/**
+ * Áp từ điển lên JSON bằng cấu trúc đã parse. Chỉ đổi object-key và `path`/`from` của JSON Patch;
+ * KHÔNG thay bừa trong string value (enum, mô tả, nội dung) như bộ regex văn bản cũ.
+ */
+export function applyMvuToJsonText(text: string, dict: Record<string, string>): string | null {
+  const parsed = parseJsonDocument(text);
+  if (parsed === undefined) return null;
+  const lookup = expandMvuDictionarySegments(dict);
+  let changed = false;
+
+  const visit = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(visit);
+    if (!value || typeof value !== 'object') return value;
+
+    const source = value as Record<string, unknown>;
+    const result: Record<string, unknown> = {};
+    const originalKeys = new Set(Object.keys(source));
+    for (const key of Object.keys(source)) {
+      let nextValue = visit(source[key]);
+      if ((key === 'path' || key === 'from') && typeof source[key] === 'string' &&
+          typeof source.op === 'string') {
+        const nextPointer = translateMvuJsonPointer(source[key] as string, dict);
+        if (nextPointer !== source[key]) changed = true;
+        nextValue = nextPointer;
+      }
+
+      let nextKey = lookup.get(key) ?? key;
+      // Không bao giờ làm mất dữ liệu khi hai mục từ cùng đổ vào một key hoặc key chuẩn đã tồn tại.
+      if (nextKey !== key && (Object.prototype.hasOwnProperty.call(result, nextKey) || originalKeys.has(nextKey))) {
+        nextKey = key;
+      }
+      if (nextKey !== key) changed = true;
+      result[nextKey] = nextValue;
+    }
+    return result;
+  };
+
+  const mapped = visit(parsed);
+  if (!changed) return text;
+  const newline = text.includes('\r\n') ? '\r\n' : '\n';
+  const trailing = /\r?\n$/.test(text) ? newline : '';
+  return JSON.stringify(mapped, null, jsonIndentOf(text)).replace(/\n/g, newline) + trailing;
+}
+
+/** Ép key/path JSON theo bản gốc + từ điển, nhưng giữ nguyên mọi giá trị đã được AI dịch. */
+function alignMvuJsonFromOriginal(originalText: string, translatedText: string, dict: Record<string, string>): string | null {
+  const original = parseJsonDocument(originalText);
+  const translated = parseJsonDocument(translatedText);
+  if (original === undefined || translated === undefined) return null;
+  const lookup = expandMvuDictionarySegments(dict);
+  let changed = false;
+
+  const align = (source: unknown, target: unknown): unknown => {
+    if (Array.isArray(source) && Array.isArray(target)) {
+      return target.map((item, i) => i < source.length ? align(source[i], item) : item);
+    }
+    if (!source || !target || typeof source !== 'object' || typeof target !== 'object' ||
+        Array.isArray(source) || Array.isArray(target)) return target;
+
+    const src = source as Record<string, unknown>;
+    const dst = target as Record<string, unknown>;
+    const srcKeys = Object.keys(src);
+    const dstKeys = Object.keys(dst);
+    const result: Record<string, unknown> = {};
+    const reserved = new Set(dstKeys);
+
+    dstKeys.forEach((currentKey, i) => {
+      const sourceKey = srcKeys[i];
+      const desired = sourceKey ? lookup.get(sourceKey) : undefined;
+      let nextKey = currentKey;
+      if (desired && desired !== currentKey && !Object.prototype.hasOwnProperty.call(result, desired) &&
+          (!reserved.has(desired) || desired === currentKey)) {
+        nextKey = desired;
+        changed = true;
+      }
+      let nextValue = sourceKey ? align(src[sourceKey], dst[currentKey]) : dst[currentKey];
+      if ((currentKey === 'path' || currentKey === 'from') && sourceKey && typeof src[sourceKey] === 'string' &&
+          typeof src.op === 'string') {
+        const pointer = translateMvuJsonPointer(src[sourceKey] as string, dict);
+        if (nextValue !== pointer) changed = true;
+        nextValue = pointer;
+      }
+      result[nextKey] = nextValue;
+    });
+    return result;
+  };
+
+  const aligned = align(original, translated);
+  if (!changed) return translatedText;
+  const newline = translatedText.includes('\r\n') ? '\r\n' : '\n';
+  const trailing = /\r?\n$/.test(translatedText) ? newline : '';
+  return JSON.stringify(aligned, null, jsonIndentOf(translatedText)).replace(/\n/g, newline) + trailing;
+}
+
 /**
  * (bug 238) TỰ LÀNH dot-access ĐÃ vỡ từ lượt dịch trước — `base.Lời Tiên Tri Và Tin Đồn`.
  *
@@ -88,7 +241,7 @@ const JS_RECEIVER = String.raw`(?:(?<![\w$À-ỹĐđ぀-ヿ一-鿿])[A-Za-z_$][\
  */
 export function bracketizeDotAccess(text: string, names: Iterable<string>): string {
   if (!text || typeof text !== 'string') return text;
-  const targets = [...new Set(names)]
+  const targets = [...new Set([...names].flatMap(name => name.split('.').map(part => part.trim()).filter(Boolean)))]
     // Tên là định danh ASCII hợp lệ (`Level`) thì dot-access vốn đã đúng cú pháp — chừa ra.
     .filter((n) => n && !/^[A-Za-z_$][\w$]*$/.test(n))
     .sort((a, b) => b.length - a.length);
@@ -126,9 +279,16 @@ export function applyMvuToText(
   aggressive: boolean = true
 ): string {
   if (!text || typeof text !== 'string') return text;
+
+  // JSON/JSON Patch phải dịch bằng cây dữ liệu. Regex fallback trên JSON có thể thay cả enum,
+  // ăn escape hoặc chèn nháy làm JSON.parse thất bại.
+  const jsonResult = applyMvuToJsonText(text, variableDictionary);
+  if (jsonResult !== null) return jsonResult;
   
   const entries = Object.entries(variableDictionary)
     .filter(([k, v]) => k && v && k !== v)
+    .map(([k, v]) => [k, sanitizeMvuVarName(k, v)] as [string, string])
+    .filter(([, v]) => !!v)
     .sort((a, b) => b[0].length - a[0].length);
   if (entries.length === 0) return text;
   
@@ -204,7 +364,8 @@ export function applyMvuToText(
       // Chỉ cần khi bản dịch KHÔNG phải identifier hợp lệ; ký tự đứng trước dấu chấm phải là
       // đuôi identifier/`]`/`)` để không đụng số thập phân hay chuỗi văn xuôi "xong. Rồi".
       const translatedIsIdentifier = /^[A-Za-z_$][\w$]*$/.test(translated);
-      if (!translatedIsIdentifier) {
+      // Mục từ cả path (`A.B` → `X.Y`) không phải một property; để lượt cuối xử lý từng đoạn.
+      if (!translatedIsIdentifier && !original.includes('.') && !translated.includes('.')) {
         const bracket = `['${safeTranslated.replace(/'/g, "\\'")}']`;
         // Dot thường: obj.KEY / arr[0].KEY / fn().KEY
         newText = newText.replace(
@@ -974,6 +1135,17 @@ export function recanonicalizeMvuInFields(
     const isLbNarr = (f.group === 'lorebook' || f.group === 'lorebook_keys') && !isCode;
     if (!isCode && !isLbNarr) return f;
     if (isLbNarr && skipNarrative) return f;
+
+    // JSON có luồng riêng hoàn toàn: parse → căn key/path → stringify. Thoát sớm để JSON không
+    // bao giờ đi qua regex chuyên cho YAML/Zod/JS (vừa chậm vừa có thể đổi enum hoặc nháy).
+    const structuredJson = alignMvuJsonFromOriginal(f.original || '', f.translated, fixedDict)
+      ?? applyMvuToJsonText(f.translated, fixedDict);
+    if (structuredJson !== null) {
+      if (structuredJson === f.translated) return f;
+      fixCount++;
+      return { ...f, translated: structuredJson };
+    }
+
     // (bug #8) Sweep dict-less TRƯỚC — Lưu_Tam_Bảo → Lưu Tam Bảo kể cả khi dict trống/thiếu key.
     let t = unifyVietnameseUnderscoresInText(f.translated).text;
     t = enforceInitvarCovariance(t, fixedDict, isLbNarr).text;
@@ -991,6 +1163,7 @@ export function recanonicalizeMvuInFields(
     }
     t = enforceVariableCasing(t, fixedDict).text;
     if (isCode) t = fixZodSyntaxErrors(t);
+
     if (t === f.translated) return f;
     fixCount++;
     return { ...f, translated: t };
@@ -2337,7 +2510,8 @@ export function enforceExactConsistency(
   // (User yêu cầu 2026) Làm SẠCH mọi giá trị về dạng chuẩn "Họ Tên" (bỏ `_`/`-` → space) — khoá
   // dạng canonical DUY NHẤT cho MỌI biến, kể cả biến đơn lẻ không thuộc cụm nào ở trên.
   for (const [k, v] of Object.entries(fixedDict)) {
-    const clean = canonicalizeMvuVarName(v);
+    // Giữ nguyên mục rỗng để UI còn nhận ra đây là key chưa được dịch, không tự biến nó thành source.
+    const clean = v ? sanitizeMvuVarName(k, v) : v;
     if (clean !== v) {
       fixedDict[k] = clean;
       fixes.push(`"${k}": "${v}" → "${clean}" (chuẩn hoá dấu)`);
@@ -2967,8 +3141,24 @@ export function restoreVariablePrefixes(dict: Record<string, string>): void {
  * Chỗ key JS/Zod không quote do enforceVariableCasing/unify tự BỌC NHÁY ('Độ Hảo Cảm': hợp lệ cả JS lẫn
  * YAML); guard cú pháp JS (v1.99.7) làm lưới đỡ cuối. Hàm giữ tên cũ để không phải sửa 4 caller.
  */
-export function sanitizeMvuVarName(_originalKey: string, translated: string): string {
-  return canonicalizeMvuVarName(translated.trim());
+export function sanitizeMvuVarName(originalKey: string, translated: string): string {
+  const sourceParts = originalKey.split('.');
+  const dotted = normalizeMvuPathDots(originalKey, translated);
+  const targetParts = dotted.split('.');
+  const cleanSegment = (part: string) => canonicalizeMvuVarName(
+    part.trim()
+      // Đây là tên KEY, không phải văn xuôi. Ký tự điều khiển/nháy/slash/dấu phân cách có thể
+      // đóng chuỗi, mở comment, đổi YAML hoặc làm regex literal chết sau khi thay từ điển.
+      .replace(/[\u0000-\u001f\u007f'"`\\\/:{}\[\],#]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim(),
+  );
+  // Dấu chấm là toán tử PATH của MVU. Một key nguồn đơn không được tự mọc thêm tầng sau dịch.
+  // Với mục từ path, chỉ giữ dấu chấm khi số tầng hai phía khớp; mỗi tầng được làm sạch riêng.
+  if (sourceParts.length === targetParts.length && sourceParts.length > 1) {
+    return targetParts.map((part, i) => cleanSegment(part) || sourceParts[i].trim()).join('.');
+  }
+  return cleanSegment(dotted) || originalKey.trim();
 }
 
 export async function aiTranslateMvuKeys(

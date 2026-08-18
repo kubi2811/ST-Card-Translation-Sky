@@ -168,7 +168,9 @@ export function parseLorebookPlan(raw: string): LorebookPlan {
   const config: LorebookRunConfig = {
     // Số entry chạy theo DANH SÁCH thật, không theo con số AI hứa suông.
     totalEntries: Math.min(Math.max(totalEntries, titleCount), MAX_TOTAL_ENTRIES),
-    minEntries: clamp(p.config?.minEntries, 0, titleCount, Math.floor(titleCount * 0.8)),
+    // (User 2026) Mặc định 0 = KHÔNG ép sàn. Mặc định cũ 80% số tiêu đề biến mọi lượt AI trả
+    // thiếu thành các batch bù nối nhau — user chỉnh tay trên bảng kế hoạch nếu thật sự cần sàn.
+    minEntries: clamp(p.config?.minEntries, 0, titleCount, 0),
     entriesPerBatch: clamp(p.config?.entriesPerBatch, 1, 10, 6),
     // (bug 196) Trần cũ 800 chặn thẳng yêu cầu 3000-5000 token/entry của user: nhập bao nhiêu cũng
     // bị kẹp về 800, nên "đặt số token" trên giao diện gần như vô nghĩa với entry chi tiết.

@@ -31,8 +31,12 @@
  *      hỏng là ra 0 entry mà người dùng không biết vì sao.
  *
  * Nay pha GENERATE dùng chung đúng bộ đồ nghề của bug 194: `planBatch` (cỡ lô + trần output),
- * `checkEntryBudget` (đo token thật, sàn 85%), `buildExpandPrompt` (nới entry ngắn), cộng thêm
- * thử lại theo lô và các VÒNG SINH BÙ cho tới khi đủ số entry đã đặt.
+ * `checkEntryBudget` (đo token thật — THUẦN ĐO, không phán đạt/không đạt), cộng thêm thử lại theo
+ * lô và các VÒNG SINH BÙ cho tới khi đủ số entry đã đặt.
+ *
+ * (User 2026) SÀN ĐỘ DÀI ĐÃ BỎ HẲN — cả ở đây lẫn `batchGenerator`. Sàn dạy mô hình viết vừa chạm
+ * mốc rồi dừng, còn cơ chế nới/sinh bù đi kèm biến mỗi entry hụt thành thêm vài lời gọi AI: đúng
+ * vòng lặp user than. Ngân sách token nay chỉ còn là định hướng độ chi tiết trong lời nhắc.
  */
 
 import type { CharacterCardV3, GenerationParams, LorebookEntry, ProxyProfile } from '../../types';
@@ -47,7 +51,7 @@ import { tryExtractJsonArray, looksTruncated } from '../ai/batchGenerator';
 import { isDuplicateEntry } from '../ai/deduplicator';
 import { materializeEntry, nextEntryId } from '../converters/cardDefaults';
 import { TFIDFIndex } from '../rag/tfidfIndexer';
-import { countTokens, checkEntryBudget, planBatch, buildExpandPrompt } from '../ai/tokenBudget';
+import { checkEntryBudget, planBatch } from '../ai/tokenBudget';
 
 export interface WikiImportDeps {
   card: CharacterCardV3;
@@ -90,8 +94,6 @@ export interface WikiImportResult {
 const MAX_TOPUP_ROUNDS = 6;
 /** Số lần thử lại một lô khi AI trả về thứ không đọc được. */
 const MAX_BATCH_RETRIES = 2;
-/** Số lần NỚI THÊM một entry còn ngắn — giống hệt batchGenerator. */
-const MAX_EXPANDS = 2;
 
 /**
  * Pha 2 tách riêng để test được không cần mạng, và để `runWikiImport` chỉ còn việc nối hai pha.
@@ -167,32 +169,6 @@ export async function generateEntriesFromPages(
     if (aborted()) throw new Error('Cancelled');
   };
 
-  /** Nới một entry còn ngắn — rẻ và chắc hơn vứt đi sinh lại từ đầu (bug 194). */
-  const expandEntry = async (comment: string, content: string, label: string): Promise<string> => {
-    let text = content;
-    let chk = checkEntryBudget(text, config.tokensPerEntry);
-    for (let i = 0; i < MAX_EXPANDS && !chk.ok && !aborted(); i++) {
-      ctl.log(`📏 ${label} "${comment}" mới ${chk.actual}/${chk.target} token — bảo AI viết đủ (nới lần ${i + 1}/${MAX_EXPANDS})…`);
-      try {
-        const grown = await callAI({
-          profile: deps.profile,
-          params: { ...callParams, max_tokens: Math.max(1024, Math.round(config.tokensPerEntry * 2)) },
-          messages: [
-            { role: 'system', content: 'Bạn là người viết lore. Trả về DUY NHẤT phần nội dung, văn bản thuần.' },
-            { role: 'user', content: buildExpandPrompt(comment, text, config.tokensPerEntry, chk.actual) },
-          ],
-          signal: ctl.signal,
-        });
-        const next = (grown.text || '').trim();
-        // Chỉ nhận nếu THẬT SỰ dài hơn — tránh nhận về một bản viết lại ngắn hơn.
-        if (countTokens(next) <= chk.actual) break;
-        text = next;
-        chk = checkEntryBudget(text, config.tokensPerEntry);
-      } catch { break; }
-    }
-    return text;
-  };
-
   /** Một lô: gọi AI (có thử lại) rồi đưa từng entry qua các cửa. */
   const runBatch = async (myPages: PageDoc[], ask: number, label: string): Promise<void> => {
     if (!myPages.length || created >= entriesTarget) return;
@@ -245,7 +221,7 @@ export async function generateEntriesFromPages(
       if (created >= entriesTarget) break;
       if (aborted()) throw new Error('Cancelled');
       const title = String(ai.comment || '').trim();
-      let content = String(ai.content || '').trim();
+      const content = String(ai.content || '').trim();
       if (!title || !content) { droppedThin++; continue; }
 
       // Cửa 1: claim tiêu đề — lô khác đã nhận thì thôi.
@@ -265,19 +241,9 @@ export async function generateEntriesFromPages(
         continue;
       }
 
-      // Cửa 4: NGÂN SÁCH TOKEN — đo thật, và ngắn thì NỚI chứ không vứt.
-      let chk = checkEntryBudget(content, config.tokensPerEntry);
-      if (!chk.ok && chk.hopeless) {
-        // Dưới 45% là mô hình hiểu sai đề; nới không cứu được, để vòng bù sinh lại thì hơn.
-        claims.release(title); droppedThin++;
-        ctl.log(`⏭️ "${title}" quá sơ sài (${chk.actual}/${chk.target} token) — bỏ, sẽ sinh bù.`);
-        continue;
-      }
-      if (!chk.ok) {
-        content = await expandEntry(title, content, label);
-        chk = checkEntryBudget(content, config.tokensPerEntry);
-        ai.content = content;
-      }
+      // Cửa 4: ĐO độ dài để báo cho user — KHÔNG còn sàn nào (User 2026). Sàn cũ vừa dạy mô hình
+      // viết vừa chạm mốc rồi dừng bút, vừa đẻ ra vòng nới/sinh bù không dứt cho mỗi entry hụt.
+      const chk = checkEntryBudget(content, config.tokensPerEntry);
 
       const id = nextEntryId(bookEntries);
       const entry = materializeEntry(

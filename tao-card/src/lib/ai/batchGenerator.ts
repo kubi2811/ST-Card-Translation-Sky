@@ -17,7 +17,7 @@ import { cascadeSearch, searchFailureReasons } from './webScraper';
 import { getProfileExtractionContext } from './worldbuildingDefaults';
 import { tag, allTags } from './storyToCard';
 import {
-  countTokens, checkEntryBudget, planBatch, buildLengthDirective, buildExpandPrompt,
+  checkEntryBudget, planBatch, buildLengthDirective,
 } from './tokenBudget';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -99,7 +99,7 @@ KHÔNG TRÙNG LẶP với danh sách "Entries đã có".
 7. ĐỦ CHẤT, KHÔNG SƠ SÀI: mỗi entry NHÂN VẬT phải nêu được ít nhất — lai lịch/xuất thân,
    ngoại hình nhận diện, tính cách qua HÀNH VI cụ thể (không chỉ tính từ suông), năng lực/vai trò,
    và quan hệ với các thực thể khác. Entry chỉ vài dòng chung chung kiểu "X là một kiếm khách
-   mạnh mẽ, tính tình lạnh lùng" sẽ BỊ LOẠI và bạn phải sinh lại — viết đủ ngay từ đầu.
+   mạnh mẽ, tính tình lạnh lùng" là CHƯA ĐẠT — viết cho đủ chất ngay từ đầu.
 
 --- HƯỚNG DẪN KỸ THUẬT SILLYTAVERN ---
 • keys: Bao phủ TẤT CẢ cách xưng hô có thể:
@@ -120,9 +120,9 @@ CHỈ trả về MỘT MẢNG JSON hợp lệ. KHÔNG thêm giải thích, KHÔN
 // ─── TOKEN BUDGET ADDON (inject khi tokensPerEntry > 0) ──────────────────
 
 function buildTokenBudgetDirective(tokensPerEntry: number | undefined): string {
-  // (bug 194) Bản cũ chỉ nói "khoảng N token" rồi cho phép tụt xuống 70%, mà bộ kiểm phía sau lại
-  // nhận tới tận 60% — nên kết quả dồn hết xuống sát sàn, user đo ra "một nửa". Nay nói bằng BA
-  // cách (token / ký tự / cấu trúc) và sàn cứng khớp đúng với bộ kiểm. Xem tokenBudget.ts.
+  // Nói bằng BA cách (token / ký tự / cấu trúc) vì mô hình không tự đếm được token của chính nó.
+  // (User 2026) KHÔNG kèm sàn: hễ nêu một mức tối thiểu là mô hình viết vừa chạm mốc rồi dừng bút,
+  // và mỗi entry hụt lại kéo theo một lượt bắt viết lại. Xem tokenBudget.ts.
   return buildLengthDirective(tokensPerEntry ?? 0);
 }
 
@@ -1145,41 +1145,13 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
         }
 
         // (User 23/07 — việc 90) "Nội dung entry của các nhân vật hơi ngắn và sơ sài."
-        // checkAntiSummarization chỉ dò TÍN HIỆU tóm tắt ("v.v.", "…") và so tỉ lệ với bản CŨ —
-        // sinh mới thì không có bản cũ để so, nên entry 40 ký tự vẫn lọt êm, chỉ ghi một dòng
-        // cảnh báo rồi vẫn nhận. Thêm SÀN TUYỆT ĐỐI: dưới sàn thì LOẠI và ghi nợ để vòng sau
-        // sinh bù (dùng chung cơ chế bù với entry bị loại vì trùng).
-        // (bug 194) ĐO TOKEN THẬT chứ không ước theo ký tự, và sàn là 85% chứ không phải 60%.
-        // Ngắn vừa phải (≥45%) thì NỚI THÊM — rẻ và chắc hơn vứt đi sinh lại từ đầu, vì sinh lại
-        // cùng một lời nhắc thì gần như chắc chắn lại ra một bản ngắn y hệt.
+        // (User 2026) SÀN ĐỘ DÀI ĐÃ BỊ BỎ. Bản trước loại thẳng entry dưới 45% ngân sách và bắt
+        // AI viết lại tối đa 2 lượt cho entry dưới 85% — cộng lại thành đúng cái vòng lặp user
+        // than: mỗi entry hụt đẻ thêm vài lời gọi AI, mà bản thân cái sàn lại dạy mô hình viết
+        // vừa chạm mốc rồi dừng. Nay ngân sách chỉ là ĐỊNH HƯỚNG trong lời nhắc; ở đây chỉ ĐO để
+        // báo cáo cho user, không entry nào bị loại hay bị bắt viết lại vì ngắn.
         if (config.tokensPerEntry && config.tokensPerEntry > 0) {
-          let chk = checkEntryBudget(ai.content || '', config.tokensPerEntry);
-          if (!chk.ok && chk.hopeless) {
-            droppedDup++;
-            ctx.log(`⏭️ Bỏ qua "${ai.comment}" — quá sơ sài (${chk.actual}/${chk.target} token), sẽ sinh bù.`);
-            continue;
-          }
-          for (let ex = 0; ex < 2 && !chk.ok && !ctx.stopped; ex++) {
-            ctx.log(`📏 "${ai.comment}" mới ${chk.actual}/${chk.target} token — yêu cầu AI viết đủ (lần ${ex + 1}/2)…`);
-            try {
-              const grown = await callAI({
-                profile,
-                params: { ...ctx.generationParams, max_tokens: Math.max(1024, Math.round(config.tokensPerEntry * 2)), useJsonResponseFormat: false },
-                messages: [
-                  { role: 'system', content: 'Bạn là người viết lore. Trả về DUY NHẤT phần nội dung, văn bản thuần.' },
-                  { role: 'user', content: buildExpandPrompt(ai.comment || '', ai.content || '', config.tokensPerEntry, chk.actual) },
-                ],
-                signal: ctx.signal,
-              });
-              const next = (grown.text || '').trim();
-              // Chỉ nhận nếu THẬT SỰ dài hơn — tránh nhận về một bản viết lại ngắn hơn.
-              if (countTokens(next) > chk.actual) { ai.content = next; chk = checkEntryBudget(next, config.tokensPerEntry); }
-              else break;
-            } catch { break; }
-          }
-          if (!chk.ok) {
-            ctx.log(`⚠️ "${ai.comment}" vẫn ${chk.actual}/${chk.target} token sau khi nới — vẫn nhận, nhưng đừng kỳ vọng đủ dài.`);
-          }
+          const chk = checkEntryBudget(ai.content || '', config.tokensPerEntry);
           tokenSum += chk.actual; tokenCount++;
         }
 
@@ -1263,8 +1235,8 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
     const pct = Math.round((avg / config.tokensPerEntry) * 100);
     ctx.log(
       `📏 Độ dài THỰC ĐO: trung bình ${avg} token/entry so với ngân sách ${config.tokensPerEntry} (${pct}%).`
-      + (pct < 85
-        ? ' Vẫn hụt — nâng trần output của model trong Cài đặt, hoặc giảm số entry mỗi lô rồi chạy lại.'
+      + (pct < 70
+        ? ' Ngắn hơn ngân sách khá nhiều — thủ phạm thường là trần output của model: nâng trần trong Cài đặt, hoặc giảm số entry mỗi lô rồi chạy lại.'
         : ''),
     );
   }

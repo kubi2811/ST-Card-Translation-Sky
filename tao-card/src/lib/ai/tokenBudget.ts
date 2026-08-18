@@ -9,22 +9,27 @@
  *   • Entry lorebook thật (thẻ bug/174, 30 entry): 2.98 ký tự/token
  *   ⇒ hằng số 3.5 mà tool đang dùng KHÔNG phải thủ phạm — nó chỉ lạc quan chút ít.
  *
- * Thủ phạm thật là ba chỗ khác:
+ * Thủ phạm thật là hai chỗ khác:
  *
- *  1. SÀN CHẤP NHẬN ĐẶT Ở 60%. Bộ kiểm cũ nhận mọi entry dài ≥ `tokensPerEntry × 3.5 × 0.6`,
- *     trong khi prompt lại hứa với AI là "không được ngắn hơn 70%". Mô hình ngôn ngữ vốn luôn
- *     viết hụt so với yêu cầu độ dài, nên kết quả dồn hết xuống sát sàn — user đo ra "một nửa".
- *     Không có bất kỳ cơ chế nào kéo nó lên.
- *
- *  2. KHÔNG BAO GIỜ ĐẾM TOKEN THẬT. Tool chỉ đếm ký tự rồi nhân chia, và không hề báo cho user
+ *  1. KHÔNG BAO GIỜ ĐẾM TOKEN THẬT. Tool chỉ đếm ký tự rồi nhân chia, và không hề báo cho user
  *     con số thực tế. Thiếu hụt vì thế vô hình với chính cái tool đang hứa hẹn con số đó.
  *
- *  3. LÔ QUÁ TO SO VỚI TRẦN OUTPUT. `max_tokens` là một con số cố định trong Settings (mặc định
+ *  2. LÔ QUÁ TO SO VỚI TRẦN OUTPUT. `max_tokens` là một con số cố định trong Settings (mặc định
  *     4096) chứ không suy ra từ `tokensPerEntry × số entry mỗi lô`. Khi tổng nhu cầu của lô chạm
  *     trần, mô hình KHÔNG báo lỗi — nó tự nén mỗi entry ngắn lại cho đủ chỗ. Đây là kiểu hỏng
  *     im lặng đúng nghĩa: không cắt giữa chừng, không cảnh báo, chỉ là mọi entry đều ngắn.
  *     Với yêu cầu 3000-5000 token/entry của bug 196 thì một lô 6 entry cần ~30.000 token output —
  *     gấp bảy lần trần mặc định, không cách nào ra đủ.
+ *
+ * ─── (User 2026) BỎ HẲN SÀN ĐỘ DÀI ──────────────────────────────────────────
+ * Bản trước dựng thêm một SÀN CHẤP NHẬN (85% ngân sách): prompt doạ "ngắn hơn sẽ bị loại", entry
+ * dưới sàn thì bị bắt viết lại, dưới 45% thì bị vứt và ghi nợ sinh bù. User báo chính cái sàn đó
+ * phản tác dụng: mô hình học được rằng chạm mốc là xong nên viết vừa đủ tới đó rồi dừng, còn hai
+ * cơ chế "cứu" kia biến mỗi entry hụt thành thêm vài lời gọi AI — thành một vòng lặp không dứt.
+ *
+ * Nay ngân sách token chỉ còn là ĐỊNH HƯỚNG ĐỘ CHI TIẾT trong lời nhắc, không phải hạn ngạch:
+ * không sàn, không loại entry vì ngắn, không tự động bắt viết lại. Phần ĐO vẫn giữ nguyên — nó là
+ * thứ duy nhất cho user biết thực tế ra bao nhiêu token, và nó không hề ép mô hình điều gì.
  */
 import { encode } from 'gpt-tokenizer';
 
@@ -48,34 +53,21 @@ export function countTokens(text: string): number {
 export interface EntryBudgetCheck {
   /** Số token đo được của nội dung. */
   actual: number;
-  /** Ngân sách người dùng đặt. */
+  /** Ngân sách người dùng đặt (0 = không đặt). */
   target: number;
-  /** actual / target. */
+  /** actual / target — 1 khi không đặt ngân sách. */
   ratio: number;
-  /** Đạt sàn chưa. */
-  ok: boolean;
-  /** Ngắn tới mức vô dụng — không đáng nới thêm, nên bỏ và sinh lại. */
-  hopeless: boolean;
 }
 
 /**
- * Sàn chấp nhận. 0.85 chứ không phải 0.6: hứa với user bao nhiêu thì phải giao gần bấy nhiêu.
- * Dưới sàn nhưng còn khá (≥ 0.45) thì NỚI THÊM cho đủ — rẻ và chắc ăn hơn sinh lại từ đầu.
- * Dưới 0.45 là mô hình hiểu sai đề, nới cũng không cứu được, sinh lại thì hơn.
+ * ĐO độ dài một entry so với ngân sách. THUẦN ĐO ĐẠC — không phán đạt/không đạt, vì không còn
+ * sàn nào để phán (xem docblock). Kết quả chỉ dùng để báo cáo cho user.
  */
-export const ENTRY_MIN_RATIO = 0.85;
-export const ENTRY_HOPELESS_RATIO = 0.45;
-
 export function checkEntryBudget(content: string, tokensPerEntry: number): EntryBudgetCheck {
   const target = Math.max(0, Math.round(tokensPerEntry || 0));
   const actual = countTokens(content);
-  if (target <= 0) return { actual, target: 0, ratio: 1, ok: true, hopeless: false };
-  const ratio = actual / target;
-  return {
-    actual, target, ratio,
-    ok: ratio >= ENTRY_MIN_RATIO,
-    hopeless: ratio < ENTRY_HOPELESS_RATIO,
-  };
+  if (target <= 0) return { actual, target: 0, ratio: 1 };
+  return { actual, target, ratio: actual / target };
 }
 
 export interface BatchPlan {
@@ -122,44 +114,22 @@ export function planBatch(
  * Chỉ thị độ dài đưa cho AI. Nói bằng BA cách vì mô hình không tự đếm được token của chính nó:
  * số token (để khớp ngôn ngữ của user), số ký tự (đo được), và CẤU TRÚC (số đoạn) — cái cuối là
  * thứ mô hình bám theo tốt nhất trong thực tế.
+ *
+ * (User 2026) Nói bằng giọng ĐỊNH HƯỚNG, tuyệt đối không đặt sàn và không doạ loại bài: hễ nêu
+ * một con số tối thiểu là mô hình viết vừa chạm con số đó rồi dừng — đúng thứ user đang than.
  */
 export function buildLengthDirective(tokensPerEntry: number): string {
   const t = Math.max(0, Math.round(tokensPerEntry || 0));
   if (t <= 0) return '';
   const chars = Math.round(t * VI_CHARS_PER_TOKEN);
-  const minChars = Math.round(chars * ENTRY_MIN_RATIO);
   // ~55 token mỗi đoạn văn xuôi tiếng Việt cỡ 3-4 câu.
   const paras = Math.max(1, Math.round(t / 55));
-  const sentences = Math.max(3, Math.round(t / 18));
   return `
 
-### 📏 ĐỘ DÀI BẮT BUỘC CỦA MỖI content
-- Mục tiêu: ~${t} token ≈ ${chars} ký tự tiếng Việt.
-- SÀN CỨNG: không dưới ${minChars} ký tự. Entry ngắn hơn sẽ bị loại và bắt viết lại.
-- Về cấu trúc: khoảng ${paras} đoạn, tổng cộng tối thiểu ${sentences} câu hoàn chỉnh.
-- Viết hụt là lỗi NẶNG hơn viết dôi. Thiếu ý thì đào sâu thêm: nguồn gốc, quan hệ, hệ quả, chi
-  tiết cảm quan, ví dụ cụ thể, mâu thuẫn nội tại — TUYỆT ĐỐI không nhồi chữ rỗng hay lặp ý.`;
-}
-
-/** Lời nhắc NỚI THÊM cho một entry còn thiếu độ dài — rẻ và chắc hơn sinh lại từ đầu. */
-export function buildExpandPrompt(
-  comment: string,
-  content: string,
-  tokensPerEntry: number,
-  actualTokens: number,
-): string {
-  const need = Math.max(1, Math.round(tokensPerEntry - actualTokens));
-  return `Entry "${comment}" hiện mới ${actualTokens} token, còn thiếu khoảng ${need} token so với yêu cầu ${tokensPerEntry}.
-
-NỘI DUNG HIỆN CÓ:
-"""
-${content}
-"""
-
-Hãy VIẾT LẠI entry này cho ĐỦ ĐỘ DÀI:
-- GIỮ NGUYÊN mọi thông tin đã có, không được bỏ bớt hay diễn đạt lại cho ngắn đi.
-- BỔ SUNG chiều sâu: nguồn gốc, bối cảnh, quan hệ với thực thể khác, hệ quả, chi tiết cảm quan,
-  ví dụ cụ thể, mâu thuẫn/điểm yếu.
-- TUYỆT ĐỐI không nhồi chữ rỗng, không lặp lại ý đã viết, không thêm lời dẫn kiểu "dưới đây là".
-- CHỈ trả về phần nội dung mới, dạng văn bản thuần, không JSON, không markdown, không tiêu đề.`;
+### 📏 ĐỘ CHI TIẾT MONG MUỐN CỦA MỖI content
+- Cỡ tham chiếu: ~${t} token ≈ ${chars} ký tự tiếng Việt, tức khoảng ${paras} đoạn.
+- Con số trên tả ĐỘ SÂU cần có, không phải hạn ngạch phải lấp cho đủ rồi dừng bút. Cứ viết cho
+  TRỌN thực thể đang tả: nguồn gốc, quan hệ, hệ quả, chi tiết cảm quan, ví dụ cụ thể, mâu thuẫn
+  nội tại. Còn ý đáng viết thì viết tiếp, hết ý thì dừng.
+- TUYỆT ĐỐI không nhồi chữ rỗng, không lặp ý, không viết lan man chỉ để cho dài.`;
 }

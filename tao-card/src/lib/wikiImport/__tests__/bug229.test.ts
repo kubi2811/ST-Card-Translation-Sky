@@ -184,9 +184,11 @@ describe('(bug 229-B) Wiki Importer chưa hề nhận bản vá bug 194', () => 
     const p = buildWikiEntrySystemPrompt(250);
     expect(p).not.toMatch(/không ngắn hơn \d+,/);
     // Phải dùng chỉ thị dùng chung của bug 194: nói bằng token + ký tự + CẤU TRÚC.
-    expect(p).toContain('SÀN CỨNG');
+    expect(p).toMatch(/token/);
     expect(p).toMatch(/ký tự/);
-    expect(p).toMatch(/câu hoàn chỉnh/);
+    expect(p).toMatch(/đoạn/);
+    // (User 2026) và tuyệt đối KHÔNG kèm sàn — sàn dạy mô hình viết chạm mốc rồi dừng.
+    expect(p).not.toContain('SÀN CỨNG');
   });
 
   it('max_tokens phải suy từ ngân sách lô, không để nguyên 4096 của Settings', async () => {
@@ -198,16 +200,16 @@ describe('(bug 229-B) Wiki Importer chưa hề nhận bản vá bug 194', () => 
     expect(params.max_tokens, 'trần output vẫn là con số cố định 4096').toBeGreaterThan(4096);
   });
 
-  it('entry ngắn (60% mục tiêu) được NỚI THÊM chứ không bị vứt — đúng cách batchGenerator đã làm', async () => {
-    mockCallAI
-      .mockResolvedValueOnce(aiArray([{ comment: 'Klein', content: proseOf(150) }]))   // 60% của 250
-      .mockResolvedValue({ text: proseOf(260), model: 'm' });                          // lượt nới
+  it('(User 2026) entry ngắn được NHẬN NGUYÊN — không sàn, không lượt bắt viết lại nào', async () => {
+    mockCallAI.mockResolvedValue(aiArray([{ comment: 'Klein', content: proseOf(150) }]));   // 60% của 250
 
     const r = await runGenerate({ card: mkCard(true), pages: mkPages(4), totalEntries: 1, tokensPerEntry: 250, concurrentBatches: 1 });
 
-    expect(r.entriesCreated, 'entry ngắn bị vứt thay vì nới').toBe(1);
-    expect(r.logs.some(l => l.includes('nới') || l.includes('token'))).toBe(true);
-    expect(countTokens(r.added[0].content)).toBeGreaterThan(200);
+    expect(r.entriesCreated, 'entry ngắn bị vứt vì một cái sàn lẽ ra không còn').toBe(1);
+    // Đúng MỘT lời gọi cho cả lô: mỗi lượt "nới" thêm là một lời gọi nữa — chỗ vòng lặp sinh ra.
+    expect(mockCallAI).toHaveBeenCalledTimes(1);
+    expect(r.logs.some(l => l.includes('nới')), 'vẫn còn cơ chế bắt viết lại').toBe(false);
+    expect(countTokens(r.added[0].content)).toBeGreaterThan(100);
   });
 
   it('entry đạt yêu cầu phải được đo bằng TOKEN THẬT và báo con số cho user', async () => {

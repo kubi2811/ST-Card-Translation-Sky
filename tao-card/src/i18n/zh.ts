@@ -1124,7 +1124,7 @@ const t: CardUiKeys = {
   lrInstruction: '给 AI 的要求 / 说明',
   lrInstructionPh: '例如：检查条目之间有没有矛盾，给黑龙潭区域补充更多 NPC，重写太单薄的内容……',
   lrOperationMode: '运行模式',
-  lrMinTokens: '每个条目内容至少 {n} tokens',
+  lrMinTokens: '每个条目内容约 {n} tokens（参考值，非下限）',
   lrMaxEntries: '最多处理的条目数（0 = 全部）',
   lrEntriesPerBatch: '每批条目数',
   lrConcurrent: '并行批次',

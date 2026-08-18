@@ -1126,7 +1126,7 @@ const t: CardUiKeys = {
   lrInstruction: 'Yêu cầu / Hướng dẫn cho AI',
   lrInstructionPh: 'VD: Kiểm tra xem entries có mâu thuẫn gì không, bổ sung thêm NPC cho khu vực Hắc Long Đầm, sửa lại nội dung quá sơ sài...',
   lrOperationMode: 'Chế độ hoạt động',
-  lrMinTokens: 'Content mỗi entry sẽ ít nhất {n} tokens',
+  lrMinTokens: 'Content mỗi entry cỡ ~{n} tokens (định hướng, không phải sàn)',
   lrMaxEntries: 'Max entries xử lý (0 = tất cả)',
   lrEntriesPerBatch: 'Entries / batch',
   lrConcurrent: 'Batch song song',

@@ -601,10 +601,12 @@ ${response.text}`;
       // chính user đã đặt cao hơn. Vẫn để một trần AN TOÀN rất rộng để không bao giờ chạy vô hạn
       // vì một con số nhập nhầm.
       const totalEntries = Math.min(5000, Math.max(lbConfig.totalEntries, entityCount + 5));
-      // 2) SÀN mặc định = 80% trần (card cũ lưu minEntries=0 cũng được nâng) → thiếu thì tự nối batch bù.
-      const minEntries = Math.max(lbConfig.minEntries ?? 0, Math.floor(totalEntries * 0.8));
+      // 2) (User 2026) BỎ SÀN MẶC ĐỊNH 80% TRẦN. Sàn tự đặt hộ ấy biến "AI trả thiếu vài entry"
+      //    thành hàng loạt batch bù nối nhau không dứt — đúng vòng lặp user than. Nay chỉ tôn
+      //    trọng con số user tự đặt trên giao diện (0 = không ép sàn, và đó là mặc định).
+      const minEntries = Math.max(0, Math.min(lbConfig.minEntries ?? 0, totalEntries));
       if (totalEntries > lbConfig.totalEntries) {
-        store.addLog({ step, level: 'info', message: `📐 Thế giới có ~${entityCount} thực thể → nâng mục tiêu lorebook ${lbConfig.totalEntries} → ${totalEntries} entry (sàn ${minEntries}).` });
+        store.addLog({ step, level: 'info', message: `📐 Thế giới có ~${entityCount} thực thể → nâng mục tiêu lorebook ${lbConfig.totalEntries} → ${totalEntries} entry.` });
       }
 
       let createdCount = 0;
@@ -652,11 +654,12 @@ ${response.text}`;
           createdCount++;
         },
       });
-      // 3) KHÔNG THẤT BẠI ÂM THẦM: dưới sàn an toàn thì ném lỗi để pipeline chạy lại bước này
-      //    (giống bước mvuzod), thay vì log "✅ Hoàn thành" trong khi lorebook rỗng hoác.
-      const floor = Math.max(1, Math.floor(minEntries * 0.6));
-      if (createdCount < floor) {
-        throw new Error(`Lorebook chỉ tạo được ${createdCount}/${totalEntries} entry (sàn ${floor}) — nhiều entry bị loại trùng hoặc AI trả thiếu. Đang thử lại...`);
+      // 3) KHÔNG THẤT BẠI ÂM THẦM: lorebook TRẮNG TRƠN thì ném lỗi để pipeline chạy lại bước này
+      //    (giống bước mvuzod), thay vì log "✅ Hoàn thành" trong khi không có entry nào.
+      //    (User 2026) Ngưỡng cũ là 60% của sàn 80% — tạo được 700/1000 entry vẫn bị coi là hỏng
+      //    rồi chạy lại cả bước từ đầu. Nay chỉ ca thật sự trắng tay mới tính là hỏng.
+      if (createdCount === 0) {
+        throw new Error(`Lorebook không tạo được entry nào (mục tiêu ${totalEntries}) — AI trả rỗng hoặc mọi entry đều bị loại trùng. Đang thử lại...`);
       }
       store.setStepResult(step, `Đã tạo ${createdCount}/${totalEntries} entries.`);
       break;

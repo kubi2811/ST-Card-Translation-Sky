@@ -21,7 +21,7 @@ BỔ SUNG (add_entry):
 - Mỗi entry mới chứa DUY NHẤT 1 chủ đề rõ ràng
 - Content phải TỰ CHỨA ĐẦY ĐỦ — TUYỆT ĐỐI KHÔNG viết "xem entry X", "tham khảo Y", "giống Z"
 - Viết dạng database/danh sách — KHÔNG viết như tiểu thuyết hay văn xuôi
-- Mỗi entry phải có ít nhất ${Math.round(config.maxTokensPerEntry * 0.6)} tokens nội dung thực sự hữu ích
+- Cỡ tham chiếu ~${config.maxTokensPerEntry} tokens/entry — là ĐỘ CHI TIẾT mong muốn, không phải hạn ngạch phải lấp
 - KHÔNG nhồi nhét nhiều chủ đề vào 1 entry cho đủ token
 - KHÔNG viết sơ sài lan man — mỗi câu phải chứa thông tin cụ thể, có giá trị`);
   }
@@ -68,7 +68,7 @@ ${modeParts.join('\n')}
 3. THÔNG TIN CỤ THỂ: Số liệu, tên riêng, mô tả chi tiết — không dùng từ chung chung
 4. Thay "là một", "tồn tại" bằng dấu hai chấm và liệt kê
 5. Tiêu chuẩn: "xóa câu này đi AI có diễn sai không?" Không thì xóa
-6. Token target: ${config.maxTokensPerEntry} tokens/entry — phải có ít nhất ${Math.round(config.maxTokensPerEntry * 0.6)} tokens nội dung thực sự
+6. Cỡ tham chiếu: ~${config.maxTokensPerEntry} tokens/entry — KHÔNG có sàn, đừng viết chạm mốc rồi dừng: còn ý đáng viết thì viết tiếp, hết ý thì dừng
 
 ═══ QUY TẮC KEYWORDS ═══
 • Ngăn cách bằng dấu phẩy tiếng Anh (,), KHÔNG khoảng trắng sau phẩy

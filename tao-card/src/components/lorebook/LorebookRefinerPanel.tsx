@@ -388,7 +388,7 @@ export function LorebookRefinerPanel() {
             onChange={e => updateConfig('maxTokensPerEntry', Math.max(100, Math.min(10000, parseInt(e.target.value) || 500)))}
             className="settings-input" min={100} max={10000} step={50} disabled={isRunning}
           />
-          <p className="text-[10px] text-muted-foreground mt-1">{fmt(ui.lrMinTokens, { n: Math.round(config.maxTokensPerEntry * 0.6) })}</p>
+          <p className="text-[10px] text-muted-foreground mt-1">{fmt(ui.lrMinTokens, { n: config.maxTokensPerEntry })}</p>
         </div>
         <div>
           <label className="settings-label">{ui.lrMaxEntries}</label>

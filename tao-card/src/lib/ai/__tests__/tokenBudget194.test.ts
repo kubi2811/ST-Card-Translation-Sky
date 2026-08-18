@@ -12,8 +12,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  countTokens, checkEntryBudget, planBatch, buildLengthDirective, buildExpandPrompt,
-  ENTRY_MIN_RATIO, VI_CHARS_PER_TOKEN,
+  countTokens, checkEntryBudget, planBatch, buildLengthDirective, VI_CHARS_PER_TOKEN,
 } from '../tokenBudget';
 
 const viText = (tokens: number) =>
@@ -40,32 +39,28 @@ describe('(bug 194) đếm token THẬT, không ước theo ký tự', () => {
   });
 });
 
-describe('(bug 194) sàn chấp nhận phải là 85%, không phải 60%', () => {
-  it('sàn cũ 60% chính là chỗ đẻ ra "một nửa"', () => {
-    expect(ENTRY_MIN_RATIO).toBeGreaterThanOrEqual(0.85);
+describe('(User 2026) BỎ SÀN — ngân sách chỉ để ĐO, không để phán đạt/không đạt', () => {
+  it('không lộ ra ngưỡng nào để chỗ khác đem đi loại entry', () => {
+    const c = checkEntryBudget(viText(180), 200);
+    expect(Object.keys(c).sort()).toEqual(['actual', 'ratio', 'target']);
   });
 
-  it('entry đạt ~90% ngân sách → nhận', () => {
-    const target = 200;
-    const c = checkEntryBudget(viText(180), target);
-    expect(c.ratio).toBeGreaterThan(0.8);
-    expect(c.ok).toBe(true);
-  });
-
-  it('entry chỉ ~50% ngân sách → KHÔNG nhận, nhưng còn cứu được bằng cách nới thêm', () => {
+  it('entry ngắn vẫn ĐO được, tỉ lệ phản ánh đúng thực tế', () => {
     const c = checkEntryBudget(viText(100), 200);
-    expect(c.ok).toBe(false);
-    expect(c.hopeless, 'còn tới một nửa thì nới là ra, đừng vứt đi sinh lại').toBe(false);
+    expect(c.actual).toBeGreaterThan(0);
+    expect(c.ratio).toBeLessThan(1);
   });
 
-  it('entry ngắn thảm hại (<45%) → coi như hỏng, sinh lại thay vì nới', () => {
-    expect(checkEntryBudget('Một câu ngắn.', 500).hopeless).toBe(true);
+  it('entry ngắn thảm hại cũng chỉ là một con số, không phải bản án', () => {
+    const c = checkEntryBudget('Một câu ngắn.', 500);
+    expect(c.ratio).toBeLessThan(0.45);
+    expect(c.target).toBe(500);
   });
 
-  it('không đặt ngân sách thì không chặn gì cả', () => {
+  it('không đặt ngân sách thì không có gì để so', () => {
     const c = checkEntryBudget('bất kỳ', 0);
-    expect(c.ok).toBe(true);
     expect(c.target).toBe(0);
+    expect(c.ratio).toBe(1);
   });
 });
 
@@ -113,12 +108,12 @@ describe('(bug 194) chỉ thị độ dài nói bằng ba cách, vì mô hình k
     expect(d).toContain('3000 token');
     expect(d).toContain(String(Math.round(3000 * VI_CHARS_PER_TOKEN)));
     expect(d).toMatch(/đoạn/);
-    expect(d).toMatch(/câu/);
   });
 
-  it('nêu SÀN CỨNG đúng bằng 85% để khớp với bộ kiểm', () => {
+  it('(User 2026) KHÔNG nêu sàn, KHÔNG doạ loại bài — nêu là mô hình viết chạm mốc rồi dừng', () => {
     const d = buildLengthDirective(1000);
-    expect(d).toContain(String(Math.round(1000 * VI_CHARS_PER_TOKEN * ENTRY_MIN_RATIO)));
+    expect(d, 'còn doạ sàn cứng').not.toMatch(/sàn|tối thiểu|ít nhất|không dưới/i);
+    expect(d, 'còn doạ loại bài vì ngắn').not.toMatch(/bị loại|viết lại/i);
   });
 
   it('không đặt ngân sách → không chèn chỉ thị nào', () => {
@@ -126,13 +121,3 @@ describe('(bug 194) chỉ thị độ dài nói bằng ba cách, vì mô hình k
   });
 });
 
-describe('(bug 194) nới thêm thay vì vứt đi sinh lại', () => {
-  it('lời nhắc mang theo nội dung cũ và nói rõ còn thiếu bao nhiêu', () => {
-    const p = buildExpandPrompt('Núi Meru', 'Trục trung tâm vũ trụ.', 500, 120);
-    expect(p).toContain('Núi Meru');
-    expect(p).toContain('Trục trung tâm vũ trụ.');
-    expect(p).toContain('380');
-    expect(p).toMatch(/GIỮ NGUYÊN/);
-    expect(p, 'nhồi chữ rỗng cho đủ số là phản tác dụng').toMatch(/không nhồi chữ rỗng/i);
-  });
-});

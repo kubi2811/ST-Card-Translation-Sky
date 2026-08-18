@@ -1125,7 +1125,7 @@ const t = {
   lrInstruction: 'Request / instructions for the AI',
   lrInstructionPh: 'e.g. check whether entries contradict each other, add more NPCs for the Black Dragon Pond area, rewrite the thin entries...',
   lrOperationMode: 'Operation mode',
-  lrMinTokens: 'Each entry will be at least {n} tokens',
+  lrMinTokens: 'Each entry around {n} tokens (a guide, not a floor)',
   lrMaxEntries: 'Max entries to process (0 = all)',
   lrEntriesPerBatch: 'Entries / batch',
   lrConcurrent: 'Parallel batches',

@@ -643,7 +643,7 @@ const ui = {
   tcCssCjk: 'CSS CJK Protection',
   tcCssPreserve: '🔒 Preserve',
   tcCssTranslate: '📝 Translate',
-  tcCssCjkDesc: 'How to handle lone CJK chars inside CSS values (e.g. drop-shadow(商 10px ...)). "Preserve" = hide from AI to keep as-is, "Translate" = let AI translate them and replace spaces with underscores for JS Object Keys.',
+  tcCssCjkDesc: 'Also applies when CSS is embedded in Regex/Script fields. “Preserve” locks CSS values; “Translate” translates text in CSS values only. CSS property names and regex syntax (e.g. /[·・]/) are always protected.',
   tcCacheTitle: 'Translation Cache',
   tcCacheResetConfirm: 'Are you sure you want to reset this card and delete its translation cache? This cannot be undone.',
   tcCacheResetOk: 'Translation cache cleared successfully',

@@ -67,8 +67,63 @@ interface ProtectedZone {
  * including already-corrupted non-ASCII property names, so that
  * `restoreCSSFromOriginal` can locate and fix them.
  */
-function extractCSSPropertyZones(text: string): ProtectedZone[] {
+function extractCSSPropertyZones(
+  text: string,
+  mode: 'preserve' | 'translate' = 'preserve',
+): ProtectedZone[] {
   const zones: ProtectedZone[] = [];
+
+  /**
+   * CSS có thể nằm trong chính field Regex/TavernHelper (replaceString thường chứa cả một
+   * trang HTML). Vì vậy không thể khóa cả field, cũng không thể coi nút "Dịch CSS" là nút
+   * cho phép dịch mọi CJK trong code. Ta chỉ tách declaration thật:
+   *   - tên property luôn là cú pháp máy đọc → luôn khóa;
+   *   - value chỉ khóa ở chế độ preserve; translate thì để Surgical lấy chữ hiển thị.
+   */
+  const addDeclarationZones = (css: string, base: number, allowStart: boolean) => {
+    // Trong <style>, declaration bắt đầu sau `{`/`;`. Trong style="...", declaration đầu
+    // tiên được phép bắt đầu ngay đầu chuỗi. Tên custom property `--中文` cũng là khóa máy.
+    const boundary = allowStart ? '(^|[;{])' : '([;{])';
+    const declRe = new RegExp(
+      `${boundary}\\s*((?:--)?[-_a-zA-Z\\u3400-\\u9fff][-_a-zA-Z0-9\\u3400-\\u9fff]*)\\s*:\\s*`,
+      'g',
+    );
+    let dm: RegExpExecArray | null;
+    while ((dm = declRe.exec(css)) !== null) {
+      const name = dm[2];
+      const nameAt = dm.index + dm[0].lastIndexOf(name);
+      zones.push({
+        start: base + nameAt,
+        end: base + nameAt + name.length,
+        reason: `css-property:${name}`,
+      });
+
+      if (mode !== 'preserve') continue;
+
+      // Tìm cuối value mà không cắt nhầm `;`/`}` nằm trong chuỗi hoặc dấu ngoặc hàm CSS.
+      const valueStart = declRe.lastIndex;
+      let i = valueStart;
+      let quote: "'" | '"' | null = null;
+      let escaped = false;
+      let parenDepth = 0;
+      for (; i < css.length; i++) {
+        const ch = css[i];
+        if (quote) {
+          if (escaped) { escaped = false; continue; }
+          if (ch === '\\') { escaped = true; continue; }
+          if (ch === quote) quote = null;
+          continue;
+        }
+        if (ch === "'" || ch === '"') { quote = ch; continue; }
+        if (ch === '(') { parenDepth++; continue; }
+        if (ch === ')' && parenDepth > 0) { parenDepth--; continue; }
+        if (parenDepth === 0 && (ch === ';' || ch === '}')) break;
+      }
+      if (i > valueStart) {
+        zones.push({ start: base + valueStart, end: base + i, reason: 'css-value-preserve' });
+      }
+    }
+  };
 
   // ── 1. <style> … </style> blocks ──────────────────────────────────────────
   const styleBlockRe = /<style[^>]*>([\s\S]*?)<\/style>/gi;
@@ -77,27 +132,17 @@ function extractCSSPropertyZones(text: string): ProtectedZone[] {
     const innerStart = sb.index + sb[0].indexOf(sb[1]);
     const inner      = sb[1];
 
-    // Match: optional-indent  PROPERTY-NAME  whitespace* : (not ::)
-    // Intentionally wide — catches already-translated non-ASCII names too.
-    const propRe = /^([ \t]*)([^\s{}:;/\n][^{}:;\n]*?)(\s*:(?!:))/gm;
-    let pm: RegExpExecArray | null;
-    while ((pm = propRe.exec(inner)) !== null) {
-      zones.push({
-        start:  innerStart + pm.index + pm[1].length,
-        end:    innerStart + pm.index + pm[1].length + pm[2].length,
-        reason: `css-property:${pm[2].trim()}`,
-      });
-    }
+    addDeclarationZones(inner, innerStart, false);
   }
 
   // ── 2. Inline style="…" attributes ────────────────────────────────────────
-  // Protect the entire value to avoid mangling property names inside.
+  // Không khóa cả attribute: ở mode=translate, phần value CJK phải được dịch như user chọn.
   const inlineRe = /\bstyle\s*=\s*(?:"([^"]*?)"|'([^']*?)')/gi;
   let im: RegExpExecArray | null;
   while ((im = inlineRe.exec(text)) !== null) {
     const val    = im[1] ?? im[2];
     const vStart = im.index + im[0].indexOf(val);
-    zones.push({ start: vStart, end: vStart + val.length, reason: 'inline-style' });
+    addDeclarationZones(val, vStart, true);
   }
 
   return zones;
@@ -623,8 +668,13 @@ export function extractCJKTokens(
   let match: RegExpExecArray | null;
   let id = 1;
   while ((match = regex.exec(text)) !== null) {
+    // U+30FB `・` và U+FF65 `･` nằm trong block Katakana nhưng là DẤU PHÂN CÁCH,
+    // không phải chữ cần dịch. Nếu đứng một mình trong regex class (`/[·・]/`) mà bị gửi
+    // cho AI, nó thường thành chữ "dấu chấm giữa" và regex vẫn compile nên guard cú pháp
+    // không thể nhận ra. Chỉ coi run là ngôn ngữ khi bỏ các dấu kana phụ mà vẫn còn chữ.
+    const semanticRun = match[0].replace(/[\u3000-\u303f\u30a0\u30fb\u30fc\uff61-\uff65]/g, '');
     const hasIdeograph =
-      /[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff\uac00-\ud7af]/.test(match[0]);
+      /[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff\uac00-\ud7af]/.test(semanticRun);
     if (!hasIdeograph) continue;
 
     const mStart = match.index;
@@ -1859,7 +1909,7 @@ export async function surgicalTranslate(
   };
 
   // ── Step 1: Extract CSS + URL protected zones, then CJK tokens ─────────────
-  const cssZones = extractCSSPropertyZones(text);
+  const cssZones = extractCSSPropertyZones(text, cssCjkHandling);
   const urlZones = extractURLZones(text);
   const allProtectedZones = [...cssZones, ...urlZones];
   const tokens   = extractCJKTokens(text, allProtectedZones, cssCjkHandling, mvuDictionary);

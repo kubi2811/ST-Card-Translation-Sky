@@ -36,6 +36,15 @@ describe('isInsideStringAtEnd — đếm đúng nháy lồng nhau', () => {
 });
 
 describe('extractCJKTokens — cv.CJK sau chuỗi có " → phải là dot-notation (đổi bracket)', () => {
+  it('không coi dấu Katakana ・ trong regex class là chữ để gửi AI dịch', () => {
+    const source = 'var parts=spec.split(/[·・]/);';
+    expect(extractCJKTokens(source)).toEqual([]);
+  });
+
+  it('vẫn dịch từ Katakana thật có dấu kéo dài ー', () => {
+    expect(extractCJKTokens("const label='スーパー';").map(t => t.text)).toContain('スーパー');
+  });
+
   it('BUG 34: token 已测能量 trong cv.已测能量 (sau `class="tag "`) được nhận là dot-notation', () => {
     const line = `h+='<span class="tag '+(cv.已测能量?'g':'')+'">'+(cv['已测能量']?'A':'B')+'</span>';`;
     const tokens = extractCJKTokens(line);
@@ -53,6 +62,38 @@ describe('extractCJKTokens — cv.CJK sau chuỗi có " → phải là dot-notat
     const translated = reinsertTranslations(source, tokens);
     expect(translated).toContain("obj['Trạng thái hiện tại']");
     expect(() => acorn.parse(translated, { ecmaVersion: 'latest' })).not.toThrow();
+  });
+});
+
+describe('Surgical — field Regex có nhúng CSS', () => {
+  const source = [
+    '<style>.box{content:"商品";filter:drop-shadow(商 10px)}</style>',
+    '<div style="content: 商品; filter: drop-shadow(商 10px)"></div>',
+    '<script>var parts=spec.split(/[·・]/);</script>',
+  ].join('');
+  const glossary = [
+    { source: '商品', target: 'Hàng hóa' },
+    { source: '商', target: 'Thương' },
+  ] as never;
+
+  it('Giữ nguyên: khóa value CSS nhưng vẫn giữ nguyên cú pháp regex', async () => {
+    const out = await surgicalTranslate(
+      source, {} as never, 'Vietnamese', undefined, glossary,
+      undefined, true, undefined, 'preserve',
+    );
+    expect(out.translated).toBe(source);
+  });
+
+  it('Dịch: dịch value CSS trong cả <style>/style="", không dịch dấu ・ của regex', async () => {
+    const out = await surgicalTranslate(
+      source, {} as never, 'Vietnamese', undefined, glossary,
+      undefined, true, undefined, 'translate',
+    );
+    expect(out.translated).toContain('content:"Hàng hóa"');
+    expect(out.translated).toContain('content: Hàng hóa;');
+    expect(out.translated).toContain('drop-shadow(Thương 10px)');
+    expect(out.translated).toContain('spec.split(/[·・]/)');
+    expect(out.translated).not.toContain('dấu chấm giữa');
   });
 });
 

@@ -22,7 +22,7 @@ import { findReusableTwin } from '../utils/translationReuse';
 import { getMvuCardSummary } from '../utils/mvuDetector';
 import { validateMvuVariables, autoFixMvuVariables, generateSyncReport, buildEntryNameDictionary, buildRegexTriggerDictionary, validateEntryNameSync } from '../utils/mvuValidator';
 import { buildEffectivePrompt } from '../utils/promptBuilder';
-import { applyRegexAlternation } from '../scriptTranslate/regexAlternation';
+import { applyRegexAlternation, restoreMachineRegexCharacterClasses } from '../scriptTranslate/regexAlternation';
 import { surgicalTranslate, verifyCodeStructureParity, detectInventedDeclarations } from '../utils/surgical';
 // (bug 237) Vỏ base64 dùng chung — nhánh phẫu thuật cũng phải đi qua, không riêng translateText.
 import { translateThroughBase64Shell } from '../utils/base64Payload';
@@ -142,6 +142,23 @@ function patchScriptRegexAfterTranslate(
   } catch {
     return code; // vá được thì tốt, không vá được thì tuyệt đối không làm hỏng bản dịch
   }
+}
+
+/**
+ * Chốt ngữ nghĩa cho regex character class chỉ gồm dấu phân cách máy đọc.
+ * Khác guard compile: `/[·dấu chấm giữa]/` vẫn hợp lệ nên chỉ đối chiếu với bản gốc mới bắt được.
+ */
+function restoreMachineRegexAfterTranslate(
+  original: string,
+  translated: string,
+  label: string,
+  addLog: (level: 'info' | 'warning' | 'active' | 'error' | 'success', msg: string) => void,
+): string {
+  const restored = restoreMachineRegexCharacterClasses(original, translated);
+  if (restored.restored > 0) {
+    addLog('warning', `🛡️ ${label}: đã khôi phục ${restored.restored} character class regex bị dịch nhầm dấu phân cách.`);
+  }
+  return restored.code;
 }
 
 
@@ -1126,6 +1143,11 @@ export function useTranslation() {
         }
       }
 
+      if (translated && (field.group === 'regex' || field.group === 'tavern_helper' ||
+          field.entryType === 'controller' || field.entryType === 'mvu_logic' || field.entryType === 'rules')) {
+        translated = restoreMachineRegexAfterTranslate(field.original, translated, field.label, store.addLog);
+      }
+
       // Post-process regex HTML: font swap + underscore display + lodash path fix
       const isRegexContent = field.group === 'regex' && (field.path.includes('replaceString') || field.path.includes('trimStrings'));
       if (isRegexContent && translated) {
@@ -2063,6 +2085,11 @@ export function useTranslation() {
               }
             }
           }
+
+        if (translated && (batchFields[j].group === 'regex' || batchFields[j].group === 'tavern_helper' ||
+            batchFields[j].entryType === 'controller' || batchFields[j].entryType === 'mvu_logic' || batchFields[j].entryType === 'rules')) {
+          translated = restoreMachineRegexAfterTranslate(batchFields[j].original, translated, batchFields[j].label, store.addLog);
+        }
 
         // Post-process regex HTML
         const isRegexField = batchFields[j].group === 'regex' && (batchFields[j].path.includes('replaceString') || batchFields[j].path.includes('trimStrings'));
@@ -3090,6 +3117,8 @@ export function useTranslation() {
               );
             }
 
+            regexTranslated = restoreMachineRegexAfterTranslate(rf.original, regexTranslated, rf.label, store.addLog);
+
             // ═══ Post-process regex HTML ═══
             const isRegexContent = rf.path.includes('replaceString') || rf.path.includes('trimStrings');
             if (isRegexContent && regexTranslated) {
@@ -3401,6 +3430,25 @@ export function useTranslation() {
       // Delay between requests
       if (i < fields.length && store.proxy.requestDelay > 0) {
         await new Promise((r) => setTimeout(r, store.proxy.requestDelay));
+      }
+    }
+
+    // Sweep độc lập MVU: dọn cả kết quả đi qua fallback/dịch thường. Regex sai kiểu
+    // `/[·dấu chấm giữa]/` vẫn compile nên phải đối chiếu nguyên bản ở đây.
+    {
+      let restoredClasses = 0;
+      const currentFields = useStore.getState().fields;
+      const repairedFields = currentFields.map((f) => {
+        if (f.status !== 'done' || !f.translated) return f;
+        const repaired = restoreMachineRegexCharacterClasses(f.original, f.translated);
+        if (repaired.restored === 0) return f;
+        restoredClasses += repaired.restored;
+        return { ...f, translated: repaired.code };
+      });
+      if (restoredClasses > 0) {
+        store.setFields(repairedFields);
+        store.saveTranslationCache();
+        store.addLog('warning', `🛡️ Regex: đã khôi phục ${restoredClasses} character class dấu phân cách bị dịch nhầm.`);
       }
     }
 
@@ -4473,15 +4521,23 @@ export function useTranslation() {
       baseCard = syncMvuVariables(baseCard, fixes.length > 0 ? fixedDict : currentDict, undefined);
     }
 
+    // Chốt thêm ngay lúc export để cả tiến trình dịch CŨ trong cache cũng được cứu mà không cần
+    // gọi AI lại. Không sửa store tại đây; chỉ sửa bản card đang dựng để tải xuống.
+    const exportFields = store.fields.map((f) => {
+      if (f.status !== 'done' || !f.translated) return f;
+      const repaired = restoreMachineRegexCharacterClasses(f.original, f.translated);
+      return repaired.restored > 0 ? { ...f, translated: repaired.code } : f;
+    });
+
     // Now overlay AI translations on the MVU-synced card
-    let exportCard = applyTranslationsToCard(baseCard, store.fields, store.translationConfig.exportKeyMode);
+    let exportCard = applyTranslationsToCard(baseCard, exportFields, store.translationConfig.exportKeyMode);
     
     // B3 FIX: Auto-add translated trigger keys for lorebook entries.
     // Ensures CJK trigger keys are supplemented with their translated equivalents
     // so lorebook entries activate correctly when the AI writes in the target language.
     exportCard = autoTranslateLorebookTriggerKeys(
       exportCard,
-      store.fields,
+      exportFields,
       store.translationConfig.enableMvuSync ? store.translationConfig.mvuDictionary : undefined
     );
 
@@ -5023,6 +5079,11 @@ export function useTranslation() {
         }
       }
 
+      if (result && (field.group === 'regex' || field.group === 'tavern_helper' ||
+          field.entryType === 'controller' || field.entryType === 'mvu_logic' || field.entryType === 'rules')) {
+        result = restoreMachineRegexAfterTranslate(inputContent, result, field.label, store.addLog);
+      }
+
       // Post-process regex HTML
       if (isRegexContent && result) {
         result = postProcessRegexHtml(result);
@@ -5450,6 +5511,11 @@ export function useTranslation() {
           } else {
             store.addLog('warning', `🩹 Patch parse failed — treating as full output for ${field.label}`);
           }
+        }
+
+        if (result && (field.group === 'regex' || field.group === 'tavern_helper' ||
+            field.entryType === 'controller' || field.entryType === 'mvu_logic' || field.entryType === 'rules')) {
+          result = restoreMachineRegexAfterTranslate(inputContent, result, field.label, store.addLog);
         }
 
         // Post-process regex HTML

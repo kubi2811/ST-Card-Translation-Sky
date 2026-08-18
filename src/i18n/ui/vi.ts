@@ -654,7 +654,7 @@ const ui: UiKeys = {
   tcCssCjk: 'CSS CJK Protection',
   tcCssPreserve: '🔒 Giữ nguyên',
   tcCssTranslate: '📝 Dịch',
-  tcCssCjkDesc: 'Xử lý chữ Hán lẻ nằm trong giá trị CSS (vd drop-shadow(商 10px …)). “Giữ nguyên” = giấu khỏi AI để y nguyên; “Dịch” = cho AI dịch rồi đổi khoảng trắng thành gạch dưới cho khớp khoá Object trong JS.',
+  tcCssCjkDesc: 'Áp dụng cả khi CSS nằm trong field Regex/Script. “Giữ nguyên” = khóa giá trị CSS; “Dịch” = chỉ dịch chữ trong giá trị CSS. Tên thuộc tính CSS và cú pháp regex (vd /[·・]/) luôn được bảo vệ.',
   tcCacheTitle: 'Bộ nhớ đệm bản dịch',
   tcCacheResetConfirm: 'Đặt lại thẻ này và xoá bộ nhớ đệm bản dịch của nó? Thao tác này KHÔNG hoàn tác được.',
   tcCacheResetOk: 'Đã xoá bộ nhớ đệm bản dịch',

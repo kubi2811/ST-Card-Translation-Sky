@@ -7,6 +7,7 @@ import {
   alternateRegexBody,
   applyRegexAlternation,
   escapeForRegex,
+  restoreMachineRegexCharacterClasses,
 } from '../regexAlternation';
 
 const DICT = { 秋青子: 'Thu Thanh Tử', 明月: 'Minh Nguyệt' };
@@ -103,5 +104,38 @@ describe('escapeForRegex', () => {
   it('escape đủ bộ ký tự đặc biệt', () => {
     expect(escapeForRegex('a.b*c?')).toBe('a\\.b\\*c\\?');
     expect(() => new RegExp(escapeForRegex('($^|[]{}\\/)'))).not.toThrow();
+  });
+});
+
+describe('restoreMachineRegexCharacterClasses — dấu phân cách không được dịch thành chữ', () => {
+  it('khôi phục đúng ca /[·・]/ → /[·dấu chấm giữa]/', () => {
+    const original = 'var parts=spec.split(/[·・]/);';
+    const broken = 'var parts=spec.split(/[·dấu chấm giữa]/);';
+    const r = restoreMachineRegexCharacterClasses(original, broken);
+    expect(r.code).toBe(original);
+    expect(r.restored).toBe(1);
+  });
+
+  it('không đoán class có chữ thật', () => {
+    const original = 'const r=/[男・女]/;';
+    const translated = 'const r=/[Nam・Nữ]/;';
+    expect(restoreMachineRegexCharacterClasses(original, translated))
+      .toEqual({ code: translated, restored: 0 });
+  });
+
+  it('nhiều literal được ghép phải-sang-trái mà không lệch offset', () => {
+    const original = 'const a=/[·・]/; const b=/x/; const c=/[・]/g;';
+    const broken = 'const a=/[·dấu chấm giữa]/; const b=/xin chào/; const c=/[dấu giữa]/g;';
+    const r = restoreMachineRegexCharacterClasses(original, broken);
+    expect(r.code).toBe('const a=/[·・]/; const b=/xin chào/; const c=/[・]/g;');
+    expect(r.restored).toBe(2);
+  });
+
+  it('khôi phục được regex nằm trong field replaceString có cả HTML/CSS', () => {
+    const original = '<style>.x{content:"商品"}</style><script>var parts=spec.split(/[·・]/);</script>';
+    const broken = '<style>.x{content:"Hàng hóa"}</style><script>var parts=spec.split(/[·dấu chấm giữa]/);</script>';
+    const r = restoreMachineRegexCharacterClasses(original, broken);
+    expect(r.code).toBe('<style>.x{content:"Hàng hóa"}</style><script>var parts=spec.split(/[·・]/);</script>');
+    expect(r.restored).toBe(1);
   });
 });

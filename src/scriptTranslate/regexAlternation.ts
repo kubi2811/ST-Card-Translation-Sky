@@ -15,33 +15,57 @@ export interface CjkRegexLiteral {
   flags: string;
 }
 
+interface RegexLiteral extends CjkRegexLiteral {}
+
 /** Khoảng CJK liên tục (Hán + kana + Hangul) — đơn vị để tra từ điển & thêm nhánh. */
 const CJK_RUN = /[一-鿿㐀-䶿぀-ヿ가-힯]+/g;
+
+/** Tách mọi regex literal bằng tokenizer thật; không nhầm dấu chia `/`. */
+function findRegexLiterals(code: string): RegexLiteral[] {
+  const tokenize = (segment: string, base = 0): RegexLiteral[] | null => {
+    const found: RegexLiteral[] = [];
+    try {
+      const t = acorn.tokenizer(segment, { ecmaVersion: 'latest', sourceType: 'module' });
+      for (;;) {
+        const tok = t.getToken();
+        if (tok.type.label === 'eof') break;
+        if (tok.type.label !== 'regexp') continue;
+        const v = (tok as unknown as { value?: { pattern: string; flags: string } }).value;
+        if (v) found.push({ start: base + tok.start, end: base + tok.end, body: v.pattern, flags: v.flags });
+      }
+      return found;
+    } catch {
+      return null;
+    }
+  };
+
+  // Script/TavernHelper trần: đường nhanh và chính xác nhất.
+  const direct = tokenize(code);
+  if (direct) return direct;
+
+  // Field Regex thường là replaceString chứa nguyên HTML + CSS + JS. Acorn không thể tokenize
+  // dấu `<` đầu HTML, nhưng các thân <script> vẫn là JS thật và phải được bảo vệ/khôi phục.
+  const out: RegexLiteral[] = [];
+  const scriptRe = /<script\b[^>]*>([\s\S]*?)<\/script>/gi;
+  let sm: RegExpExecArray | null;
+  while ((sm = scriptRe.exec(code)) !== null) {
+    const bodyAt = sm.index + sm[0].indexOf('>') + 1;
+    const literals = tokenize(sm[1], bodyAt);
+    if (literals) out.push(...literals);
+  }
+  return out;
+}
 
 /**
  * Tìm mọi regex LITERAL chứa CJK bằng tokenizer acorn (phân biệt được `/` chia và `/` regex).
  * Parse lỗi → trả [] (bỏ qua pass này thay vì đoán mò bằng regex-trên-regex).
  */
 export function findCjkRegexLiterals(code: string): CjkRegexLiteral[] {
-  const out: CjkRegexLiteral[] = [];
-  try {
-    const t = acorn.tokenizer(code, { ecmaVersion: 'latest', sourceType: 'module' });
-    for (;;) {
-      const tok = t.getToken();
-      if (tok.type.label === 'eof') break;
-      if (tok.type.label === 'regexp') {
-        const v = (tok as unknown as { value?: { pattern: string; flags: string } }).value;
-        if (v && CJK_RUN.test(v.pattern)) {
-          CJK_RUN.lastIndex = 0;
-          out.push({ start: tok.start, end: tok.end, body: v.pattern, flags: v.flags });
-        }
-        CJK_RUN.lastIndex = 0;
-      }
-    }
-  } catch {
-    return [];
-  }
-  return out;
+  return findRegexLiterals(code).filter((lit) => {
+    const found = CJK_RUN.test(lit.body);
+    CJK_RUN.lastIndex = 0;
+    return found;
+  });
 }
 
 /** Escape chuỗi thường để nhét an toàn vào thân regex. */
@@ -65,6 +89,59 @@ export function charClassRanges(body: string): Array<[number, number]> {
   }
   if (inClass) ranges.push([classStart, body.length]);
   return ranges;
+}
+
+export interface RestoreMachineRegexResult {
+  code: string;
+  restored: number;
+}
+
+/**
+ * Khôi phục character class chỉ gồm dấu middle-dot từ bản gốc.
+ *
+ * `・` thuộc Unicode Katakana nên model có thể dịch nó thành cả cụm chữ:
+ *   `/[·・]/` -> `/[·dấu chấm giữa]/`
+ * Kết quả vẫn là regex hợp lệ nhưng nghĩa đã đổi. Chỉ khôi phục class mà bản gốc HOÀN TOÀN
+ * gồm `·・･` (có thể escape), vì đây là quyết định chắc chắn; class chứa chữ thật không đoán.
+ */
+export function restoreMachineRegexCharacterClasses(
+  original: string,
+  translated: string,
+): RestoreMachineRegexResult {
+  if (!original || !translated || original === translated) return { code: translated, restored: 0 };
+  const origLiterals = findRegexLiterals(original);
+  const transLiterals = findRegexLiterals(translated);
+  if (origLiterals.length === 0 || origLiterals.length !== transLiterals.length) {
+    return { code: translated, restored: 0 };
+  }
+
+  let out = translated;
+  let restored = 0;
+  for (let li = origLiterals.length - 1; li >= 0; li--) {
+    const orig = origLiterals[li];
+    const trans = transLiterals[li];
+    const origClasses = charClassRanges(orig.body);
+    const transClasses = charClassRanges(trans.body);
+    if (origClasses.length !== transClasses.length) continue;
+
+    let body = trans.body;
+    let changedHere = 0;
+    for (let ci = origClasses.length - 1; ci >= 0; ci--) {
+      const [os, oe] = origClasses[ci];
+      const [ts, te] = transClasses[ci];
+      const sourceClass = orig.body.slice(os, oe);
+      // Dạng chắc chắn: `[·・]`, `[・]`, `[\\・･]`... Không chạm `[男・女]`.
+      if (!/^\[(?:[·・･]|\\[·・･])+\]$/u.test(sourceClass)) continue;
+      if (body.slice(ts, te) === sourceClass) continue;
+      body = body.slice(0, ts) + sourceClass + body.slice(te);
+      changedHere++;
+    }
+    if (changedHere === 0) continue;
+    try { void new RegExp(body, trans.flags); } catch { continue; }
+    out = out.slice(0, trans.start) + `/${body}/${trans.flags}` + out.slice(trans.end);
+    restored += changedHere;
+  }
+  return { code: out, restored };
 }
 
 export interface AlternateBodyResult {

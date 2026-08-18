@@ -57,13 +57,16 @@ function ActionCard({ action, onApply, onSkip }: {
   };
 
   const info = labels[action.type] ?? { icon: '❓', label: action.type, color: 'text-muted-foreground' };
+  // (bug 236) Bỏ hết `as Record<string, unknown>`: union action nay khai payload riêng cho từng
+  // type, nên `action.type === '…'` tự thu hẹp ra đúng kiểu dữ liệu — đọc nhầm tên trường là tsc
+  // bắt ngay tại đây thay vì ra chuỗi "undefined" trên thẻ duyệt.
   // value có thể dài (AI viết 1-2 câu) — cắt để thẻ duyệt không tràn; nội dung đầy đủ vẫn được lưu.
-  const memVal = String((action.data as Record<string, unknown>).value ?? '');
-  const summary = action.type === 'save_memory' ? `[${(action.data as Record<string, unknown>).scope}] "${(action.data as Record<string, unknown>).key}": ${memVal.length > 120 ? memVal.slice(0, 120) + '…' : memVal}`
-    : action.type === 'create_entry' ? `"${(action.data as Record<string, unknown>).comment}"`
-    : action.type === 'update_entry' ? `ID: ${(action.data as Record<string, unknown>).id}`
-    : action.type === 'delete_entry' ? `"${(action.data as Record<string, unknown>).comment ?? `ID ${(action.data as Record<string, unknown>).id}`}"`
-    : action.type === 'update_field' ? (action.data as Record<string, unknown>).path as string
+  const clip = (v: string) => (v.length > 120 ? v.slice(0, 120) + '…' : v);
+  const summary = action.type === 'save_memory' ? `[${action.data.scope}] "${action.data.key}": ${clip(String(action.data.value ?? ''))}`
+    : action.type === 'create_entry' ? `"${action.data.comment}"`
+    : action.type === 'update_entry' ? `ID: ${action.data.id}`
+    : action.type === 'delete_entry' ? `"${action.data.comment ?? `ID ${action.data.id}`}"`
+    : action.type === 'update_field' ? action.data.path
     : '';
 
   const isDestructive = action.type.startsWith('delete');

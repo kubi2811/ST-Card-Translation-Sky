@@ -5,6 +5,7 @@
 
 import type { CharacterCardV3 } from '../../types';
 import type { WorldbuildingMode } from './copilotTypes';
+import { AI_ACTION_TYPES } from './copilotTypes';
 import { buildScriptContext } from '../jsAnalyzer/variableExtractor';
 import type { MVUZODSchema } from '../../types/mvuzod.types';
 import { buildToolsPrompt } from '../toolsEngine';
@@ -215,9 +216,8 @@ Mọi response PHẢI là JSON object hợp lệ (không markdown, không code b
     {"type":"create_entry","data":{"comment":"...","keys":[...],"content":"..."}}
   ]
 }
-Action types: create_entry, update_entry, delete_entry, update_field,
-add_regex_script, update_regex_script, delete_regex_script,
-fetch_fandom_data, read_document, set_variable, continue_signal`;
+Action types (CHỈ dùng tên trong danh sách này, không tự nghĩ thêm):
+${AI_ACTION_TYPES.join(', ')}`;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MVUZOD BATCH ADDON

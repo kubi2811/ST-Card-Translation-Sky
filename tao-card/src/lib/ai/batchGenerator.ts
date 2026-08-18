@@ -751,8 +751,11 @@ function closeTruncatedObject(src: string): string | null {
   if (inStr) {
     const q = body.lastIndexOf('"');
     const head = body.slice(0, q + 1);
+    // Class ký tự viết bằng ESCAPE, không phải byte thô: bản cũ nhét thẳng U+0000 và U+001F vào
+    // file, nên ripgrep/grep coi cả batchGenerator.ts là NHỊ PHÂN và bỏ qua khi tìm kiếm — file AI
+    // lớn nhất dự án trở nên vô hình với mọi lượt grep.
     const tail = body.slice(q + 1)
-      .replace(/[ -]/g, (m) => (m === '\n' ? '\\n' : m === '\t' ? '\\t' : m === '\r' ? '\\r' : ''));
+      .replace(/[\u0000-\u001f]/g, (m) => (m === '\n' ? '\\n' : m === '\t' ? '\\t' : m === '\r' ? '\\r' : ''));
     body = head + tail + '"';
   } else {
     // 4. Không ở trong chuỗi: bỏ phần đuôi dở dang — dấu phẩy treo, khoá chưa có giá trị,

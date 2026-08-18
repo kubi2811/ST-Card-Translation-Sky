@@ -7,13 +7,10 @@ export type { TavernHelperExtension, TavernHelperScript } from './tavernHelper.t
 export type { ProxyProfile, ModelInfo, GenerationParams, WorldbuildingStep } from './settings.types';
 export { DEFAULT_GENERATION_PARAMS } from './settings.types';
 export type {
-  AIResponse, AIAction, AIGeneratedEntry, WorldbuildingMode, ChatMessage,
-  CreateEntryAction, UpdateEntryAction, DeleteEntryAction, UpdateFieldAction,
-  AddRegexAction, UpdateRegexAction, DeleteRegexAction,
-  FetchFandomAction, ReadDocumentAction, SetVariableAction,
-  CreateTavernScriptAction,
+  AIResponse, AIAction, AIActionType, AIActionPayloads, AIGeneratedEntry, AdvancedEntryHints,
+  WorldbuildingMode, ChatMessage, ChatAttachment,
 } from './aiAgent.types';
-export { WORLDBUILDING_MODE_LABELS, WORLDBUILDING_MODE_DESCRIPTIONS } from './aiAgent.types';
+export { AI_ACTION_TYPES, normalizeActionType, WORLDBUILDING_MODE_LABELS, WORLDBUILDING_MODE_DESCRIPTIONS } from './aiAgent.types';
 export type {
   MVUZODField, MVUZODConstraints, MVUZODSchema, JSONPatchOp, MVUZODPatchBlock,
   MVUZODConfig, PatchValidationResult, PatchValidationError,

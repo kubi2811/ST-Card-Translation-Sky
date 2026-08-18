@@ -5,13 +5,14 @@
 
 import type { ChatMessage, CharacterCardV3, ProxyProfile, GenerationParams, LorebookEntry, TavernHelperScript, AIGeneratedEntry } from '../../types';
 import type { AIAction, AIResponse, WorldbuildingMode, CopilotMessage } from './copilotTypes';
+import { normalizeActionType } from './copilotTypes';
 import { callAI } from './client';
 import { buildCopilotSystemPrompt } from './copilotPrompts';
 import { buildMemoryBlock, getSessionId } from './memoryContext';
 import { shouldSummarize, summarizeHistory, buildCompressedHistory, KEEP_RECENT } from './memorySummarizer';
 import { useMemoryStore } from '../../store/memoryStore';
 import { useCardStore } from '../../store/cardStore';
-import { parseAIResponseJSON } from './jsonExtract';
+import { parseAIResponseJSON, VALID_ACTION_TYPES } from './jsonExtract';
 import { materializeEntry, nextEntryId } from '../converters/cardDefaults';
 import { toolsEngine } from '../toolsEngine';
 import { sanitizeAiKeys } from '../worldbook/keyInput';
@@ -189,6 +190,17 @@ export async function runCopilotLoop(userMessage: string, ctx: CopilotContext): 
       ctx.showThought(response.thought);
     }
 
+    // (bug 236) Action lạ: nói thật MỘT lần, kèm danh sách tên hợp lệ để AI tự sửa được ngay lượt
+    // sau. Bản cũ để action lạ chạy tiếp rồi báo "applied successfully" — AI tin là xong, không
+    // thấy kết quả, hỏi lại, và vòng lặp không có lối ra.
+    if (response.droppedActionTypes?.length) {
+      messages.push({
+        role: 'user',
+        content: `[System: Không có action tên ${response.droppedActionTypes.map(t => `"${t}"`).join(', ')}. `
+          + `Danh sách hợp lệ: ${VALID_ACTION_TYPES.join(', ')}. Dùng đúng tên trong danh sách, hoặc trả lời thẳng bằng "message".]`,
+      });
+    }
+
     // Handle actions
     for (const action of response.actions) {
       if (ctx.stopped) break;
@@ -359,7 +371,10 @@ export function executeAction(
   updateField: (path: string, value: unknown) => void,
   safeMode: boolean = false
 ): void {
-  const action = rawAction as unknown as GenericAction;
+  // (bug 236) Tên cũ đã được quy chuẩn ngay ở cửa vào (jsonExtract), nhưng executeAction là hàm
+  // export nên vẫn tự phòng thân — có vậy switch bên dưới mới chỉ cần biết MỘT bộ tên.
+  const canonical = normalizeActionType((rawAction as { type: string }).type);
+  const action = { ...(rawAction as unknown as GenericAction), type: canonical ?? (rawAction as { type: string }).type };
   if (!card.data.character_book) {
     card.data.character_book = { name: card.data.name, entries: [] };
   }
@@ -425,7 +440,6 @@ export function executeAction(
       }
       break;
     }
-    case 'add_regex':
     case 'add_regex_script': {
       if (!card.data.extensions) {
         card.data.extensions = {} as unknown as CharacterCardV3['data']['extensions'];
@@ -442,11 +456,11 @@ export function executeAction(
       updateField('data.extensions.regex_scripts', card.data.extensions.regex_scripts);
       break;
     }
-    case 'update_regex':
     case 'update_regex_script': {
       const data = action.data;
-      const id = action.type === 'update_regex' ? action.id : data?.id;
-      const patch = action.type === 'update_regex' ? action.patch : data?.patch;
+      // Payload nay chỉ còn MỘT hình dạng ({type, data}) nên hết cảnh đọc id ở hai chỗ khác nhau.
+      const id = data?.id;
+      const patch = data?.patch;
       if (card.data.extensions?.regex_scripts && id) {
         card.data.extensions.regex_scripts = card.data.extensions.regex_scripts.map(s =>
           s.id === id ? { ...s, ...patch } : s
@@ -455,10 +469,9 @@ export function executeAction(
       }
       break;
     }
-    case 'delete_regex':
     case 'delete_regex_script': {
       const data = action.data;
-      const id = action.type === 'delete_regex' ? action.id : data?.id;
+      const id = data?.id;
       if (card.data.extensions?.regex_scripts && id) {
         card.data.extensions.regex_scripts = card.data.extensions.regex_scripts.filter(s => s.id !== id);
         updateField('data.extensions.regex_scripts', card.data.extensions.regex_scripts);

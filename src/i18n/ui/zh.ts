@@ -922,6 +922,7 @@ const ui: UiKeys = {
   msTranslationPh: '译文',
   msNoResults: '没有找到结果',
   msOriginalKeyPh: '原始键名',
+  msRemovedBadSchemaMappings: '已移除 {count} 个由字段顺序变化产生的错误映射。',
   msTranslatedPh: '译文',
 
   // ─── VerifyPanel ───

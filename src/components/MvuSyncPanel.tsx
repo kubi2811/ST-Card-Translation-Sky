@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useStore } from '../store';
 import { useIdleMemo } from '../hooks/useIdleMemo';
 import { useThrottledStore } from '../hooks/useThrottledStore';
@@ -16,7 +16,8 @@ import {
   aiResolveMvuConflicts,
   recanonicalizeMvuInCard,
   recanonicalizeMvuInFields,
-  enforceVariableCasing
+  enforceVariableCasing,
+  sanitizeAutomaticSchemaMappings,
 } from '../utils/mvuSync';
 import { isMvuCard, getMvuZodSummary } from '../utils/mvuDetector';
 import { getLockedBookName, setLockedBookName, enforceLorebookRefs } from '../utils/lorebookRefSync';
@@ -84,6 +85,41 @@ export default function MvuSyncPanel() {
   
   const ui = useUi();
   const { enableMvuSync, mvuDictionary } = translationConfig;
+
+  // Dọn rác schema đã sinh ở phiên/bản app cũ. Ưu tiên metadata `schema`; với cache rất cũ đã
+  // mất metadata, chỉ dọn CHU KỲ khép kín (B→V→B) — bằng chứng chắc chắn của field bị hoán vị.
+  // Mục user nhập tay (`manual`) không bao giờ bị xóa, kể cả khi cố ý dùng tên một ký tự.
+  useEffect(() => {
+    const autoSchema: Record<string, string> = {};
+    const belongsToClosedCycle = (start: string): boolean => {
+      const seen = new Set<string>();
+      let node = start;
+      while (mvuDictionary[node] && !seen.has(node)) {
+        seen.add(node);
+        node = mvuDictionary[node];
+      }
+      return node === start;
+    };
+    for (const [key, value] of Object.entries(mvuDictionary)) {
+      const confidence = mvuKeyMetadata[key]?.confidence;
+      if (confidence === 'schema' || (!confidence && belongsToClosedCycle(key))) {
+        autoSchema[key] = value;
+      }
+    }
+    const { removed } = sanitizeAutomaticSchemaMappings(autoSchema);
+    if (removed.length === 0) return;
+
+    pushDictionaryHistory(mvuDictionary);
+    const nextDict = { ...mvuDictionary };
+    const nextMetadata = { ...mvuKeyMetadata };
+    for (const key of removed) {
+      delete nextDict[key];
+      delete nextMetadata[key];
+    }
+    setMvuKeyMetadata(nextMetadata);
+    setTranslationConfig({ mvuDictionary: nextDict });
+    addToast('info', fmt(ui.msRemovedBadSchemaMappings, { count: removed.length }));
+  }, [mvuDictionary, mvuKeyMetadata, pushDictionaryHistory, setMvuKeyMetadata, setTranslationConfig, addToast, ui.msRemovedBadSchemaMappings]);
 
   if (!card) return null;
 

@@ -926,6 +926,7 @@ const ui = {
   msTranslationPh: 'Translation',
   msNoResults: 'No results found',
   msOriginalKeyPh: 'Original Key',
+  msRemovedBadSchemaMappings: 'Removed {count} false mappings caused by reordered schema fields.',
   msTranslatedPh: 'Translated',
 
   // ─── VerifyPanel ───

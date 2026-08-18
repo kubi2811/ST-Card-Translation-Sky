@@ -941,6 +941,7 @@ const ui: UiKeys = {
   msTranslationPh: 'Translation',
   msNoResults: 'No results found',
   msOriginalKeyPh: 'Original Key',
+  msRemovedBadSchemaMappings: 'Đã tự xóa {count} ánh xạ giả do schema đổi thứ tự field.',
   msTranslatedPh: 'Translated',
 
   // ─── VerifyPanel ───

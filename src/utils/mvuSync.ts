@@ -4200,6 +4200,57 @@ export function postProcessRegexHtml(html: string): string {
   return result;
 }
 
+export interface SanitizedSchemaMappings {
+  mapping: Record<string, string>;
+  removed: string[];
+}
+
+/**
+ * Loại ánh xạ giả do so sánh schema theo vị trí khi AI đổi thứ tự các field cùng kiểu.
+ *
+ * Bằng chứng thật: `B→V, V→B, A→M, M→A`. Đây không phải dịch ngôn ngữ mà là một hoán vị:
+ * target của dòng này lại là source của dòng kia. Tên generic Latin một ký tự cũng không bao
+ * giờ nên được tự dịch. Chỉ dùng guard này cho mapping TỰ SINH từ schema; mục manual không qua đây.
+ */
+export function sanitizeAutomaticSchemaMappings(
+  input: Record<string, string>,
+): SanitizedSchemaMappings {
+  const raw: Record<string, string> = {};
+  for (const [source, target] of Object.entries(input || {})) {
+    const s = String(source || '').trim();
+    const t = String(target || '').trim();
+    if (s && t && s !== t) raw[s] = t;
+  }
+
+  // Tìm mọi node nằm trong chu kỳ A→B→…→A, không chỉ chu kỳ hai phần tử.
+  const cycleKeys = new Set<string>();
+  for (const start of Object.keys(raw)) {
+    const path: string[] = [];
+    const at = new Map<string, number>();
+    let node: string | undefined = start;
+    while (node && raw[node] && !at.has(node)) {
+      at.set(node, path.length);
+      path.push(node);
+      node = raw[node];
+    }
+    if (node && at.has(node)) {
+      for (const key of path.slice(at.get(node)!)) cycleKeys.add(key);
+    }
+  }
+
+  const mapping: Record<string, string> = {};
+  const removed: string[] = [];
+  for (const [source, target] of Object.entries(raw)) {
+    const isSingleLatinGeneric = /^[A-Za-z_$]$/.test(source) || /^[A-Za-z_$]$/.test(target);
+    if (isSingleLatinGeneric || cycleKeys.has(source)) {
+      removed.push(source);
+      continue;
+    }
+    mapping[source] = target;
+  }
+  return { mapping, removed };
+}
+
 /**
  * Trích xuất ánh xạ (mapping) trực tiếp từ các Schema đã được dịch (TavernHelper).
  * Hàm này so sánh Zod Object trong mã nguồn gốc và mã nguồn đã dịch của TavernHelper
@@ -4343,7 +4394,7 @@ export function extractMappingFromTranslatedSchemas(
     }
   }
 
-  return mapping;
+  return sanitizeAutomaticSchemaMappings(mapping).mapping;
 }
 
 /**

@@ -388,13 +388,19 @@ function buildSectionContent(section: SectionAnalysis, bindings: string[]): stri
  * trị đơn thì in thẳng. Mảng rỗng hiện "Trống" — chứ không im lặng như trước.
  */
 function buildArrayBinding(af: FieldAnalysis): string {
-  const pathExpr = af.keyPath.map(k => `'${k.replace(/'/g, "\'")}'`).join(', ');
+  const pathExpr = af.keyPath.map(k => `'${k.replace(/'/g, "\\'")}'`).join(', ');
   const listId = `${af.elementId}-list`;
   // children của array mang path "_child" — đó là khai cấu trúc MỘT phần tử.
   const childFields = (af.field.children ?? []).filter(c => String(c.path || '').includes('/_child/'));
   const subValues = childFields.slice(0, 4)
-    .map(c => `' + (item['${c.label}'] == null ? '—' : item['${c.label}']) + '`)
+    // label chỉ để HIỂN THỊ; key dữ liệu luôn lấy từ path schema. Hai giá trị thường khác nhau
+    // (vd path=CurrentVP, label="VP hiện tại") — dùng label làm bảng đọc ra undefined.
+    .map(c => {
+      const key = varNameOf(c).replace(/'/g, "\\'");
+      return `' + (item['${key}'] == null ? '—' : item['${key}']) + '`;
+    })
     .join(' | ');
+  const titleKey = varNameOf(childFields[0] ?? { path: '', label: 'Tên' }).replace(/'/g, "\\'") || 'Tên';
 
   return `    // Array: ${af.field.label}
     (function() {
@@ -410,7 +416,7 @@ function buildArrayBinding(af: FieldAnalysis): string {
         arr.forEach(function(item, i) {
             if (item !== null && typeof item === 'object') {
                 html += '<li class="stcs-list-item interactive" data-array-index="' + i + '" data-array-path="${af.keyPath.join('/')}">'
-                     + '<span>' + (item['${childFields[0]?.label ?? 'Tên'}'] || ('#' + (i + 1))) + '</span>'
+                     + '<span>' + (item['${titleKey}'] || ('#' + (i + 1))) + '</span>'
                      + '<span style="font-size:var(--fs-sm);color:var(--text-secondary);font-weight:normal">${subValues}</span>'
                      + '</li>';
             } else {
@@ -432,7 +438,10 @@ function buildRecordBinding(rf: FieldAnalysis): string {
   if (childFields.length > 0) {
     const subValues = childFields
       .slice(0, 4) // max 4 sub-fields displayed
-      .map(c => `' + (entry['${c.label}'] || '—') + '`)
+      .map(c => {
+        const key = varNameOf(c).replace(/'/g, "\\'");
+        return `' + (entry['${key}'] == null ? '—' : entry['${key}']) + '`;
+      })
       .join(' | ');
     itemTemplate =
       `'<li class="stcs-list-item interactive" data-record-key="' + key + '" data-record-path="${rf.keyPath.join('/')}">' +` +
@@ -1059,7 +1068,9 @@ function compileRelationsForForm(schema: MVUZODSchema, analysis: SchemaAnalysis)
  */
 function buildRelationJS(relations: CompiledRelation[]): string {
   if (relations.length === 0) return '';
-  const runtime = relations.map(({ depPath: _d, ...r }) => r);
+  const runtime = relations.map(({ aId, aLabel, dId, dLabel, basis, lms }) => ({
+    aId, aLabel, dId, dLabel, basis, lms,
+  }));
   return `
     // ── (Goal 28/07) Cảnh báo mềm giữa chỉ số liên quan ──
     var STCS_RELATIONS = ${JSON.stringify(runtime)};

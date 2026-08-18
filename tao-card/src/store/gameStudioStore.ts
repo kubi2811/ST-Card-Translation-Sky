@@ -36,6 +36,8 @@ interface GameStudioState {
   regexDraft: DraftScript[];
   sampleOutput: string;
   validation: ValidationReport | null;
+  /** Schema/initvar context đã dùng để sinh regexDraft. Khác context hiện tại thì cấm Apply. */
+  draftContextKey: string | null;
   phase: StudioPhase;
   status: string | null;          // dòng trạng thái tạm ("AI đang nghĩ (lượt 2)…")
   abort: AbortController | null;
@@ -49,6 +51,7 @@ interface GameStudioState {
   setRegexDraft: (scripts: DraftScript[]) => void;
   setSampleOutput: (s: string) => void;
   setValidation: (r: ValidationReport | null) => void;
+  setDraftContextKey: (key: string | null) => void;
   setPhase: (p: StudioPhase) => void;
   setStatus: (s: string | null) => void;
   beginTurn: () => AbortController;  // arm AbortController mới, clear stopped
@@ -62,6 +65,7 @@ export const useGameStudioStore = create<GameStudioState>((set, get) => ({
   regexDraft: [],
   sampleOutput: '',
   validation: null,
+  draftContextKey: null,
   phase: 'idle',
   status: null,
   abort: null,
@@ -76,6 +80,7 @@ export const useGameStudioStore = create<GameStudioState>((set, get) => ({
   setRegexDraft: (scripts) => set({ regexDraft: scripts }),
   setSampleOutput: (sampleOutput) => set({ sampleOutput }),
   setValidation: (validation) => set({ validation }),
+  setDraftContextKey: (draftContextKey) => set({ draftContextKey }),
   setPhase: (phase) => set({ phase }),
   setStatus: (status) => set({ status }),
   beginTurn: () => {
@@ -89,5 +94,5 @@ export const useGameStudioStore = create<GameStudioState>((set, get) => ({
     set({ phase: 'idle', status: null });
   },
   resetSession: () =>
-    set({ messages: [], components: {}, regexDraft: [], sampleOutput: '', validation: null, phase: 'idle', status: null, abort: null, stopped: false }),
+    set({ messages: [], components: {}, regexDraft: [], sampleOutput: '', validation: null, draftContextKey: null, phase: 'idle', status: null, abort: null, stopped: false }),
 }));

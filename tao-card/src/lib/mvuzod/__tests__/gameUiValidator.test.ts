@@ -4,6 +4,8 @@ import {
   type DraftScript,
 } from '../gameUiValidator';
 import type { MVUZODSchema } from '../../../types/mvuzod.types';
+import { buildProgrammaticRegex } from '../programmaticRegexBuilder';
+import { normalizeMVUZODSchema } from '../normalizeSchema';
 
 function mk(o: Partial<DraftScript>): DraftScript {
   return {
@@ -136,10 +138,10 @@ describe('tên biến Unicode (Việt/Trung) — \\w cũ làm đứt tên', () =
     );
     expect(codes(r)).not.toContain('UNKNOWN_VAR');
   });
-  it("stat_data['Thế Giới.Chương'] lấy leaf 'Chương'", () => {
+  it("stat_data['Thế Giới.Chương'] phải khớp đúng full path", () => {
     const r = validateRegexDraft(
       [mk({ replaceString: "<div>${stat_data['Thế Giới.Chương']}</div>" })],
-      '<x>a</x>', ['Chương'],
+      '<x>a</x>', ['Thế Giới.Chương'],
     );
     expect(codes(r)).not.toContain('UNKNOWN_VAR');
   });
@@ -157,6 +159,23 @@ describe('NO_VAR_BOUND — widget không bind biến nào', () => {
     const longHardcoded = '<div class="stat">' + 'HP: 100 / MP: 50 / Vàng: 999 '.repeat(12) + '</div>';
     const r = validateRegexDraft([mk({ replaceString: longHardcoded })], '<x>a</x>', ['hp', 'mp']);
     expect(codes(r)).toContain('NO_VAR_BOUND');
+    expect(r.issues.find((i) => i.code === 'NO_VAR_BOUND')?.level).toBe('error');
+    expect(r.ok).toBe(false);
+  });
+
+  it("_.get(d, ['Player','HP']) được nhận là binding động", () => {
+    const html = `<div>${'x'.repeat(220)}</div><script>var hp=_.get(d, ['Player', 'HP'], 0);</script>`;
+    const r = validateRegexDraft([mk({ replaceString: html })], '<x>a</x>', ['Player.HP']);
+    expect(codes(r)).not.toContain('NO_VAR_BOUND');
+    expect(codes(r)).not.toContain('UNKNOWN_VAR');
+  });
+
+  it('đúng leaf nhưng SAI nhánh vẫn bị chặn', () => {
+    const r = validateRegexDraft(
+      [mk({ replaceString: "<div><script>_.get(d, ['Enemy', 'HP'], 0)</script></div>" })],
+      '<x>a</x>', ['Player.HP', 'HP'],
+    );
+    expect(codes(r)).toContain('UNKNOWN_VAR');
   });
 });
 
@@ -171,6 +190,25 @@ describe('case PASS hoàn chỉnh', () => {
   });
 });
 
+describe('Tạo nhanh — kết quả programmatic phải Apply được ngay', () => {
+  it('full_set qua kiểm với schema lồng nhau + record', () => {
+    const schema = normalizeMVUZODSchema({
+      version: '1.0',
+      fields: [{ path: '/Player', type: 'object', label: 'Người chơi', defaultValue: {}, constraints: {}, children: [
+        { path: '/Player/HP', type: 'number', label: 'Máu', defaultValue: 100, constraints: { min: 0, max: 100 } },
+        { path: '/Player/Relations', type: 'record', label: 'Quan hệ', defaultValue: {}, constraints: {}, children: [
+          { path: '/Player/Relations/_child/Affinity', type: 'number', label: 'Hảo cảm', defaultValue: 0, constraints: {} },
+        ] },
+      ] }],
+    });
+    const built = buildProgrammaticRegex({ schema, component: 'full_set' });
+    const sample = '<OpeningFormImpl/>\n<StatusPlaceHolderImpl/>\n<UpdateVariable><Analysis>none</Analysis><JSONPatch>[]</JSONPatch></UpdateVariable>';
+    const report = validateRegexDraft(built.scripts, sample, collectSchemaVarNames(schema));
+    expect(report.issues.filter((i) => i.level === 'error')).toEqual([]);
+    expect(report.ok).toBe(true);
+  });
+});
+
 describe('buildRenderableHtml + collectSchemaVarNames + reportToXml', () => {
   it('thế $1 bằng capture thật', () => {
     const html = buildRenderableHtml(mk({ findRegex: '/<x>([\\s\\S]*?)<\\/x>/s', replaceString: '<b>$1</b>' }), '<x>HELLO</x>');
@@ -179,11 +217,12 @@ describe('buildRenderableHtml + collectSchemaVarNames + reportToXml', () => {
   it('không match → null (không dựng preview được)', () => {
     expect(buildRenderableHtml(mk({ findRegex: '/<z>(.*?)<\\/z>/' }), '<x>a</x>')).toBeNull();
   });
-  it('collectSchemaVarNames gom label + leaf path', () => {
+  it('collectSchemaVarNames gom tên/path thật, không coi label hiển thị là key dữ liệu', () => {
     const schema = { fields: [{ path: '/stats/hp', label: 'Máu', children: [] }] } as unknown as MVUZODSchema;
     const names = collectSchemaVarNames(schema);
     expect(names).toContain('hp');
-    expect(names).toContain('Máu');
+    expect(names).toContain('stats.hp');
+    expect(names).not.toContain('Máu');
   });
   it('reportToXml bọc issue trong <validation_report>', () => {
     const xml = reportToXml(validateRegexDraft([mk({ findRegex: '/[bad/' })], '<x>a</x>'));

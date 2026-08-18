@@ -17,9 +17,13 @@ import { useCardStore } from '../../store/cardStore';
 import { useSettingsStore } from '../../store/settingsStore';
 import { useGameStudioStore } from '../../store/gameStudioStore';
 import { runGameUiTurn } from '../../lib/mvuzod/gameUiAgent';
-import { buildRenderableHtml } from '../../lib/mvuzod/gameUiValidator';
+import {
+  buildRenderableHtml, collectInitVarNames, collectSchemaVarNames, validateRegexDraft,
+} from '../../lib/mvuzod/gameUiValidator';
 import { buildProgrammaticRegex, isProgrammaticComponent, formatBytes } from '../../lib/mvuzod/programmaticRegexBuilder';
 import { DEFAULT_THEME_ID } from '../../lib/mvuzod/gameHtmlTemplates';
+import { OPENING_FORM_ANCHOR, STATUS_BAR_ANCHOR } from '../../lib/mvuzod/regexAnchors';
+import { toIframeHtml, withPreviewData } from '../../lib/ai/schemaPreviewData';
 
 interface Props { schema: MVUZODSchema | null; initVarConfig?: InitVarConfig | null; }
 
@@ -33,6 +37,7 @@ const QUICK_PROMPTS = [
 
 export function GameUiStudio({ schema, initVarConfig }: Props) {
   const updateCard = useCardStore((s) => s.updateCard);
+  const currentProjectId = useCardStore((s) => s.currentProjectId);
 
   // ─── store phiên (giữ khi đổi tab) ───
   const messages = useGameStudioStore((s) => s.messages);
@@ -40,6 +45,7 @@ export function GameUiStudio({ schema, initVarConfig }: Props) {
   const regexDraft = useGameStudioStore((s) => s.regexDraft);
   const sampleOutput = useGameStudioStore((s) => s.sampleOutput);
   const validation = useGameStudioStore((s) => s.validation);
+  const draftContextKey = useGameStudioStore((s) => s.draftContextKey);
   const phase = useGameStudioStore((s) => s.phase);
   const status = useGameStudioStore((s) => s.status);
 
@@ -50,6 +56,43 @@ export function GameUiStudio({ schema, initVarConfig }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const busy = phase === 'thinking' || phase === 'validating';
+
+  const allowedVarNames = useMemo(() => [...new Set([
+    ...collectSchemaVarNames(schema),
+    ...collectInitVarNames(initVarConfig),
+  ])], [schema, initVarConfig]);
+  const contextKey = useMemo(() => JSON.stringify({
+    project: currentProjectId,
+    schema,
+    initVars: collectInitVarNames(initVarConfig).sort(),
+  }), [currentProjectId, schema, initVarConfig]);
+  const previousContext = useRef({ project: currentProjectId, key: contextKey });
+
+  // Store sống qua chuyển tab/project. Không để UI của card/schema cũ được Apply nhầm sang
+  // context mới; khi schema đổi thì kiểm lại ngay và yêu cầu sinh/chỉnh lại bản nháp.
+  useEffect(() => {
+    const prev = previousContext.current;
+    if (prev.key === contextKey) return;
+    const store = useGameStudioStore.getState();
+    if (prev.project !== currentProjectId) {
+      store.resetSession();
+      store.appendMessage({
+        id: uuidv4(), role: 'system-note', tone: 'info',
+        content: 'ℹ️ Đã đổi thẻ — Game UI cũ được xoá để không lẫn biến sang thẻ mới.',
+      });
+    } else {
+      store.setValidation(store.regexDraft.length
+        ? validateRegexDraft(store.regexDraft, store.sampleOutput, allowedVarNames)
+        : null);
+      store.appendMessage({
+        id: uuidv4(), role: 'system-note', tone: 'info',
+        content: 'ℹ️ Schema/InitVar vừa thay đổi. Đã kiểm lại bản nháp; hãy Tạo nhanh hoặc nhắn AI cập nhật trước khi Apply.',
+      });
+    }
+    setManualPreview(null);
+    setApplied(false);
+    previousContext.current = { project: currentProjectId, key: contextKey };
+  }, [allowedVarNames, contextKey, currentProjectId]);
 
   // Auto-scroll chat xuống đáy khi có message mới / status đổi
   useEffect(() => {
@@ -66,10 +109,15 @@ export function GameUiStudio({ schema, initVarConfig }: Props) {
     const comps = Object.values(components);
     return comps.length ? comps[comps.length - 1].html : '';
   }, [regexDraft, sampleOutput, components, manualPreview]);
+  // Iframe của app không có TavernHelper/MVU thật. Bơm runtime giả + dữ liệu từ schema để
+  // preview vẽ được số liệu động thay vì đứng ở placeholder rồi khiến user tưởng card bị lỗi.
+  const iframePreviewHtml = useMemo(() => previewHtml
+    ? withPreviewData(toIframeHtml(previewHtml), schema, 'solo')
+    : '', [previewHtml, schema]);
 
   const validationOk = !!validation && validation.ok;
   const errorCount = validation ? validation.issues.filter((i) => i.level === 'error').length : 0;
-  const canApply = regexDraft.length > 0 && validationOk;
+  const canApply = regexDraft.length > 0 && validationOk && draftContextKey === contextKey;
 
   // ─── Gửi 1 lượt chat ───
   const send = useCallback(async (raw?: string) => {
@@ -90,12 +138,14 @@ export function GameUiStudio({ schema, initVarConfig }: Props) {
     const ac = store.beginTurn();
     try {
       await runGameUiTurn(text, { schema, initVarConfig, profile, params, signal: ac.signal });
+      // Chỉ mở khoá context sau khi agent thật sự chạy xong. API lỗi thì draft cũ vẫn bị chặn.
+      store.setDraftContextKey(contextKey);
     } catch (e) {
       if ((e as Error)?.name !== 'AbortError') {
         store.appendMessage({ id: uuidv4(), role: 'system-note', content: `❌ Lỗi: ${(e as Error)?.message || e}`, tone: 'error' });
       }
     }
-  }, [input, busy, schema]);
+  }, [input, busy, schema, initVarConfig, contextKey]);
 
   const stop = useCallback(() => useGameStudioStore.getState().stop(), []);
 
@@ -116,20 +166,41 @@ export function GameUiStudio({ schema, initVarConfig }: Props) {
     store.setRegexDraft(result.scripts);
     result.scripts.forEach((s, i) => store.upsertComponent(`quick_${i}`, s.scriptName || `Widget ${i + 1}`, s.replaceString));
     setManualPreview(result.previewHtml);
-    store.setValidation(null);
+    // Tạo nhanh cũng phải đi qua cùng chốt kiểm. Bản cũ set null nên nút Apply bị khoá vĩnh viễn.
+    const sample = [
+      OPENING_FORM_ANCHOR,
+      STATUS_BAR_ANCHOR,
+      '<UpdateVariable><Analysis>none</Analysis><JSONPatch>[]</JSONPatch></UpdateVariable>',
+    ].join('\n');
+    store.setSampleOutput(sample);
+    store.setValidation(validateRegexDraft(result.scripts, sample, allowedVarNames));
+    store.setDraftContextKey(contextKey);
     store.appendMessage({
       id: uuidv4(), role: 'system-note', tone: 'info',
       content: `⚡ Đã tạo nhanh ${result.scripts.length} script (${formatBytes(result.totalSize)}, ${result.fieldsRendered} biến) bằng template — $0, không tốn API. Nhắn AI để chỉnh tiếp cho đẹp/đúng ý.`,
     });
     setApplied(false);
     setTab('preview');
-  }, [schema]);
+  }, [schema, allowedVarNames, contextKey]);
 
   // ─── Apply regexDraft vào thẻ ───
   const apply = useCallback(() => {
     if (regexDraft.length === 0) return;
     const withIds: RegexScript[] = regexDraft.map((s) => ({ ...s, id: uuidv4() }));
-    updateCard((c) => { c.data.extensions.regex_scripts.push(...withIds); });
+    updateCard((c) => {
+      if (!c.data.extensions.regex_scripts) c.data.extensions.regex_scripts = [];
+      const existing = c.data.extensions.regex_scripts;
+      const roleOf = (s: Pick<RegexScript, 'promptOnly' | 'markdownOnly'>) =>
+        s.promptOnly && !s.markdownOnly ? 'hide' : 'render';
+      // Ghi đè theo (mỏ neo + vai trò). Chồng nhiều script cùng mỏ neo làm script đầu tiên
+      // ăn mất placeholder, script render mới không còn gì để match nên UI tưởng như đứng yên.
+      for (const incoming of withIds) {
+        const idx = existing.findIndex((s) =>
+          s.findRegex === incoming.findRegex && roleOf(s) === roleOf(incoming));
+        if (idx >= 0) existing[idx] = incoming;
+        else existing.push(incoming);
+      }
+    });
     setApplied(true);
     useGameStudioStore.getState().appendMessage({
       id: uuidv4(), role: 'system-note', tone: 'ok',
@@ -229,8 +300,8 @@ export function GameUiStudio({ schema, initVarConfig }: Props) {
         {/* Body */}
         <div className="flex-1 overflow-hidden">
           {tab === 'preview' && (
-            previewHtml
-              ? <iframe title="preview" srcDoc={previewHtml} sandbox="allow-scripts" className="w-full h-full bg-white" />
+            iframePreviewHtml
+              ? <iframe title="preview" srcDoc={iframePreviewHtml} sandbox="allow-scripts" className="w-full h-full bg-white" />
               : <Placeholder text="Chưa có gì để xem. Nhắn AI tạo UI, hoặc bấm ⚡ Tạo nhanh." />
           )}
 
@@ -265,7 +336,15 @@ export function GameUiStudio({ schema, initVarConfig }: Props) {
               <div className="text-[11px] text-muted-foreground">Đoạn văn AI mẫu — regex phải match được đoạn này. Sửa tay được (AI cũng tự cập nhật).</div>
               <textarea
                 value={sampleOutput}
-                onChange={(e) => useGameStudioStore.getState().setSampleOutput(e.target.value)}
+                onChange={(e) => {
+                  const store = useGameStudioStore.getState();
+                  const next = e.target.value;
+                  store.setSampleOutput(next);
+                  store.setValidation(store.regexDraft.length
+                    ? validateRegexDraft(store.regexDraft, next, allowedVarNames)
+                    : null);
+                  setApplied(false);
+                }}
                 placeholder="Vd: <status>\nHP: 80/100\nLevel: 5\n</status>"
                 className="flex-1 resize-none rounded-lg border border-border bg-background p-2.5 text-xs font-mono scrollbar-thin focus:outline-none focus:ring-1 focus:ring-primary"
               />
@@ -280,8 +359,8 @@ export function GameUiStudio({ schema, initVarConfig }: Props) {
             <Zap className="w-3.5 h-3.5 text-amber-500" /> Tạo nhanh (không AI)
           </button>
           <div className="ml-auto" />
-          <button onClick={apply} disabled={!canApply}
-            title={canApply ? 'Thêm vào card.data.extensions.regex_scripts' : 'Cần regex đã qua kiểm (Đạt) mới apply'}
+          <button onClick={apply} disabled={!canApply || applied}
+            title={canApply ? 'Thêm vào card.data.extensions.regex_scripts' : 'Cần regex đúng schema hiện tại và đã qua kiểm (Đạt) mới Apply'}
             className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground font-medium disabled:opacity-40">
             {applied ? <><Check className="w-4 h-4" /> Đã thêm</> : <>Apply vào thẻ</>}
           </button>

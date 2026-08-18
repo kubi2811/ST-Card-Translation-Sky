@@ -17,43 +17,15 @@ import { useCardStore } from '../../store/cardStore';
 import { useSettingsStore } from '../../store/settingsStore';
 import { callAI } from '../../lib/ai/client';
 import { MVUZOD_VARLIST_PROMPT, MVUZOD_SIMPLE_UPDATE_RULES_PROMPT } from '../../prompts/modeMVUZOD';
+import { generateUpdateRulesEntry as buildCanonicalUpdateRules } from '../../lib/mvuzod/scriptGenerator';
+import { VARLIST_TEMPLATES } from '../../lib/mvuzod/varListTemplates';
+import { injectMvuSystemEntry } from '../../lib/mvuzod/injectSystemEntry';
 import { copyWithToast } from '../../lib/copyToClipboard';   // (bug 224) copy chạy được cả trong iframe của Hub
 
 // ─── Template Presets ────────────────────────────────────────────────────
+// Khuôn in biến nằm ở lib/mvuzod/varListTemplates.ts để có chỗ kiểm bằng test.
 
-const TEMPLATE_PRESETS = [
-  {
-    id: 'ejs-getvar',
-    label: 'EJS getvar() — Chuẩn',
-    description: 'Dùng getvar() để đọc biến, gửi dưới dạng text cho AI',
-    displayTemplate: (field: MVUZODField) =>
-      `<%= getvar('${field.path.replace(/\//g, '.')}') %>`,
-    injectionTemplate: (field: MVUZODField) =>
-      `${field.label}: <%= getvar('${field.path.replace(/\//g, '.')}') %>`,
-  },
-  {
-    id: 'ejs-mvu',
-    label: 'EJS getMvuData() — MVU Native',
-    description: 'Dùng Mvu.getMvuData() trực tiếp, cần MVU ZOD framework',
-    displayTemplate: (field: MVUZODField) => {
-      const parts = field.path.split('/').filter(Boolean);
-      return `<%= Mvu.getMvuData({type:'message',message_id:'latest'}).stat_data${parts.map(p => `['${p}']`).join('')} %>`;
-    },
-    injectionTemplate: (field: MVUZODField) => {
-      const parts = field.path.split('/').filter(Boolean);
-      return `${field.label}: <%= Mvu.getMvuData({type:'message',message_id:'latest'}).stat_data${parts.map(p => `['${p}']`).join('')} %>`;
-    },
-  },
-  {
-    id: 'macro',
-    label: 'SillyTavern Macro',
-    description: 'Dùng macro {{format_message_variable::X}} tiêu chuẩn',
-    displayTemplate: (field: MVUZODField) =>
-      `{{format_message_variable::${field.path.split('/').filter(Boolean).join('.')}}}`,
-    injectionTemplate: (field: MVUZODField) =>
-      `${field.label}: {{format_message_variable::${field.path.split('/').filter(Boolean).join('.')}}}`,
-  },
-];
+const TEMPLATE_PRESETS = VARLIST_TEMPLATES;
 
 // ─── Entry Generator Functions ──────────────────────────────────────────
 
@@ -85,75 +57,45 @@ function generateVariableListEntry(
   processFields(schema.fields);
 
   return {
-    comment: `[VariableList] Biến số - ${charName}`,
+    // Tên chuẩn DUY NHẤT của entry này (worldbookGenerator.ts). Trước đây tab đặt
+    // "[VariableList] Biến số - <tên>" còn tab Update đặt "Danh sách biến" ⇒ thẻ mọc hai entry
+    // danh sách biến sống song song, AI đọc phải bản cũ.
+    comment: 'Danh sách biến',
     content: lines.join('\n'),
     keys: [charName, 'biến số', 'variable', 'trạng thái'],
-    position: 'before_char',
-    order: 900,
+    position: 'at_depth_system',
+    order: 200,
     constant: true,
     description: 'Auto-generated variable display entry. Hiển thị giá trị biến hiện tại cho AI đọc.',
   };
 }
 
-function generateUpdateRulesEntry(
-  schema: MVUZODSchema,
-  charName: string,
-): GeneratedVariableEntry {
-  const paths = flattenPaths(schema.fields).filter(f => !f.constraints?.readOnly && !f.constraints?.hidden);
-  const samplePaths = paths.slice(0, 3);
-
-  const content = `[Quy tắc cập nhật biến số]
-Khi viết phản hồi, nếu có bất kỳ thay đổi nào về trạng thái game, HÃY cập nhật biến bằng khối <UpdateVariable>.
-
-Các biến có thể cập nhật:
-${paths.map(f => `- ${f.path}: ${f.label} (${f.type}${f.constraints?.min !== undefined ? `, min: ${f.constraints?.min}` : ''}${f.constraints?.max !== undefined ? `, max: ${f.constraints?.max}` : ''})`).join('\n')}
-
-Quy tắc:
-1. Chỉ cập nhật biến đã thay đổi thực sự
-2. Dùng "delta" cho thay đổi tương đối (cộng/trừ), "replace" cho thay đổi tuyệt đối
-3. KHÔNG tự ý thêm biến mới ngoài danh sách trên
-4. Đặt khối <UpdateVariable> ở CUỐI phản hồi
-
-Ví dụ:
-<UpdateVariable>
-[
-  ${samplePaths.map((f, i) => {
-    if (f.type === 'number') return `{"op":"delta","path":"${f.path}","value":${i === 0 ? 10 : -5}}`;
-    if (f.type === 'string') return `{"op":"replace","path":"${f.path}","value":"giá trị mới"}`;
-    return `{"op":"replace","path":"${f.path}","value":${JSON.stringify(f.defaultValue)}}`;
-  }).join(',\n  ')}
-]
-</UpdateVariable>`;
-
+/**
+ * (việc 87) BẢN CŨ Ở ĐÂY LÀ THỨ LÀM CHẾT THẺ: nó nhét mảng JSON ĐỂ TRẦN vào <UpdateVariable>,
+ * thiếu cả <Analysis> lẫn <JSONPatch>. Engine MVU chỉ bóc lệnh bên trong <JSONPatch> nên vào
+ * game là "变量更新失败"; chạy qua validateMvuCard của chính tool cũng ra error
+ * `update-block-invalid`. Ngoài ra nó chỉ liệt kê biến chứ không cho biến nào một luật `check`.
+ *
+ * Nay dùng đúng bộ sinh mà Auto Creator/Export Wizard dùng: phủ hết mọi lá, có type/range/check,
+ * và KHÔNG tự chế khối <UpdateVariable> — khối đó là việc của entry "Định dạng đầu ra biến"
+ * (tab Update), để cả thẻ chỉ có MỘT nơi định nghĩa hợp đồng với engine.
+ */
+function generateUpdateRulesEntry(schema: MVUZODSchema): GeneratedVariableEntry {
   return {
-    comment: `[mvu_update] Quy tắc cập nhật biến - ${charName}`,
-    content,
-    keys: ['UpdateVariable', 'cập nhật biến'],
-    position: 'at_depth_system',
-    order: 850,
+    comment: '[mvu_update] Quy tắc cập nhật biến',
+    content: buildCanonicalUpdateRules(schema),
+    keys: [],
+    position: 'before_char',
+    order: 100,
     constant: true,
     description: 'Hướng dẫn AI cách cập nhật biến game qua JSON Patch.',
   };
-}
-
-function flattenPaths(fields: MVUZODField[]): MVUZODField[] {
-  const result: MVUZODField[] = [];
-  for (const field of fields) {
-    if (field.children?.length) {
-      result.push(...flattenPaths(field.children));
-    } else {
-      result.push(field);
-    }
-  }
-  return result;
 }
 
 // ─── Main Component ─────────────────────────────────────────────────────
 
 export function VariableListGenerator({ schema }: { schema: MVUZODSchema | null }) {
   const card = useCardStore(s => s.card);
-  const addEntry = useCardStore(s => s.addEntry);
-  const getNextEntryId = useCardStore(s => s.getNextEntryId);
 
   const [selectedPreset, setSelectedPreset] = useState('ejs-getvar');
   const [showSettings, setShowSettings] = useState(false);
@@ -219,7 +161,7 @@ export function VariableListGenerator({ schema }: { schema: MVUZODSchema | null 
       const params = useSettingsStore.getState().generationParams;
       if (!activeProfile?.apiKey) throw new Error('Chưa cấu hình API AI.');
 
-      const baseUpdateRules = generateUpdateRulesEntry(schema, card.data.name || 'Character');
+      const baseUpdateRules = generateUpdateRulesEntry(schema);
 
       const contextInfo = `Character: ${card.data.name}\nDescription: ${card.data.description.slice(0, 1000)}\n\nSchema:\n${JSON.stringify(schema, null, 2)}`;
       
@@ -242,58 +184,28 @@ export function VariableListGenerator({ schema }: { schema: MVUZODSchema | null 
     }
   }, [schema, card.data]);
 
+  /**
+   * Bản cũ tự dựng entry tại chỗ: ép cứng `position:'before_char'`, `extensions.position:0`,
+   * `depth:0` — tức là BỎ QUA chính cái `entry.position` mà khung xem trước đang khoe
+   * ("at_depth_system"), lại luôn THÊM MỚI nên bấm hai lần là thẻ có hai entry trùng.
+   * Nay đi qua injectMvuSystemEntry: vị trí lấy theo đặc tả chuẩn, có sẵn thì cập nhật.
+   */
   const handleAddToCard = useCallback((type: 'varList' | 'updateRules') => {
     const entry = generated[type];
-    if (!entry) return;
-    const id = getNextEntryId();
-    addEntry({
-      id,
-      keys: entry.keys,
-      secondary_keys: [],
-      comment: entry.comment,
-      content: entry.content,
-      constant: entry.constant,
-      selective: false,
-      insertion_order: entry.order,
-      enabled: true,
-      position: 'before_char',
-      use_regex: false,
-      extensions: {
-        position: 0,
-        exclude_recursion: false,
-        display_index: 0,
-        probability: 100,
-        useProbability: true,
-        depth: 0,
-        selectiveLogic: 0,
-        outlet_name: '',
-        group: '',
-        group_override: false,
-        group_weight: 100,
-        prevent_recursion: true,
-        delay_until_recursion: false,
-        scan_depth: 0,
-        match_whole_words: false,
-        use_group_scoring: false,
-        case_sensitive: false,
-        automation_id: '',
-        role: null,
-        vectorized: false,
-        sticky: 0,
-        cooldown: 0,
-        delay: 0,
-        match_persona_description: false,
-        match_character_description: false,
-        match_character_personality: false,
-        match_character_depth_prompt: false,
-        match_scenario: false,
-        match_creator_notes: false,
-        triggers: [],
-        ignore_budget: false,
-      },
-    });
+    if (!entry || !schema) return;
+    const res = injectMvuSystemEntry(
+      type === 'varList' ? 'varlist' : 'update_rules',
+      entry.content,
+      schema,
+    );
+    if (res.level === 'error') {
+      useToastStore.getState().error(res.message);
+      return;
+    }
+    if (res.level === 'warning') useToastStore.getState().warning(res.message);
+    else useToastStore.getState().success(res.message);
     setAddedToCard(prev => new Set([...prev, type]));
-  }, [generated, addEntry, getNextEntryId]);
+  }, [generated, schema]);
 
   const togglePath = useCallback((path: string) => {
     setVisiblePaths(prev => {
@@ -403,7 +315,7 @@ export function VariableListGenerator({ schema }: { schema: MVUZODSchema | null 
             </button>
             <button onClick={() => {
               if (!schema) return;
-              const updateRules = generateUpdateRulesEntry(schema, card.data.name || 'Character');
+              const updateRules = generateUpdateRulesEntry(schema);
               setGenerated(prev => ({ ...prev, updateRules }));
             }}
               className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-muted text-foreground text-xs font-medium hover:bg-muted/80 transition-all">

@@ -16,6 +16,7 @@
 
 import { buildMvuOutputBlock } from './mvuReference';
 import { emitYamlScalar } from './yamlScalars';
+import { synthCheck } from './updateRulesBuilder';
 import type { MVUZODSchema, MVUZODField, InitVarEntry } from '../../types/mvuzod.types';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -327,23 +328,27 @@ export function generateVariableListEntry(
   if (mode === 'full') {
     lines.push('{{format_message_variable::stat_data}}');
   } else {
-    // Selective: show each top-level field with its own macro
-    for (const field of schema.fields) {
-      const name = getFieldName(field);
-      if (field.constraints?.hidden) continue;
+    // Selective: mỗi biến một macro riêng, ĐI HẾT MỌI TẦNG.
+    // Bản cũ chỉ xuống đúng một tầng con: schema 3 tầng trở lên (Người Chơi → Chỉ Số → HP) thì
+    // tầng trong cùng không bao giờ được liệt kê, mà tầng giữa lại in ra nguyên cụm object.
+    // record/array là lá theo nghĩa hiển thị — khoá của chúng chỉ có lúc chơi nên in cả cụm.
+    const walk = (fields: MVUZODField[], prefix: string, indent: number) => {
+      for (const field of fields) {
+        const name = getFieldName(field);
+        if (!name || field.constraints?.hidden) continue;
+        const path = prefix ? `${prefix}.${name}` : name;
+        const pad = '  '.repeat(indent);
+        const kids = (field.children ?? []).filter(c => !String(c.path || '').includes('/_child/'));
 
-      if (field.children?.length) {
-        lines.push(`${name}:`);
-        // Show selective children
-        for (const child of field.children) {
-          const childName = getFieldName(child);
-          if (child.constraints?.hidden) continue;
-          lines.push(`  ${childName}: {{format_message_variable::stat_data.${name}.${childName}}}`);
+        if (kids.length && field.type === 'object') {
+          lines.push(`${pad}${name}:`);
+          walk(kids, path, indent + 1);
+        } else {
+          lines.push(`${pad}${name}: {{format_message_variable::stat_data.${path}}}`);
         }
-      } else {
-        lines.push(`${name}: {{format_message_variable::stat_data.${name}}}`);
       }
-    }
+    };
+    walk(schema.fields, '', 0);
   }
 
   lines.push('</status_current_variable>');
@@ -492,7 +497,22 @@ function processUpdateRuleField(field: MVUZODField, indent: number, lines: strin
   // Check rules
   if (field.constraints?.checkRules?.length) {
     lines.push(`${p}  check:`);
-    for (const rule of field.constraints?.checkRules) {
+    for (const rule of field.constraints.checkRules) {
+      lines.push(`${p}    - ${rule}`);
+    }
+    return;
+  }
+
+  // (bugNeedFix/112, làm tiếp cho tab Update) Lá KHÔNG có checkRules trước đây ra đúng một dòng
+  // `Tên:` trống trơn — schema do AI sinh hầu như chẳng bao giờ có sẵn checkRules, nên phần lớn
+  // biến string/boolean rơi vào đây. AI trong game đọc entry thấy tên biến mà không thấy luật nào
+  // thì để nguyên biến đó cả ván: đúng lời user "có cái cập nhật được, có cái không".
+  // Sinh bù bằng CHÍNH bộ luật Auto Creator dùng (updateRulesBuilder.synthCheck) để hai đường ra
+  // — Studio và Auto Creator — không còn lệch nội dung.
+  const synth = synthCheck(field, name);
+  if (synth.length) {
+    lines.push(`${p}  check:`);
+    for (const rule of synth) {
       lines.push(`${p}    - ${rule}`);
     }
   }

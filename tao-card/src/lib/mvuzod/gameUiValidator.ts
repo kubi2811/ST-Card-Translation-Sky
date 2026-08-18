@@ -65,39 +65,67 @@ function referencedGroups(replaceString: string): number[] {
 // `\w` chỉ khớp [A-Za-z0-9_] nên {{getvar::Máu}} trước đây chỉ bắt được "M" rồi đứt ở "á"
 // → so khớp schema luôn trượt → báo biến bịa oan (hoặc bỏ lọt biến bịa thật).
 // Nay dùng lớp ký tự Unicode và cho phép khoảng trắng trong tên biến.
-const VAR_TOKEN_RES = [
-  /getvar::([^}\n|]+)/g,                    // {{getvar::Tên Biến}} — tên có dấu + khoảng trắng
-  /stat_data\.([\p{L}\p{N}_\-]+)/gu,        // stat_data.TênBiến
-  /stat_data\[['"]([^'"\]]+)['"]\]/g,       // stat_data['Tên Biến']
-  /_\.get\([^,]+,\s*['"]([^'"]+)['"]/g,     // _.get(obj, 'a.b.c')
-];
+function normalizeVarPath(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^stat_data[./]/i, '')
+    .replace(/^\/+|\/+$/g, '')
+    .replace(/\//g, '.')
+    .replace(/\.+/g, '.')
+    .toLowerCase();
+}
 
-/** Rút các biến MVU mà replaceString tham chiếu (leaf name). */
+/** Rút các đường dẫn biến MVU mà replaceString tham chiếu. Giữ CẢ đường dẫn thay vì chỉ leaf:
+ * `Player.CurrentVP` không được phép qua kiểm chỉ vì schema có một `CurrentVP` ở nhánh khác. */
 function referencedVars(replaceString: string): string[] {
   const out = new Set<string>();
-  for (const re of VAR_TOKEN_RES) {
+  const add = (raw: string) => {
+    const v = normalizeVarPath(raw);
+    // stat_data là container gốc của MVU, không phải một field do người dùng khai báo.
+    if (v && v !== 'stat_data') out.add(v);
+  };
+  const scanOne = (re: RegExp) => {
     re.lastIndex = 0;
     let m: RegExpExecArray | null;
-    while ((m = re.exec(replaceString)) !== null) {
-      const raw = (m[1] || '').trim();
-      if (!raw) continue;
-      // lấy đoạn cuối của đường dẫn (a.b.c → c) để so khớp mềm với tên biến trong schema
-      const leaf = raw.split(/[.[\]']/).map((s) => s.trim()).filter(Boolean).pop();
-      if (leaf) out.add(leaf);
-    }
+    while ((m = re.exec(replaceString)) !== null) add(m[1] || '');
+  };
+
+  scanOne(/getvar::([^}\n|]+)/g);                         // {{getvar::Tên Biến}}
+  scanOne(/mvuGet\([^,]+,\s*['"]([^'"]+)['"]/g);         // mvuGet(d, 'A.B')
+  scanOne(/_\.get\([^,]+,\s*['"]([^'"]+)['"]/g);        // _.get(d, 'A.B')
+
+  // _.get(d, ['A', 'B']) — đây là dạng mà chính bộ Tạo nhanh sinh ra.
+  const arrayGet = /_\.get\([^,]+,\s*\[([^\]]+)\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = arrayGet.exec(replaceString)) !== null) {
+    const keys = [...m[1].matchAll(/['"]([^'"]+)['"]/g)].map((x) => x[1]);
+    if (keys[0]?.toLowerCase() === 'stat_data') keys.shift();
+    if (keys.length) add(keys.join('.'));
+  }
+
+  // stat_data.foo.bar / stat_data['foo']['bar'] / d?.['foo']?.['bar'].
+  const dotPath = /stat_data((?:\??\.[\p{L}\p{N}_$-]+)+)/gu;
+  while ((m = dotPath.exec(replaceString)) !== null) add(m[1].replace(/\?\./g, '.'));
+  const bracketPath = /(?:stat_data|\bd)((?:\??\[['"][^'"]+['"]\])+)/g;
+  while ((m = bracketPath.exec(replaceString)) !== null) {
+    const keys = [...m[1].matchAll(/['"]([^'"]+)['"]/g)].map((x) => x[1]);
+    if (keys.length) add(keys.join('.'));
   }
   return [...out];
 }
 
-/** Gom TẤT CẢ tên biến hợp lệ từ schema (label + leaf path + full path) để kiểm V4. */
+/** Gom tên biến THẬT từ path schema. `label` chỉ là chữ hiển thị, không phải key dữ liệu. */
 export function collectSchemaVarNames(schema?: MVUZODSchema | null): string[] {
   const out = new Set<string>();
   const walk = (fields?: MVUZODField[]) => {
     for (const f of fields || []) {
-      if (f.label) out.add(f.label);
-      const leaf = (f.path || '').split('/').filter(Boolean).pop();
+      const parts = (f.path || '').split('/').filter(Boolean);
+      const leaf = parts.at(-1);
       if (leaf) out.add(leaf);
-      if (f.path) out.add(f.path.replace(/^\//, ''));
+      if (parts.length) {
+        out.add(parts.join('.'));
+        out.add(parts.join('/'));
+      }
       if (f.children?.length) walk(f.children);
     }
   };
@@ -122,6 +150,7 @@ export function collectInitVarNames(initVarConfig?: { entries?: { data?: Record<
       out.add(k);                                   // leaf name
       const path = prefix ? `${prefix}.${k}` : k;
       out.add(path);                                // full path
+      out.add(path.replace(/\./g, '/'));            // slash path (schema dùng /)
       walk(v, path);
     }
   };
@@ -169,7 +198,7 @@ export function validateRegexDraft(
     return { ok: false, issues: [{ level: 'error', code: 'NO_MATCH', message: 'Chưa có regex script nào — AI cần tạo ít nhất 1 script.' }] };
   }
 
-  const schemaSet = new Set(schemaVarNames.map((s) => s.toLowerCase()));
+  const schemaSet = new Set(schemaVarNames.map(normalizeVarPath));
 
   scripts.forEach((s, i) => {
     // ─── V1a: findRegex compile ───
@@ -224,13 +253,14 @@ export function validateRegexDraft(
     if (schemaSet.size > 0) {
       const used = referencedVars(s.replaceString || '');
       for (const v of used) {
-        if (!schemaSet.has(v.toLowerCase())) {
+        if (!schemaSet.has(normalizeVarPath(v))) {
           push('error', 'UNKNOWN_VAR', `Script #${i + 1} "${s.scriptName}": tham chiếu biến "${v}" KHÔNG có trong schema/initvar → widget sẽ render ra rỗng (undefined). Phải dùng ĐÚNG tên biến đã khai báo, hoặc thêm biến đó vào schema trước.`, i);
         }
       }
       // Widget bám biến mà không tham chiếu biến nào = bảng chết (hardcode), không đồng biến.
-      if (used.length === 0 && (s.replaceString || '').length > 200) {
-        push('warn', 'NO_VAR_BOUND', `Script #${i + 1} "${s.scriptName}": KHÔNG tham chiếu biến MVU nào (không có getvar::/stat_data/_.get) → bảng chỉ là chữ chết, số liệu sẽ không bao giờ đổi. Nếu đây là widget hiển thị chỉ số thì phải bind biến từ schema.`, i);
+      const hasOtherLiveInput = /\$[1-9]|\{\{\s*match\s*\}\}|insertOrAssignVariables|replaceMvuData|parseMessage/.test(s.replaceString || '');
+      if (used.length === 0 && !hasOtherLiveInput && s.markdownOnly && !s.promptOnly && (s.replaceString || '').length > 200) {
+        push('error', 'NO_VAR_BOUND', `Script #${i + 1} "${s.scriptName}": KHÔNG tham chiếu biến MVU nào (không có getvar::/stat_data/_.get/mvuGet) → bảng chỉ là chữ chết, số liệu sẽ không bao giờ đổi. Phải bind biến từ schema trước khi Apply.`, i);
       }
     }
   });

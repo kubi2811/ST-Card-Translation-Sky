@@ -18,6 +18,7 @@ import type { ChatMessage } from '../../types';
 import { MVUZOD_INITVAR_PROMPT } from '../../prompts/modeMVUZOD';
 import { parseSchemaInferenceResponse } from '../../lib/mvuzod/schemaInferencer';
 import { emitYamlScalar } from '../../lib/mvuzod/yamlScalars';
+import { injectMvuSystemEntry } from '../../lib/mvuzod/injectSystemEntry';
 import { copyWithToast } from '../../lib/copyToClipboard';   // (bug 224) copy chạy được cả trong iframe của Hub
 import { useToastStore } from '../../store/toastStore';
 
@@ -522,6 +523,30 @@ export function InitVarEditor({ schema }: { schema: MVUZODSchema | null }) {
     return JSON.stringify(defaultEntry.data, null, 2);
   }, [config.entries]);
 
+  /**
+   * Nội dung ghi thẳng vào entry: CHỈ cây YAML, không kèm dòng nhãn nào ở đầu.
+   * (bugNeedFix/111) MVU đọc trọn nội dung entry như YAML, nên một dòng chữ đứng trước cây biến
+   * sẽ bị coi là một biến và nuốt luôn biến lớn đầu tiên.
+   */
+  const initvarEntryYAML = useMemo(() => {
+    const defaultEntry = config.entries.find(e => e.isDefault);
+    return defaultEntry ? generateWorldbookYAML(defaultEntry.data) : '';
+  }, [config.entries]);
+
+  /**
+   * Trước đây tab này CHỈ cho copy — muốn có entry [initvar] thì phải tự tạo tay trong worldbook,
+   * mà quên là validateMvuCard báo `initvar-missing`: "MVU không có gì để khởi tạo biến, card vào
+   * game là chết". Nút này dựng entry với đúng hai thứ engine đòi: enabled=false VÀ disable=true.
+   */
+  const handleInjectInitvar = useCallback(() => {
+    if (!schema || !initvarEntryYAML.trim()) return;
+    const res = injectMvuSystemEntry('initvar', initvarEntryYAML, schema);
+    const toast = useToastStore.getState();
+    if (res.level === 'error') toast.error(res.message);
+    else if (res.level === 'warning') toast.warning(res.message);
+    else toast.success(`${res.message} — entry để TẮT sẵn, đừng bật lên.`);
+  }, [schema, initvarEntryYAML]);
+
   if (!schema) {
     return (
       <div className="rounded-xl border border-border bg-card p-8 text-center space-y-3">
@@ -660,10 +685,16 @@ export function InitVarEditor({ schema }: { schema: MVUZODSchema | null }) {
                 className="flex items-center gap-1 px-2 py-1 rounded text-[10px] bg-muted hover:bg-muted/80 transition-colors">
                 <Download className="w-3 h-3" /> Copy YAML
               </button>
+              <button
+                onClick={handleInjectInitvar}
+                className="flex items-center gap-1 px-2 py-1 rounded text-[10px] bg-gradient-to-r from-emerald-500/80 to-teal-500/80
+                  text-white font-medium hover:from-emerald-500 hover:to-teal-500 transition-all">
+                <Download className="w-3 h-3" /> Inject vào card
+              </button>
             </div>
           </div>
           <div className="flex items-center gap-2 px-2 py-1.5 rounded bg-amber-500/5 border border-amber-500/20">
-            <span className="text-[10px] text-amber-400">⚠️ Nhớ DISABLE entry này trong worldbook — MVU chỉ đọc entry disabled!</span>
+            <span className="text-[10px] text-amber-400">⚠️ MVU chỉ đọc entry [initvar] khi nó đang TẮT — nút "Inject vào card" đã tự đặt tắt sẵn, đừng bật lên.</span>
           </div>
           <pre className="text-[10px] font-mono text-muted-foreground bg-muted/20 rounded-lg p-3 overflow-x-auto max-h-60 leading-relaxed">
             {yamlPreview}

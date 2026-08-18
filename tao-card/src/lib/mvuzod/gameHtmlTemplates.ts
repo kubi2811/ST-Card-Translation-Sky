@@ -1218,8 +1218,9 @@ export function generateFieldBindingJS(
 export function generatePopulateFunction(bindings: string[]): string {
   return `
     function populateData() {
-        var all = getAllVariables();
-        var d = _.get(all, ['stat_data'], {});
+        // Đọc qua helper MVU native để lấy đúng message-scoped state. Kho biến chung có thể
+        // trỏ sang tầng khác nên bảng đứng yên dù MVU đã đổi.
+        var d = mvuData();
 ${bindings.join('\n')}
     }
 `;
@@ -1239,6 +1240,9 @@ ${populateFnBody}
         await waitGlobalInitialized('Mvu');
         populateData();
         eventOn(Mvu.events.VARIABLE_UPDATE_ENDED, populateData);
+        // Một số card/iframe không truyền event xuyên khung. Poll nhẹ làm lưới an toàn để bảng
+        // vẫn tự đồng bộ, đồng thời không phụ thuộc vào một bản TavernHelper cụ thể.
+        setInterval(populateData, 1500);
     }
 
     $(errorCatched(init));

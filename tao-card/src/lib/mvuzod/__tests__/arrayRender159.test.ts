@@ -47,6 +47,37 @@ describe('(bug 159-8) array phải hiện thành DANH SÁCH, không phải ô nh
     expect(html).toContain("item['Số Lượng']");
   });
 
+  it('tra field con bằng PATH thật, không dùng label hiển thị', () => {
+    const s = normalizeMVUZODSchema({
+      version: '1.0',
+      fields: [{ path: '/Player', type: 'object', label: 'Người chơi', defaultValue: {}, constraints: {}, children: [{
+          path: '/Player/Inventory', type: 'array', label: 'Túi đồ', defaultValue: [], constraints: {},
+          children: [
+            { path: '/Player/Inventory/_child/ItemName', type: 'string', label: 'Tên vật phẩm', defaultValue: '', constraints: {} },
+            { path: '/Player/Inventory/_child/Amount', type: 'number', label: 'Số lượng', defaultValue: 0, constraints: {} },
+          ],
+        }] }],
+    }) as MVUZODSchema;
+    const html = buildProgrammaticRegex({ schema: s, component: 'status_bar' }).previewHtml;
+    expect(html).toContain("item['ItemName']");
+    expect(html).toContain("item['Amount']");
+    expect(html).not.toContain("item['Tên vật phẩm']");
+    expect(html).not.toContain("item['Số lượng']");
+  });
+
+  it('record cũng tra field con bằng PATH thật, không dùng label', () => {
+    const s = normalizeMVUZODSchema({
+      version: '1.0',
+      fields: [{ path: '/World', type: 'object', label: 'Thế giới', defaultValue: {}, constraints: {}, children: [{
+          path: '/World/NPC', type: 'record', label: 'Quan hệ NPC', defaultValue: {}, constraints: {},
+          children: [{ path: '/World/NPC/_child/Affinity', type: 'number', label: 'Hảo cảm', defaultValue: 0, constraints: {} }],
+        }] }],
+    }) as MVUZODSchema;
+    const html = buildProgrammaticRegex({ schema: s, component: 'status_bar' }).previewHtml;
+    expect(html).toContain("entry['Affinity']");
+    expect(html).not.toContain("entry['Hảo cảm']");
+  });
+
   it('KHÔNG còn dựng mảng thành ô nhập chữ như trước', () => {
     const html = build('status_bar');
     // Ô nhập chữ cho Kho Đồ sẽ có dạng <input ... id="...kho-đồ"> mà không phải trong danh sách.

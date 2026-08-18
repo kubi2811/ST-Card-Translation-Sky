@@ -84,6 +84,16 @@ describe('scanFieldsHealth', () => {
     expect(r.ok).toBe(false);
   });
 
+  it("property access mất key thành [''] → chặn xuất dù JS vẫn hợp lệ", () => {
+    const r = scanFieldsHealth([mk({
+      path: 'script', group: 'tavern_helper',
+      original: "const x = state['状态'];", translated: "const x = state[''];", status: 'done',
+    })]);
+    expect(r.counts.emptyPropertyAccesses).toBe(1);
+    expect(r.issues.some(i => i.kind === 'empty_property_access')).toBe(true);
+    expect(r.ok).toBe(false);
+  });
+
   /**
    * (bug 234) HỢP ĐỒNG ĐỔI: 'info' → 'warning'.
    * User: "Vẫn còn tiếng trung chưa dịch hết nhưng vẫn để là dịch xong."

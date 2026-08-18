@@ -3,6 +3,7 @@ import {
   applyMvuToJsonText,
   applyMvuToText,
   recanonicalizeMvuInFields,
+  restoreEmptyMvuBracketAccess,
   sanitizeMvuVarName,
   translateMvuJsonPointer,
 } from '../mvuSync';
@@ -63,11 +64,52 @@ describe('MVU covariance cho field JSON', () => {
     expect(op.value).toEqual({ 'Mô Tả': 'Bản dịch' });
   });
 
+  it("khôi phục obj[''] theo key gốc khi từ điển xác định được tên", () => {
+    const restored = restoreEmptyMvuBracketAccess(
+      "const x = data['状态']; const y = data?.[\"当前值\"];",
+      "const x = data['']; const y = data?.[\"\"];",
+      { 状态: 'Trạng Thái', 当前值: 'Giá Trị Hiện Tại' },
+    );
+    expect(restored.count).toBe(2);
+    expect(restored.text).toBe("const x = data['Trạng Thái']; const y = data?.[\"Giá Trị Hiện Tại\"];");
+  });
+
+  it("sweep đồng biến tự khôi phục [''] trong field code", () => {
+    const field = {
+      path: 'th[0].content', label: 'schema', group: 'tavern_helper',
+      original: "const x = state['状态'];", translated: "const x = state[''];",
+      status: 'done', retries: 0,
+    } as TranslationField;
+    const out = recanonicalizeMvuInFields([field], { 状态: 'Trạng Thái' }).fields[0].translated;
+    expect(out).toBe("const x = state['Trạng Thái'];");
+  });
+
+  it("không đoán mò [''] khi thiếu từ điển hoặc số access hai phía lệch", () => {
+    expect(restoreEmptyMvuBracketAccess("x['状态']", "x['']", {}).text).toBe("x['']");
+    expect(restoreEmptyMvuBracketAccess("x['状态']", "x['']; y['']", { 状态: 'Trạng Thái' }).text)
+      .toBe("x['']; y['']");
+  });
+
   it('tự loại dấu chấm mọc thêm ở bản dịch của một key đơn; path hợp lệ vẫn giữ tầng', () => {
     expect(sanitizeMvuVarName('状态', 'Trạng.Thái')).toBe('Trạng Thái');
     expect(sanitizeMvuVarName('世界.状态', 'Thế Giới.Trạng Thái')).toBe('Thế Giới.Trạng Thái');
     expect(sanitizeMvuVarName('状态', 'Trạng/"Thái"')).toBe('Trạng Thái');
     expect(JSON.parse(applyMvuToText('{"状态":1}', { 状态: 'Trạng.Thái' }, true)))
       .toEqual({ 'Trạng Thái': 1 });
+  });
+
+  it('sweep cuối dọn hết tên CJK còn sót trong hướng dẫn MVU dù tên mới đã xuất hiện', () => {
+    const field = {
+      path: 'lorebook[19].content', label: 'Hướng dẫn định dạng biến', group: 'lorebook', entryType: 'mvu_logic',
+      original: "年龄: z.string(); 状态: z.enum(['通话中', '已挂断']); const x = 人物['年龄'];",
+      translated: "Tuổi Tác: z.string(); 年龄 được ghi ở đây; 状态: z.enum(['通话中', '已挂断']); const x = Nhân Vật['Tuổi Tác'];",
+      status: 'done', retries: 0,
+    } as TranslationField;
+    const out = recanonicalizeMvuInFields([field], {
+      年龄: 'Tuổi Tác', 状态: 'Trạng Thái', 通话中: 'Đang Gọi', 已挂断: 'Đã Cúp Máy', 人物: 'Nhân Vật',
+    }).fields[0].translated!;
+    expect(out).not.toMatch(/年龄|状态|通话中|已挂断|人物/);
+    expect(out).toContain('Tuổi Tác được ghi ở đây');
+    expect(out).toContain("Nhân Vật['Tuổi Tác']");
   });
 });

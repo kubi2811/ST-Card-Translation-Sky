@@ -1328,6 +1328,10 @@ export function verifySurgicalResult(original: string, translated: string): bool
   if (countPair(original, '(', '\uff08') !== countPair(translated, '(', '\uff08')) return false;
   if (countPair(original, ')', '\uff09') !== countPair(translated, ')', '\uff09')) return false;
 
+  // `obj['']` vẫn là JavaScript hợp lệ nên parser không báo, nhưng key đã mất và logic đọc sai.
+  const countEmptyBracketAccess = (s: string) => (s.match(/\[\s*(['"])\s*\1\s*\]/g) || []).length;
+  if (countEmptyBracketAccess(translated) > countEmptyBracketAccess(original)) return false;
+
   // JSON gốc hợp lệ thì kết quả bắt buộc vẫn phải parse được. Đếm ngoặc cân bằng không bắt được
   // nháy/escape hỏng, dấu phẩy thừa hoặc key bị đổi thành nháy đơn.
   const originalTrimmed = original.trim();

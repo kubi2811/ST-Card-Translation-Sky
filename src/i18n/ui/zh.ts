@@ -443,6 +443,8 @@ const ui: UiKeys = {
   tpProblemBtn: '🩹 重译 {n} 个未达标条目',
   tpProblemTip: '一键收集所有未真正完成的条目：红色错误、被跳过的、以及标记"完成"但仍含中文的（包括被安全闸还原为原文的条目）。多线程运行，每个条目自动重试最多 3 次，残留中文的条目会被精确指出未译段落。',
   tpProblemBreakdown: '{e} 个错误 · {s} 个跳过 · {r} 个仍含中文',
+  tpJumpSkipped: '向下跳到下一个已跳过条目；到末尾后回到第一项',
+  tpJumpError: '向下跳到下一个出错条目；到末尾后回到第一项',
   tpListFields: '查看/选择字段（跳过翻译）',
   tpManualHint1: '想手工翻译某个字段？',
   tpManualHint2: '取消勾选',
@@ -511,6 +513,8 @@ const ui: UiKeys = {
   feApplyAllToast: '已把勾选状态应用到所有 {key} 字段',
   feSkip: '跳过',
   feIgnoreFallback: '跳过（不翻译）',
+  feNextStatusEntry: '下一条目',
+  feNextStatusEntryTip: '向下跳到筛选列表中的下一个条目；到末尾后回到第一项',
 
   // ─── TranslateConfig ───
   tcToastModelAll: '已把该模型应用到所有 {key} 字段',

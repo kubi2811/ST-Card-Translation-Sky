@@ -445,6 +445,8 @@ const ui = {
   tpProblemBtn: '🩹 Retranslate {n} unfinished item(s)',
   tpProblemTip: 'One click collects every item that is NOT done properly: red errors, skipped items, and items marked "Done" that still contain Chinese (including ones the safety guard reverted to the original). Runs multi-threaded; each item auto-retries up to 3 times, and leftover-Chinese items get told exactly which passages remain.',
   tpProblemBreakdown: '{e} errors · {s} skipped · {r} still Chinese',
+  tpJumpSkipped: 'Jump down to the next skipped entry; wraps to the first entry at the end',
+  tpJumpError: 'Jump down to the next failed entry; wraps to the first entry at the end',
   tpListFields: 'View/pick fields (skip translation)',
   tpManualHint1: 'Want to translate a field by hand?',
   tpManualHint2: 'Untick',
@@ -513,6 +515,8 @@ const ui = {
   feApplyAllToast: 'Applied selection to all {key} fields',
   feSkip: 'Skip',
   feIgnoreFallback: 'Skip (do not translate)',
+  feNextStatusEntry: 'Next entry',
+  feNextStatusEntryTip: 'Jump down to the next entry in the filtered list; wraps to the first entry at the end',
 
   // ─── TranslateConfig ───
   tcToastModelAll: 'Applied model to all {key} fields',

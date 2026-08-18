@@ -229,6 +229,38 @@ function alignMvuJsonFromOriginal(originalText: string, translatedText: string, 
 }
 
 /**
+ * Khôi phục `obj['']`/`obj[""]` khi bản gốc ở đúng vị trí có key và từ điển biết tên chuẩn.
+ * Chỉ chạy khi số bracket-access hai phía bằng nhau để không đoán lệch vị trí.
+ */
+export function restoreEmptyMvuBracketAccess(
+  original: string,
+  translated: string,
+  dict: Record<string, string>,
+): { text: string; count: number } {
+  const re = /\[\s*(['"])(.*?)\1\s*\]/g;
+  const sourceSlots = [...original.matchAll(re)];
+  const targetSlots = [...translated.matchAll(re)];
+  if (sourceSlots.length === 0 || sourceSlots.length !== targetSlots.length) return { text: translated, count: 0 };
+
+  const edits: Array<{ start: number; end: number; value: string }> = [];
+  targetSlots.forEach((slot, i) => {
+    if (slot[2].trim()) return;
+    const sourceKey = sourceSlots[i][2].trim();
+    const mapped = dict[sourceKey];
+    if (!sourceKey || !mapped) return;
+    const canonical = sanitizeMvuVarName(sourceKey, mapped);
+    if (!canonical) return;
+    const quote = slot[1];
+    const escaped = canonical.replace(/\\/g, '\\\\').replace(new RegExp(quote, 'g'), `\\${quote}`);
+    edits.push({ start: slot.index, end: slot.index + slot[0].length, value: `[${quote}${escaped}${quote}]` });
+  });
+
+  let out = translated;
+  for (const edit of edits.reverse()) out = out.slice(0, edit.start) + edit.value + out.slice(edit.end);
+  return { text: out, count: edits.length };
+}
+
+/**
  * (bug 238) TỰ LÀNH dot-access ĐÃ vỡ từ lượt dịch trước — `base.Lời Tiên Tri Và Tin Đồn`.
  *
  * Trước đây việc này nằm trong vòng lặp từ điển của {@link applyMvuToText}, mỗi tên một lượt
@@ -441,6 +473,12 @@ export function applyMvuToText(
   if (aggressive && dotHealNames.length > 0) {
     newText = bracketizeDotAccess(newText, dotHealNames);
   }
+
+  // Tự lành path lai từ lượt cũ: `[Nhân Vật['Tuổi Tác']]` → `[Nhân Vật.Tuổi Tác]`.
+  // Dùng chính target trong từ điển làm chứng cứ, không quét/đổi array expression JS tuỳ tiện.
+  const normTarget = (s: string) => s.toLowerCase().replace(/\s*\.\s*/g, '.').replace(/[\s_-]+/g, ' ').trim();
+  const targetMap = new Map(entries.map(([, target]) => [normTarget(target), target]));
+  newText = normalizeHybridMvuPathTokens(newText, (name) => targetMap.get(normTarget(name)) ?? null, () => {});
 
   return newText;
 }
@@ -1026,7 +1064,7 @@ export function buildDictVariantAliases(
   for (const f of fields) {
     if (f.status !== 'done' || !f.original || !f.translated) continue;
     const isCode =
-      f.entryType === 'initvar' || f.entryType === 'controller' || f.entryType === 'mvu_logic' ||
+      f.entryType === 'initvar' || f.entryType === 'controller' || f.entryType === 'mvu_logic' || f.entryType === 'rules' ||
       f.group === 'regex' || f.group === 'tavern_helper';
     if (!isCode) continue;
 
@@ -1129,7 +1167,7 @@ export function recanonicalizeMvuInFields(
   const out = fields.map((f) => {
     if (f.status !== 'done' || typeof f.translated !== 'string' || !f.translated) return f;
     const isCode =
-      f.entryType === 'initvar' || f.entryType === 'controller' || f.entryType === 'mvu_logic' ||
+      f.entryType === 'initvar' || f.entryType === 'controller' || f.entryType === 'mvu_logic' || f.entryType === 'rules' ||
       f.group === 'regex' || f.group === 'tavern_helper';
     // (bug #8) Gồm cả lorebook_keys — trigger keyword nhiễm `_` khi export sẽ đè lên card đã sửa.
     const isLbNarr = (f.group === 'lorebook' || f.group === 'lorebook_keys') && !isCode;
@@ -1146,8 +1184,13 @@ export function recanonicalizeMvuInFields(
       return { ...f, translated: structuredJson };
     }
 
-    // (bug #8) Sweep dict-less TRƯỚC — Lưu_Tam_Bảo → Lưu Tam Bảo kể cả khi dict trống/thiếu key.
-    let t = unifyVietnameseUnderscoresInText(f.translated).text;
+    // Ép trực tiếp tên NGUỒN → tên chuẩn trước các lượt covariance. Đây là lưới an toàn cho
+    // ca AI đã dịch một số lần xuất hiện nhưng còn sót số khác (ví dụ vừa có 年龄 vừa có
+    // Tuổi Tác), cũng như access lai `Nhân Vật['Tuổi Tác']`. Văn xuôi chỉ áp trong macro/
+    // cấu trúc xác định; field code mới được phép thay mạnh toàn bộ.
+    let t = applyMvuToText(f.translated, fixedDict, isCode);
+    // (bug #8) Sweep dict-less — Lưu_Tam_Bảo → Lưu Tam Bảo kể cả khi dict trống/thiếu key.
+    t = unifyVietnameseUnderscoresInText(t).text;
     t = enforceInitvarCovariance(t, fixedDict, isLbNarr).text;
     // (bug 232) Biến thể chỉ ép ở field CODE. Văn xuôi thì "Tiền bạc" có thể là chữ dùng thật
     // trong truyện, ép sang tên biến ở đó là sửa hỏng bản dịch chứ không phải đồng nhất biến.
@@ -1163,6 +1206,7 @@ export function recanonicalizeMvuInFields(
     }
     t = enforceVariableCasing(t, fixedDict).text;
     if (isCode) t = fixZodSyntaxErrors(t);
+    if (isCode && f.original) t = restoreEmptyMvuBracketAccess(f.original, t, fixedDict).text;
 
     if (t === f.translated) return f;
     fixCount++;
@@ -1886,12 +1930,49 @@ function isProsePath(segs: string[], resolve: SegResolver): boolean {
   return segs.some((s) => resolve(s.trim()));
 }
 
+/**
+ * Dọn dạng path LAI do bản dịch cũ sinh ra:
+ *   `[Nhân Vật['Tuổi Tác']]` → `[Nhân Vật.Tuổi Tác]`
+ *   `[A['B']['C']]`           → `[A.B.C]`
+ *
+ * Chỉ đổi khi từ điển xác nhận cả path hoặc ít nhất một đoạn, và không đụng array expression
+ * JS thật kiểu `[data['status']]` trừ khi từ điển có đúng full-path `data.status`.
+ */
+function normalizeHybridMvuPathTokens(
+  text: string,
+  resolve: SegResolver,
+  note: (found: string, replaced: string) => void,
+): string {
+  return text.replace(
+    /\[([^\[\]\n]+?)((?:\[\s*['"][^'"\]\n]+['"]\s*\])+)]/g,
+    (match, parentRaw: string, bracketRaw: string) => {
+      const parent = parentRaw.trim();
+      const children = [...bracketRaw.matchAll(/\[\s*(['"])([^'"\]\n]+)\1\s*\]/g)].map(m => m[2].trim());
+      if (!parent || children.length === 0) return match;
+      const parentSegments = parent.split('.').map(s => s.trim());
+      const segments = [...parentSegments, ...children];
+      if (!segments.every(looksLikeMvuName)) return match;
+
+      const joined = segments.join('.');
+      const whole = resolve(joined);
+      const parentIsJsReceiver = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/.test(parent);
+      if (!whole && parentIsJsReceiver) return match;
+      if (!whole && !segments.some(seg => resolve(seg))) return match;
+
+      const canonical = canonicalizeDotPath(joined, resolve).text;
+      const replacement = `[${canonical}]`;
+      if (replacement !== match) note(match, replacement);
+      return replacement;
+    },
+  );
+}
+
 function enforceMvuPathTokens(
   text: string,
   resolve: SegResolver,
   note: (found: string, replaced: string) => void,
 ): string {
-  let out = text;
+  let out = normalizeHybridMvuPathTokens(text, resolve, note);
 
   // (a) Token đường dẫn trong văn quy tắc: `[Thế Giới.Thời Gian Hiện Tại]`
   out = out.replace(/\[([^[\]\n]+)\]/g, (match, inner: string) => {

@@ -41,7 +41,7 @@ const KEY_MODE_OPTIONS: { value: ExportKeyMode; labelKey: 'epKeyModeMerge' | 'ep
 
 /** (bugNeedFix/37) Báo cáo rỗng dùng làm giá trị chờ trong lúc quét sức khoẻ chạy ở idle tick. */
 const EMPTY_HEALTH: import('../utils/cardHealth').HealthReport = {
-  counts: { total: 0, done: 0, error: 0, pending: 0, skipped: 0, brokenScripts: 0, brokenJson: 0, invalidRegex: 0, residualCjkCode: 0, residualCjkText: 0, emptyBrackets: 0, renamedMacros: 0, glossaryUnapplied: 0 },
+  counts: { total: 0, done: 0, error: 0, pending: 0, skipped: 0, brokenScripts: 0, brokenJson: 0, invalidRegex: 0, residualCjkCode: 0, residualCjkText: 0, emptyBrackets: 0, emptyPropertyAccesses: 0, renamedMacros: 0, glossaryUnapplied: 0 },
   issues: [],
   ok: true,
 };
@@ -669,11 +669,11 @@ export default function ExportPanel() {
         )}
 
         {/* Chỉ số nhanh */}
-        {(health.counts.error > 0 || health.counts.brokenScripts > 0 || health.counts.brokenJson > 0 || health.counts.invalidRegex > 0 || health.counts.residualCjkCode > 0 || health.counts.residualCjkText > 0 || health.counts.pending > 0) && (
+        {(health.counts.error > 0 || health.counts.brokenScripts > 0 || health.counts.brokenJson > 0 || health.counts.invalidRegex > 0 || health.counts.emptyPropertyAccesses > 0 || health.counts.residualCjkCode > 0 || health.counts.residualCjkText > 0 || health.counts.pending > 0) && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px 16px', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
             {health.counts.error > 0 && <span>{fmt(ui.epCntError, { count: health.counts.error })}</span>}
             {health.counts.pending > 0 && <span>{fmt(ui.epCntPending, { count: health.counts.pending })}</span>}
-            {(health.counts.brokenScripts + health.counts.brokenJson + health.counts.invalidRegex) > 0 && <span style={{ color: 'var(--accent-danger)', fontWeight: 600 }}>{fmt(ui.epCntBroken, { count: health.counts.brokenScripts + health.counts.brokenJson + health.counts.invalidRegex })}</span>}
+            {(health.counts.brokenScripts + health.counts.brokenJson + health.counts.invalidRegex + health.counts.emptyPropertyAccesses) > 0 && <span style={{ color: 'var(--accent-danger)', fontWeight: 600 }}>{fmt(ui.epCntBroken, { count: health.counts.brokenScripts + health.counts.brokenJson + health.counts.invalidRegex + health.counts.emptyPropertyAccesses })}</span>}
             {health.counts.residualCjkCode > 0 && <span style={{ color: 'var(--accent-danger)', fontWeight: 600 }}>{fmt(ui.epCntCjkCode, { count: health.counts.residualCjkCode })}</span>}
             {health.counts.residualCjkText > 0 && <span>{fmt(ui.epCntCjkText, { count: health.counts.residualCjkText })}</span>}
             {health.counts.glossaryUnapplied > 0 && <span>{fmt(ui.epCntGlossary, { count: health.counts.glossaryUnapplied })}</span>}

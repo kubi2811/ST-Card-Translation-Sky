@@ -26,6 +26,7 @@ export type HealthKind =
   | 'residual_cjk_code'  // chữ Hán còn trong field code (json_patch/initvar/controller)
   | 'residual_cjk_text'  // chữ Hán còn sót trong văn bản đã "done" (có thể là tên riêng cố ý)
   | 'empty_bracket'      // (bugNeedFix/178) 【nhãn】 ở gốc thành 【】 RỖNG ở bản dịch — mất chữ
+  | 'empty_property_access' // obj['KEY'] ở gốc thành obj[''] sau dịch
   | 'macro_renamed'      // (bugNeedFix/180) {{user}} bị đổi ruột thành thứ khác — thẻ hiện sai khi chơi
   | 'glossary_unapplied';// thuật ngữ trong Từ điển vẫn còn NGUYÊN GỐC trong bản dịch (dịch chưa nhất quán)
 
@@ -51,6 +52,8 @@ export interface HealthReport {
     residualCjkText: number;
     /** (bugNeedFix/178) Số chỗ 【…】 bị rỗng ruột sau dịch. */
     emptyBrackets: number;
+    /** Số property access `['']`/`[""]` mới xuất hiện sau dịch. */
+    emptyPropertyAccesses: number;
     /** (bugNeedFix/180) Số macro {{…}} bị đổi ruột sau dịch. */
     renamedMacros: number;
     glossaryUnapplied: number;
@@ -100,11 +103,18 @@ export function countEmptiedBrackets(original: string, translated: string): stri
   return out;
 }
 
+/** Đếm property access bị mất key; `['']` vốn có sẵn trong nguồn không bị báo oan. */
+export function countEmptiedPropertyAccesses(original: string, translated: string): number {
+  const count = (s: string) => (s.match(/\[\s*(['"])\s*\1\s*\]/g) || []).length;
+  return Math.max(0, count(translated) - count(original));
+}
+
 export function scanFieldsHealth(fields: TranslationField[], glossary?: GlossaryEntry[]): HealthReport {
   const issues: HealthIssue[] = [];
   let brokenScripts = 0, brokenJson = 0, invalidRegex = 0;
   let residualCjkCode = 0, residualCjkText = 0, glossaryUnapplied = 0;
   let emptyBrackets = 0;
+  let emptyPropertyAccesses = 0;
   let renamedMacros = 0;
   let done = 0, error = 0, pending = 0, skipped = 0;
 
@@ -257,6 +267,15 @@ export function scanFieldsHealth(fields: TranslationField[], glossary?: Glossary
           + `${emptied.slice(0, 4).join(', ')}${emptied.length > 4 ? '…' : ''} — nội dung trong ngoặc đã mất, cần dịch lại hoặc bấm Sửa bằng AI.`,
       });
     }
+
+    const emptyProps = countEmptiedPropertyAccesses(f.original || '', f.translated || '');
+    if (emptyProps > 0) {
+      emptyPropertyAccesses += emptyProps;
+      issues.push({
+        severity: 'error', kind: 'empty_property_access', label: f.label, path: f.path,
+        detail: `${emptyProps} chỗ truy cập thuộc tính bị mất key thành [''] hoặc [""] sau dịch — code vẫn parse được nhưng đọc sai biến MVU.`,
+      });
+    }
   }
 
   // Sắp xếp: error → warning → info (để danh sách hiển thị cái quan trọng trước).
@@ -264,7 +283,7 @@ export function scanFieldsHealth(fields: TranslationField[], glossary?: Glossary
   issues.sort((a, b) => rank[a.severity] - rank[b.severity]);
 
   return {
-    counts: { total: fields.length, done, error, pending, skipped, brokenScripts, brokenJson, invalidRegex, residualCjkCode, residualCjkText, emptyBrackets, renamedMacros, glossaryUnapplied },
+    counts: { total: fields.length, done, error, pending, skipped, brokenScripts, brokenJson, invalidRegex, residualCjkCode, residualCjkText, emptyBrackets, emptyPropertyAccesses, renamedMacros, glossaryUnapplied },
     issues,
     ok: !issues.some((i) => i.severity === 'error'),
   };
@@ -292,6 +311,7 @@ export function buildTranslationReport(
   lines.push(`- Script vỡ cú pháp: **${c.brokenScripts}**`);
   lines.push(`- JSON/JSON Patch vỡ cú pháp: **${c.brokenJson}**`);
   lines.push(`- findRegex không hợp lệ: **${c.invalidRegex}**`);
+  lines.push(`- Truy cập thuộc tính mất key ['']: **${c.emptyPropertyAccesses}**`);
   lines.push(`- Chữ Hán còn trong field code: **${c.residualCjkCode}**`);
   lines.push(`- Trường còn chữ Hán (văn bản): **${c.residualCjkText}**`);
   lines.push(`- Thuật ngữ chưa áp bản dịch: **${c.glossaryUnapplied}**`);

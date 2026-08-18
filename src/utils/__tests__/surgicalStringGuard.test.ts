@@ -72,4 +72,10 @@ describe('surgical local-only — vẫn phải qua lưới cú pháp', () => {
   it('JSON gốc hợp lệ nhưng bản dịch hỏng nháy → verify không cho qua', () => {
     expect(verifySurgicalResult('{"状态":1}', '{"Trạng "Thái"":1}')).toBe(false);
   });
+
+  it("obj['KEY'] thành obj[''] vẫn parse được nhưng phải bị chặn", () => {
+    expect(verifySurgicalResult("const x = obj['状态'];", "const x = obj[''];")).toBe(false);
+    // Nguồn vốn cố ý dùng key rỗng thì không báo oan.
+    expect(verifySurgicalResult("const x = obj[''];", "const x = obj[''];")).toBe(true);
+  });
 });

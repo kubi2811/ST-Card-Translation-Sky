@@ -1,13 +1,21 @@
 /**
- * UpdateRulesEditor — Auto-generate [mvu_update] worldbook entries from schema
- * References: MVU_ZOD指南.md "第五步：编写变量提示词" + "Quy tắc cập nhật biến"
- * Generates both Quy tắc cập nhật biến and Định dạng đầu ra biến entries
+ * UpdateRulesEditor — 4 entry [mvu_update] sinh từ schema.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Tab này TỪNG có bộ sinh riêng, và bộ đó lệch hẳn với bộ mà Auto Creator / Export Wizard dùng:
+ *   • Quy tắc: lá string/boolean ra đúng một dòng `Tên:` trống — AI trong game không biết khi nào
+ *     được đổi nên để im cả ván ("có cái cập nhật được, có cái không").
+ *   • Danh sách biến: chỉ đi một tầng, biến lồng sâu không bao giờ được liệt kê.
+ *   • Định dạng: dạy "JSON Patch (RFC 6902)" — mà RFC có op `add`, MVU KHÔNG nhận (mvuReference).
+ *   • Vị trí ghi vào thẻ: positionExt=0 kèm depth=4 (depth bị bỏ qua), role=1 (=user, phải là
+ *     system), order cả ba entry đều 100 nên không có thứ tự xác định.
+ * Nay chỉ còn là MÀN HÌNH cho bộ sinh chuẩn trong scriptGenerator.ts; ghi vào thẻ đi qua
+ * injectMvuSystemEntry để dùng chung một đặc tả vị trí và một đường dò trùng.
  */
 
 import { useState, useMemo, useCallback } from 'react';
 import {
   FileText, Copy, Check,
-  Sparkles, Eye, RefreshCw, Wand2, Loader2, Download,
+  Sparkles, Eye, RefreshCw, Wand2, Loader2, Download, Megaphone,
 } from 'lucide-react';
 import type { MVUZODSchema, MVUZODField } from '../../types/mvuzod.types';
 import { useCardStore } from '../../store/cardStore';
@@ -16,271 +24,56 @@ import { callAI } from '../../lib/ai/client';
 import type { ChatMessage } from '../../types';
 import { MVUZOD_UPDATE_RULES_PROMPT, MVUZOD_OUTPUT_FORMAT_PROMPT } from '../../prompts/modeMVUZOD';
 import { parseSchemaInferenceResponse } from '../../lib/mvuzod/schemaInferencer';
-import { nextEntryId } from '../../lib/converters/cardDefaults';
-import type { LorebookEntry } from '../../types/lorebook.types';
+import {
+  generateUpdateRulesEntry,
+  generateOutputFormatEntry,
+  generateVariableListEntry,
+  generateEmphasisEntry,
+} from '../../lib/mvuzod/scriptGenerator';
+import { injectMvuSystemEntry, type MvuSystemEntryId } from '../../lib/mvuzod/injectSystemEntry';
+import { checkMvuOutputContract } from '../../lib/mvuzod/mvuReference';
 import { copyWithToast } from '../../lib/copyToClipboard';   // (bug 224) copy chạy được cả trong iframe của Hub
 import { useToastStore } from '../../store/toastStore';
 
-// ─── YAML Generator ──────────────────────────────────────────────────────
-
-function generateUpdateRulesYAML(schema: MVUZODSchema): string {
-  const lines: string[] = ['Quy tắc cập nhật biến:'];
-
-  function processField(field: MVUZODField, indent: number, parentPath: string) {
-    const name = field.path.split('/').filter(Boolean).pop() ?? field.path;
-    const fullPath = parentPath ? `${parentPath}.${name}` : name;
-    const pad = '  '.repeat(indent);
-
-    // Skip readonly fields (prefixed with _)
-    if (name.startsWith('_') || field.constraints?.readOnly) return;
-
-    // If has children, recurse
-    if (field.children?.length) {
-      lines.push(`${pad}${name}:`);
-      for (const child of field.children) {
-        processField(child, indent + 1, fullPath);
-      }
-      return;
-    }
-
-    // Leaf field — generate update rule
-    lines.push(`${pad}${name}:`);
-
-    // Type
-    if (field.constraints?.updateType) {
-      lines.push(`${pad}  type: |-`);
-      for (const line of field.constraints.updateType.split('\n')) {
-        lines.push(`${pad}    ${line}`);
-      }
-    } else if (field.type === 'number') {
-      lines.push(`${pad}  type: number`);
-    } else if (field.type === 'record') {
-      lines.push(`${pad}  type: |-`);
-      lines.push(`${pad}    {`);
-      const keyDesc = field.constraints?.describe ?? 'key';
-      lines.push(`${pad}      [${keyDesc}: string]: ${field.children?.length ? 'object' : 'string'}`);
-      lines.push(`${pad}    }`);
-    }
-
-    // Range
-    if (field.constraints?.updateRange) {
-      lines.push(`${pad}  range: ${field.constraints?.updateRange}`);
-    } else if (field.constraints?.clamp) {
-      lines.push(`${pad}  range: ${field.constraints?.clamp[0]}~${field.constraints?.clamp[1]}`);
-    }
-
-    // Format
-    if (field.constraints?.updateFormat) {
-      lines.push(`${pad}  format: ${field.constraints?.updateFormat}`);
-    }
-
-    // Check rules
-    if (field.constraints?.checkRules?.length) {
-      lines.push(`${pad}  check:`);
-      for (const rule of field.constraints.checkRules) {
-        lines.push(`${pad}    - ${rule}`);
-      }
-    } else {
-      // Auto-generate basic check rule
-      const autoCheck = generateAutoCheck(field, name);
-      if (autoCheck.length) {
-        lines.push(`${pad}  check:`);
-        for (const rule of autoCheck) {
-          lines.push(`${pad}    - ${rule}`);
-        }
-      }
-    }
-  }
-
-  for (const field of schema.fields) {
-    processField(field, 1, '');
-  }
-
-  return lines.join('\n');
-}
-
-function generateAutoCheck(field: MVUZODField, name: string): string[] {
-  const checks: string[] = [];
-
-  if (field.type === 'number' && field.constraints?.clamp) {
-    const [min, max] = field.constraints.clamp;
-    checks.push(`Phạm vi: ${min}~${max}`);
-    checks.push(`Chỉ update khi có sự kiện liên quan trực tiếp`);
-  }
-
-  if (field.type === 'record') {
-    checks.push(`Thêm/xóa items khi có sự kiện liên quan`);
-    if (field.constraints?.transform === 'pickBy') {
-      checks.push(`Số lượng = 0 → tự động xóa`);
-    }
-  }
-
-  // Don't generate for self-explanatory names
-  const selfExplanatory = ['thời_gian', 'địa_điểm', 'vị_trí', 'tên', 'name', 'location', 'time'];
-  if (selfExplanatory.some(s => name.toLowerCase().includes(s))) {
-    return []; // Tên tự giải thích
-  }
-
-  return checks;
-}
-
-// ─── Output Format Generator ─────────────────────────────────────────────
-
-function generateOutputFormatYAML(): string {
-  return `Định dạng đầu ra biến:
-  rule:
-    - Output update analysis + commands ở CUỐI mỗi reply
-    - Format: JSON Patch (RFC 6902), JSON array chứa operation objects
-    - Operations hỗ trợ: replace, delta, insert, remove, move
-    - KHÔNG update fields bắt đầu bằng _ (readonly)
-  format: |-
-    <UpdateVariable>
-    <Analysis>$(Tiếng Anh, tối đa 80 từ)
-    - \${tính thời gian trôi qua: ...}
-    - \${phán đoán có cho phép thay đổi lớn không: có/không}
-    - \${phân tích từng biến theo check rules, chỉ dựa trên reply hiện tại: ...}
-    </Analysis>
-    <JSONPatch>
-    [
-      { "op": "replace", "path": "\${/đường/dẫn/biến}", "value": "\${giá trị mới}" },
-      { "op": "delta", "path": "\${/đường/dẫn/số}", "value": "\${delta +/-}" },
-      { "op": "insert", "path": "\${/đường/dẫn/object/key mới}", "value": "\${giá trị}" },
-      { "op": "remove", "path": "\${/đường/dẫn/object/key}" },
-      ...
-    ]
-    </JSONPatch>
-    </UpdateVariable>`;
-}
-
-// ─── Variable List Generator ─────────────────────────────────────────────
-
-function generateVariableListYAML(schema: MVUZODSchema): string {
-  const lines: string[] = ['---', '<status_current_variable>'];
-
-  function addField(field: MVUZODField, prefix: string) {
-    const name = field.path.split('/').filter(Boolean).pop() ?? field.path;
-    const path = prefix ? `${prefix}.${name}` : name;
-
-    if (field.children?.length) {
-      lines.push(`${name}:`);
-      lines.push(`  {{format_message_variable::stat_data.${path}}}`);
-    } else {
-      lines.push(`${name}: {{format_message_variable::stat_data.${path}}}`);
-    }
-  }
-
-  for (const field of schema.fields) {
-    addField(field, '');
-  }
-
-  lines.push('</status_current_variable>');
-  return lines.join('\n');
-}
-
-// ─── Entry injection config ──────────────────────────────────────────────
-
-const ENTRY_CONFIGS: Record<'rules' | 'format' | 'varlist', {
-  comment: string;
-  constant: boolean;
-  positionExt: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
-  depth: number;
-  role?: number | null;
-}> = {
-  rules: {
-    comment: '[mvu_update]Quy tắc cập nhật biến',
-    constant: true,
-    positionExt: 0,
-    depth: 4,
-  },
-  format: {
-    comment: '[mvu_update]Định dạng đầu ra biến',
-    constant: true,
-    positionExt: 4,
-    depth: 0,
-    role: 1,
-  },
-  varlist: {
-    comment: 'Danh sách biến',
-    constant: true,
-    positionExt: 0,
-    depth: 1,
-  },
-};
 
 // ─── Main Component ──────────────────────────────────────────────────────
+
+type TabId = 'rules' | 'format' | 'varlist' | 'emphasis';
 
 export function UpdateRulesEditor({ schema }: {
   schema: MVUZODSchema | null;
 }) {
-  const [activeTab, setActiveTab] = useState<'rules' | 'format' | 'varlist'>('rules');
+  const [activeTab, setActiveTab] = useState<TabId>('rules');
   const [copied, setCopied] = useState<string | null>(null);
   const [customFormatYAML, setCustomFormatYAML] = useState<string | null>(null);
 
   const rulesYAML = useMemo(() =>
-    schema ? generateUpdateRulesYAML(schema) : '(Chưa có schema)',
+    schema ? generateUpdateRulesEntry(schema) : '(Chưa có schema)',
     [schema]
   );
 
-  const formatYAML = useMemo(() => customFormatYAML || generateOutputFormatYAML(), [customFormatYAML]);
+  const formatYAML = useMemo(() =>
+    customFormatYAML || (schema ? generateOutputFormatEntry(schema) : '(Chưa có schema)'),
+    [customFormatYAML, schema]
+  );
 
+  // 'selective' = mỗi biến một macro riêng (đi hết mọi tầng), thay vì đổ nguyên stat_data —
+  // thẻ lớn mà đổ cả cụm thì tốn token và AI khó tra đúng biến.
   const varListYAML = useMemo(() =>
-    schema ? generateVariableListYAML(schema) : '(Chưa có schema)',
+    schema ? generateVariableListEntry(schema, 'selective') : '(Chưa có schema)',
     [schema]
   );
 
-  const [injected, setInjected] = useState<string | null>(null);
+  const emphasisText = useMemo(() => generateEmphasisEntry(), []);
 
-  const handleInject = useCallback((tabId: 'rules' | 'format' | 'varlist', content: string) => {
-    const config = ENTRY_CONFIGS[tabId];
-    const entries = useCardStore.getState().card.data.character_book?.entries ?? [];
+  const [injected, setInjected] = useState<{ level: 'success' | 'warning' | 'error'; message: string } | null>(null);
 
-    // Find existing entry by comment
-    const existing = entries.find(e => e.comment === config.comment);
-
-    if (existing) {
-      // Update existing entry
-      useCardStore.getState().updateEntry(existing.id, { content });
-      setInjected(`✅ Đã cập nhật entry #${existing.id}`);
-    } else {
-      // Create new entry
-      const id = nextEntryId(entries);
-      const newEntry: LorebookEntry = {
-        id,
-        keys: [],
-        secondary_keys: [],
-        comment: config.comment,
-        content,
-        constant: config.constant,
-        selective: false,
-        insertion_order: 100,
-        enabled: true,
-        position: 'before_char',
-        use_regex: false,
-        extensions: {
-          position: config.positionExt,
-          exclude_recursion: true,
-          display_index: id,
-          probability: 100,
-          useProbability: true,
-          depth: config.depth,
-          selectiveLogic: 0,
-          outlet_name: '',
-          group: '',
-          group_override: false,
-          group_weight: 100,
-          prevent_recursion: true,
-          delay_until_recursion: false,
-          scan_depth: null,
-          match_whole_words: null,
-          ...(config.role !== undefined ? { role: config.role } : {}),
-        } as LorebookEntry['extensions'],
-      };
-      useCardStore.getState().addEntry(newEntry);
-      setInjected(`✅ Đã tạo entry mới #${id}`);
-    }
-
-    setTimeout(() => setInjected(null), 3000);
-  }, []);
+  const handleInject = useCallback((systemId: MvuSystemEntryId, content: string) => {
+    if (!schema) return;
+    const res = injectMvuSystemEntry(systemId, content, schema);
+    setInjected({ level: res.level, message: res.message });
+    setTimeout(() => setInjected(null), 6000);
+  }, [schema]);
 
   const handleCopy = useCallback((content: string, label: string) => {
     void copyWithToast(content, label, useToastStore.getState()).then((ok) => {
@@ -291,12 +84,18 @@ export function UpdateRulesEditor({ schema }: {
   }, []);
 
   const tabs = [
-    { id: 'rules' as const, label: 'Update Rules', icon: FileText, yaml: rulesYAML,
-      entryName: '[mvu_update]Quy tắc cập nhật biến', description: 'Hướng dẫn AI khi nào và cách nào update biến' },
-    { id: 'format' as const, label: 'Output Format', icon: Sparkles, yaml: formatYAML,
-      entryName: '[mvu_update]Định dạng đầu ra biến', description: 'Template <Analysis> CoT + <JSONPatch>' },
-    { id: 'varlist' as const, label: 'Variable List', icon: Eye, yaml: varListYAML,
-      entryName: 'Danh sách biến', description: 'Macro hiển thị giá trị biến cho AI đọc' },
+    { id: 'rules' as const, systemId: 'update_rules' as const, label: 'Update Rules', icon: FileText, yaml: rulesYAML,
+      entryName: '[mvu_update] Quy tắc cập nhật biến', placement: 'before_char · order 100',
+      description: 'Hướng dẫn AI khi nào và cách nào update biến' },
+    { id: 'format' as const, systemId: 'output_format' as const, label: 'Output Format', icon: Sparkles, yaml: formatYAML,
+      entryName: '[mvu_update] Định dạng đầu ra biến', placement: 'before_char · order 101',
+      description: 'Template <Analysis> CoT + <JSONPatch>' },
+    { id: 'varlist' as const, systemId: 'varlist' as const, label: 'Variable List', icon: Eye, yaml: varListYAML,
+      entryName: 'Danh sách biến', placement: '@D0 · role system · order 200',
+      description: 'Macro hiển thị giá trị biến cho AI đọc' },
+    { id: 'emphasis' as const, systemId: 'emphasis' as const, label: 'Nhấn mạnh', icon: Megaphone, yaml: emphasisText,
+      entryName: '[mvu_update] Nhấn mạnh định dạng đầu ra biến', placement: '@D0 · role system · order 999',
+      description: 'Nhắc AI ở CUỐI prompt — thiếu entry này model hay quên xuất khối cập nhật' },
   ];
 
   const activeTabData = tabs.find(t => t.id === activeTab)!;
@@ -340,6 +139,7 @@ export function UpdateRulesEditor({ schema }: {
             Entry: <code className="text-primary">{activeTabData.entryName}</code>
           </p>
           <p className="text-[10px] text-muted-foreground">{activeTabData.description}</p>
+          <p className="text-[10px] text-muted-foreground/70">Vị trí khi inject: <code>{activeTabData.placement}</code></p>
         </div>
         <div className="flex items-center gap-1.5">
           <button
@@ -354,7 +154,7 @@ export function UpdateRulesEditor({ schema }: {
             )}
           </button>
           <button
-            onClick={() => handleInject(activeTab, activeTabData.yaml)}
+            onClick={() => handleInject(activeTabData.systemId, activeTabData.yaml)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-emerald-500/80 to-teal-500/80
               text-white text-xs font-medium hover:from-emerald-500 hover:to-teal-500 transition-all
               shadow-sm shadow-emerald-500/10"
@@ -368,22 +168,48 @@ export function UpdateRulesEditor({ schema }: {
 
       {/* Inject status */}
       {injected && (
-        <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
-          <Check className="w-3 h-3 text-emerald-400" />
-          <span className="text-[10px] text-emerald-400 font-medium">{injected}</span>
+        <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border ${
+          injected.level === 'success'
+            ? 'bg-emerald-500/10 border-emerald-500/20'
+            : injected.level === 'warning'
+              ? 'bg-amber-500/10 border-amber-500/20'
+              : 'bg-red-500/10 border-red-500/20'
+        }`}>
+          <Check className={`w-3 h-3 ${
+            injected.level === 'success' ? 'text-emerald-400'
+              : injected.level === 'warning' ? 'text-amber-400' : 'text-red-400'
+          }`} />
+          <span className={`text-[10px] font-medium ${
+            injected.level === 'success' ? 'text-emerald-400'
+              : injected.level === 'warning' ? 'text-amber-400' : 'text-red-400'
+          }`}>{injected.message}</span>
         </div>
       )}
+
+      {/* (việc 87) Hợp đồng với engine: khối cập nhật phải có ĐỦ <UpdateVariable>/<Analysis>/
+          <JSONPatch>. Soi ngay trên màn hình để không ai inject nhầm bản thiếu thẻ — thiếu là
+          SillyTavern báo "变量更新失败" mà trong tool chẳng thấy dấu hiệu gì. */}
+      {(activeTab === 'format' || activeTab === 'emphasis') && (() => {
+        const contract = checkMvuOutputContract(activeTabData.yaml);
+        return (
+          <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border ${
+            contract.ok ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-red-500/10 border-red-500/30'
+          }`}>
+            <span className={`text-[10px] font-medium ${contract.ok ? 'text-emerald-400' : 'text-red-400'}`}>
+              {contract.ok
+                ? '✓ Đủ hợp đồng engine: <UpdateVariable> + <Analysis> + <JSONPatch>'
+                : `✗ Thiếu thẻ ${contract.missing.join(', ')} — engine MVU sẽ không bóc được lệnh cập nhật`}
+            </span>
+          </div>
+        );
+      })()}
 
       {/* YAML Preview */}
       <div className="rounded-xl border border-border bg-card overflow-hidden">
         <div className="px-3 py-2 border-b border-border bg-muted/20 flex items-center gap-2">
           <FileText className="w-3 h-3 text-primary" />
           <span className="text-[10px] font-medium">Nội dung Worldbook Entry</span>
-          <span className="text-[9px] text-muted-foreground ml-auto">
-            {activeTab === 'rules' ? 'Vị trí: D0 hoặc D3~D4' :
-             activeTab === 'format' ? 'Vị trí: D0 (Gemini) hoặc D4 (Claude)' :
-             'Vị trí: D0 hoặc D1, Order: 200'}
-          </span>
+          <span className="text-[9px] text-muted-foreground ml-auto">{activeTabData.placement}</span>
         </div>
         <pre className="p-4 max-h-96 overflow-y-auto text-xs font-mono text-foreground/80
           whitespace-pre-wrap leading-relaxed scrollbar-thin">
@@ -396,24 +222,32 @@ export function UpdateRulesEditor({ schema }: {
         <p className="text-[10px] font-medium text-muted-foreground mb-1">💡 Hướng dẫn sử dụng</p>
         {activeTab === 'rules' && (
           <ul className="text-[10px] text-muted-foreground space-y-0.5">
-            <li>• Copy nội dung → Paste vào worldbook entry <code>[mvu_update]Quy tắc cập nhật biến</code></li>
-            <li>• Mỗi biến cần <code>check</code> rules cụ thể — edit trong Schema Editor (tab ℹ️)</li>
+            <li>• Bấm <strong>Inject vào card</strong> — entry cũ cùng loại sẽ được CẬP NHẬT, không đẻ thêm bản trùng</li>
+            <li>• Mọi biến đều có <code>check</code>: biến nào schema không khai thì máy sinh bù (biến không có luật là biến đứng im cả ván)</li>
             <li>• Biến <code>_</code> readonly tự động bị bỏ qua</li>
-            <li>• Gộp biến cùng nhóm: <code>着装.$&#123;上装|下装|...&#125;</code></li>
+            <li>• Muốn luật bám cốt truyện hơn thì bấm <strong>AI tạo check rules</strong> rồi sinh lại</li>
           </ul>
         )}
         {activeTab === 'format' && (
           <ul className="text-[10px] text-muted-foreground space-y-0.5">
             <li>• <code>&lt;Analysis&gt;</code> CoT bắt AI phân tích TRƯỚC khi update — giảm hallucination</li>
-            <li>• 5 operations: replace, delta, insert, remove, move</li>
-            <li>• Path bắt đầu từ root (KHÔNG có <code>stat_data</code> prefix)</li>
+            <li>• 5 operations MVU nhận: replace, delta, insert, remove, move — <strong>KHÔNG</strong> có <code>add</code>/<code>test</code>/<code>copy</code> của RFC 6902</li>
+            <li>• Mảng lệnh PHẢI nằm trong <code>&lt;JSONPatch&gt;</code>; để trần là engine không bóc ra được lệnh nào</li>
+            <li>• Path bắt đầu từ root (KHÔNG có <code>stat_data</code> prefix), giữ nguyên dấu và khoảng trắng của tên biến</li>
           </ul>
         )}
         {activeTab === 'varlist' && (
           <ul className="text-[10px] text-muted-foreground space-y-0.5">
-            <li>• Dùng macro <code>&#123;&#123;format_message_variable::stat_data.X&#125;&#125;</code></li>
-            <li>• Đặt ở D0/D1 để AI đọc giá trị mới nhất</li>
-            <li>• Có thể tách thành nhiều entries với đèn xanh/đèn lam khác nhau</li>
+            <li>• Dùng macro <code>&#123;&#123;format_message_variable::stat_data.X&#125;&#125;</code> — đủ đường dẫn từ <code>stat_data</code></li>
+            <li>• Inject sẽ đặt entry ở <code>@D0, role system</code> để AI luôn thấy giá trị mới nhất</li>
+            <li>• Mỗi biến một dòng riêng (đi hết mọi tầng) thay vì đổ nguyên cụm — đỡ token, AI tra đúng biến hơn</li>
+          </ul>
+        )}
+        {activeTab === 'emphasis' && (
+          <ul className="text-[10px] text-muted-foreground space-y-0.5">
+            <li>• Entry ngắn đặt ở <code>@D0</code> — thứ model đọc SAU CHÓT trước khi viết</li>
+            <li>• Card MVU thật nào cũng có entry này; thiếu nó model hay bỏ khối cập nhật ở những lượt dài</li>
+            <li>• Nội dung là hợp đồng cố định với engine, không nên sửa tay</li>
           </ul>
         )}
       </div>

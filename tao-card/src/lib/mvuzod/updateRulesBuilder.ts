@@ -108,7 +108,7 @@ function describeFormat(f: MVUZODField): string | undefined {
  * Sinh bù gạch `check:` cho biến mà AI bỏ quên. Không cố viết hay — cốt để MỌI biến đều có
  * hướng dẫn cập nhật, vì biến không có dòng nào là biến sẽ đứng im suốt ván chơi.
  */
-function synthCheck(f: MVUZODField, pathText: string): string[] {
+export function synthCheck(f: MVUZODField, pathText: string): string[] {
   const c = f.constraints ?? {};
   const desc = (f.description || '').trim();
   const label = (f.label || leafName(f)).trim();

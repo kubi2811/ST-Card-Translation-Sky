@@ -53,13 +53,27 @@ function mvuText(v, dflt){
   return String(x);
 }
 
-// Lấy stat_data của lượt mới nhất. Ưu tiên display_data nếu card có (bản đã format để hiện).
+// Lấy stat_data của ĐÚNG tin nhắn đang chứa UI. Dùng "latest" chỉ làm fallback vì mỗi
+// bong bóng chat có state MVU riêng; đọc latest cho mọi iframe khiến bảng cũ/preview và form
+// mở đầu dễ nhìn như không cập nhật hoặc nhảy sang dữ liệu của lượt khác.
+function mvuCurrentMessageId(){
+  try {
+    var getId = (typeof getCurrentMessageId === 'function') ? getCurrentMessageId
+      : (window.getCurrentMessageId && typeof window.getCurrentMessageId === 'function') ? window.getCurrentMessageId
+      : (window.parent && typeof window.parent.getCurrentMessageId === 'function') ? window.parent.getCurrentMessageId
+      : null;
+    var id = getId ? getId() : null;
+    return (id === undefined || id === null || id === '') ? 'latest' : id;
+  } catch (e) { return 'latest'; }
+}
+
+// Ưu tiên display_data nếu card có (bản đã format để hiện).
 function mvuData(){
   try {
     var M = (typeof Mvu !== 'undefined' && Mvu) ? Mvu
           : (window.Mvu ? window.Mvu : (window.parent && window.parent.Mvu ? window.parent.Mvu : null));
     if (!M || typeof M.getMvuData !== 'function') return {};
-    var all = M.getMvuData({ type: 'message', message_id: 'latest' }) || {};
+    var all = M.getMvuData({ type: 'message', message_id: mvuCurrentMessageId() }) || {};
     return all.display_data || all.stat_data || {};
   } catch (e) { return {}; }
 }

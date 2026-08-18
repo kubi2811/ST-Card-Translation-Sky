@@ -178,6 +178,16 @@ describe('#6b — validateMvuVariables hết báo oan "unreplaced"', () => {
     expect(res.unreplaced).toContain('能力');
     expect(res.valid).toBe(false);
   });
+
+  it('có cả tên mới lẫn tên gốc vẫn phải đưa vào auto-fix', () => {
+    const original = '年龄 được dùng ở hai vị trí: 年龄';
+    const translated = 'Tuổi Tác được dùng ở hai vị trí: 年龄';
+    const res = validateMvuVariables(original, translated, { 年龄: 'Tuổi Tác' }, 'mvu_logic');
+    expect(res.unreplaced).toEqual(['年龄']);
+    expect(res.replaced).toEqual(['年龄']);
+    expect(res.valid).toBe(false);
+    expect(res.warnings.some(w => /partially replaced/.test(w))).toBe(true);
+  });
 });
 
 /* ═════════════ masterPrompt hết tự mâu thuẫn ═════════════ */

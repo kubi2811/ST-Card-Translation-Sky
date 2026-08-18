@@ -441,6 +441,8 @@ const ui: UiKeys = {
   tpProblemBtn: '🩹 Dịch lại {n} mục chưa đạt',
   tpProblemTip: 'Gom một phát tất cả mục CHƯA ĐẠT: lỗi đỏ, bị bỏ qua, và cả mục đã "Xong" nhưng vẫn còn tiếng Trung (gồm mục bị chốt an toàn giữ nguyên bản gốc). Chạy đa luồng, mỗi mục tự thử lại tối đa 3 lượt, mục còn sót được nhắc đích danh đoạn nào chưa dịch.',
   tpProblemBreakdown: '{e} lỗi · {s} bỏ qua · {r} còn tiếng Trung',
+  tpJumpSkipped: 'Bấm để đi xuống entry Bỏ qua kế tiếp; hết danh sách sẽ quay lại đầu',
+  tpJumpError: 'Bấm để đi xuống entry Lỗi kế tiếp; hết danh sách sẽ quay lại đầu',
   tpManualHint1: 'Muốn tự dịch tay trường nào?',
   tpManualHint2: 'Bỏ tick',
   tpManualHint3: 'ô của trường đó ở bảng',
@@ -519,6 +521,8 @@ const ui: UiKeys = {
   feApplyAllToast: 'Applied selection to all {key} fields',
   feSkip: 'Bỏ qua',
   feIgnoreFallback: 'Bỏ qua (không dịch)',
+  feNextStatusEntry: 'Entry kế',
+  feNextStatusEntryTip: 'Đi xuống entry kế tiếp trong danh sách đang lọc; hết danh sách sẽ quay lại đầu',
 
   // ─── TranslateConfig ───
   // ⚠️ Phần lớn key ở đây vốn đi qua `locale === 'vi' ? VN : EN` và LUÔN ra bản ANH

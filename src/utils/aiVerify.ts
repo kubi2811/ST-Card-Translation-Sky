@@ -5,6 +5,7 @@ import type { CharacterCard, ProxySettings, TranslationField } from '../types/ca
 import { detectStructuralTruncation, callProvider, computePoolConcurrency } from './apiClient';
 // (bugNeedFix/177) Dò lỗi phải chạy đa luồng như mọi luồng khác — xem ghi chú ở verifyConcurrency().
 import { runWorkerPool } from './runWorkerPool';
+import { applyMvuToText } from './mvuSync';
 
 /**
  * (bugNeedFix/177) SỐ LUỒNG CHO CÁC LƯỢT "DÒ LỖI"/"SỬA LỖI" BẰNG AI.
@@ -1048,12 +1049,17 @@ export function verifyFields(
 
     // ─── 7. MVU variable consistency ───
     if (Object.keys(mvuDictionary).length > 0 && (field.group === 'tavern_helper' || field.group === 'lorebook' || field.group === 'regex')) {
+      const isMvuCodeField =
+        field.entryType === 'initvar' || field.entryType === 'controller' ||
+        field.entryType === 'mvu_logic' || field.entryType === 'rules' ||
+        field.group === 'regex' || field.group === 'tavern_helper';
       for (const [origVar, transVar] of sortedVarPairs(mvuDictionary)) {
         // (Bug 70) Chỉ tính là "chưa đổi tên" khi tên biến ĐỨNG RIÊNG trong bản dịch —
         // trước đây includes() trần khiến biến tên "B" khớp cả chữ B trong getElementById.
         const stillHasOld = replaceVarSafe(currentAutoFix, origVar, ' ') !== currentAutoFix;
-        if (orig.includes(origVar) && stillHasOld && !currentAutoFix.includes(transVar)) {
-          currentAutoFix = replaceVarSafe(currentAutoFix, origVar, transVar);
+        const safeFix = applyMvuToText(currentAutoFix, { [origVar]: transVar }, isMvuCodeField);
+        if (orig.includes(origVar) && stillHasOld && safeFix !== currentAutoFix) {
+          currentAutoFix = safeFix;
           issues.push({
             id: crypto.randomUUID(), fieldPath: field.path,
             severity: 'warning', category: 'mvu_inconsistent',

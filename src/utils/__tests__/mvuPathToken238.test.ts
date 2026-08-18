@@ -182,6 +182,22 @@ describe('(bug 238) CA GIẾT THẺ — token path bị xẻ thành biểu thứ
     expect(bracketizeDotAccess('fn().Thế Giới', names)).toBe(`fn()['Thế Giới']`);
     expect(bracketizeDotAccess('wd?.Thế Giới', names)).toBe(`wd?.['Thế Giới']`);
   });
+
+  it("path lai [Nhân Vật['Tuổi Tác']] tự trở về dot-path đầy đủ, không bị rút còn Tuổi", () => {
+    const fullPathDict = {
+      '角色.年龄': 'Nhân Vật.Tuổi Tác',
+      '年龄': 'Tuổi', // mục ngắn cạnh tranh không được phép nuốt mất full-path
+    };
+    const hybrid = "[Nhân Vật['Tuổi Tác']]";
+    expect(applyMvuToText(hybrid, fullPathDict, true)).toBe('[Nhân Vật.Tuổi Tác]');
+    expect(enforceVariableCasing(hybrid, fullPathDict).text).toBe('[Nhân Vật.Tuổi Tác]');
+  });
+
+  it("array expression JS thật [data['status']] không bị đổi nhầm thành path văn xuôi", () => {
+    const js = "const x = [data['status']];";
+    expect(applyMvuToText(js, { 状态: 'status' }, true)).toBe(js);
+    expect(enforceVariableCasing(js, { 状态: 'status' }).text).toBe(js);
+  });
 });
 
 describe('(bug 238) NHÓM 2 — biến thể sai tên thuộc tính, ở dạng path', () => {

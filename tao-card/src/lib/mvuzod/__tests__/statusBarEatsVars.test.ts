@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generateStatusBarSharedJS } from '../gameHtmlTemplates';
+import { generatePopulateFunction, generateStatusBarSharedJS } from '../gameHtmlTemplates';
 
 /**
  * (User 21/07 — việc 78) Test end-to-end cho lỗi "bảng không ăn biến".
@@ -33,6 +33,11 @@ function runHelpers() {
 }
 
 describe('bảng trạng thái ĂN ĐÚNG biến MVU (cặp [giá trị, mô tả])', () => {
+  it('populateData đọc qua MVU native, không dùng kho getAllVariables dễ lệch tầng', () => {
+    const src = generatePopulateFunction([]);
+    expect(src).toContain('var d = mvuData()');
+    expect(src).not.toContain('getAllVariables');
+  });
   it('stcsSetText nhận CẶP → chỉ in giá trị, KHÔNG in kèm mô tả', () => {
     const { api, els } = runHelpers();
     // Đúng định dạng MVU thật: giá trị bọc trong mảng cùng phần mô tả.

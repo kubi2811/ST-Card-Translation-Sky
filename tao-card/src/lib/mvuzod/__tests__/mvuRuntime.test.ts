@@ -15,12 +15,14 @@ import { MVU_RUNTIME_HELPERS, MVU_VAR_ACCESS_RULES } from '../mvuRuntime';
 
 /** Chạy đoạn helper trong sandbox rồi trả về các hàm để test thật. */
 function loadHelpers() {
-  const fn = new Function(`${MVU_RUNTIME_HELPERS}; return { mvuLeaf, mvuGet, mvuNum, mvuText };`);
+  const fn = new Function(`${MVU_RUNTIME_HELPERS}; return { mvuLeaf, mvuGet, mvuNum, mvuText, mvuData, mvuCurrentMessageId };`);
   return fn() as {
     mvuLeaf: (v: unknown) => unknown;
     mvuGet: (data: unknown, path: string, dflt?: unknown) => unknown;
     mvuNum: (v: unknown, dflt?: number) => number;
     mvuText: (v: unknown, dflt?: string) => string;
+    mvuData: () => unknown;
+    mvuCurrentMessageId: () => string | number;
   };
 }
 

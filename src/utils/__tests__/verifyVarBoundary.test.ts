@@ -73,4 +73,17 @@ describe('verifyFields — hết báo lỗi giả cho code còn nguyên', () => 
     const issues = verifyFields([notRenamed], { B: 'Tuổi' }, 'Chinese');
     expect(issues.some(i => /MVU variable "B"/.test(i.description))).toBe(true);
   });
+
+  it('vẫn sửa phần tên gốc còn sót khi tên mới đã có ở vị trí khác', () => {
+    const partial = {
+      path: 'lorebook[19].content', group: 'lorebook', entryType: 'mvu_logic', status: 'done',
+      original: '年龄: z.string(); const key = 年龄;',
+      translated: 'Tuổi Tác: z.string(); const key = 年龄;',
+      label: 'lorebook[19].content',
+    } as unknown as TranslationField;
+    const issue = verifyFields([partial], { 年龄: 'Tuổi Tác' }, 'Chinese')
+      .find(i => i.category === 'mvu_inconsistent');
+    expect(issue).toBeDefined();
+    expect(String(issue?.fixValue)).not.toContain('年龄');
+  });
 });

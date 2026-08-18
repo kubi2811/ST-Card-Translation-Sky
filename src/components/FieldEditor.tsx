@@ -2004,6 +2004,7 @@ export default function FieldEditor() {
   const setJumpToFieldPath = useStore((s) => s.setJumpToFieldPath);
   const { retranslateField, applyModToField, retranslateSkipped } = useTranslation();
   const t = useT();
+  const ui = useUi();
   const modEnabled = Boolean(translationConfig.enableModMode && translationConfig.modInstructions?.trim());
   const tabLabels = useTabLabels();
   const [activeTab, setActiveTab] = useState<FieldGroup | 'all'>('all');
@@ -2020,6 +2021,8 @@ export default function FieldEditor() {
   const [bulkRunning, setBulkRunning] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [jumpPath, setJumpPath] = useState<string | null>(null);
+  // Giữ riêng cursor sau khi hiệu ứng highlight tắt, để nút "Entry kế" vẫn đi tiếp đúng dòng.
+  const [statusCursorPath, setStatusCursorPath] = useState<string | null>(null);
 
   // "Nhảy tới trường" từ bảng Sức khoẻ thẻ — chỉ xử lý trường THƯỜNG (không phải regex; regex do
   // RegexManagerPanel lo). Đặt đúng tab + xoá ô Tìm để trường hiện, cuộn bảng vào tầm nhìn, rồi
@@ -2029,9 +2032,16 @@ export default function FieldEditor() {
     if (jumpToFieldPath.includes('regex_scripts[')) return; // trường regex → panel khác xử lý
     const target = fields.find((f) => f.path === jumpToFieldPath);
     if (!target) { setJumpToFieldPath(null); return; }
-    setActiveTab(target.group as FieldGroup);
+    const jumpStatus = target.status === 'skipped' || target.status === 'error' ? target.status : null;
+    // Với Bỏ qua/Lỗi, để tab "Tất cả" nhằm hiện trọn danh sách trạng thái trên mọi nhóm entry.
+    // Các lệnh nhảy thông thường vẫn mở đúng nhóm cũ để giữ nguyên hành vi trước đây.
+    setActiveTab(jumpStatus ? 'all' : target.group as FieldGroup);
     setSearchQuery('');
+    // Tín hiệu từ hai badge "Bỏ qua" / "Lỗi" ở tiến trình dịch phải đưa người dùng vào đúng
+    // danh sách trạng thái, không chỉ cuộn tới một dòng lẫn giữa hàng trăm entry đã xong.
+    setStatusFilter(jumpStatus || 'all');
     setJumpPath(jumpToFieldPath);
+    setStatusCursorPath(jumpStatus ? jumpToFieldPath : null);
     setJumpToFieldPath(null);
     requestAnimationFrame(() => containerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   }, [jumpToFieldPath, fields, setJumpToFieldPath]);
@@ -2072,6 +2082,16 @@ export default function FieldEditor() {
     () => (statusFilter === 'all' ? scopedFields : scopedFields.filter(f => f.status === statusFilter)),
     [scopedFields, statusFilter],
   );
+
+  const statusCursorIndex = statusCursorPath
+    ? filteredFields.findIndex((f) => f.path === statusCursorPath)
+    : -1;
+  const jumpToNextFilteredStatus = () => {
+    if (filteredFields.length === 0) return;
+    const target = filteredFields[(statusCursorIndex + 1) % filteredFields.length];
+    setStatusCursorPath(target.path);
+    setJumpPath(target.path);
+  };
 
   // Count fields per tab
   const tabCounts = useMemo(() => {
@@ -2263,6 +2283,22 @@ export default function FieldEditor() {
                 }}
               >
                 {bulkRunning ? '⏳ Đang dịch lại…' : `🔁 Dịch lại tất cả ${filteredFields.length} mục đang hiện`}
+              </button>
+            )}
+
+            {(statusFilter === 'skipped' || statusFilter === 'error') && filteredFields.length > 1 && (
+              <button
+                type="button"
+                onClick={jumpToNextFilteredStatus}
+                title={ui.feNextStatusEntryTip}
+                style={{
+                  fontSize: '0.7rem', fontWeight: 600, padding: '3px 10px',
+                  borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+                  border: '1px solid var(--accent-secondary)', background: 'rgba(56,189,248,0.09)',
+                  color: 'var(--accent-secondary)',
+                }}
+              >
+                {ui.feNextStatusEntry} ↓ ({Math.max(1, statusCursorIndex + 1)}/{filteredFields.length})
               </button>
             )}
           </div>

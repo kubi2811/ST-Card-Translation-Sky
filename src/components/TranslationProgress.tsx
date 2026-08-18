@@ -32,13 +32,42 @@ import {
 // Shared components
 // ═══════════════════════════════════════════════
 
-function MiniStat({ icon, value, label, color }: { icon: React.ReactNode; value: number; label: string; color: string }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '4px 10px', background: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', fontSize: '0.75rem', color }}>
+function MiniStat({ icon, value, label, color, onClick, title }: {
+  icon: React.ReactNode;
+  value: number;
+  label: string;
+  color: string;
+  onClick?: () => void;
+  title?: string;
+}) {
+  const content = (
+    <>
       {icon}
       <span style={{ fontWeight: 600 }}>{value}</span>
       <span style={{ color: 'var(--text-muted)' }}>{label}</span>
-    </div>
+    </>
+  );
+  const style: React.CSSProperties = {
+    display: 'flex', alignItems: 'center', gap: '4px', padding: '4px 10px',
+    background: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)',
+    fontSize: '0.75rem', color,
+  };
+
+  if (!onClick) return <div style={style}>{content}</div>;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      aria-label={title || `${value} ${label}`}
+      style={{
+        ...style,
+        border: `1px solid color-mix(in srgb, ${color} 45%, transparent)`,
+        cursor: 'pointer', fontFamily: 'inherit', transition: 'background 0.15s, transform 0.15s',
+      }}
+    >
+      {content}
+    </button>
   );
 }
 
@@ -623,6 +652,7 @@ function TranslationPanel() {
   const translationConfig = useStore((s) => s.translationConfig);
   const preprocessProgress = useThrottledStore((s) => s.preprocessProgress, 150);
   const deleteCurrentCardCache = useStore((s) => s.deleteCurrentCardCache);
+  const setJumpToFieldPath = useStore((s) => s.setJumpToFieldPath);
   const ui = useUi();
   const { startTranslation, continueTranslation, pauseTranslation, resumeTranslation, cancelTranslation, retranslateProblemFields, prepareFields } = useTranslation();
   const t = useT();
@@ -664,6 +694,18 @@ function TranslationPanel() {
 
   const totalChars = fields.reduce((sum, f) => sum + f.original.length, 0);
   const estimatedTokens = Math.ceil(totalChars / 4);
+  const statusJumpCursor = useRef<Record<'skipped' | 'error', string | null>>({ skipped: null, error: null });
+
+  // Mỗi lần bấm đi XUỐNG entry kế tiếp theo đúng thứ tự bảng; hết danh sách thì vòng lại đầu.
+  // Cursor giữ bằng path để không lệch khi một entry đổi trạng thái hoặc danh sách được cập nhật.
+  const jumpToNextStatus = (status: 'skipped' | 'error') => {
+    const matches = fields.filter((f) => f.status === status);
+    if (matches.length === 0) return;
+    const currentIndex = matches.findIndex((f) => f.path === statusJumpCursor.current[status]);
+    const target = matches[(currentIndex + 1) % matches.length];
+    statusJumpCursor.current[status] = target.path;
+    setJumpToFieldPath(target.path);
+  };
 
   return (
     <div className="card fade-in" style={{ padding: '20px' }}>
@@ -756,12 +798,26 @@ function TranslationPanel() {
         <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
           <MiniStat icon={<CheckCircle2 size={12} />} value={doneFields} label={t.done} color="var(--accent-success)" />
           {skippedFields > 0 && (
-            <MiniStat icon={<SkipForward size={12} />} value={skippedFields} label={t.skipped} color="var(--accent-warning)" />
+            <MiniStat
+              icon={<SkipForward size={12} />}
+              value={skippedFields}
+              label={t.skipped}
+              color="var(--accent-warning)"
+              onClick={() => jumpToNextStatus('skipped')}
+              title={ui.tpJumpSkipped}
+            />
           )}
           {ignoredFields > 0 && (
             <MiniStat icon={<Ban size={12} />} value={ignoredFields} label={t.ignored || 'Ignored'} color="var(--text-muted)" />
           )}
-          <MiniStat icon={<XCircle size={12} />} value={errorFields} label={t.error} color="var(--accent-danger)" />
+          <MiniStat
+            icon={<XCircle size={12} />}
+            value={errorFields}
+            label={t.error}
+            color="var(--accent-danger)"
+            onClick={errorFields > 0 ? () => jumpToNextStatus('error') : undefined}
+            title={errorFields > 0 ? ui.tpJumpError : undefined}
+          />
           <MiniStat icon={<Loader2 size={12} />} value={totalFields - doneFields - errorFields - skippedFields - ignoredFields} label={t.remaining} color="var(--text-muted)" />
           {/* (bug 211) "0 Lỗi" không có nghĩa là sạch: mục bị chốt an toàn giữ nguyên gốc và mục
               dịch sót chữ Hán đều mang mác "Xong". Đếm thẳng ra đây cho khỏi ai bị lừa. */}

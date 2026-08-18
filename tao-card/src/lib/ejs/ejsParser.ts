@@ -161,6 +161,17 @@ export function validateEJSEntry(content: string, schema?: MVUZODSchema): Valida
         warnings.push(`getvar('${path}'): key không bắt đầu bằng 'stat_data.' — có thể sai`);
       }
 
+      // CHƯA BÓC CẶP: MVU lưu biến dạng [giá_trị, "mô tả"] hoặc giá trị trần, getvar trả về
+      // NGUYÊN thứ đang nằm trong stat_data. Thẻ nhập từ ngoài hay dùng cặp ⇒ Number(cặp) = NaN
+      // và mọi so sánh số trượt lặng lẽ. Chỉ nhắc, không chặn: thẻ do tool sinh xuất giá trị
+      // trần nên bản không bọc vẫn chạy được.
+      if (!/\[\s*\]\s*\.concat\s*\(\s*$|castArray\s*\(\s*$/.test(line.slice(0, match.index))) {
+        warnings.push(
+          `getvar('${path}') chưa bóc cặp [giá trị, "mô tả"] — thẻ dùng dạng cặp sẽ ra NaN/dính mô tả. `
+          + `Bọc lại: [].concat(getvar('${path}'${defaults !== null ? `, { defaults: … }` : ''}))[0]`,
+        );
+      }
+
       // Check against schema
       let inSchema: boolean | null = null;
       if (schema && path.startsWith('stat_data.')) {
@@ -235,7 +246,9 @@ export function generateGetvarCall(fieldPath: string, defaultValue: unknown): st
   const defaultStr = typeof defaultValue === 'string' ? `'${defaultValue}'`
     : typeof defaultValue === 'number' ? String(defaultValue)
     : JSON.stringify(defaultValue);
-  return `getvar('${dotPath}', { defaults: ${defaultStr} })`;
+  // `[].concat(...)[0]` bóc cặp [giá_trị, "mô tả"] mà MVU dùng cho biến có mô tả; giá trị trần
+  // đi qua vẫn nguyên. Thiếu nó thì thẻ nhập từ ngoài cho ra NaN / dính cả câu mô tả.
+  return `[].concat(getvar('${dotPath}', { defaults: ${defaultStr} }))[0]`;
 }
 
 /**

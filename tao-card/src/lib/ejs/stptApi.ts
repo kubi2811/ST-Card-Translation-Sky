@@ -76,7 +76,18 @@ QUY TẮC CÚ PHÁP (vi phạm là vỡ compile "Unexpected token '<'"):
 - MỖI <%_ hoặc <% PHẢI có _%> hoặc %> đóng lại. Tuyệt đối không mở khối rồi để hở —
   khi còn khối hở, mọi thẻ phía sau bị nuốt vào JS và cả entry chết.
 - Dùng var (không let/const). activewi/getwi PHẢI có await.
-- Trong scriptlet nên dùng chú thích /* ... */; nếu dùng // thì PHẢI có xuống dòng ngay sau.`;
+- Trong scriptlet nên dùng chú thích /* ... */; nếu dùng // thì PHẢI có xuống dòng ngay sau.
+
+ĐỌC BIẾN MVU CHO ĐÚNG (sai là so sánh nào cũng trượt, mà KHÔNG có lỗi đỏ nào báo):
+- Đường dẫn LUÔN bắt đầu bằng 'stat_data.' — getvar('stat_data.Nhóm.Biến'). Thiếu tiền tố là
+  đọc trúng một biến chat không tồn tại, luôn ra giá trị mặc định.
+- MVU lưu biến theo HAI dạng: giá trị TRẦN (Máu: 100) hoặc CẶP [giá_trị, "mô tả"]
+  (Cảnh Giới: ["Luyện Khí", "cảnh giới hiện tại"]). getvar() trả về NGUYÊN thứ đang nằm đó,
+  KHÔNG tự bóc cặp. In thẳng ra là dính cả câu mô tả; Number(cặp) ra NaN.
+  ⇒ LUÔN bọc: [].concat(getvar('stat_data.Nhóm.Biến', { defaults: X }))[0]
+     vd: var hp = Number([].concat(getvar('stat_data.Nhân vật.HP', { defaults: 100 }))[0]);
+- Macro {{format_message_variable::stat_data.Nhóm.Biến}} thì TỰ format sẵn — dùng nó khi chỉ
+  cần IN giá trị ra prompt; getvar dùng khi cần TÍNH TOÁN / so sánh.`;
 
 export interface WorldbookEjsCheck {
   ok: boolean;

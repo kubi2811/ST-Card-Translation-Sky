@@ -24,6 +24,41 @@ PHONG CÁCH:
 - Mỗi lần đổi findRegex thì BẮT BUỘC kèm/cập nhật <sample_output> (đoạn văn AI mẫu chứa đúng block) — hệ thống sẽ CHẠY THẬT findRegex lên đó để chứng minh nó match. Nếu không match, bạn sẽ nhận <validation_report> và phải sửa.
 - Widget game UI thường dùng: placement=[2] (AI Output), markdownOnly=true, promptOnly=false, và findRegex nhiều dòng nên THƯỜNG CẦN flag "s" (dotAll), vd /<status>([\\s\\S]*?)<\\/status>/s.`;
 
+/**
+ * ĐỌC BIẾN TRONG WIDGET — luật cứng, tách riêng vì đây là chỗ hỏng nhiều nhất.
+ *
+ * SillyTavern có BỐN kho biến; MVU chỉ sống ở kho MESSAGE (stat_data gắn theo từng tin nhắn).
+ * `{{getvar::X}}` đọc kho CHAT — kho khác hẳn — nên widget bind kiểu đó render ra rỗng, y hệt
+ * bug #162 nhưng ở đường đọc. Trước đây prompt này còn DẠY dùng `getvar::`, và bộ kiểm cũng
+ * tính nó là binding hợp lệ, nên cái sai đi lọt tới tận lúc chơi.
+ */
+const VAR_BINDING_RULES = `═══ ĐỌC BIẾN MVU TRONG WIDGET (SAI LÀ BẢNG TRỐNG — ĐỌC KỸ) ═══
+
+Widget chạy trong IFRAME của TavernHelper, sau khi tin nhắn đã hiện. Đọc biến bằng JS, KHÔNG bằng macro:
+
+✅ ĐÚNG — bind động, tự vẽ lại khi biến đổi:
+<script>
+  var d = mvuData();                          // stat_data của ĐÚNG tin nhắn đang hiện
+  var mau  = mvuGet(d, 'Người Chơi.Máu', '—'); // đã tự bóc cặp [giá trị, "mô tả"]
+  var vang = _.get(d, ['Người Chơi', 'Vàng'], 0);
+</script>
+
+❌ CẤM — mọi thứ dưới đây bộ kiểm sẽ báo LỖI WRONG_VAR_STORE:
+  {{getvar::Máu}}  {{setvar::Máu}}  /setvar
+  → đụng kho biến CHAT chứ không phải stat_data của MVU;
+  → macro chỉ được thế MỘT LẦN lúc dựng tin nhắn nên số đứng im, không đồng biến.
+
+BA ĐIỀU BẮT BUỘC NHỚ:
+1. MVU lưu biến dạng CẶP [giá_trị, "mô tả"] hoặc giá trị trần. In thẳng cặp ra là bảng hiện
+   "Luyện Khí,cảnh giới hiện tại". Dùng mvuGet/mvuText/mvuNum — chúng bóc sẵn.
+2. Đường dẫn tính TỪ GỐC stat_data: biến lồng phải viết đủ 'Nhóm.Biến'.
+3. Vẽ lại: đặt toàn bộ code vẽ trong một hàm rồi
+   eventOn(Mvu.events.VARIABLE_UPDATE_ENDED, hàmĐó) + setInterval dự phòng.
+
+GHI biến (chỉ Opening Form mới cần): MỘT đường duy nhất
+  insertOrAssignVariables({ stat_data: cây }, { type: 'message', message_id: 'latest' })
+KHÔNG dùng /setvar (ghi nhầm kho chat — đúng bug #162).`;
+
 const XML_PROTOCOL = `═══ GIAO THỨC OUTPUT (BẮT BUỘC — chỉ XML, KHÔNG JSON, KHÔNG markdown \`\`\`) ═══
 Mỗi lượt trả về các khối sau (bỏ khối không dùng):
 
@@ -112,9 +147,10 @@ export function buildGameUiSystemPrompt(
   const allowListBlock = allowedVarNames.length
     ? [
         '\n═══ DANH SÁCH TRẮNG TÊN BIẾN (schema ∪ initvar) ═══',
-        'CHỈ được dùng các tên dưới đây trong getvar:: / stat_data[...] / _.get(...).',
+        'CHỈ được dùng các tên dưới đây trong mvuGet(...) / _.get(...) / stat_data[...].',
         'Dùng tên KHÁC = widget render ra rỗng (undefined) và sẽ bị bộ kiểm báo LỖI, bắt làm lại:',
         allowedVarNames.map((v) => `• ${v}`).join('\n'),
+        'Biến LỒNG phải viết ĐỦ đường dẫn ("Người Chơi.Máu"), viết trần ("Máu") là đọc từ gốc stat_data → undefined.',
         'Nếu cần một biến CHƯA có trong danh sách: nói rõ cho user thêm vào schema trước, ĐỪNG tự bịa.',
       ].join('\n')
     : '';
@@ -126,6 +162,7 @@ export function buildGameUiSystemPrompt(
     REGEX_PATTERN_LIBRARY,
     REGEX_BEST_PRACTICES,
     '\n' + STATUS_BAR_PATTERNS,
+    '\n' + VAR_BINDING_RULES,
     '\n═══ SCHEMA BIẾN (dùng đúng tên, đừng bịa) ═══',
     schemaBlock,
     allowListBlock,

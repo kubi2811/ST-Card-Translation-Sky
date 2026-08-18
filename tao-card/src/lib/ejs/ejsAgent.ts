@@ -587,6 +587,22 @@ export function createEjsDomain(ctx: EjsAgentContext): GoalAgentDomain<EjsDraft>
         );
       }
 
+      // Bóc cặp [giá_trị, "mô tả"] cho mọi getvar chưa bọc. MVU lưu biến theo cả hai dạng
+      // (trần và cặp), getvar trả về NGUYÊN thứ đang nằm trong stat_data — thẻ nhập từ ngoài
+      // hay dùng cặp nên Number(cặp) ra NaN và mọi so sánh số trượt IM LẶNG.
+      // Sửa máy móc được nên không tốn một lượt gọi AI nào.
+      if (issues.some((i) => /chưa bóc cặp/.test(i.message))) {
+        const wrap = /(?<!\[\]\.concat\()getvar\(\s*('[^']*'|"[^"]*")\s*(,\s*\{[^}]*\})?\s*\)/g;
+        out = out.map((d) => {
+          if (!wrap.test(d.code)) return d;
+          wrap.lastIndex = 0;
+          const code = d.code.replace(wrap, (_m, p, opts) => `[].concat(getvar(${p}${opts ?? ''}))[0]`);
+          if (code === d.code) return d;
+          fixed.push(`bóc cặp [giá trị, "mô tả"] cho getvar trong "${d.entryComment}"`);
+          return { ...d, code };
+        });
+      }
+
       // (bug 126) Tự vá xung đột. Khối cũ trong card đưa vào để làm mốc nhưng KHÔNG bị sửa —
       // ta chỉ được đụng vào thứ mình vừa sinh, không đi sửa entry sẵn có của user.
       if (issues.some((i) => i.code === 'ejs-var-conflict' || i.code === 'ejs-name-conflict')) {

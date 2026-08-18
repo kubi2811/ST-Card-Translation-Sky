@@ -24,7 +24,8 @@ export interface ValidationIssue {
   level: 'error' | 'warn';
   code:
     | 'REGEX_SYNTAX' | 'SCRIPT_SYNTAX' | 'PLACEMENT' | 'MEANINGLESS_FLAGS' | 'HTML_QUALITY'
-    | 'NO_SAMPLE' | 'NO_MATCH' | 'MISSING_GROUP' | 'UNKNOWN_VAR' | 'NO_VAR_BOUND' | 'EDIT_MISMATCH';
+    | 'NO_SAMPLE' | 'NO_MATCH' | 'MISSING_GROUP' | 'UNKNOWN_VAR' | 'NO_VAR_BOUND' | 'EDIT_MISMATCH'
+    | 'WRONG_VAR_STORE' | 'AMBIGUOUS_VAR';
   message: string;      // tiếng Việt, kèm gợi ý sửa
   scriptIndex?: number; // script nào trong regexDraft
 }
@@ -158,6 +159,52 @@ export function collectInitVarNames(initVarConfig?: { entries?: { data?: Record<
   return [...out];
 }
 
+/**
+ * SAI KHO BIẾN — cùng lớp lỗi với bug #162, nhưng ở đường ĐỌC.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * SillyTavern có bốn kho biến riêng biệt; MVU sống ở kho MESSAGE
+ * (MvuData = {stat_data, schema, display_data…} gắn theo TỪNG tin nhắn — mvuReference.ts).
+ * `{{getvar::X}}` / `{{setvar::X}}` / `/setvar` đụng vào kho CHAT — một kho KHÁC HẲN.
+ *
+ * Bug #162 đã bắt đúng chuyện này ở đường GHI (`/setvar` không làm stat_data đổi). Đường ĐỌC thì
+ * chưa ai chặn: widget bind bằng `{{getvar::Máu}}` vẫn QUA được kiểm V4 (tên có trong whitelist)
+ * rồi vào game render ra rỗng. Thêm một tầng nữa: macro chỉ được THẾ MỘT LẦN lúc dựng tin nhắn,
+ * nên kể cả trúng kho thì số cũng đứng im khi biến đổi — không đồng biến như bảng phải có.
+ */
+function wrongStoreRefs(replaceString: string): string[] {
+  const s = String(replaceString || '');
+  const out: string[] = [];
+  for (const m of s.matchAll(/\{\{\s*(get|set)var::([^}\n|]*)/gi)) {
+    out.push(`{{${m[1]}var::${(m[2] || '').trim()}}}`);
+  }
+  if (/\/setvar\b/.test(s)) out.push('/setvar');
+  return [...new Set(out)];
+}
+
+/**
+ * Tên biến viết TRẦN (một đoạn) trong khi schema/initvar để nó NẰM LỒNG.
+ * `mvuGet(d, 'Máu')` với schema `/Người Chơi/Máu` trả undefined — bảng ra ô trống.
+ * Whitelist cố tình lỏng (nhận cả tên lá) để không báo "bịa biến" oan, nên chỗ này chỉ NHẮC
+ * kèm đường dẫn đủ để AI sửa, không chặn.
+ */
+function fullPathSuggestions(ref: string, allNames: string[]): string[] {
+  // `ref` đến từ referencedVars nên đã qua normalizeVarPath (thường + đổi / thành .);
+  // `allNames` là tên GỐC từ schema/initvar. Phải chuẩn hoá cả hai để so, nhưng trả về tên
+  // GỐC — gợi ý viết thường thì AI chép vào code là sai hoa/thường của khoá MVU.
+  const r = normalizeVarPath(ref);
+  if (r.includes('.')) return [];
+  const suffix = '.' + r;
+  // Schema khai mỗi biến hai kiểu ('A.B' và 'A/B') → gộp lại, giữ dạng chấm cho gợi ý.
+  const seen = new Map<string, string>();
+  for (const n of allNames) {
+    const k = normalizeVarPath(n);
+    if (!k.includes('.') || !k.endsWith(suffix)) continue;
+    const prev = seen.get(k);
+    if (!prev || (prev.includes('/') && !n.includes('/'))) seen.set(k, n);
+  }
+  return [...seen.values()];
+}
+
 /** Đưa 1 đoạn sampleOutput quanh chỗ gần khớp để AI thấy vì sao trượt. */
 function sampleHint(sampleOutput: string): string {
   const s = sampleOutput.trim();
@@ -246,6 +293,19 @@ export function validateRegexDraft(
       }
     }
 
+    // ─── V5: ĐÚNG KHO BIẾN ───
+    // Chặn TRƯỚC cả V4: tên biến có đúng đến mấy mà đọc nhầm kho thì bảng vẫn trống.
+    // CHỈ áp cho thẻ CÓ hệ biến MVU. Thẻ không có schema/initvar thì kho chat là kho DUY NHẤT
+    // nó có — cấm {{getvar::}} ở đó là báo oan.
+    for (const ref of schemaSet.size > 0 ? wrongStoreRefs(s.replaceString || '') : []) {
+      push('error', 'WRONG_VAR_STORE',
+        `Script #${i + 1} "${s.scriptName}": ${ref} đụng vào kho biến CHAT của SillyTavern, `
+        + 'trong khi MVU lưu stat_data ở kho MESSAGE (theo từng tin nhắn) → widget render ra rỗng. '
+        + 'Ngoài ra macro chỉ được thế MỘT LẦN lúc dựng tin nhắn nên số sẽ đứng im khi biến đổi. '
+        + "Bind bằng JS trong <script>: var d = mvuData(); rồi mvuGet(d, 'Nhóm.Biến', '—') "
+        + "(hoặc _.get(d, ['Nhóm','Biến'], 0)) — đây là đường mà bộ Tạo nhanh và các thẻ thật dùng.", i);
+    }
+
     // ─── V4: ĐỒNG BIẾN VỚI SCHEMA + INITVAR ───
     // Đây là chốt chặn cho lỗi "bảng không ăn biến": AI bịa tên biến không có thật thì
     // widget render ra ô trống/undefined. TRƯỚC ĐÂY chỉ là 'warn' nên report vẫn ok=true,
@@ -255,6 +315,11 @@ export function validateRegexDraft(
       for (const v of used) {
         if (!schemaSet.has(normalizeVarPath(v))) {
           push('error', 'UNKNOWN_VAR', `Script #${i + 1} "${s.scriptName}": tham chiếu biến "${v}" KHÔNG có trong schema/initvar → widget sẽ render ra rỗng (undefined). Phải dùng ĐÚNG tên biến đã khai báo, hoặc thêm biến đó vào schema trước.`, i);
+          continue;
+        }
+        const full = fullPathSuggestions(v, schemaVarNames);
+        if (full.length > 0) {
+          push('warn', 'AMBIGUOUS_VAR', `Script #${i + 1} "${s.scriptName}": viết trần "${v}" nhưng biến này nằm LỒNG trong schema — đọc từ gốc stat_data sẽ ra undefined. Viết đủ đường dẫn: ${full.slice(0, 3).map(f => `"${f}"`).join(' hoặc ')}.`, i);
         }
       }
       // Widget bám biến mà không tham chiếu biến nào = bảng chết (hardcode), không đồng biến.

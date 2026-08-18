@@ -13,7 +13,8 @@
  *     Thấy ở bug/135 Card 1 & 2, bug/148 Eldran, bug/116 One Piece. Chuỗi thay thế 18–70 nghìn
  *     ký tự. Đây là mẫu mà chính Auto Creator của tool sinh ra, và là mẫu ĐÁNG TIN NHẤT: mồi
  *     không phụ thuộc AI viết đúng format nội dung, chỉ cần nó nhả đúng MỘT thẻ neo. Bảng đọc
- *     biến qua EJS/getvar chứ không qua nhóm bắt.
+ *     biến bằng JS trong iframe (mvuData/mvuGet) chứ không qua nhóm bắt — KHÔNG phải EJS: EJS
+ *     chạy lúc dựng prompt, xong trước khi widget tồn tại.
  *     ⚠️ Bắt buộc: phải có chỗ DẠY AI nhả thẻ neo (world info/prompt), không thì bảng không hiện.
  *
  *  B. THẺ BỌC NỘI DUNG — `/<battle_panel>([\s\S]*?)<\/battle_panel>/gs` → HTML dùng `$1`.
@@ -44,7 +45,9 @@ export const STATUS_BAR_PATTERNS = `═══ BẢNG TRẠNG THÁI: NĂM MẪU R
 
 A. MỒI NEO TỰ ĐÓNG (đáng tin nhất — dùng mặc định cho bảng trạng thái đầy đủ)
    findRegex : <StatusPlaceHolderImpl/>
-   replace   : cả trang bảng (đo thật: 18.000–70.000 ký tự), đọc biến qua getvar/stat_data
+   replace   : cả trang bảng (đo thật: 18.000–70.000 ký tự), đọc biến bằng JS trong <script>:
+               var d = mvuData(); rồi mvuGet(d,'Nhóm.Biến','—') — KHÔNG dùng {{getvar::}}
+               (macro đó đọc kho biến CHAT, không phải stat_data của MVU)
    Vì sao tốt: mồi KHÔNG phụ thuộc AI viết đúng format nội dung — nó chỉ cần nhả một thẻ neo.
    Bắt buộc kèm: một chỗ DẠY AI nhả thẻ neo đó mỗi lượt (world info), không thì bảng không hiện.
 

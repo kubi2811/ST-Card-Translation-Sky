@@ -97,10 +97,18 @@ Pattern A-1: Widget thẻ ngang đơn giản
   │   padding:12px; background:#1a202c; color:#e2e8f0;
   │   font-family:'Noto Serif SC',serif; margin:8px 0">
   │   <strong style="color:#f6c90e">{{char}}</strong>
-  │   <!-- TavernHelper EJS để đọc biến (key có khoảng trắng dùng _.get array path): -->
-  │   <%_ const d = Mvu.getMvuData({type:'message',message_id:'latest'})?.stat_data ?? {}; _%>
-  │   <%= _.get(d, ['Người chơi', 'HP'], 100) %>/100 HP
+  │   <span id="hp-val">—</span>/100 HP
   │ </div>
+  │ <script>
+  │   // Widget chạy trong IFRAME sau khi tin nhắn đã hiện → đọc biến bằng JS, KHÔNG bằng
+  │   // macro {{getvar::}} (macro đọc kho biến CHAT, còn MVU nằm ở kho MESSAGE) và cũng
+  │   // KHÔNG bằng EJS (EJS chạy lúc DỰNG PROMPT, xong xuôi trước khi widget tồn tại).
+  │   var d = mvuData();                                  // stat_data của đúng tin nhắn này
+  │   document.getElementById('hp-val').textContent =
+  │     mvuGet(d, 'Người chơi.HP', '—');                  // mvuGet tự bóc cặp [giá trị, mô tả]
+  │   // Vẽ lại khi MVU cập nhật biến:
+  │   eventOn(Mvu.events.VARIABLE_UPDATE_ENDED, function(){ /* gọi lại hàm vẽ */ });
+  │ </script>
   │ ` + '```' + `
   └───────────────────────────────────────────────────────────────┘
 

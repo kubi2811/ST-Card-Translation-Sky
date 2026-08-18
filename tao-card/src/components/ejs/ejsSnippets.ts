@@ -1,6 +1,17 @@
 /**
  * EJS Template Snippets — shared constants
  * Extracted to separate file to avoid Fast Refresh issues
+ *
+ * ─── VÌ SAO MỌI `getvar` ĐỀU BỌC `[].concat(...)[0]` ───
+ * MVU lưu biến theo HAI dạng: giá trị trần (`Máu: 100`) hoặc CẶP mô tả
+ * (`Cảnh Giới: ["Luyện Khí", "cảnh giới hiện tại"]` — ValueWithDescription, mvuReference.ts).
+ * `getvar()` trả về NGUYÊN thứ đang nằm trong stat_data, KHÔNG tự bóc cặp như macro
+ * `{{format_message_variable::…}}`.
+ *
+ * Thẻ do chính tool sinh thì initvar luôn xuất giá trị trần nên bản cũ chạy được — nhưng thẻ
+ * NHẬP TỪ NGOÀI (card Trung/Việt thật rất hay dùng cặp) thì `Number(getvar(...))` ra NaN và
+ * mọi nhánh `if` so sánh số đều sai lặng lẽ. `[].concat(x)[0]` bóc được cặp, mà giá trị trần
+ * đi qua vẫn nguyên vẹn — dùng chung được cho cả hai, không cần lodash.
  */
 
 export const EJS_SNIPPETS = [
@@ -9,7 +20,7 @@ export const EJS_SNIPPETS = [
     label: 'Multi-stage Persona',
     description: 'Thay đổi tính cách AI theo mức độ (ví dụ: 好感度)',
     code: `<%_
-if (typeof _affinity === 'undefined') var _affinity = Number(getvar('stat_data.Nhân vật.Cảm xúc.Độ thân mật', { defaults: 0 }));
+if (typeof _affinity === 'undefined') var _affinity = Number([].concat(getvar('stat_data.Nhân vật.Cảm xúc.Độ thân mật', { defaults: 0 }))[0]);
 
 if (_affinity < 40) {
   print('【{{char}} hiện tại rất dè dặt, không muốn giao tiếp nhiều】');
@@ -25,10 +36,10 @@ _%>`,
     label: 'Variable Display',
     description: 'Hiển thị danh sách biến hiện tại cho AI đọc',
     code: `[Trạng thái hiện tại]
-Thời gian: <%= getvar('stat_data.Thế giới.Thời gian hiện tại') %>
-Địa điểm: <%= getvar('stat_data.Thế giới.Địa điểm hiện tại') %>
-HP: <%= getvar('stat_data.Nhân vật.HP') %> / <%= getvar('stat_data.Nhân vật.MaxHP') %>
-Gold: <%= getvar('stat_data.Nhân vật.Gold') %>`,
+Thời gian: <%= [].concat(getvar('stat_data.Thế giới.Thời gian hiện tại'))[0] %>
+Địa điểm: <%= [].concat(getvar('stat_data.Thế giới.Địa điểm hiện tại'))[0] %>
+HP: <%= [].concat(getvar('stat_data.Nhân vật.HP'))[0] %> / <%= [].concat(getvar('stat_data.Nhân vật.MaxHP'))[0] %>
+Gold: <%= [].concat(getvar('stat_data.Nhân vật.Gold'))[0] %>`,
   },
   {
     id: 'conditional-inject',
@@ -39,7 +50,7 @@ Gold: <%= getvar('stat_data.Nhân vật.Gold') %>`,
 /* (bug 125/128) ST-Prompt-template KHÔNG có hàm tắt entry từ EJS — chỉ BẬT được entry
    đang tắt bằng await activewi(tên, true). Vậy 3 entry dưới đây phải để enabled=false
    sẵn trong worldbook; mỗi lượt chat controller chỉ bật đúng cái khớp thời đại. */
-if (typeof _era === 'undefined') var _era = getvar('stat_data.Thế giới.Thời đại', { defaults: 'Hiện đại' });
+if (typeof _era === 'undefined') var _era = [].concat(getvar('stat_data.Thế giới.Thời đại', { defaults: 'Hiện đại' }))[0];
 
 if (_era === 'Hiện đại') { await activewi('WB: Thiết lập thế giới hiện đại', true); }
 if (_era === 'Cổ đại') { await activewi('WB: Thiết lập thế giới cổ đại', true); }
@@ -52,7 +63,7 @@ _%>`,
     description: 'Inject prompt vào vị trí cụ thể trong context',
     code: `@@preprocessing
 <%_
-if (typeof _scene === 'undefined') var _scene = getvar('stat_data.Thế giới.Loại cảnh', { defaults: 'Hàng ngày' });
+if (typeof _scene === 'undefined') var _scene = [].concat(getvar('stat_data.Thế giới.Loại cảnh', { defaults: 'Hàng ngày' }))[0];
 
 /* In THẲNG bằng print(): nội dung rơi đúng vào vị trí/độ sâu của chính entry này.
    KHÔNG truyền object dạng { text, position, depth } — chữ ký thật nhận tham số VỊ TRÍ
@@ -106,7 +117,7 @@ export const EJS_ADVANCED_TEMPLATES: EJSAdvancedTemplate[] = [
 /* (bug 125/128) Mô hình đúng của ST-Prompt-template: KHÔNG có API tắt entry từ EJS.
    Để TẤT CẢ entry era ở trạng thái tắt (enabled=false) trong worldbook — thế là "tắt
    tất cả" miễn phí, không cần code — rồi mỗi lượt chỉ BẬT nhóm của era hiện tại. */
-var era = getvar('stat_data.Thế giới.Thời đại', { defaults: 'Hiện đại' });
+var era = [].concat(getvar('stat_data.Thế giới.Thời đại', { defaults: 'Hiện đại' }))[0];
 
 var eraMap = {
   'Cổ đại': ['WB: Cổ đại', 'WB: Vũ khí cổ', 'WB: Ma thuật cổ'],
@@ -130,10 +141,10 @@ _%>`,
     tags: ['threshold', 'cascade', 'HP', 'danger'],
     code: `@@preprocessing
 <%_
-var hp = Number(getvar('stat_data.Nhân vật.HP', { defaults: 100 }));
-var maxHp = Number(getvar('stat_data.Nhân vật.MaxHP', { defaults: 100 }));
+var hp = Number([].concat(getvar('stat_data.Nhân vật.HP', { defaults: 100 }))[0]);
+var maxHp = Number([].concat(getvar('stat_data.Nhân vật.MaxHP', { defaults: 100 }))[0]);
 var ratio = maxHp > 0 ? hp / maxHp : 1;
-var danger = Number(getvar('stat_data.Thế giới.Mức nguy hiểm', { defaults: 0 }));
+var danger = Number([].concat(getvar('stat_data.Thế giới.Mức nguy hiểm', { defaults: 0 }))[0]);
 
 /* Cascade: càng nguy hiểm càng nhiều entry được BẬT (cả 4 entry phải TẮT sẵn —
    EJS không tắt được entry, chỉ bật entry đang tắt bằng await activewi). */
@@ -156,10 +167,10 @@ _%>`,
     tags: ['combo', 'condition', 'multiple'],
     code: `@@preprocessing
 <%_
-var mood = getvar('stat_data.Nhân vật.Tâm trạng', { defaults: 'Bình thường' });
-var location = getvar('stat_data.Thế giới.Địa điểm', { defaults: 'Nhà' });
-var time = getvar('stat_data.Thế giới.Thời gian', { defaults: 'Ngày' });
-var trust = Number(getvar('stat_data.Nhân vật.Độ tin tưởng', { defaults: 50 }));
+var mood = [].concat(getvar('stat_data.Nhân vật.Tâm trạng', { defaults: 'Bình thường' }))[0];
+var location = [].concat(getvar('stat_data.Thế giới.Địa điểm', { defaults: 'Nhà' }))[0];
+var time = [].concat(getvar('stat_data.Thế giới.Thời gian', { defaults: 'Ngày' }))[0];
+var trust = Number([].concat(getvar('stat_data.Nhân vật.Độ tin tưởng', { defaults: 50 }))[0]);
 
 /* Ba entry combo dưới đây phải TẮT sẵn trong worldbook — controller chỉ BẬT khi đủ điều kiện. */
 var intimateMode = (mood === 'Buồn' || mood === 'Cô đơn') && time === 'Đêm' && location === 'Nhà';
@@ -192,10 +203,10 @@ function makeBar(current, max, length, fillChar, emptyChar) {
   return bar;
 }
 
-var hp = Number(getvar('stat_data.Nhân vật.HP', { defaults: 100 }));
-var maxHp = Number(getvar('stat_data.Nhân vật.MaxHP', { defaults: 100 }));
-var mp = Number(getvar('stat_data.Nhân vật.MP', { defaults: 50 }));
-var maxMp = Number(getvar('stat_data.Nhân vật.MaxMP', { defaults: 50 }));
+var hp = Number([].concat(getvar('stat_data.Nhân vật.HP', { defaults: 100 }))[0]);
+var maxHp = Number([].concat(getvar('stat_data.Nhân vật.MaxHP', { defaults: 100 }))[0]);
+var mp = Number([].concat(getvar('stat_data.Nhân vật.MP', { defaults: 50 }))[0]);
+var maxMp = Number([].concat(getvar('stat_data.Nhân vật.MaxMP', { defaults: 50 }))[0]);
 
 print('┌─────────────────┐');
 print('│ ❤️ HP: ' + hp + '/' + maxHp);
@@ -213,9 +224,9 @@ _%>`,
     tags: ['relationship', 'NPC', 'affinity'],
     code: `@@preprocessing
 <%_
-var affinity = Number(getvar('stat_data.Quan hệ.Độ thân mật', { defaults: 0 }));
-var trust = Number(getvar('stat_data.Quan hệ.Độ tin tưởng', { defaults: 50 }));
-var romance = Number(getvar('stat_data.Quan hệ.Lãng mạn', { defaults: 0 }));
+var affinity = Number([].concat(getvar('stat_data.Quan hệ.Độ thân mật', { defaults: 0 }))[0]);
+var trust = Number([].concat(getvar('stat_data.Quan hệ.Độ tin tưởng', { defaults: 50 }))[0]);
+var romance = Number([].concat(getvar('stat_data.Quan hệ.Lãng mạn', { defaults: 0 }))[0]);
 
 function getEmoji(val) {
   if (val >= 80) return '💖';
@@ -249,10 +260,10 @@ _%>`,
     tags: ['inventory', 'items', 'display'],
     code: `@@preprocessing
 <%_
-var gold = Number(getvar('stat_data.Nhân vật.Gold', { defaults: 0 }));
-var weapon = getvar('stat_data.Trang bị.Vũ khí', { defaults: 'Không' });
-var armor = getvar('stat_data.Trang bị.Giáp', { defaults: 'Không' });
-var accessory = getvar('stat_data.Trang bị.Phụ kiện', { defaults: 'Không' });
+var gold = Number([].concat(getvar('stat_data.Nhân vật.Gold', { defaults: 0 }))[0]);
+var weapon = [].concat(getvar('stat_data.Trang bị.Vũ khí', { defaults: 'Không' }))[0];
+var armor = [].concat(getvar('stat_data.Trang bị.Giáp', { defaults: 'Không' }))[0];
+var accessory = [].concat(getvar('stat_data.Trang bị.Phụ kiện', { defaults: 'Không' }))[0];
 
 print('╔══ TRANG BỊ ══╗');
 print('│ ⚔️ ' + weapon);
@@ -349,20 +360,20 @@ _%>`,
     tags: ['event', 'queue', 'processor'],
     code: `@@preprocessing
 <%_
-var lastEvent = getvar('stat_data.Events.LastEvent', { defaults: '' });
-var eventData = getvar('stat_data.Events.EventData', { defaults: '' });
+var lastEvent = [].concat(getvar('stat_data.Events.LastEvent', { defaults: '' }))[0];
+var eventData = [].concat(getvar('stat_data.Events.EventData', { defaults: '' }))[0];
 
 if (lastEvent) {
   // Xử lý sự kiện
   if (lastEvent === 'BATTLE_WON') {
-    var exp = Number(getvar('stat_data.Nhân vật.EXP', { defaults: 0 }));
+    var exp = Number([].concat(getvar('stat_data.Nhân vật.EXP', { defaults: 0 }))[0]);
     var reward = eventData ? Number(eventData) : 50;
     setvar('stat_data.Nhân vật.EXP', exp + reward);
     print('[🎉 Chiến thắng! +' + reward + ' EXP]');
     
     // Level up check
     if (exp + reward >= 100) {
-      var level = Number(getvar('stat_data.Nhân vật.Level', { defaults: 1 }));
+      var level = Number([].concat(getvar('stat_data.Nhân vật.Level', { defaults: 1 }))[0]);
       setvar('stat_data.Nhân vật.Level', level + 1);
       setvar('stat_data.Nhân vật.EXP', (exp + reward) - 100);
       print('[⬆️ LEVEL UP! Level ' + (level + 1) + '!]');
@@ -387,8 +398,8 @@ _%>`,
     tags: ['time', 'day', 'night', 'season'],
     code: `@@preprocessing
 <%_
-var timeSlot = getvar('stat_data.Thế giới.Khung giờ', { defaults: 'Sáng' });
-var day = Number(getvar('stat_data.Thế giới.Ngày', { defaults: 1 }));
+var timeSlot = [].concat(getvar('stat_data.Thế giới.Khung giờ', { defaults: 'Sáng' }))[0];
+var day = Number([].concat(getvar('stat_data.Thế giới.Ngày', { defaults: 1 }))[0]);
 
 // Time-based effects
 var isNight = (timeSlot === 'Đêm' || timeSlot === 'Khuya');
@@ -423,9 +434,9 @@ _%>`,
     tags: ['persona', 'dynamic', 'multi-stat'],
     code: `@@preprocessing
 <%_
-var corruption = Number(getvar('stat_data.Nhân vật.Corruption', { defaults: 0 }));
-var affinity = Number(getvar('stat_data.Nhân vật.Độ thân mật', { defaults: 50 }));
-var mood = getvar('stat_data.Nhân vật.Tâm trạng', { defaults: 'Bình thường' });
+var corruption = Number([].concat(getvar('stat_data.Nhân vật.Corruption', { defaults: 0 }))[0]);
+var affinity = Number([].concat(getvar('stat_data.Nhân vật.Độ thân mật', { defaults: 50 }))[0]);
+var mood = [].concat(getvar('stat_data.Nhân vật.Tâm trạng', { defaults: 'Bình thường' }))[0];
 
 var traits = [];
 
@@ -455,8 +466,8 @@ _%>`,
     tags: ['inject', 'prompt', 'multi-position'],
     code: `@@preprocessing
 <%_
-var scene = getvar('stat_data.Thế giới.Loại cảnh', { defaults: 'Hàng ngày' });
-var importance = Number(getvar('stat_data.Thế giới.Mức quan trọng', { defaults: 5 }));
+var scene = [].concat(getvar('stat_data.Thế giới.Loại cảnh', { defaults: 'Hàng ngày' }))[0];
+var importance = Number([].concat(getvar('stat_data.Thế giới.Mức quan trọng', { defaults: 5 }))[0]);
 
 /* Gom nhiều mẩu vào MỘT nhóm rồi hút ra một chỗ — đúng công dụng của injectPrompt.
    Bắt buộc phải có vế đọc getPromptsInjected(), nếu không nội dung không bao giờ tới AI.

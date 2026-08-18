@@ -225,9 +225,87 @@ export async function checkWorldbookHealth(
         autoFixable: false,
       });
     }
+
+    // ─── 11. (Tawa 2.0) sticky/cooldown/delay trên entry THƯỜNG TRÚ ──
+    // Ba số này đếm theo lượt KỂ TỪ KHI ENTRY ĐƯỢC KÍCH HOẠT. Entry constant luôn nằm sẵn trong
+    // context, không có "lúc kích hoạt" nào để đếm — đặt vào chỉ làm file rối, không đổi hành vi.
+    if (entry.constant && (ext.sticky > 0 || ext.cooldown > 0 || ext.delay > 0)) {
+      items.push({
+        entryId: entry.id,
+        comment: entry.comment,
+        level: 'info',
+        code: 'TIMING_ON_CONSTANT',
+        message: `Entry thường trú (constant) mà đặt sticky=${ext.sticky}/cooldown=${ext.cooldown}/delay=${ext.delay}. Ba số này chỉ có tác dụng với entry kích hoạt theo từ khoá.`,
+        autoFixable: true,
+        fix: { extensions: { sticky: 0, cooldown: 0, delay: 0 } },
+      });
+    }
+
+    // ─── 12. (Tawa 2.0) selectiveLogic khác AND ANY mà không có key phụ ──
+    // AND ALL / NOT ALL / NOT ANY đều so trên TẬP key phụ. Thiếu tập đó thì luật hoặc vô hiệu,
+    // hoặc tệ hơn: chặn sạch không cho entry nổ lần nào — hỏng im lặng đúng nghĩa.
+    if (ext.selectiveLogic !== 0 && entry.secondary_keys.length === 0) {
+      items.push({
+        entryId: entry.id,
+        comment: entry.comment,
+        level: 'warning',
+        code: 'LOGIC_NO_SECONDARY',
+        message: `selectiveLogic=${ext.selectiveLogic} (khác AND ANY) nhưng không có secondary key nào để so — entry có thể không bao giờ kích hoạt.`,
+        autoFixable: true,
+        fix: { extensions: { selectiveLogic: 0 } },
+      });
+    }
+
+    // ─── 13. (Tawa 2.0) Key ngắn mà không khớp trọn từ ───────────────
+    // Ca kinh điển của tiếng Việt: key "nam" bắt trúng "việt nam", "nam châm", "giám đốc nam".
+    if (!entry.constant && ext.match_whole_words !== true) {
+      const shortKeys = entry.keys.filter(k => !k.includes(' ') && k.trim().length > 0 && k.trim().length <= 4);
+      if (shortKeys.length > 0) {
+        items.push({
+          entryId: entry.id,
+          comment: entry.comment,
+          level: 'info',
+          code: 'SHORT_KEY_PARTIAL_MATCH',
+          message: `Key ngắn (${shortKeys.join(', ')}) mà chưa bật "khớp trọn từ" — dễ nổ nhầm khi nằm trong từ khác.`,
+          autoFixable: true,
+          fix: { extensions: { match_whole_words: true } },
+        });
+      }
+    }
+
+    // ─── 14. (Tawa 2.0) probability < 100 mà quên bật useProbability ──
+    if (ext.probability < 100 && !ext.useProbability) {
+      items.push({
+        entryId: entry.id,
+        comment: entry.comment,
+        level: 'warning',
+        code: 'PROBABILITY_IGNORED',
+        message: `Đặt probability=${ext.probability} nhưng useProbability=false — SillyTavern bỏ qua con số này, entry vẫn nạp 100%.`,
+        autoFixable: true,
+        fix: { extensions: { useProbability: true } },
+      });
+    }
   }
 
-  // ─── 11. Minh Nguyệt: Bát cổ + Tag (nếu có qualityChecker) ────
+  // ─── 15. (Tawa 2.0) Lạm dụng thẻ VIP ignore_budget ────────────────
+  // ignore_budget ép entry vào context KỂ CẢ khi ngân sách World Info đã cạn. Vài cái thì tiện,
+  // nhiều cái thì chính nó ăn hết cửa sổ context và AI quên sạch lịch sử chat — đúng thứ ngân
+  // sách sinh ra để chặn.
+  const vip = entries.filter(e => e.enabled && e.extensions.ignore_budget);
+  if (vip.length > 3) {
+    for (const e of vip) {
+      items.push({
+        entryId: e.id,
+        comment: e.comment,
+        level: 'warning',
+        code: 'IGNORE_BUDGET_ABUSE',
+        message: `${vip.length} entry đang bật ignore_budget (thẻ VIP). Nên giữ tối đa 2-3 cho luật tuyệt đối/persona — nhiều hơn là tự làm tràn context.`,
+        autoFixable: false,
+      });
+    }
+  }
+
+  // ─── 16. Minh Nguyệt: Bát cổ + Tag (nếu có qualityChecker) ────
   try {
     const { runQualityCheck } = await import('../validation/qualityChecker');
     const qReport = runQualityCheck(entries);

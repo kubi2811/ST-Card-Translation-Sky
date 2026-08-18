@@ -5,6 +5,7 @@
 
 import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { VI_CHARS_PER_TOKEN } from '../../lib/ai/tokenBudget';
+import { CONTENT_FORMAT_LABELS, type EntryContentFormat } from '../../prompts/worldSettingTemplate';
 import { usePersistedState } from '../../lib/usePersistedState';
 import {
   Play, Pause, Square, ChevronDown, ChevronRight,
@@ -79,6 +80,9 @@ export function BatchGeneratorPanel() {
   const [entriesPerBatch, setEntriesPerBatch] = usePersistedState('bgen.entriesPerBatch', 5);
   const [concurrentBatches, setConcurrentBatches] = usePersistedState('bgen.concurrentBatches', 1);
   const [tokensPerEntry, setTokensPerEntry] = usePersistedState('bgen.tokensPerEntry', 200);
+  // (Tawa 2.0) Định dạng nội dung: database phẳng (mặc định) hay XML+YAML phân cấp cho thế giới
+  // nhiều tầng. Là lựa chọn từng lượt sinh, không phải mặc định mới.
+  const [contentFormat, setContentFormat] = usePersistedState<EntryContentFormat>('bgen.contentFormat', 'default');
   const [defaultPosition, setDefaultPosition] = usePersistedState<0|1|2|3|4|5|6|7>('bgen.defaultPosition', 0);
   const [insertionOrderMode, setInsertionOrderMode] = usePersistedState<'same' | 'increment'>('bgen.insertionOrderMode', 'increment');
   const [insertionOrderStart, setInsertionOrderStart] = usePersistedState('bgen.insertionOrderStart', 100);
@@ -241,6 +245,7 @@ export function BatchGeneratorPanel() {
           cardType: tab.cardType,
           autoConfig,
           tokensPerEntry: tokensPerEntry > 0 ? tokensPerEntry : undefined,
+          contentFormat,
           schemaContext: useSchemaContext && mvuzodSchema
             ? buildSchemaContextForBatch(mvuzodSchema)
             : undefined,
@@ -433,6 +438,20 @@ export function BatchGeneratorPanel() {
           <input type="number" value={concurrentBatches} onChange={e => setConcurrentBatches(Math.max(1, Math.min(24, parseInt(e.target.value) || 1)))}
             className="settings-input" min={1} max={24} disabled={isRunning} title={ui.bgConcurrentTip} />
         </div>
+      </div>
+
+      {/* (Tawa 2.0) Định dạng nội dung entry */}
+      <div>
+        <label className="settings-label">{ui.bgContentFormat}</label>
+        <select value={contentFormat} onChange={e => setContentFormat(e.target.value as EntryContentFormat)}
+          className="settings-input" disabled={isRunning} title={ui.bgContentFormatTip}>
+          {(Object.keys(CONTENT_FORMAT_LABELS) as EntryContentFormat[]).map(k => (
+            <option key={k} value={k}>{k === 'default' ? ui.bgFormatDefault : ui.bgFormatXmlYaml}</option>
+          ))}
+        </select>
+        {contentFormat === 'xml_yaml' && (
+          <p className="text-[10px] text-muted-foreground mt-1">{ui.bgFormatXmlYamlHint}</p>
+        )}
       </div>
 
       {/* Token budget hint */}

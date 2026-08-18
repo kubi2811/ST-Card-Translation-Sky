@@ -7,6 +7,7 @@ import { MVU_WORKING_CARD_EXAMPLE } from '../mvuzod/mvuReference';
 
 import { POLISHED_IDEA_READING_HINT } from './ideaPolish';
 import { lockedSchemaBlock } from './cardTuning';
+import { CHARACTER_QUALITY_SHORT } from '../../prompts/characterQuality';
 import type { MVUZODSchema as MVUZODSchemaLike } from '../../types/mvuzod.types';
 
 /**
@@ -119,6 +120,7 @@ Yêu cầu định dạng JSON chính xác:
   "personality": "Mô tả tính cách (nếu được yêu cầu, ít nhất 100 từ)",
   "scenario": "Bối cảnh hiện tại (nếu được yêu cầu, ít nhất 50 từ)"
 }
+${CHARACTER_QUALITY_SHORT}
 ${JSON_FORMAT_REQUIREMENT}
 `;
   return applyOverride(base, config.promptOverride, config.promptMode);

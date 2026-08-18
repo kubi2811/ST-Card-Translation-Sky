@@ -152,3 +152,10 @@ export interface ChatMessage {
   content: string;
   attachments?: ChatAttachment[];
 }
+  // Tham số ST nâng cao: xem AdvancedEntryHints ở trên.
+/**
+ * (bug 236, gốc rễ) Union này từng có SÁU mode, còn bản trong `copilotTypes.ts` có BẢY — cùng tên,
+ * khác nội dung. `chatStore` dùng bản sáu nên không lưu nổi phiên `game_dev`. Nay chỉ còn một bản;
+ * hai bảng nhãn bên dưới khai kiểu `Record<WorldbuildingMode, …>` nên thêm mode mới là tsc bắt
+ * phải điền đủ cả hai.
+ */

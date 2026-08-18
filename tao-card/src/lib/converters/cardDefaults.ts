@@ -4,8 +4,8 @@
  */
 
 import type { CharacterCardV3 } from '../../types/card.types';
-import type { LorebookEntry } from '../../types/lorebook.types';
-import type { AIGeneratedEntry } from '../../types/aiAgent.types';
+import type { LorebookEntry, LorebookEntryExt } from '../../types/lorebook.types';
+import type { AdvancedEntryHints, AIGeneratedEntry } from '../../types/aiAgent.types';
 import { DEFAULT_ENTRY_EXT } from '../../types/lorebook.types';
 import { getPreset, lockedFieldsOf, type EntryCategory, type CardType, type LockableField } from '../worldbook/worldbookConfig';
 
@@ -95,6 +95,60 @@ export interface MaterializeConfig {
   };
 }
 
+/**
+ * (Tawa 2.0) THAM SỐ ST NÂNG CAO DO AI ĐỀ XUẤT — kẹp lại trước khi tin.
+ *
+ * `LorebookEntryExt` đỡ đủ bộ tham số của SillyTavern từ lâu (sticky/cooldown/ignore_budget/
+ * selectiveLogic/match_whole_words…), nhưng chưa đường sinh nào cho AI chạm tới: mọi entry sinh ra
+ * đều mang y hệt `DEFAULT_ENTRY_EXT`. Mở ra đúng nhóm AI suy được từ nội dung MỘT entry, kèm ba
+ * lớp chặn:
+ *   • kẹp miền giá trị — AI trả `sticky: 9999` hay `probability: -3` là chuyện thường;
+ *   • bỏ tham số VÔ NGHĨA với entry thường trú — `constant` luôn nằm trong context nên sticky/
+ *     cooldown/delay/vectorized không có gì để tác động, giữ lại chỉ làm rác file;
+ *   • cơ chế đệ quy KHÔNG mở (xem cuối materializeEntry) — đó là quyết định của guide worldbook,
+ *     không phải thứ để AI cân nhắc từng entry.
+ */
+export function advancedExtFromAi(ai: AdvancedEntryHints, constant: boolean): Partial<LorebookEntryExt> {
+  const out: Partial<LorebookEntryExt> = {};
+  const int = (v: unknown, lo: number, hi: number): number | undefined => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.max(lo, Math.min(hi, Math.round(n))) : undefined;
+  };
+  const triBool = (v: unknown): boolean | null | undefined =>
+    typeof v === 'boolean' ? v : v === null ? null : undefined;
+
+  if (ai.selectiveLogic !== undefined && [0, 1, 2, 3].includes(Number(ai.selectiveLogic))) {
+    out.selectiveLogic = Number(ai.selectiveLogic) as 0 | 1 | 2 | 3;
+  }
+  const mww = triBool(ai.match_whole_words);
+  if (mww !== undefined) out.match_whole_words = mww;
+  const cs = triBool(ai.case_sensitive);
+  if (cs !== undefined) out.case_sensitive = cs;
+  if (typeof ai.ignore_budget === 'boolean') out.ignore_budget = ai.ignore_budget;
+
+  const prob = int(ai.probability, 0, 100);
+  if (prob !== undefined) { out.probability = prob; out.useProbability = true; }
+
+  if (typeof ai.group === 'string' && ai.group.trim()) {
+    out.group = ai.group.trim().slice(0, 40);
+    const gw = int(ai.group_weight, 1, 1000);
+    if (gw !== undefined) out.group_weight = gw;
+  }
+
+  // Nhóm chỉ có nghĩa với entry kích hoạt theo từ khoá.
+  if (!constant) {
+    if (typeof ai.vectorized === 'boolean') out.vectorized = ai.vectorized;
+    const sticky = int(ai.sticky, 0, 100);
+    if (sticky !== undefined) out.sticky = sticky;
+    const cooldown = int(ai.cooldown, 0, 100);
+    if (cooldown !== undefined) out.cooldown = cooldown;
+    const delay = int(ai.delay, 0, 100);
+    if (delay !== undefined) out.delay = delay;
+  }
+
+  return out;
+}
+
 export function materializeEntry(
   ai: AIGeneratedEntry,
   config: MaterializeConfig,
@@ -156,6 +210,9 @@ export function materializeEntry(
     use_regex: config.useRegex ?? true,
     extensions: {
       ...DEFAULT_ENTRY_EXT,
+      // Tham số nâng cao AI đề xuất nằm NGAY SAU mặc định: các field cơ học bên dưới (position,
+      // depth, role, scan_depth, đệ quy) vẫn thắng, nên AI không cướp được thứ đã có chủ.
+      ...advancedExtFromAi(ai, constant),
       position: posExt,
       depth,
       role,

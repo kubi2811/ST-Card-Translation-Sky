@@ -86,6 +86,17 @@ NPC              | false | true  | 1   | 4     | 100    | 2
 Cảnh vật/SK      | false | true  | 1   | 4     | 50-98  | 2
 Chỉ đạo AI(D0)  | false | true  | 4   | 0     | 1      | 2
 
+═══ THAM SỐ NÂNG CAO (chỉ vá khi entry rơi ĐÚNG vào ca mô tả) ═══
+• match_whole_words=true: nên bật cho key tiếng Việt — key "nam" không có cờ này bắt trúng cả
+  "việt nam". Để null khi cố ý muốn bắt cụm dài hơn.
+• selectiveLogic: 0=AND ANY (mặc định) | 3=AND ALL (đủ mọi key) | 1=NOT ALL | 2=NOT ANY (chặn).
+  Khác 0 thì BẮT BUỘC có secondary_keys.
+• sticky/cooldown/delay (số lượt): CHỈ cho trạng thái đang diễn ra — cảnh, trận đánh, nghi lễ.
+  Hồ sơ tĩnh (nhân vật, địa danh, thế lực) để 0. Entry constant=true thì ba số này vô nghĩa.
+• probability 0-100 + group/group_weight: cho biến thể loại trừ nhau (thời tiết, tâm trạng NPC).
+• ignore_budget=true: thẻ VIP ép nạp khi hết ngân sách — TỐI ĐA 1-2 entry trong cả lorebook.
+• vectorized=true: tìm theo ngữ nghĩa, chỉ khi khái niệm không liệt kê hết được từ khoá.
+
 ═══ ĐỊNH DẠNG PHẢN HỒI (JSON ARRAY BẮT BUỘC) ═══
 Trả về MỘT MẢNG JSON gồm các hành động. Mỗi phần tử có dạng:
 {
@@ -101,6 +112,9 @@ Trả về MỘT MẢNG JSON gồm các hành động. Mỗi phần tử có d�
   "newKeys": ["key1","key2"],
   "newSecondaryKeys": ["skey1"],
   "configPatch": { "constant": true, "selective": false, "position": 0, "depth": 4, "insertion_order": 1, "scan_depth": null, "role": null },
+  // configPatch nhận thêm tham số nâng cao — CHỈ thêm field bạn thật sự có lý do vá:
+  // "match_whole_words", "selectiveLogic", "sticky", "cooldown", "delay", "probability",
+  // "group", "group_weight", "ignore_budget", "vectorized".
   "mergeTargetId": <ID entry target khi merge>,
   "mergeTargetComment": "<tên target>",
   "mergedContent": "<content gộp đầy đủ>",

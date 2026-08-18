@@ -14,7 +14,7 @@ import { buildRefinerSystemPrompt, buildRefinerUserMessage } from './refinerProm
 import { checkWorldbookHealth } from '../worldbook/worldbookHealthCheck';
 import { isDuplicateEntry } from './deduplicator';
 import { TFIDFIndex } from '../rag/tfidfIndexer';
-import { materializeEntry } from '../converters/cardDefaults';
+import { advancedExtFromAi, materializeEntry } from '../converters/cardDefaults';
 import { isSystemEntry } from './refinerUtils';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -476,6 +476,12 @@ export function applyRefinerActions(
               if (action.configPatch.scan_depth !== undefined) extPatch.scan_depth = action.configPatch.scan_depth;
               if (action.configPatch.exclude_recursion !== undefined) extPatch.exclude_recursion = action.configPatch.exclude_recursion;
               if (action.configPatch.prevent_recursion !== undefined) extPatch.prevent_recursion = action.configPatch.prevent_recursion;
+              // (Tawa 2.0) Tham số nâng cao đi qua ĐÚNG bộ kẹp mà batch dùng — refiner không có
+              // đường tắt riêng, nên sticky/probability/group vá vào đây cũng an toàn như lúc sinh.
+              Object.assign(extPatch, advancedExtFromAi(
+                action.configPatch,
+                action.configPatch.constant ?? entry.constant,
+              ));
 
               if (Object.keys(extPatch).length > 0) {
                 patch.extensions = { ...entry.extensions, ...extPatch } as LorebookEntry['extensions'];
@@ -601,6 +607,8 @@ export function applyRefinerActions(
                 role: action.configPatch?.role,
                 insertion_order: action.configPatch?.insertion_order,
                 scan_depth: action.configPatch?.scan_depth,
+                // Tham số nâng cao: materializeEntry tự kẹp, cứ chuyển thẳng.
+                ...(action.configPatch ?? {}),
               },
               {},
               id,

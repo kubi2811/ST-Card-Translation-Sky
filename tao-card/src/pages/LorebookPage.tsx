@@ -599,6 +599,21 @@ function EntryRow({ entry, isActive, isSelected, onSelect, onEdit, onToggle, onD
       <div className="flex gap-0.5 shrink-0">
         {entry.constant && <span title="Constant" className="text-[10px] px-1 py-0.5 rounded bg-amber-500/15 text-amber-400">C</span>}
         {entry.selective && <span title="Selective" className="text-[10px] px-1 py-0.5 rounded bg-blue-500/15 text-blue-400">S</span>}
+        {/* (Tawa 2.0) Tham số nâng cao giờ AI đặt được — phải LIẾC QUA LÀ THẤY. Thứ nguy hiểm nhất
+            là ignore_budget: nó ăn ngân sách context của cả thẻ, mà trước đây phải mở từng entry
+            mới biết ai đang bật. */}
+        {entry.extensions.ignore_budget && (
+          <span title={ui.lbBadgeVip} className="text-[10px] px-1 py-0.5 rounded bg-rose-500/15 text-rose-400">VIP</span>
+        )}
+        {entry.extensions.sticky > 0 && (
+          <span title={fmt(ui.lbBadgeSticky, { n: entry.extensions.sticky })} className="text-[10px] px-1 py-0.5 rounded bg-violet-500/15 text-violet-400">📌{entry.extensions.sticky}</span>
+        )}
+        {entry.extensions.probability < 100 && entry.extensions.useProbability && (
+          <span title={fmt(ui.lbBadgeProbability, { n: entry.extensions.probability })} className="text-[10px] px-1 py-0.5 rounded bg-cyan-500/15 text-cyan-400">{entry.extensions.probability}%</span>
+        )}
+        {entry.extensions.group && (
+          <span title={fmt(ui.lbBadgeGroup, { g: entry.extensions.group })} className="text-[10px] px-1 py-0.5 rounded bg-emerald-500/15 text-emerald-400 max-w-[70px] truncate">⛓{entry.extensions.group}</span>
+        )}
       </div>
 
       {/* Comment */}
@@ -1009,6 +1024,83 @@ function EntryEditor({ entry, onChange, onSave, onCancel, onDelete }: {
                   onChange={e => updateExt({ vectorized: e.target.checked })} className="settings-checkbox" />
                 {ui.lbVectorized}
               </label>
+
+              {/* (Tawa 2.0) KHỚP TỪ KHOÁ — ba trạng thái: null = theo cài đặt chung của ST. */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="settings-label" title={ui.lbMatchWholeWordsTip}>{ui.lbMatchWholeWords}</label>
+                  <select value={entry.extensions.match_whole_words === null ? '' : String(entry.extensions.match_whole_words)}
+                    onChange={e => updateExt({ match_whole_words: e.target.value === '' ? null : e.target.value === 'true' })}
+                    className="settings-input text-xs" title={ui.lbMatchWholeWordsTip}>
+                    <option value="">{ui.lbTriDefault}</option>
+                    <option value="true">{ui.lbTriOn}</option>
+                    <option value="false">{ui.lbTriOff}</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="settings-label" title={ui.lbCaseSensitiveTip}>{ui.lbCaseSensitive}</label>
+                  <select value={entry.extensions.case_sensitive === null ? '' : String(entry.extensions.case_sensitive)}
+                    onChange={e => updateExt({ case_sensitive: e.target.value === '' ? null : e.target.value === 'true' })}
+                    className="settings-input text-xs" title={ui.lbCaseSensitiveTip}>
+                    <option value="">{ui.lbTriDefault}</option>
+                    <option value="true">{ui.lbTriOn}</option>
+                    <option value="false">{ui.lbTriOff}</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* (Tawa 2.0) Các công tắc lẻ mà ST có nhưng editor chưa bao giờ hiện ra. */}
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+                <label className="flex items-center gap-2 text-xs cursor-pointer" title={ui.lbUseProbabilityTip}>
+                  <input type="checkbox" checked={entry.extensions.useProbability}
+                    onChange={e => updateExt({ useProbability: e.target.checked })} className="settings-checkbox" />
+                  {ui.lbUseProbability}
+                </label>
+                <label className="flex items-center gap-2 text-xs cursor-pointer" title={ui.lbDelayUntilRecursionTip}>
+                  <input type="checkbox" checked={entry.extensions.delay_until_recursion}
+                    onChange={e => updateExt({ delay_until_recursion: e.target.checked })} className="settings-checkbox" />
+                  {ui.lbDelayUntilRecursion}
+                </label>
+                <label className="flex items-center gap-2 text-xs cursor-pointer" title={ui.lbGroupOverrideTip}>
+                  <input type="checkbox" checked={entry.extensions.group_override}
+                    onChange={e => updateExt({ group_override: e.target.checked })} className="settings-checkbox" />
+                  {ui.lbGroupOverride}
+                </label>
+                <label className="flex items-center gap-2 text-xs cursor-pointer" title={ui.lbGroupScoringTip}>
+                  <input type="checkbox" checked={entry.extensions.use_group_scoring}
+                    onChange={e => updateExt({ use_group_scoring: e.target.checked })} className="settings-checkbox" />
+                  {ui.lbGroupScoring}
+                </label>
+              </div>
+
+              {/* (Tawa 2.0) NGUỒN QUÉT TỪ KHOÁ — mặc định ST chỉ quét lịch sử chat. */}
+              <div>
+                <label className="settings-label" title={ui.lbScanSourcesTip}>{ui.lbScanSources}</label>
+                <div className="grid grid-cols-3 gap-x-3 gap-y-1.5 mt-1">
+                  {([
+                    ['match_persona_description', 'Persona'],
+                    ['match_character_description', 'Description'],
+                    ['match_character_personality', 'Personality'],
+                    ['match_character_depth_prompt', 'Depth Prompt'],
+                    ['match_scenario', 'Scenario'],
+                    ['match_creator_notes', 'Creator Notes'],
+                  ] as const).map(([field, label]) => (
+                    <label key={field} className="flex items-center gap-1.5 text-[11px] cursor-pointer">
+                      <input type="checkbox" checked={entry.extensions[field]}
+                        onChange={e => updateExt({ [field]: e.target.checked })} className="settings-checkbox" />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* Automation ID — móc nối với Quick Reply/STscript bên ST. */}
+              <div>
+                <label className="settings-label" title={ui.lbAutomationIdTip}>{ui.lbAutomationId}</label>
+                <input type="text" value={entry.extensions.automation_id}
+                  onChange={e => updateExt({ automation_id: e.target.value })}
+                  className="settings-input text-xs" placeholder="vd: open_shop" title={ui.lbAutomationIdTip} />
+              </div>
             </div>
           )}
         </div>

@@ -19,6 +19,8 @@ import { tag, allTags } from './storyToCard';
 import {
   checkEntryBudget, planBatch, buildLengthDirective,
 } from './tokenBudget';
+import { CHARACTER_QUALITY_PROTOCOL } from '../../prompts/characterQuality';
+import { buildContentFormatDirective, type EntryContentFormat } from '../../prompts/worldSettingTemplate';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONFIG
@@ -46,6 +48,8 @@ export interface BatchGenConfig {
   autoConfig?: boolean;        // true = AI tự quyết order/position/depth per entry
   schemaContext?: string;      // MVUZOD schema context — inject vào prompt khi có schema
   tokensPerEntry?: number;     // Số token mục tiêu cho mỗi entry (0 = không giới hạn)
+  /** (Tawa 2.0) Định dạng nội dung entry: database phẳng (mặc định) hay XML+YAML phân cấp. */
+  contentFormat?: EntryContentFormat;
   /**
    * (User 23/07 — việc 90) YÊU CẦU/QUY TẮC TOÀN CỤC của user.
    * Trước đây bước lorebook KHÔNG hề nhận cái này: `callAIAndExtract` của pipeline mới là chỗ
@@ -229,6 +233,40 @@ Ngoài comment/keys/content, bạn PHẢI trả thêm config cho MỖI entry. D�
 • Tiêu chuẩn: xóa câu này đi AI có diễn sai không? Không thì xóa
 • KHÔNG viết đánh giá chủ quan ("hùng mạnh", "bí ẩn"), KHÔNG viết hình ảnh tu từ
 
+═══ THAM SỐ NÂNG CAO (TÙY CHỌN — chỉ đặt khi entry rơi ĐÚNG vào ca mô tả) ═══
+Đây là phần SillyTavern có mà hầu hết lorebook bỏ không. Đặt bừa còn hại hơn không đặt: bỏ trống
+thì entry chạy theo mặc định an toàn, đặt sai thì entry nổ nhầm lúc hoặc ăn hết ngân sách context.
+
+• "match_whole_words": true — chỉ khớp TRỌN từ.
+  NÊN BẬT cho mọi key tiếng Việt: key "nam" không có cờ này sẽ bắt trúng "việt nam", "nam châm".
+  Để null khi cố ý muốn bắt cả cụm dài hơn (key "Hắc Long" bắt luôn "Hắc Long Đầm").
+
+• "selectiveLogic": 0=AND ANY (mặc định — trúng một key là đủ) | 3=AND ALL (phải đủ MỌI key)
+  | 1=NOT ALL | 2=NOT ANY (thấy key thì CHẶN, không nạp).
+  Dùng 3 khi entry chỉ đúng lúc hai thứ gặp nhau ("Lễ Tế" + "Đêm Trăng Máu"); dùng 1/2 để entry
+  khỏi nổ nhầm bối cảnh. Đặt khác 0 thì BẮT BUỘC có "secondary_keys".
+
+• "sticky": N — nổ xong còn dính thêm N lượt dù không còn từ khoá.
+  Chỉ cho TRẠNG THÁI ĐANG DIỄN RA: một cảnh, một trận đánh, một nghi lễ (N = 3-6).
+  KHÔNG dùng cho hồ sơ tĩnh (nhân vật, địa danh, thế lực) — chỉ tổ nạp thừa.
+• "cooldown": N — hết dính thì nghỉ N lượt mới được nổ lại (sự kiện không nên lặp liền).
+• "delay": N — thấy từ khoá vẫn chờ N lượt mới nạp (hệ quả đến muộn: tin đồn lan ra).
+
+• "probability": 0-100 — xác suất nạp. CHỈ cho entry ngẫu nhiên (thời tiết, chạm mặt tình cờ).
+  Hồ sơ nhân vật/địa danh luôn để 100 hoặc bỏ trống.
+
+• "group": "tên nhóm" + "group_weight": N — các entry cùng group chỉ MỘT cái được chọn mỗi lượt,
+  bốc theo trọng số. Dành cho các biến thể loại trừ nhau: thời tiết, tâm trạng NPC, sự kiện.
+
+• "ignore_budget": true — thẻ VIP, ép nạp kể cả khi ngân sách World Info đã cạn.
+  TỐI ĐA 1-2 entry trong CẢ lorebook, chỉ cho luật tuyệt đối/persona cốt lõi. Bật tràn lan là tự
+  làm tràn context — AI quên sạch lịch sử chat.
+
+• "vectorized": true — tìm theo NGỮ NGHĨA thay vì khớp chữ (nhắc "đi bộ" gọi được entry "đôi chân").
+  Chỉ khi khái niệm không thể liệt kê hết từ khoá. Entry thường trú không cần.
+
+KHÔNG phải việc của bạn: prevent_recursion / exclude_recursion — tool tự ép bật cho MỌI entry.
+
 ═══ BẢNG TÓM TẮT NHANH ═══
 Loại             | const | selec | pos | depth | order  | scan
 Thế giới quan    | true  | false | 0   | 4     | 1-3    | null
@@ -252,6 +290,10 @@ JSON FORMAT BẮT BUỘC:
   "depth": 4,
   "role": null,
   "scan_depth": 2|null
+  // ── Tham số nâng cao: CHỈ thêm field nào bạn thật sự có lý do đặt, bỏ hẳn phần còn lại ──
+  // "match_whole_words": true, "selectiveLogic": 0|1|2|3, "secondary_keys": ["..."],
+  // "sticky": 0, "cooldown": 0, "delay": 0, "probability": 100,
+  // "group": "", "group_weight": 100, "ignore_budget": false, "vectorized": false
 }, ...]
 `;
 
@@ -1048,7 +1090,7 @@ export async function runBatchGeneration(config: BatchGenConfig, ctx: BatchRunCo
       // Lô lớn → ép phần lớn entry "ngủ", chỉ bật theo từ khoá, cho khỏi cháy context mỗi lượt chat.
       const largeBatchDirective = buildLargeBatchBudgetDirective(config.totalEntries ?? 0);
       const messages: ChatMessage[] = [
-        { role: 'system', content: BATCH_SYSTEM_PROMPT + tokenBudgetDirective + largeBatchDirective + (config.autoConfig ? AUTO_CONFIG_ADDON : '\n\nCHỈ trả về MỘT MẢNG JSON hợp lệ:\n[{"comment":"...","keys":["..."],"content":"..."},...  ]') + categoryDirective + schemaAddon + getProfileExtractionContext(profile) },
+        { role: 'system', content: BATCH_SYSTEM_PROMPT + CHARACTER_QUALITY_PROTOCOL + buildContentFormatDirective(config.contentFormat) + tokenBudgetDirective + largeBatchDirective + (config.autoConfig ? AUTO_CONFIG_ADDON : '\n\nCHỈ trả về MỘT MẢNG JSON hợp lệ:\n[{"comment":"...","keys":["..."],"content":"..."},...  ]') + categoryDirective + schemaAddon + getProfileExtractionContext(profile) },
         { role: 'user', content: userMessage + '\n\n[LỆNH CUỐI CÙNG]: TUYỆT ĐỐI CHỈ TRẢ VỀ MẢNG JSON. KHÔNG markdown, KHÔNG text giải thích, KHÔNG code block. Xoá mọi format Markdown đi, chỉ xuất đúng chuẩn mảng JSON (Bắt đầu bằng `[` và kết thúc bằng `]`).' },
       ];
 

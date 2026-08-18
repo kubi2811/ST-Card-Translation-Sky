@@ -3,6 +3,8 @@
  * Phân tích, bổ sung, sửa, xóa entries bằng AI — đảm bảo nhất quán & không xung đột
  */
 
+import type { AdvancedEntryHints } from './aiAgent.types';
+
 // ═══════════════════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════════════════
@@ -131,7 +133,12 @@ export interface RefinerAction {
   skipped: boolean;
 }
 
-export interface EntryConfigPatch {
+/**
+ * (Tawa 2.0) Kế thừa `AdvancedEntryHints` để refiner vá được ĐÚNG BỘ tham số mà batch sinh ra —
+ * trước đây refiner chỉ chạm được 7 field cơ bản, nên mọi sticky/group/ignore_budget do batch đặt
+ * đều nằm ngoài tầm sửa của nó.
+ */
+export interface EntryConfigPatch extends AdvancedEntryHints {
   constant: boolean;
   selective: boolean;
   position: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;

@@ -1663,8 +1663,10 @@ export interface PoolProvider {
   id: string; provider: AIProvider; proxyUrl: string; keys: string[];
   primaryModel: string; primaryRpm: number;
   enableSecondary: boolean; secondaryModel: string; secondaryRpm: number; secondaryThreshold: number;
+  /** (bug 248) Trần token đầu ra riêng; 0/undefined = theo cấu hình chung. */
+  maxTokens?: number;
 }
-interface ChosenLane { providerId: string; provider: AIProvider; proxyUrl: string; model: string; key: string; keyIndex: number; keyTotal: number; }
+interface ChosenLane { providerId: string; provider: AIProvider; proxyUrl: string; model: string; key: string; keyIndex: number; keyTotal: number; maxTokens?: number; }
 
 const _rlKey = (id: string, model: string) => (id === 'default' ? model : `${id}${model}`);
 
@@ -1681,7 +1683,7 @@ function _laneKeyToPanel(laneKey: string): string {
   return laneKey; // an toàn nếu gặp khoá dạng cũ (đã là dạng gộp)
 }
 
-function _toPoolProvider(id: string, c: { provider: AIProvider; proxyUrl: string; apiKey: string; apiKeys: string[]; model: string; primaryModelRpm: number; enableSecondaryModel: boolean; secondaryModel: string; secondaryModelRpm: number; secondaryModelThreshold: number }): PoolProvider {
+function _toPoolProvider(id: string, c: { provider: AIProvider; proxyUrl: string; apiKey: string; apiKeys: string[]; model: string; primaryModelRpm: number; enableSecondaryModel: boolean; secondaryModel: string; secondaryModelRpm: number; secondaryModelThreshold: number; maxTokens?: number }): PoolProvider {
   return {
     // (User 2026) provider suy TỪ Base URL hiện tại — config cũ lưu provider lệch vẫn chạy đúng.
     id, provider: detectProviderFromUrl(c.proxyUrl) || c.provider, proxyUrl: c.proxyUrl, keys: getUniqueKeys(c),
@@ -1689,6 +1691,7 @@ function _toPoolProvider(id: string, c: { provider: AIProvider; proxyUrl: string
     enableSecondary: !!c.enableSecondaryModel && !!c.secondaryModel?.trim(),
     secondaryModel: c.secondaryModel, secondaryRpm: c.secondaryModelRpm > 0 ? c.secondaryModelRpm : 17,
     secondaryThreshold: c.secondaryModelThreshold || 0,
+    maxTokens: c.maxTokens && c.maxTokens > 0 ? c.maxTokens : undefined,
   };
 }
 /**
@@ -1715,7 +1718,10 @@ export function setMainProviderConfig(c: MainPoolConfig | null): void {
   _liveMainConfig = c;
 }
 function buildPool(base: ProxySettings): PoolProvider[] {
-  return [_toPoolProvider('default', _liveMainConfig ?? base), ..._extraProviders.map((p) => _toPoolProvider(p.id, p))];
+  const main = _toPoolProvider('default', _liveMainConfig ?? base);
+  // (bug 248) Provider chính KHÔNG mang trần riêng — nó dùng đúng `config.maxTokens` của người gọi.
+  main.maxTokens = undefined;
+  return [main, ..._extraProviders.map((p) => _toPoolProvider(p.id, p))];
 }
 /**
  * SỐ LUỒNG SONG SONG = tổng NGÂN SÁCH RPM của toàn pool. Mỗi provider (config chính + provider
@@ -1779,7 +1785,7 @@ async function pickLane(pool: PoolProvider[], charCount: number | undefined, sig
   const build = (p: PoolProvider, ki: number, model: string): ChosenLane => {
     const total = Math.max(1, p.keys.length || 1);
     const key = p.keys.length ? p.keys[ki % p.keys.length] : '';
-    return { providerId: p.id, provider: p.provider, proxyUrl: p.proxyUrl, model, key, keyIndex: ki, keyTotal: total };
+    return { providerId: p.id, provider: p.provider, proxyUrl: p.proxyUrl, model, key, keyIndex: ki, keyTotal: total, maxTokens: p.maxTokens };
   };
   // Lượt 1: né lane đang NGHỈ 15s vì vừa fail. Lượt 2: mọi lane khoẻ đầy RPM thì chấp nhận cả lane nghỉ.
   for (const skipCooling of [true, false]) {
@@ -1828,7 +1834,8 @@ export async function callProvider(
   const lane = await pickLane(pool, meta?.charCount, signal, meta?.preferSecondary);
   const keyIndex = lane.keyIndex;
   const keyTotal = lane.keyTotal;
-  const rotatedConfig = { ...config, provider: lane.provider, proxyUrl: lane.proxyUrl, model: lane.model, apiKey: lane.key };
+  // (bug 248) provider có trần token riêng thì dùng trần đó, không thì theo cấu hình chung.
+  const rotatedConfig = { ...config, provider: lane.provider, proxyUrl: lane.proxyUrl, model: lane.model, apiKey: lane.key, maxTokens: lane.maxTokens ?? config.maxTokens };
 
   // Register this call in the live monitor so the UI can show model + provider + entry + thread count
   const callId = crypto.randomUUID();

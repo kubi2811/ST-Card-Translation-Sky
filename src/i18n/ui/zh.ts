@@ -420,6 +420,8 @@ const ui: UiKeys = {
   ppModelCount: '{count} 个模型',
   ppPrimaryModel: '主模型',
   ppPrimaryRpm: '主 RPM',
+  ppMaxTokens: '每次请求最大 token（0 = 使用全局设置）',
+  ppMaxTokensTitle: '仅此提供商的输出 token 上限（主模型与备用模型）。例如 Gemini 65536、GLM-5.3 128000。0 = 使用全局“每次请求最大 token”。',
   ppSecondaryTitle: '备用模型（仅翻译短于字符阈值的条目 — 不再是主模型繁忙时的溢出）',
   ppSecondaryModel: '备用模型',
   ppSecondaryRpm: '备用 RPM',

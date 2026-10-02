@@ -142,6 +142,12 @@ function ProviderCard({ p, index, onChange, onRemove }: { p: ProviderConfig; ind
           <input type="number" min={1} max={1000} value={p.primaryModelRpm} onChange={(e) => onChange({ primaryModelRpm: Math.max(1, +e.target.value || 1) })} style={inputStyle} />
         </div>
       </div>
+      {/* (bug 248) Trần token đầu ra riêng của provider này */}
+      <div>
+        <label style={lbl} title={ui.ppMaxTokensTitle}>{ui.ppMaxTokens}</label>
+        <input type="number" min={0} step={1024} value={p.maxTokens || 0} placeholder="0" title={ui.ppMaxTokensTitle}
+          onChange={(e) => onChange({ maxTokens: Math.max(0, Math.floor(+e.target.value || 0)) })} style={inputStyle} />
+      </div>
 
       {/* Model phụ */}
       <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.72rem', color: 'var(--text-secondary)', cursor: 'pointer' }}>

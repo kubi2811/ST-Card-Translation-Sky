@@ -417,6 +417,8 @@ const ui: UiKeys = {
   ppModelCount: '{count} model',
   ppPrimaryModel: 'Model chính',
   ppPrimaryRpm: 'RPM chính',
+  ppMaxTokens: 'Token tối đa mỗi yêu cầu (0 = theo mức chung)',
+  ppMaxTokensTitle: 'Trần token ĐẦU RA riêng cho provider này (cả model chính lẫn phụ). Vd Gemini 65536, GLM-5.3 128000. Để 0 thì dùng "Số token tối đa mỗi yêu cầu" chung.',
   ppSecondaryTitle: 'Model phụ (CHỈ chạy entry ngắn hơn ngưỡng ký tự — KHÔNG tràn khi chính bận)',
   ppSecondaryModel: 'Model phụ',
   ppSecondaryRpm: 'RPM phụ',

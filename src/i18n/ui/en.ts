@@ -422,6 +422,8 @@ const ui = {
   ppModelCount: '{count} models',
   ppPrimaryModel: 'Primary model',
   ppPrimaryRpm: 'Primary RPM',
+  ppMaxTokens: 'Max tokens per request (0 = use global)',
+  ppMaxTokensTitle: 'Output token cap for THIS provider only (both primary and secondary model). E.g. Gemini 65536, GLM-5.3 128000. 0 = use the global "Max tokens per request".',
   ppSecondaryTitle: 'Secondary model (runs ONLY entries shorter than the char threshold — not an overflow when the primary is busy)',
   ppSecondaryModel: 'Secondary model',
   ppSecondaryRpm: 'Secondary RPM',

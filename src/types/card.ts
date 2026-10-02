@@ -334,6 +334,12 @@ export interface ProviderConfig {
   secondaryModel: string;
   secondaryModelRpm: number;
   secondaryModelThreshold: number;
+  /**
+   * (bug 248) Trần token ĐẦU RA riêng của provider này (áp cho cả model chính lẫn phụ của nó).
+   * 0/thiếu = dùng "Số token tối đa mỗi yêu cầu" chung. Cần vì mỗi nhà có trần khác nhau:
+   * Gemini 65.536, GLM-5.3 128.000 — một số chung cho cả pool thì hoặc lãng phí, hoặc bị 400.
+   */
+  maxTokens?: number;
 }
 
 export type ConnectionStatus = 'untested' | 'connected' | 'failed';

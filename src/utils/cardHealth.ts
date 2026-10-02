@@ -10,6 +10,7 @@ import { checkCodeFieldForCjk } from './mvuValidator';
 import { restoreMacros } from './macroGuard';
 import { extractScriptBodies, isJsSyntaxOk, isLikelyJsScript, jsParseErrorAny } from './scriptSafety';
 import { parseFindRegex } from './stPreview';
+import { countFenceLines } from './fenceGuard';
 import type { TranslationField, GlossaryEntry } from '../types/card';
 
 /** Ideograph CJK (Trung/Nhật/Hàn) — dùng để phát hiện chữ chưa dịch còn sót. */
@@ -28,6 +29,7 @@ export type HealthKind =
   | 'empty_bracket'      // (bugNeedFix/178) 【nhãn】 ở gốc thành 【】 RỖNG ở bản dịch — mất chữ
   | 'empty_property_access' // obj['KEY'] ở gốc thành obj[''] sau dịch
   | 'macro_renamed'      // (bugNeedFix/180) {{user}} bị đổi ruột thành thứ khác — thẻ hiện sai khi chơi
+  | 'fence_lost'         // (bug 246) dòng ``` của gốc biến mất sau dịch — SillyTavern không render khối HTML
   | 'glossary_unapplied';// thuật ngữ trong Từ điển vẫn còn NGUYÊN GỐC trong bản dịch (dịch chưa nhất quán)
 
 export interface HealthIssue {
@@ -56,6 +58,8 @@ export interface HealthReport {
     emptyPropertyAccesses: number;
     /** (bugNeedFix/180) Số macro {{…}} bị đổi ruột sau dịch. */
     renamedMacros: number;
+    /** (bug 246) Số dòng hàng rào ``` bị mất sau dịch. */
+    lostFences: number;
     glossaryUnapplied: number;
   };
   issues: HealthIssue[];
@@ -116,6 +120,7 @@ export function scanFieldsHealth(fields: TranslationField[], glossary?: Glossary
   let emptyBrackets = 0;
   let emptyPropertyAccesses = 0;
   let renamedMacros = 0;
+  let lostFences = 0;
   let done = 0, error = 0, pending = 0, skipped = 0;
 
   // Chỉ giữ mục từ điển hợp lệ (source≠target, đủ dài để không báo nhầm 1 ký tự).
@@ -258,6 +263,20 @@ export function scanFieldsHealth(fields: TranslationField[], glossary?: Glossary
       }
     }
 
+    // ═══ (bug 246) HÀNG RÀO ``` BỊ MẤT ═══
+    // Mọi bộ kiểm cũ chỉ đếm ``` theo chiều THỪA (AI chèn ``` vào giữa code). Chiều THIẾU — AI coi
+    // ``` là định dạng câu trả lời rồi xoá đi — thì không ai đếm, nên regex hỏng vẫn được báo sạch.
+    if (f.translated && f.translated !== f.original) {
+      const lost = countFenceLines(f.original || '') - countFenceLines(f.translated);
+      if (lost > 0) {
+        lostFences += lost;
+        issues.push({
+          severity: 'error', kind: 'fence_lost', label: f.label, path: f.path,
+          detail: `Mất ${lost} dòng \`\`\` so với bản gốc — SillyTavern dựa vào dòng này để nhận khối HTML, thiếu là regex hiện vỡ. Thêm lại cho đủ (đúng chỗ như bản gốc) hoặc dịch lại field này.`,
+        });
+      }
+    }
+
     const emptied = countEmptiedBrackets(f.original || '', f.translated || '');
     if (emptied.length > 0) {
       emptyBrackets += emptied.length;
@@ -283,7 +302,7 @@ export function scanFieldsHealth(fields: TranslationField[], glossary?: Glossary
   issues.sort((a, b) => rank[a.severity] - rank[b.severity]);
 
   return {
-    counts: { total: fields.length, done, error, pending, skipped, brokenScripts, brokenJson, invalidRegex, residualCjkCode, residualCjkText, emptyBrackets, emptyPropertyAccesses, renamedMacros, glossaryUnapplied },
+    counts: { total: fields.length, done, error, pending, skipped, brokenScripts, brokenJson, invalidRegex, residualCjkCode, residualCjkText, emptyBrackets, emptyPropertyAccesses, renamedMacros, lostFences, glossaryUnapplied },
     issues,
     ok: !issues.some((i) => i.severity === 'error'),
   };

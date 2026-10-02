@@ -5,6 +5,7 @@ import type { CharacterCard, ProxySettings, TranslationField } from '../types/ca
 import { detectStructuralTruncation, callProvider, computePoolConcurrency } from './apiClient';
 // (bugNeedFix/177) Dò lỗi phải chạy đa luồng như mọi luồng khác — xem ghi chú ở verifyConcurrency().
 import { runWorkerPool } from './runWorkerPool';
+import { countFenceLines } from './fenceGuard';
 import { applyMvuToText } from './mvuSync';
 
 /**
@@ -1598,6 +1599,11 @@ function validateFixQuality(
   // ta hoặc tự bịa marker tương tự thì bản sửa đó đang mô tả phần nó KHÔNG nhìn thấy.
   if (/\[\s*\.{3}\s*\d+\s*chars?(?:\s+truncated)?\s*\.{3}\s*\]/i.test(fixedText)) {
     return { valid: false, reason: 'Bản AI sửa chứa marker cắt cụt "[... N chars ...]" — AI đang chép lại phần nó không nhìn thấy, không áp dụng.' };
+  }
+
+  // 0b. (bug 246) Bản sửa không được làm rơi dòng ``` — SillyTavern dựa vào nó để nhận khối HTML.
+  if (countFenceLines(fixedText) < Math.min(countFenceLines(original), countFenceLines(currentTranslation))) {
+    return { valid: false, reason: 'Bản AI sửa làm MẤT dòng ``` của bản gốc — regex sẽ hiện vỡ trong SillyTavern, không áp dụng.' };
   }
 
   // 1. Length ratio check: fix shouldn't be drastically different from current

@@ -50,6 +50,7 @@ import { decideChunkResume } from './chunkRetryPlan';
 import { detectRefusal, RefusalError, isRefusalError } from './refusalGuard';
 import { hedgedRace } from './hedge';
 import { translateThroughBase64Shell } from './base64Payload';
+import { restoreDroppedFences } from './fenceGuard';
 // (bug 193) Bác sĩ chunk: chẩn đoán 6 mặt + lượt SỬA có chẩn đoán + lọc/ép từ điển MVU theo chunk.
 import {
   diagnoseChunk, buildChunkRepairInstruction, filterDictForChunk, applyDictCasing,
@@ -1921,14 +1922,9 @@ export function cleanTranslationResponse(original: string, translated: string, i
     
     if (origCodeFenceMatch) {
       // Original HAD code fences — they are part of the content, not AI hallucination
-      if (transCodeFenceMatch) {
-        // Translation also has code fences → keep as-is (already correct)
-        return text;
-      } else {
-        // AI dropped the code fences → RE-WRAP with the original fence type
-        const fenceType = origCodeFenceMatch[1] || '';
-        return `\`\`\`${fenceType}\n${trimmedText}\n\`\`\``;
-      }
+      // (bug 246) Bọc lại cả khối chỉ đúng khi AI làm rơi CẢ HAI dấu. Rơi một dấu (thường là dấu
+      // đóng) mà vẫn bọc thì ra hai dấu mở liền nhau — restoreDroppedFences đặt từng dòng về đúng chỗ.
+      return restoreDroppedFences(orig, text).text;
     }
     
     // Original did NOT have code fences — strip them if AI added them
@@ -1972,11 +1968,14 @@ export function cleanTranslationResponse(original: string, translated: string, i
     // For HTML content, apply code fence logic + embedded backtick repair (safe operation)
     let cleaned = stripMarkdownFences(translated, original);
     cleaned = repairEmbeddedBackticks(original, cleaned);
+    cleaned = restoreDroppedFences(original, cleaned).text; // (bug 246)
     return cleaned.trim() || translated.trim();
   }
 
   let cleaned = stripMarkdownFences(translated, original);
   cleaned = repairEmbeddedBackticks(original, cleaned);
+  // (bug 246) Hàng rào ``` nằm GIỮA field (có chữ trước/sau, nhiều khối) — mẫu bọc-trọn ở trên không thấy.
+  cleaned = restoreDroppedFences(original, cleaned).text;
 
   // Pattern 1: Full text "original → translation" or "original -> translation"
   // The AI sometimes returns "Chinese text → Vietnamese text"
@@ -2918,6 +2917,9 @@ function verifyFinalTranslation(
   const transTriple = (translated.match(/```/g) || []).length;
   if (transTriple > origTriple) {
     issues.push(`⚠️ Markdown \`\`\` injection: gốc ${origTriple}, dịch ${transTriple} (+${transTriple - origTriple})`);
+  } else if (transTriple < origTriple) {
+    // (bug 246) chiều ngược lại: AI làm rơi ``` — trước đây không bộ kiểm nào đếm chiều này.
+    issues.push(`⚠️ Mất \`\`\`: gốc ${origTriple}, dịch ${transTriple} (-${origTriple - transTriple}) — SillyTavern sẽ không render khối HTML`);
   }
 
   // 3. Bracket balance

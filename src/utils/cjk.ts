@@ -43,6 +43,37 @@ export function stripUrlsForCjkCheck(text: string): string {
   return s;
 }
 
+/**
+ * Đuôi file tài nguyên (ảnh/âm thanh/video/font/mã/dữ liệu). Cho phép `?query`/`#hash` phía sau.
+ * Dùng để nhận ra TÊN FILE trần như `变身状态agp4lq.png` — không có scheme, không có `/`, nhưng
+ * vẫn là một tên phải giữ nguyên từng byte.
+ */
+const ASSET_EXT_RE = /\.(?:png|jpe?g|gif|webp|avif|bmp|svg|ico|mp3|wav|ogg|m4a|flac|aac|mp4|webm|mov|woff2?|ttf|otf|css|js|mjs|json|ya?ml|txt|html?)(?:[?#][^\s]*)?$/i;
+
+/** Ký tự kết thúc một "cụm" URL/tên file: khoảng trắng, nháy, ngoặc, phân cách thuộc tính/JS. */
+const LINK_BOUNDARY_RE = /[\s'"`<>()[\]{},;|=]/;
+
+/**
+ * (bug 247) Đoạn `text.slice(start, end)` có nằm trong một URL / đường dẫn / tên file không?
+ *
+ * Nở ra hai phía tới ký tự biên gần nhất để lấy nguyên cụm chứa nó, rồi xét cụm đó:
+ * có scheme (`https://`, `//host`, `data:`), là đường dẫn tương đối (`./`, `../`), hoặc kết thúc
+ * bằng đuôi file tài nguyên. Thước đo này cố ý HẸP: văn bản thường có dấu `/` (`攻击/防御`) không
+ * bị coi là link — nó phải còn được dịch/ép từ điển như cũ.
+ */
+export function isInsideLinkOrFile(text: string, start: number, end: number): boolean {
+  if (!text || start < 0 || end > text.length || start >= end) return false;
+  let a = start;
+  while (a > 0 && !LINK_BOUNDARY_RE.test(text[a - 1])) a--;
+  let b = end;
+  while (b < text.length && !LINK_BOUNDARY_RE.test(text[b])) b++;
+  const token = text.slice(a, b);
+  if (/^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(token)) return true; // https://… ftp://… //host
+  if (/^data:/i.test(token)) return true;
+  if (/^\.{1,2}\//.test(token)) return true;
+  return ASSET_EXT_RE.test(token);
+}
+
 /** Đếm chữ Hán SAU khi bỏ URL — thước đo "còn tiếng Trung chưa dịch". */
 export function countHanStripped(text: string): number {
   return (stripUrlsForCjkCheck(text).match(HAN_RE_G) || []).length;

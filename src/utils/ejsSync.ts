@@ -12,6 +12,7 @@ import type { CharacterCard, TranslationField, ProxySettings } from '../types/ca
 import { fandomNameOverride } from './fandomMode';
 import { callProvider } from './apiClient';
 import { unifyVarWordSeparators } from './mvuSync';
+import { isInsideLinkOrFile } from './cjk';
 
 /**
  * Parse JSON from AI response, handling markdown code blocks and surrounding text.
@@ -914,7 +915,8 @@ Rules:
 - String comparisons (===, includes(), indexOf(), match(), switch/case) MUST use translated keywords
 - Alias arrays (var aliases = [...]) MUST use translated names
 - getChatMessages() scan targets MUST use translated keywords
-- Narrative text that triggers these keywords MUST also use the same translated versions`;
+- Narrative text that triggers these keywords MUST also use the same translated versions
+- EXCEPTION: NEVER change a keyword that is only PART of a URL, file path or file name (e.g. src="https://…/变身状态agp4lq.png", 'img/变身.webp'). Those names are set by the image host — copy them byte-for-byte or the image link breaks`;
   }
 
   // ─── Decorator Preservation ───
@@ -1082,6 +1084,8 @@ export function autoFixEjsKeywords(
       for (const pattern of quotedPatterns) {
         const before = fixedBlock;
         fixedBlock = fixedBlock.replace(pattern, (match, q, pre, post) => {
+          // (bug 247) keyword chỉ là một khúc của link/tên file ⇒ giữ nguyên, đổi là gãy link.
+          if (keywordInLinkOrFile(pre, original, post)) return match;
           return `${q}${pre}${translatedKw}${post}${q}`;
         });
         if (fixedBlock !== before) {
@@ -1282,6 +1286,7 @@ export function enforceEjsCovariance(
         'g',
       );
       const fixedScript = scriptContent.replace(quotedPattern, (m, q, pre, post) => {
+        if (keywordInLinkOrFile(pre, original, post)) return m; // (bug 247)
         return `${q}${pre}${translated}${post}${q}`;
       });
       if (fixedScript !== scriptContent) {
@@ -1735,6 +1740,7 @@ export function autoFixEjsKeywordsExtended(
       const q = qm[1];
       const pre = qm[2];
       const post = qm[3];
+      if (keywordInLinkOrFile(pre, original, post)) continue; // (bug 247)
       const replacement = `${q}${pre}${translatedKw}${post}${q}`;
       matches.push({ index: qm.index, match: qm[0], replacement });
     }
@@ -1826,6 +1832,16 @@ function collectAllTexts(card: CharacterCard): { text: string; source: string }[
   }
 
   return allTexts;
+}
+
+/**
+ * (bug 247) Keyword nằm trong một chuỗi trong nháy (`pre` + keyword + `post`) — có phải nó chỉ là
+ * MỘT KHÚC của URL/tên file không? Ba bộ ép bên trên đổi keyword ở BẤT KỲ đâu trong chuỗi, nên
+ * `'…/变身状态agp4lq.png'` từng bị đổi thành `'…/Biến thân状态agp4lq.png'` — ảnh mất hẳn. Tên file
+ * là tên do máy chủ đặt, không phải chữ để dịch: khớp keyword ở đó luôn là khớp nhầm.
+ */
+function keywordInLinkOrFile(pre: string, keyword: string, post: string): boolean {
+  return isInsideLinkOrFile(pre + keyword + post, pre.length, pre.length + keyword.length);
 }
 
 /** Escape string for use in RegExp */

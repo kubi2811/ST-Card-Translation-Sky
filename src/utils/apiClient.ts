@@ -900,7 +900,12 @@ export function getMaxOutputTokens(modelId: string, maxTokensFromConfig?: number
   if (model.includes('-pro') || model.includes('gemini-3.1-pro') || model.includes('gemini-2.5-pro')) {
     return 65535;
   }
-  if (model.includes('flash') || model.includes('gemini-3.') || model.includes('gemini-2.0') || model.includes('gemini-1.5')) {
+  // (bug 250) Gemini 2.5+/3.x flash có suy nghĩ: token suy nghĩ TÍNH VÀO maxOutputTokens, nên trần
+  // 8192 kiểu đời cũ bị phần nghĩ ăn hết, câu trả lời rỗng hoặc cụt. Các model này nhận tới 65536.
+  if (/gemini-(?:2\.5|[3-9])/.test(model)) {
+    return 65535;
+  }
+  if (model.includes('flash') || model.includes('gemini-2.0') || model.includes('gemini-1.5')) {
     return 8192;
   }
   
@@ -1007,8 +1012,13 @@ async function callOpenAICompatible(
   if (!useStream) {
     const json = await res.json();
     captureUsage(json.usage);
-    const text = json.choices?.[0]?.message?.content || json.choices?.[0]?.text;
-    if (!text) throw new ApiError(`Empty response from API`, undefined, true);
+    const text = openAiContentText(json.choices?.[0]?.message?.content) || json.choices?.[0]?.text;
+    if (!text) {
+      const fr = json.choices?.[0]?.finish_reason;
+      throw new ApiError(fr === 'length'
+        ? 'API hết hạn mức token đầu ra trước khi viết xong (model có suy nghĩ tiêu token vào phần nghĩ) — tăng "Số token tối đa mỗi yêu cầu".'
+        : `Empty response from API${fr ? ` (finish_reason: ${fr})` : ''}`, undefined, true);
+    }
     return text.trim();
   }
 
@@ -1029,7 +1039,7 @@ async function callOpenAICompatible(
             try {
               const parsed = JSON.parse(line.slice(6));
               captureUsage(parsed.usage);
-              const text = parsed.choices?.[0]?.delta?.content;
+              const text = openAiContentText(parsed.choices?.[0]?.delta?.content);
               if (text) fullContent += text;
             } catch (e) {}
           }
@@ -1047,7 +1057,7 @@ async function callOpenAICompatible(
           try {
             const parsed = JSON.parse(trimmedLine.slice(6));
             captureUsage(parsed.usage);
-            const text = parsed.choices?.[0]?.delta?.content;
+            const text = openAiContentText(parsed.choices?.[0]?.delta?.content);
             if (text) fullContent += text;
           } catch (e) {}
         }
@@ -1066,6 +1076,21 @@ async function callOpenAICompatible(
     throw new ApiError(`Empty response from API`, undefined, true);
   }
   return fullContent.trim();
+}
+
+/**
+ * (bug 250) `content` của cổng OpenAI-compatible: chuẩn là chuỗi, nhưng cổng tương thích của Google
+ * và vài proxy trả MẢNG part (`[{type:'text', text}]`, có thể kèm part suy nghĩ). Đọc cả hai dạng.
+ */
+export function openAiContentText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  let out = '';
+  for (const p of content as any[]) {
+    if (typeof p === 'string') out += p;
+    else if (p && typeof p.text === 'string' && p.thought !== true && p.type !== 'thinking' && p.type !== 'reasoning') out += p.text;
+  }
+  return out;
 }
 
 /* ─── Anthropic API call ─── */
@@ -1329,8 +1354,8 @@ async function callGemini(
     if (candidate?.finishReason === 'SAFETY') {
       throw new ApiError(`Gemini blocked this content (SAFETY filter). Try enabling Jailbreak mode or use Flash model which is less restrictive.`, 400);
     }
-    const text = candidate?.content?.parts?.[0]?.text;
-    if (!text) throw new ApiError(`Empty response from Gemini API`, undefined, true);
+    const text = geminiPartsText(candidate);
+    if (!text) throw emptyGeminiError(candidate?.finishReason);
     return text.trim();
   }
 
@@ -1351,7 +1376,7 @@ async function callGemini(
       }
       const candidate = parsed.candidates?.[0];
       if (candidate?.finishReason) lastFinishReason = candidate.finishReason;
-      const text = candidate?.content?.parts?.[0]?.text;
+      const text = geminiPartsText(candidate);
       if (text) fullContent += text;
     } catch (e) {}
   }
@@ -1393,9 +1418,33 @@ async function callGemini(
     throw new ApiError(`Gemini blocked this content (SAFETY filter). Try enabling Jailbreak mode or use Flash model which is less restrictive.`, 400);
   }
   if (!fullContent) {
-    throw new ApiError(`Empty response from Gemini API`, undefined, true);
+    throw emptyGeminiError(lastFinishReason);
   }
   return fullContent.trim();
+}
+
+/**
+ * (bug 250) Ghép chữ của MỌI part trong câu trả lời Gemini, bỏ part "suy nghĩ" (thought: true).
+ * Bản cũ chỉ đọc `parts[0]` — đúng với model đời cũ (một part duy nhất), nhưng model có suy nghĩ
+ * (gemini-2.5+/3.x) có thể trả part đầu là chữ ký suy nghĩ (`thoughtSignature`, không có text)
+ * và chữ thật nằm ở part sau ⇒ app nhận chuỗi rỗng, báo "Empty response" rồi thử lại mãi.
+ */
+export function geminiPartsText(candidate: any): string {
+  const parts = candidate?.content?.parts;
+  if (!Array.isArray(parts)) return '';
+  let out = '';
+  for (const p of parts) {
+    if (p && typeof p.text === 'string' && p.thought !== true) out += p.text;
+  }
+  return out;
+}
+
+/** (bug 250) Câu trả lời rỗng: nói rõ VÌ SAO thay vì một câu "Empty response" chung chung. */
+function emptyGeminiError(finishReason?: string): ApiError {
+  if (finishReason === 'MAX_TOKENS') {
+    return new ApiError('Gemini hết hạn mức token đầu ra trước khi viết xong (model có suy nghĩ tiêu token vào phần nghĩ) — tăng "Số token tối đa mỗi yêu cầu" (gợi ý 65536).', undefined, true);
+  }
+  return new ApiError(`Empty response from Gemini API${finishReason ? ` (finishReason: ${finishReason})` : ''}`, undefined, true);
 }
 
 /* ─── API Key Rotation ─── */

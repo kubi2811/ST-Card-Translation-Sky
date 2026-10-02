@@ -7,6 +7,9 @@ import { publishToGithub } from '../utils/githubApi';
 import { safeSetItem } from '../utils/safeStorage';
 import { useUi } from '../i18n/useLocale';
 import HeavyScriptMode from './HeavyScriptMode';
+import ExternalTranslateProgress from './ExternalTranslateProgress';
+import { useHeavyScriptJob, heavySourceSig } from '../utils/heavyScriptJob';
+import { useTranslateActivity, noteActivity } from '../utils/translateActivity';
 // (bugNeedFix/181) Kho link ngoài + kiểm tra tham chiếu chéo.
 import {
   loadVault, saveVault, upsertLink, removeLink, classifyExternalLink, suggestNameFromUrl,
@@ -45,7 +48,12 @@ export default function ExternalLinkTab() {
   
   const [input, setInput] = useState(() => localStorage.getItem('custom-external-input') || '');
   const [copied, setCopied] = useState(false);
-  const [heavyOutput, setHeavyOutput] = useState(''); // bản ghép của chế độ Script Nặng
+  // (bug 239) Bản ghép của chế độ Script Nặng giờ nằm ở store cấp module (heavyScriptJob) — đóng
+  // panel không còn làm mất nó. Chỉ dùng khi lượt đó đúng là của script đang ở ô nháp.
+  const heavySig = useHeavyScriptJob((s) => s.sig);
+  const heavyMerged = useHeavyScriptJob((s) => s.merged);
+  const heavyHasAny = useHeavyScriptJob((s) => s.results.some(Boolean));
+  const heavyOutput = heavyHasAny && heavySig === heavySourceSig(input) ? heavyMerged : '';
 
   // GitHub state
   const [ghToken, setGhToken] = useState(() => localStorage.getItem('gh-token') || '');
@@ -98,6 +106,19 @@ export default function ExternalLinkTab() {
 
   const handleTranslate = async () => {
     if (!input.trim()) return;
+    // (bug 240) Mỗi lượt bắt đầu với nhật ký sạch, để không lẫn diễn biến của lượt trước.
+    useTranslateActivity.getState().clear(ui.eltFieldLabel);
+    noteActivity(ui.eltFieldLabel, 'info', `Bắt đầu dịch ${input.length.toLocaleString()} ký tự.`);
+    // (bug 239) Lượt trước chết giữa chừng (lỗi mạng, hết quota…) mà vẫn là ĐÚNG script này thì
+    // dịch TIẾP từ các mảnh đã xong, thay vì xoá sạch rồi trả tiền API cho cả file lần nữa.
+    const canResume = !!field && field.original === input && field.status !== 'done'
+      && !!field.completedChunks?.some(c => !!c?.trim());
+    if (canResume) {
+      noteActivity(ui.eltFieldLabel, 'info', 'Dịch tiếp từ các mảnh đã lưu của lượt trước.');
+      updateField(fieldPath, { status: 'pending', error: undefined });
+      setTimeout(() => { void retranslateField(fieldPath, true).catch(() => {}); }, 50);
+      return;
+    }
     if (field) {
       updateField(fieldPath, { original: input, translated: '', status: 'pending', error: undefined, retries: 0 });
     } else {
@@ -171,7 +192,6 @@ export default function ExternalLinkTab() {
   /** Mở một mục ra sửa: đổ lại vào ô nháp để dịch tiếp / dịch lại. */
   const openEntry = (e: ExternalLinkEntry) => {
     setInput(e.original || e.translated);
-    setHeavyOutput('');
     if (e.translated) updateField(fieldPath, { original: e.original, translated: e.translated, status: 'done', error: undefined });
     setEditingId(e.id);
     setSaveName(e.name);
@@ -377,8 +397,11 @@ export default function ExternalLinkTab() {
         </div>
         {hasError && <div style={{ padding: '8px 12px', borderRadius: 'var(--radius-md)', background: 'rgba(255,82,82,0.08)', border: '1px solid rgba(255,82,82,0.2)', color: 'var(--accent-danger)', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '6px' }}><X size={14} /> {ui.eltErrPrefix} {field?.error}</div>}
 
+        {/* (bug 239 + 240) Tiến độ từng mảnh + nhật ký — sống qua việc đóng/mở Regex Manager. */}
+        {field && <ExternalTranslateProgress field={field} label={ui.eltFieldLabel} />}
+
         {/* (User 2026) Script Nặng (Chia Phần) — tự hiện khi script vượt ngưỡng an toàn */}
-        <HeavyScriptMode source={input} onMerged={setHeavyOutput} />
+        <HeavyScriptMode source={input} />
 
         {output && (
           <div style={{ position: 'relative', marginTop: '8px' }}>

@@ -10,6 +10,7 @@ import { aiRegexScan, aiRegexFixAll, aiRegexProcess } from '../utils/aiVerify';
 import type { VerifyIssue, RegexFixResult, RegexScanProgress, RegexProcessProgress } from '../utils/aiVerify';
 import AiCompanionPanel from './AiCompanionPanel';
 import ExternalLinkTab from './ExternalLinkTab';
+import { isExternalTranslateActive } from './ExternalJobBadge';
 
 /* ════════════════════════════════════════════════════════════════════
    HELPER: Render fully interactive HTML preview with jQuery & ST CSS
@@ -258,7 +259,9 @@ export default function RegexManagerPanel({ onClose, isFullscreen }: { onClose: 
   );
 
   // ─── State ───
-  const [selectedScriptIdx, setSelectedScriptIdx] = useState<number>(0);
+  // (bug 239) Đang có lượt dịch link ngoài chạy nền → mở thẳng tab Link ngoài, không bắt người
+  // dùng đi tìm (trước đây luôn mở script số 0, nên tưởng lượt dịch đã mất).
+  const [selectedScriptIdx, setSelectedScriptIdx] = useState<number>(() => (isExternalTranslateActive() ? -1 : 0));
   const [showAiChat, setShowAiChat] = useState(false);
 
   // "Nhảy tới trường" từ bảng Sức khoẻ thẻ, trỏ vào 1 trường regex → chọn đúng script chứa nó.

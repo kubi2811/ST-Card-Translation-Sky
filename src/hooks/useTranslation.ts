@@ -246,6 +246,38 @@ function bakeModdedFieldsIntoCard() {
   state.addLog('info', `📌 Baked ${doneFields.length} modded field(s) into card — new base state set`);
 }
 
+/**
+ * (bug 239) KHOÁ "ĐANG DỊCH" VÀ NÚT HUỶ THEO FIELD PHẢI LÀ MỘT, DÙ BAO NHIÊU COMPONENT GỌI HOOK.
+ *
+ * Trước đây hai thứ này là useRef — mỗi component gọi useTranslation() có một bản RIÊNG. Lượt dịch
+ * lẻ (Regex Manager / Link ngoài) là promise sống tiếp sau khi panel đóng, nhưng controller của nó
+ * nằm trong bản của component ĐÃ UNMOUNT. Mở lại panel thì bản mới rỗng:
+ *   • bấm "Huỷ" chỉ đổi nhãn về pending, request thật vẫn bay và vẫn ghi đè kết quả;
+ *   • bấm "Dịch" lần nữa thì khoá chống trùng (bug 213) không thấy lượt cũ ⇒ hai lượt cùng chạy.
+ * Đặt ở cấp module thì panel nào cũng nhìn thấy và dừng được đúng lượt đang chạy.
+ */
+const SHARED_IN_FLIGHT = { current: new Set<string>() };
+const SHARED_FIELD_ABORTS = { current: new Map<string, AbortController>() };
+
+/**
+ * Field chạy ĐỘC LẬP với vòng dịch thẻ: Bắt đầu/Tạm dừng/Huỷ dịch thẻ không được giết nó, vì nó
+ * là việc riêng người dùng bấm ở tab khác (một file link ngoài lớn chạy 10-20 phút). Chỉ nút Huỷ
+ * của chính nó (cancelFieldTranslation) mới dừng.
+ */
+const DETACHED_FIELD_PATHS = new Set<string>(['custom_external_link']);
+
+/** Dừng mọi lượt dịch lẻ đang bay — trừ các field chạy độc lập ở trên. */
+function abortSharedFieldWork(): void {
+  for (const [path, ctrl] of [...SHARED_FIELD_ABORTS.current]) {
+    if (DETACHED_FIELD_PATHS.has(path)) continue;
+    ctrl.abort();
+    SHARED_FIELD_ABORTS.current.delete(path);
+  }
+  for (const path of [...SHARED_IN_FLIGHT.current]) {
+    if (!DETACHED_FIELD_PATHS.has(path)) SHARED_IN_FLIGHT.current.delete(path);
+  }
+}
+
 export function useTranslation() {
   // (User 2026 — bugNeedFix/39) KHÔNG subscribe store trong hook engine.
   // Trước đây `const store = useStore()` (không selector) khiến MỌI component gọi useTranslation()
@@ -271,7 +303,8 @@ export function useTranslation() {
   const runIdRef = useRef(0);
   // Paths currently being translated by SOME context. Prevents the same field from
   // being translated twice at once (e.g. a zombie loop + a fresh resume loop).
-  const inFlightPaths = useRef<Set<string>>(new Set());
+  // (bug 239) Dùng CHUNG một bản cho mọi component — xem SHARED_IN_FLIGHT ở đầu file.
+  const inFlightPaths = SHARED_IN_FLIGHT;
 
   /* ─── (bug 213) Hàng đợi "từ điển tên entry EJS" — gom rồi ghi một lần ───
    *
@@ -331,7 +364,8 @@ export function useTranslation() {
   // can call it without a use-before-define / dep-array TDZ issue.
   const applyModRef = useRef<((isContinue: boolean) => void) | null>(null);
   // Per-field abort controllers: cancel previous in-flight translation for same field on retry
-  const fieldAbortMap = useRef<Map<string, AbortController>>(new Map());
+  // (bug 239) Dùng CHUNG một bản cho mọi component — xem SHARED_FIELD_ABORTS ở đầu file.
+  const fieldAbortMap = SHARED_FIELD_ABORTS;
 
   /**
    * (bug 229) NẠP CÀI ĐẶT CẤP-ENGINE — PHẢI GỌI Ở MỌI CỬA VÀO CÓ GỌI API.
@@ -2346,12 +2380,7 @@ export function useTranslation() {
       abortRef.current.abort();
     }
     // Also cancel any per-field in-flight translations (from retranslate/retry)
-    for (const [, ctrl] of fieldAbortMap.current) {
-      ctrl.abort();
-    }
-    fieldAbortMap.current.clear();
-    // Release any field locks held by a previous (now-superseded) run
-    inFlightPaths.current.clear();
+    abortSharedFieldWork();   // (bug 239) chừa field chạy độc lập
 
     // (bug 205) Giữ màn hình thức suốt lượt dịch — tab nền + màn hình tắt là combo bị Edge cho
     // ngủ nhiều nhất. Nhả ở pause/cancel/kết thúc.
@@ -3865,7 +3894,7 @@ export function useTranslation() {
     [200, 500, 1000, 1800, 2600].forEach((ms) => {
       setTimeout(() => {
         if (runningRef.current) return;   // đã Resume → thôi
-        const stuck = useStore.getState().fields.filter(f => f.status === 'translating');
+        const stuck = useStore.getState().fields.filter(f => f.status === 'translating' && !DETACHED_FIELD_PATHS.has(f.path));
         if (stuck.length) for (const f of stuck) store.updateField(f.path, { status: 'pending' });
       }, ms);
     });
@@ -3884,11 +3913,9 @@ export function useTranslation() {
     pauseRef.current = true;
     runIdRef.current++;                 // any live loop bails silently at its next checkpoint
     abortRef.current?.abort();          // stop in-flight field/batch translations
-    for (const [, ctrl] of fieldAbortMap.current) ctrl.abort();
-    fieldAbortMap.current.clear();
-    inFlightPaths.current.clear();
+    abortSharedFieldWork();   // (bug 239) chừa field chạy độc lập
     runningRef.current = false;
-    const stuck = useStore.getState().fields.filter(f => f.status === 'translating');
+    const stuck = useStore.getState().fields.filter(f => f.status === 'translating' && !DETACHED_FIELD_PATHS.has(f.path));
     for (const f of stuck) store.updateField(f.path, { status: 'pending' });
     sweepStuckToPending();              // dọn straggler do task nền set lại 'translating' sau reset
     store.setPhase('paused');
@@ -3906,7 +3933,7 @@ export function useTranslation() {
       // Hard pause (or an error) killed the loop → restart in CONTINUE mode, picking up
       // pending fields. Route to the SAME flow that was running (translate vs mod).
       store.addLog('info', '▶ Tiếp tục...');
-      const stuckFields = useStore.getState().fields.filter(f => f.status === 'translating');
+      const stuckFields = useStore.getState().fields.filter(f => f.status === 'translating' && !DETACHED_FIELD_PATHS.has(f.path));
       for (const f of stuckFields) {
         store.updateField(f.path, { status: 'pending' });
       }
@@ -3928,15 +3955,11 @@ export function useTranslation() {
     runIdRef.current++;
     abortRef.current?.abort();
     // Also cancel any per-field in-flight translations
-    for (const [, ctrl] of fieldAbortMap.current) {
-      ctrl.abort();
-    }
-    fieldAbortMap.current.clear();
-    inFlightPaths.current.clear();
+    abortSharedFieldWork();   // (bug 239) chừa field chạy độc lập
     pauseRef.current = false;
     runningRef.current = false;
     // Reset any fields stuck in 'translating' status back to 'pending'
-    const stuckFields = useStore.getState().fields.filter(f => f.status === 'translating');
+    const stuckFields = useStore.getState().fields.filter(f => f.status === 'translating' && !DETACHED_FIELD_PATHS.has(f.path));
     for (const f of stuckFields) {
       store.updateField(f.path, { status: 'pending' });
     }
@@ -3962,14 +3985,11 @@ export function useTranslation() {
     // Cancel global abort
     abortRef.current?.abort();
     // Cancel all per-field in-flight translations
-    for (const [, ctrl] of fieldAbortMap.current) {
-      ctrl.abort();
-    }
-    fieldAbortMap.current.clear();
+    abortSharedFieldWork();   // (bug 239) chừa field chạy độc lập
     pauseRef.current = false;
     runningRef.current = false;
     // Reset any fields stuck in 'translating' status
-    const stuckFields = useStore.getState().fields.filter(f => f.status === 'translating');
+    const stuckFields = useStore.getState().fields.filter(f => f.status === 'translating' && !DETACHED_FIELD_PATHS.has(f.path));
     for (const f of stuckFields) {
       store.updateField(f.path, { status: f.translated ? 'done' : 'pending' });
     }
@@ -4609,11 +4629,7 @@ export function useTranslation() {
     if (abortRef.current) {
       abortRef.current.abort();
     }
-    for (const [, ctrl] of fieldAbortMap.current) {
-      ctrl.abort();
-    }
-    fieldAbortMap.current.clear();
-    inFlightPaths.current.clear();
+    abortSharedFieldWork();   // (bug 239) chừa field chạy độc lập
     abortRef.current = new AbortController();
     pauseRef.current = false;
     runningRef.current = true;
@@ -5201,11 +5217,7 @@ export function useTranslation() {
       abortRef.current.abort();
     }
     // Also cancel any per-field in-flight translations (from retranslate/retry)
-    for (const [, ctrl] of fieldAbortMap.current) {
-      ctrl.abort();
-    }
-    fieldAbortMap.current.clear();
-    inFlightPaths.current.clear();
+    abortSharedFieldWork();   // (bug 239) chừa field chạy độc lập
 
     // Clear state for fresh progress tracking
     abortRef.current = new AbortController();
@@ -5829,9 +5841,7 @@ export function useTranslation() {
     // chỉ huỷ được phần sinh lorebook). Giờ dừng hẳn vòng cũ trước khi chiếm abortRef.
     runIdRef.current++;
     abortRef.current?.abort();
-    for (const [, ctrl] of fieldAbortMap.current) ctrl.abort();
-    fieldAbortMap.current.clear();
-    inFlightPaths.current.clear();
+    abortSharedFieldWork();   // (bug 239) chừa field chạy độc lập
     runningRef.current = false;
 
     store.setPhase('translating');

@@ -22,6 +22,7 @@ import { onPanelRequest } from './components/ui/panelNav';
 import { OPEN_AI_COMPANION_EVENT } from './hub/openAiCompanion';
 // (bug 226) Tab bị giết giữa khâu ghép chunk ⇒ mở lại phiên là tự ghép nốt.
 import { planAutoJoin } from './utils/chunkAudit';
+import ExternalJobBadge from './components/ExternalJobBadge';
 
 /** (bug 165) Tab của cột nội dung chính. */
 type MainTabId = 'fields' | 'verify' | 'export' | 'glossary';
@@ -207,6 +208,8 @@ export default function App() {
 
   return (
     <div className="app-layout">
+      {/* (bug 239) Lượt dịch link ngoài chạy nền → báo ở màn hình chính, bấm để quay lại. */}
+      <ExternalJobBadge onOpen={() => setShowRegexManager(true)} />
       {/* ─── Sidebar ─── */}
       <aside className="sidebar">
         {/* Logo + Locale switcher */}

@@ -35,6 +35,9 @@
   (Node ≥ 22.21 cần `NODE_USE_ENV_PROXY=1` để đi qua proxy của môi trường cloud).
 
 ## Code & commit
+- Tác giả commit phải là chủ repo: `Kaltovia <ranconbonmat@gmail.com>` (đặt bằng `git config user.name/user.email`
+  trong repo). **Không** thêm dòng `Co-Authored-By: Claude …`, chủ repo muốn contributor trên GitHub là tên mình.
+- Sửa xong thì push lên `main`.
 - Mỗi bug một commit, tiêu đề theo quy ước `fix(<app>): bug <STT> — …` với app là
   `dich-card` / `tao-card` / `dich-script` / `preset-tool` … (test `versionApps` đọc tiêu đề commit).
   Thân commit viết tiếng Việt: user báo gì → gốc rễ → sửa gì → đo/kiểm thế nào.

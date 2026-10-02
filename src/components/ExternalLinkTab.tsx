@@ -8,6 +8,7 @@ import { safeSetItem } from '../utils/safeStorage';
 import { useUi } from '../i18n/useLocale';
 import HeavyScriptMode from './HeavyScriptMode';
 import ExternalTranslateProgress from './ExternalTranslateProgress';
+import ExternalMvuDictPanel from './ExternalMvuDictPanel';
 import { useHeavyScriptJob, heavySourceSig } from '../utils/heavyScriptJob';
 import { useTranslateActivity, noteActivity } from '../utils/translateActivity';
 // (bugNeedFix/181) Kho link ngoài + kiểm tra tham chiếu chéo.
@@ -402,6 +403,9 @@ export default function ExternalLinkTab() {
 
         {/* (User 2026) Script Nặng (Chia Phần) — tự hiện khi script vượt ngưỡng an toàn */}
         <HeavyScriptMode source={input} />
+
+        {/* (bug 238) Từ điển MVU cho link ngoài: quét key, AI dịch key thiếu, tra/sửa từ điển. */}
+        <ExternalMvuDictPanel code={input} />
 
         {output && (
           <div style={{ position: 'relative', marginTop: '8px' }}>

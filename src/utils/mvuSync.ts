@@ -2747,7 +2747,15 @@ export function extractSchemaContextFromCard(card: CharacterCard | null | undefi
   return thScripts.map(s => s.content || s.script || s.code || '').filter(Boolean).join('\n\n');
 }
 
-export function extractPotentialMvuKeys(card: CharacterCard): MvuKeyInfo[] {
+export function extractPotentialMvuKeys(
+  card: CharacterCard,
+  /**
+   * (bug 238) Code của LINK NGOÀI (file .js/.json nạp qua <script src> hay import). Thẻ đời mới
+   * dời hết biến + giá trị MVU ra script ngoài: trong thẻ chỉ còn 9-14 key, quét script thì ra
+   * 140+. Không quét chỗ này thì từ điển thiếu gần hết, và phần dịch link ngoài chẳng có gì để áp.
+   */
+  externalCode: string[] = [],
+): MvuKeyInfo[] {
   const keys = new Set<string>();
   // Track key sources for cross-validation
   const keySources = new Map<string, Set<string>>(); // key → Set<'yaml'|'macro'|'zod'|'datavar'>
@@ -3042,6 +3050,23 @@ export function extractPotentialMvuKeys(card: CharacterCard): MvuKeyInfo[] {
   }
 
   // ═══════════════════════════════════════════════════════════
+  // SOURCE 3b: (bug 238) Link ngoài — quét như script TavernHelper (toàn bộ bộ quét code).
+  // File có khối [initvar]/stat_data là file giá trị khởi tạo ⇒ quét thêm key YAML.
+  // ═══════════════════════════════════════════════════════════
+  for (const code of externalCode) {
+    if (!code || typeof code !== 'string') continue;
+    scanZodFields(code);
+    scanMacros(code);
+    scanEjsCalls(code);
+    scanDataVar(code);
+    scanZodEnumAndDefaultValues(code);
+    scanBracketAccess(code);
+    scanStringLiteralComparisons(code);
+    scanLodashAccess(code);
+    if (/\[initvar\]/i.test(code) || /^\s*stat_data\s*:/m.test(code)) scanYamlKeys(code);
+  }
+
+  // ═══════════════════════════════════════════════════════════
   // SOURCE 4: Narrative fields — macros only
   // ═══════════════════════════════════════════════════════════
   const narrativeFields = [
@@ -3070,6 +3095,7 @@ export function extractPotentialMvuKeys(card: CharacterCard): MvuKeyInfo[] {
   const allScripts = [
     ...thScripts,
     ...(Array.isArray(tavernHelperLegacy) ? tavernHelperLegacy : []),
+    ...externalCode.filter(c => typeof c === 'string' && c).map(content => ({ content })),
   ];
   for (const script of allScripts) {
     if (script.content) {
@@ -3124,6 +3150,15 @@ export function extractPotentialMvuKeys(card: CharacterCard): MvuKeyInfo[] {
  * Backward-compatible wrapper: returns just the key strings.
  * Used by callers that don't need the rich metadata.
  */
+/**
+ * (bug 238) Chỉ quét code link ngoài, không đụng thẻ — để tab Link ngoài biết RIÊNG file đang mở
+ * có những key nào, key nào từ điển đã có, key nào còn thiếu.
+ */
+export function extractMvuKeysFromCode(code: string | string[]): MvuKeyInfo[] {
+  const list = Array.isArray(code) ? code : [code];
+  return extractPotentialMvuKeys({ data: {} } as CharacterCard, list);
+}
+
 export function extractPotentialMvuKeyStrings(card: CharacterCard): string[] {
   return extractPotentialMvuKeys(card).map(k => k.key);
 }

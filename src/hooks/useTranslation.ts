@@ -14,7 +14,7 @@ import { GLOSSARY_PRESETS } from '../utils/glossaryPresets';
 import { extractTranslatableFields, applyTranslationsToCard, autoTranslateLorebookTriggerKeys, injectNewLorebookEntries, isMvuUpdateField } from '../utils/cardFields';
 import { applyMythicToCard } from '../utils/cardFields';
 import { syncEmbeddedWorldLink } from '../utils/worldLink';
-import { syncMvuVariables, postProcessRegexHtml, normalizeSmartQuotesInCode, fixNestedQuoteBracketPaths, fixBrokenLodashPaths, fixDotNotationPaths, extractPotentialMvuKeyStrings, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, enforceInitvarCovariance, extractMappingFromTranslatedInitvar, enforceExactConsistency, enforceVariableCasing, fixZodSyntaxErrors, validateDictionaryConflicts, aiResolveMvuConflicts, recanonicalizeMvuInFields, unifyVietnameseUnderscoresInText } from '../utils/mvuSync';
+import { syncMvuVariables, postProcessRegexHtml, normalizeSmartQuotesInCode, fixNestedQuoteBracketPaths, fixBrokenLodashPaths, fixDotNotationPaths, extractPotentialMvuKeyStrings, extractMvuKeysFromCode, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, enforceInitvarCovariance, extractMappingFromTranslatedInitvar, enforceExactConsistency, enforceVariableCasing, fixZodSyntaxErrors, validateDictionaryConflicts, aiResolveMvuConflicts, recanonicalizeMvuInFields, unifyVietnameseUnderscoresInText } from '../utils/mvuSync';
 import { shouldSkipTranslation, detectLanguage, detectResidualCjk } from '../utils/langDetect';
 import { clearRAGCache } from '../utils/ragContext';
 import { storeTranslation, lookupTranslationMemory } from '../utils/translationMemory';
@@ -50,6 +50,7 @@ import { collectProblemFields } from '../utils/problemFields';
 import { judgeRetryResult, regressionMessage } from '../utils/retryRegression';
 // (bug 221) Giữ tab sống khi Edge muốn cho nó đi ngủ.
 import { startKeepAlive, stopKeepAlive, measureKeepAliveDbfs, CHROMIUM_SILENCE_DBFS } from '../utils/keepAlive';
+import { collectExternalCodeForCard } from '../utils/externalLinkVault';
 
 /* ─── (bug 205) Wake lock trong lúc dịch ───
  * Edge/Chrome cho tab nền "ngủ" rất hăng khi máy tắt màn hình — user để tool chạy ngầm vài chục
@@ -2544,7 +2545,17 @@ export function useTranslation() {
     // (extractZodDescriptions backtracking) đã fix tận nơi, đây là lưới bảo hiểm cho hotspot mới.
     await new Promise<void>((r) => setTimeout(r, 0));
     const mvuSummary = store.card ? getMvuCardSummary(store.card) : null;
-    const cardIsMvu = !!mvuSummary && (mvuSummary.isMvu || mvuSummary.initvarCount > 0 || mvuSummary.hasZodSchema || mvuSummary.variableCount > 0);
+    // (bug 238) Thẻ đời mới dời hết biến MVU ra LINK NGOÀI — trong thẻ chỉ còn <script src>, nên
+    // bộ nhận diện ở trên trả "card thường". Hệ quả cũ tệ hơn cả thiếu key: dòng dưới DỌN SẠCH từ
+    // điển user vừa dựng từ link ngoài, ngay lúc bấm Bắt đầu dịch. Nay đọc cả code link ngoài.
+    const externalCode = store.card
+      ? await collectExternalCodeForCard(store.card.data?.name || store.card.name, useStore.getState().fields)
+      : [];
+    const externalKeys = externalCode.length ? extractMvuKeysFromCode(externalCode).map(k => k.key) : [];
+    const dictHasExternalKeys = Object.values(useStore.getState().mvuKeyMetadata || {})
+      .some(m => m?.sources?.includes('external'));
+    const cardIsMvu = (!!mvuSummary && (mvuSummary.isMvu || mvuSummary.initvarCount > 0 || mvuSummary.hasZodSchema || mvuSummary.variableCount > 0))
+      || externalKeys.length > 0 || dictHasExternalKeys;
     const cardIsEjs = store.card ? (() => { try { return detectEjsCard(store.card!).isEjs; } catch { return false; } })() : false;
     if (!cardIsMvu && Object.keys(useStore.getState().translationConfig.mvuDictionary).length > 0) {
       if (writeMvuDictAuto({}, 'dọn từ điển cho card thường')) {
@@ -2567,7 +2578,10 @@ export function useTranslation() {
         if (dictLockedB) {
           store.addLog('info', `🔒 Từ điển MVU đang KHOÁ — bỏ qua tự dò/AI dịch tên biến; dùng nguyên ${Object.keys(useStore.getState().translationConfig.mvuDictionary).length} biến bạn đã chốt.`);
         }
-        const extractedKeys = dictLockedB ? [] : extractPotentialMvuKeyStrings(store.card);
+        const extractedKeys = dictLockedB ? [] : [...new Set([...extractPotentialMvuKeyStrings(store.card), ...externalKeys])];
+        if (!dictLockedB && externalKeys.length > 0) {
+          store.addLog('info', `🔗 Tính cả ${externalCode.length} file link ngoài của thẻ: ${externalKeys.length} biến nằm trong đó.`);
+        }
 
         if (extractedKeys.length > 0) {
           let existingDict = store.translationConfig.mvuDictionary;

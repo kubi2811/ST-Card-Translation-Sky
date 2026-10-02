@@ -120,6 +120,11 @@ async function translatePart(part: HeavyPart, total: number, signal: AbortSignal
     signal,
     undefined,
     cfg.glossary, // GLOSSARY CHUNG xuyên tất cả các phần
+    undefined,
+    undefined,
+    // (bug 238) Trước đây KHÔNG truyền từ điển MVU: tên biến trong link ngoài bị dịch tự do,
+    // lệch với tên đã thống nhất trong thẻ. Bật đồng bộ MVU thì áp như mọi field khác.
+    cfg.enableMvuSync ? cfg.mvuDictionary : undefined,
   );
 }
 

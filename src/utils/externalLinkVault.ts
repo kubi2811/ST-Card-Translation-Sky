@@ -231,3 +231,37 @@ export function matchVaultToCard(
   }
   return { covered, missing };
 }
+
+/**
+ * (bug 238) Code GỐC của các link ngoài thuộc thẻ đang mở — cho bộ quét key MVU.
+ * Thuộc thẻ = cùng tên thẻ lúc lưu, HOẶC tên file khớp một link mà thẻ đang nạp. Chỉ lấy bản
+ * GỐC: bản dịch đã đổi tên biến rồi, quét nó là tự đẻ ra key "dịch của dịch".
+ */
+export function vaultCodeForCard(
+  vault: ExternalLinkEntry[],
+  cardName: string | undefined,
+  cardUrls: CardExternalUrl[],
+): string[] {
+  const files = new Set(cardUrls.map(u => suggestNameFromUrl(u.url).toLowerCase()).filter(Boolean));
+  return vault
+    .filter(e => (!!cardName && e.cardName === cardName)
+      || (!!e.url && files.has(suggestNameFromUrl(e.url).toLowerCase())))
+    .map(e => e.original)
+    .filter((c): c is string => !!c && !!c.trim());
+}
+
+/**
+ * (bug 238) Toàn bộ code link ngoài của thẻ đang mở: các mục trong kho + script đang nằm ở ô
+ * dịch link ngoài (field `custom_external_link`, có thể chưa kịp lưu vào kho).
+ */
+export async function collectExternalCodeForCard(
+  cardName: string | undefined,
+  fields: Array<{ path: string; label: string; original?: string; translated?: string }>,
+): Promise<string[]> {
+  let vault: ExternalLinkEntry[] = [];
+  try { vault = await loadVault(); } catch { /* IndexedDB hỏng → chỉ dùng ô nháp */ }
+  const out = vaultCodeForCard(vault, cardName, extractCardExternalUrls(fields));
+  const draft = fields.find(f => f.path === 'custom_external_link')?.original;
+  if (draft && draft.trim() && !out.includes(draft)) out.push(draft);
+  return out;
+}

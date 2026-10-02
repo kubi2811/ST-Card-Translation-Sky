@@ -6,6 +6,7 @@ import { useT, useUi } from '../i18n/useLocale';
 import { fmt } from '../i18n';
 import { 
   extractPotentialMvuKeys, 
+  extractMvuKeysFromCode,
   aiTranslateMvuKeys, 
   extractZodDescriptions, 
   extractSchemaContextFromCard, 
@@ -20,6 +21,7 @@ import {
   sanitizeAutomaticSchemaMappings,
 } from '../utils/mvuSync';
 import { isMvuCard, getMvuZodSummary } from '../utils/mvuDetector';
+import { collectExternalCodeForCard } from '../utils/externalLinkVault';
 import { getLockedBookName, setLockedBookName, enforceLorebookRefs } from '../utils/lorebookRefSync';
 import { 
   Settings, 
@@ -204,8 +206,24 @@ export default function MvuSyncPanel() {
     setTranslationConfig({ mvuDictionary: nextDict });
   };
 
-  const autoExtract = () => {
-    const keyInfos = extractPotentialMvuKeys(card);
+  /**
+   * (bug 238) Key của THẺ + key nằm trong LINK NGOÀI của thẻ (kho link ngoài + ô dịch link ngoài).
+   * Key chỉ có ở link ngoài được gắn nguồn 'external' — để lúc Bắt đầu dịch tool biết thẻ này là
+   * thẻ MVU (biến dời ra ngoài) mà không dọn mất từ điển.
+   */
+  const collectKeyInfos = async (): Promise<MvuKeyInfo[]> => {
+    const fromCard = extractPotentialMvuKeys(card);
+    const extCode = await collectExternalCodeForCard(card.data?.name || card.name, fields);
+    if (extCode.length === 0) return fromCard;
+    const seen = new Set(fromCard.map(k => k.key));
+    const fromExt = extractMvuKeysFromCode(extCode)
+      .filter(k => !seen.has(k.key))
+      .map(k => ({ ...k, sources: [...k.sources, 'external'] as MvuKeyInfo['sources'] }));
+    return [...fromCard, ...fromExt];
+  };
+
+  const autoExtract = async () => {
+    const keyInfos = await collectKeyInfos();
     if (keyInfos.length === 0) {
       addToast('info', ui.msNoKeys);
       return;
@@ -262,7 +280,7 @@ export default function MvuSyncPanel() {
 
   // Quét key + gọi AI dịch tự động
   const autoExtractAndTranslate = async () => {
-    const keyInfos = extractPotentialMvuKeys(card);
+    const keyInfos = await collectKeyInfos();
     const keys = keyInfos.map(ki => ki.key);
     if (keys.length === 0) {
       addToast('info', ui.msNoKeys);
@@ -276,6 +294,13 @@ export default function MvuSyncPanel() {
     let extractedCount = 0;
     
     const nextMetadata = { ...mvuKeyMetadata };
+    // Ghi nguồn cho key mới (nhất là 'external' — xem collectKeyInfos), kẻo key AI dịch xong
+    // không còn dấu vết nó đến từ link ngoài.
+    for (const ki of keyInfos) {
+      if (!nextMetadata[ki.key]) {
+        nextMetadata[ki.key] = { sources: ki.sources, keyType: ki.keyType, description: ki.description, occurrences: ki.occurrences, confidence: 'ai' };
+      }
+    }
     if (schemaMappingKeys.length > 0) {
       pushDictionaryHistory(currentDict);
       for (const [k, v] of Object.entries(schemaMappings)) {

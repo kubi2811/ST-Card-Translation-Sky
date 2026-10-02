@@ -12,7 +12,7 @@ import {
 import { useCardStore } from '../../store/cardStore';
 import { useSettingsStore } from '../../store/settingsStore';
 import {
-  runRefinerPipeline, applyRefinerActions,
+  runRefinerPipeline, applyRefinerActions, deduplicateNewEntries,
   type RefinerContext, type ApplyContext,
 } from '../../lib/ai/lorebookRefiner';
 import type {
@@ -201,6 +201,25 @@ export function LorebookRefinerPanel() {
     await createSnapshot('Before AI Refiner');
     addLog(ui.lrSnapshot);
 
+    // (Fix bug #9-5) "Áp dụng luôn": áp NGAY khi từng batch xong, gộp báo cáo dần.
+    const makeApplyCtx = (): ApplyContext => ({
+      getEntries: () => useCardStore.getState().card.data.character_book?.entries ?? [],
+      addEntry: (entry) => { addEntry(entry); },
+      updateEntry: (id, patch) => { updateEntry(id, patch); },
+      deleteEntry: (id) => { deleteEntry(id); },
+      getNextEntryId: () => getNextEntryId(),
+      log: addLog,
+    });
+    let liveReport: RefinerReport | null = null;
+    const mergeReport = (r: RefinerReport) => {
+      if (!liveReport) { liveReport = { ...r }; return liveReport; }
+      for (const k of Object.keys(r) as (keyof RefinerReport)[]) {
+        if (k === 'actionsProposed') continue; // tính lại ở cuối bằng tổng số action
+        (liveReport[k] as number) += r[k] as number;
+      }
+      return liveReport;
+    };
+
     try {
       const refinerCtx: RefinerContext = {
         card: structuredClone(useCardStore.getState().card),
@@ -212,20 +231,22 @@ export function LorebookRefinerPanel() {
         signal: abortRef.current.signal,
         log: addLog,
         onProgress: setProgress,
+        onBatchActions: (batchActions) => {
+          if (config.autoApply) {
+            const current = useCardStore.getState().card.data.character_book?.entries ?? [];
+            const fresh = deduplicateNewEntries(batchActions, current, addLog);
+            for (const a of batchActions) if (!fresh.includes(a)) a.skipped = true;
+            setReport({ ...mergeReport(applyRefinerActions(fresh, makeApplyCtx())) });
+          }
+          setActions(prev => [...prev, ...batchActions]);
+        },
         onActionsReady: (allActions) => {
           setActions(allActions);
           if (config.autoApply) {
-            // Auto-apply: immediately apply all non-skipped
+            // Phần AI đã áp dần theo từng batch; tới đây chỉ còn phần chưa áp (phân tích cục bộ).
             addLog('\n' + ui.lrAutoApplying);
-            const applyCtx: ApplyContext = {
-              getEntries: () => useCardStore.getState().card.data.character_book?.entries ?? [],
-              addEntry: (entry) => { addEntry(entry); },
-              updateEntry: (id, patch) => { updateEntry(id, patch); },
-              deleteEntry: (id) => { deleteEntry(id); },
-              getNextEntryId: () => getNextEntryId(),
-              log: addLog,
-            };
-            const r = applyRefinerActions(allActions, applyCtx);
+            const r = { ...mergeReport(applyRefinerActions(allActions, makeApplyCtx())) };
+            r.actionsProposed = allActions.length;
             setReport(r);
             setProgress({
               phase: 'done',

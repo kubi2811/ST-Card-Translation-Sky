@@ -37,6 +37,13 @@ export interface RefinerContext {
   log: (message: string) => void;
   onProgress: (progress: RefinerProgress) => void;
   onActionsReady: (actions: RefinerAction[]) => void;
+  /**
+   * (Fix bug #9-5) Gọi NGAY khi một batch AI xong, với actions của riêng batch đó (đã lọc trùng
+   * và đã bỏ qua action nhắm vào entry hệ thống). Panel dùng nó cho "Áp dụng luôn": làm tới đâu
+   * đổi tới đó, thay vì đợi cả trăm batch xong mới thấy thay đổi đầu tiên. Action nào áp xong
+   * được đánh dấu `applied` nên `onActionsReady` cuối lượt không áp lại lần hai.
+   */
+  onBatchActions?: (actions: RefinerAction[]) => void;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -266,79 +273,86 @@ async function runAIAnalysis(
 
   const systemPrompt = buildRefinerSystemPrompt(config);
 
-  // Process in rounds of `concurrency`
-  for (let roundStart = 0; roundStart < totalBatches; roundStart += concurrency) {
-    if (ctx.stopped) break;
-    while (ctx.paused) { await sleep(300); }
+  const systemEntryIds = new Set(entries.filter(e => isSystemEntry(e)).map(e => e.id));
+  const runBatch = async (batchIndex: number): Promise<RefinerAction[]> => {
+    const messages = [
+      { role: 'system' as const, content: systemPrompt },
+      {
+        role: 'user' as const,
+        content: buildRefinerUserMessage(
+          entries, batches[batchIndex], config,
+          batchIndex + 1, totalBatches, ctx.schemaContext,
+        ),
+      },
+    ] as ChatMessage[];
 
-    const roundEnd = Math.min(roundStart + concurrency, totalBatches);
-    const roundIndices: number[] = [];
-    for (let i = roundStart; i < roundEnd; i++) roundIndices.push(i);
-
-    const tasks = roundIndices.map(i => ({
-      batchIndex: i,
-      batchEntries: batches[i],
-      messages: [
-        { role: 'system' as const, content: systemPrompt },
-        {
-          role: 'user' as const,
-          content: buildRefinerUserMessage(
-            entries, batches[i], config,
-            i + 1, totalBatches, ctx.schemaContext,
-          ),
-        },
-      ] as ChatMessage[],
-    }));
-
-    // Execute concurrently
-    const results = await Promise.all(tasks.map(async task => {
+    for (let attempt = 0; attempt <= 2; attempt++) {
       if (ctx.stopped) return [];
-
-      for (let attempt = 0; attempt <= 2; attempt++) {
-        if (ctx.stopped) return [];
-        // (Fix bug #9-2) Tạm dừng có tác dụng NGAY trong lúc chạy: giữ ở đây trước mỗi lượt gọi.
-        while (ctx.paused && !ctx.stopped) await sleep(300);
-        if (ctx.stopped) return [];
-        try {
-          ctx.log(`📡 Batch ${task.batchIndex + 1}/${totalBatches} — gọi AI${attempt > 0 ? ` (thử lại ${attempt})` : ''}...`);
-          const raw = await callAI({ profile, params: ctx.generationParams, messages: task.messages, signal: ctx.signal });
-          const parsed = tryExtractRefinerActions(raw.text);
-          if (!parsed || parsed.length === 0) {
-            ctx.log(`⚠️ Batch ${task.batchIndex + 1} — AI không trả về actions hợp lệ, thử lại...`);
-            continue;
-          }
-
-          const actions: RefinerAction[] = [];
-          for (const rawAction of parsed) {
-            const action = parseRawAction(rawAction);
-            if (action) actions.push(action);
-          }
-
-          ctx.log(`✅ Batch ${task.batchIndex + 1} — ${actions.length} actions`);
-          return actions;
-        } catch (err) {
-          // Người dùng bấm "Dừng hẳn" → abort: thoát NGAY, không log lỗi oan, không thử lại.
-          if (ctx.stopped || (err instanceof DOMException && err.name === 'AbortError')) return [];
-          ctx.log(`⚠️ Batch ${task.batchIndex + 1} — lỗi: ${err instanceof Error ? err.message : String(err)}`);
+      // (Fix bug #9-2) Tạm dừng có tác dụng NGAY trong lúc chạy: giữ ở đây trước mỗi lượt gọi.
+      while (ctx.paused && !ctx.stopped) await sleep(300);
+      if (ctx.stopped) return [];
+      try {
+        ctx.log(`📡 Batch ${batchIndex + 1}/${totalBatches} — gọi AI${attempt > 0 ? ` (thử lại ${attempt})` : ''}...`);
+        const raw = await callAI({ profile, params: ctx.generationParams, messages, signal: ctx.signal });
+        const parsed = tryExtractRefinerActions(raw.text);
+        if (!parsed || parsed.length === 0) {
+          ctx.log(`⚠️ Batch ${batchIndex + 1} — AI không trả về actions hợp lệ, thử lại...`);
+          continue;
         }
+
+        const actions: RefinerAction[] = [];
+        for (const rawAction of parsed) {
+          const action = parseRawAction(rawAction);
+          if (action) actions.push(action);
+        }
+
+        ctx.log(`✅ Batch ${batchIndex + 1} — ${actions.length} actions`);
+        return actions;
+      } catch (err) {
+        // Người dùng bấm "Dừng hẳn" → abort: thoát NGAY, không log lỗi oan, không thử lại.
+        if (ctx.stopped || (err instanceof DOMException && err.name === 'AbortError')) return [];
+        ctx.log(`⚠️ Batch ${batchIndex + 1} — lỗi: ${err instanceof Error ? err.message : String(err)}`);
       }
-
-      ctx.log(`❌ Batch ${task.batchIndex + 1} thất bại sau 3 lần thử.`);
-      return [];
-    }));
-
-    for (const batchActions of results) {
-      allActions.push(...batchActions);
     }
 
-    ctx.onProgress({
-      phase: 'ai_analysis',
-      currentBatch: roundEnd,
-      totalBatches,
-      actionsFound: allActions.length,
-      actionsApplied: 0,
-      message: `Đã phân tích ${roundEnd}/${totalBatches} batches — ${allActions.length} actions`,
-    });
+    ctx.log(`❌ Batch ${batchIndex + 1} thất bại sau 3 lần thử.`);
+    return [];
+  };
+
+  // (Fix bug #9-4) HÀNG ĐỢI LIÊN TỤC thay cho "chạy theo lượt". Bản cũ chạy `concurrency` batch rồi
+  // CHỜ CẢ LƯỢT xong mới gọi lượt kế — một batch chậm (thử lại, model nghĩ lâu) giữ chân mọi luồng
+  // còn lại. Nay mỗi luồng xong là bốc ngay batch kế tiếp, nên lúc nào cũng có đủ `concurrency`
+  // lời gọi đang bay cho tới khi hết việc.
+  const perBatch: RefinerAction[][] = new Array(totalBatches);
+  let nextBatch = 0;
+  let doneBatches = 0;
+  let found = 0;
+  const worker = async () => {
+    while (!ctx.stopped) {
+      const i = nextBatch++;
+      if (i >= totalBatches) return;
+      const actions = await runBatch(i);
+      for (const a of actions) {
+        if (a.targetEntryId != null && systemEntryIds.has(a.targetEntryId)) a.skipped = true;
+      }
+      perBatch[i] = actions;
+      doneBatches++;
+      found += actions.length;
+      if (actions.length > 0 && !ctx.stopped) ctx.onBatchActions?.(actions);
+      ctx.onProgress({
+        phase: 'ai_analysis',
+        currentBatch: doneBatches,
+        totalBatches,
+        actionsFound: found,
+        actionsApplied: 0,
+        message: `Đã phân tích ${doneBatches}/${totalBatches} batches — ${found} actions`,
+      });
+    }
+  };
+  await Promise.all(Array.from({ length: concurrency }, worker));
+
+  for (const batchActions of perBatch) {
+    if (batchActions) allActions.push(...batchActions);
   }
 
   return allActions;
@@ -348,7 +362,7 @@ async function runAIAnalysis(
 // PHASE 3: DEDUP NEW ENTRIES (for add_entry actions)
 // ═══════════════════════════════════════════════════════════════════════════
 
-function deduplicateNewEntries(
+export function deduplicateNewEntries(
   actions: RefinerAction[],
   existingEntries: LorebookEntry[],
   log: (msg: string) => void,
@@ -358,6 +372,7 @@ function deduplicateNewEntries(
 
   return actions.filter(action => {
     if (action.type !== 'add_entry') return true;
+    if (action.applied) return true; // (bug #9-5) đã áp ở lúc batch xong — không lọc lại
     if (!action.newContent || !action.newKeys) return true;
 
     const dupCheck = isDuplicateEntry(
@@ -417,7 +432,8 @@ export function applyRefinerActions(
   ];
 
   const sorted = [...actions]
-    .filter(a => !a.skipped)
+    // (bug #9-5) action đã áp (ở lúc batch xong) thì không bao giờ áp lần hai
+    .filter(a => !a.skipped && !a.applied)
     .sort((a, b) => {
       const pa = priorityOrder.indexOf(a.type);
       const pb = priorityOrder.indexOf(b.type);

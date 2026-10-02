@@ -1552,6 +1552,36 @@ function reportLaneIssue(rlKey: string, issue: LaneIssue): void {
   try { _laneIssueReporter(issue); } catch { /* kênh báo hỏng thì thôi, không được làm chết lượt dịch */ }
 }
 
+/* ─── (bug 240) NHẬT KÝ TIẾN ĐỘ CỦA TỪNG LƯỢT DỊCH — ĐƯA RA GIAO DIỆN ───
+ *
+ * User: "đang dịch link ngoài thì vẫn thấy tool call api, nhưng các báo cáo cụ thể lại không thể
+ * hiện trong UI chính… chỉ quan sát được bằng F12 nhưng không hề có đánh dấu đang dịch phần nào."
+ * Đúng: mọi diễn biến trong một field (chia bao nhiêu mảnh, mảnh nào xong, mảnh nào phải sửa, lỗi
+ * gì) trước giờ chỉ đi ra console.log. Kênh này đẩy đúng những mốc đó ra ngoài, theo `fieldName`,
+ * để tầng React vẽ lại. Như kênh báo lane: callback do tầng trên cắm, apiClient không import store.
+ */
+export interface TranslateProgressEvent {
+  fieldName: string;
+  kind: 'plan' | 'chunk-done' | 'chunk-repair' | 'chunk-error' | 'surgical' | 'note';
+  level: 'info' | 'success' | 'warning' | 'error';
+  message: string;
+  /** Chỉ số mảnh, 0-based. */
+  chunk?: number;
+  total?: number;
+  /** Với 'surgical': số cụm chữ đã dịch / tổng số cụm. */
+  done?: number;
+  at: number;
+}
+let _translateProgressReporter: ((ev: TranslateProgressEvent) => void) | null = null;
+/** Cắm kênh nhật ký tiến độ (một chỗ duy nhất gọi). Truyền null để gỡ. */
+export function setTranslateProgressReporter(fn: ((ev: TranslateProgressEvent) => void) | null): void {
+  _translateProgressReporter = fn;
+}
+function reportTranslateProgress(ev: Omit<TranslateProgressEvent, 'at'>): void {
+  if (!_translateProgressReporter) return;
+  try { _translateProgressReporter({ ...ev, at: Date.now() }); } catch { /* không được làm chết lượt dịch */ }
+}
+
 function recordLaneFailure(rlKey: string): number {
   const cur = _laneFailures.get(rlKey);
   const count = (cur?.count || 0) + 1;
@@ -2725,6 +2755,7 @@ async function translateChunk(
           }
 
           console.log(`[translateChunk] ${fieldName} chunk ${chunkIdx + 1}/${totalChunks}: response ${(responseRatio * 100).toFixed(0)}% of expected (${result.length}/${Math.round(expectedOutputLen)} chars) < ${(CONT_THRESHOLD * 100).toFixed(0)}% (or structural issue) → continuation round ${contRound + 1}/${MAX_CONT_ROUNDS}...`);
+          reportTranslateProgress({ fieldName, kind: 'chunk-repair', level: 'warning', chunk: chunkIdx, total: totalChunks, message: `Mảnh ${chunkIdx + 1}: AI trả về mới ${(responseRatio * 100).toFixed(0)}% độ dài cần có — gọi viết tiếp lần ${contRound + 1}/${MAX_CONT_ROUNDS}.` });
 
           // (bug 213) Cờ ép chỉ dùng cho ĐÚNG một vòng: đã nối bù xong thì các vòng sau xét theo
           // ngưỡng như bình thường, khỏi quay đủ 5 vòng vô ích.
@@ -3610,10 +3641,22 @@ async function translateTextCore(
     console.log(`[translateText] Field "${fieldName}" is a replaceString. Performing surgical translation (lenient verification)...`);
     try {
       // Use lenient verification directly — replaceString with <script> blocks will never pass strict char-count verification
-      const result = await surgicalTranslate(text, config, targetLang, signal, glossary, mvuDictionary, false, undefined, cssCjkHandling || 'preserve', customSchema, customPrompt, fieldName);
+      // (bug 240) Tiến độ theo cụm chữ — trước đây truyền `undefined` nên UI không biết gì.
+      let lastPct = -1;
+      const onSurgicalProgress = (done: number, total: number, stage: string) => {
+        const pct = total > 0 ? Math.floor((done / total) * 10) : 10;
+        if (pct === lastPct && done < total) return;   // 10 mốc là đủ, khỏi bắn mỗi cụm một lần
+        lastPct = pct;
+        reportTranslateProgress({ fieldName, kind: 'surgical', level: 'info', done, total, message: `${stage}: ${done}/${total} cụm chữ` });
+      };
+      const result = await surgicalTranslate(text, config, targetLang, signal, glossary, mvuDictionary, false, onSurgicalProgress, cssCjkHandling || 'preserve', customSchema, customPrompt, fieldName);
+      if (!result.success) {
+        reportTranslateProgress({ fieldName, kind: 'note', level: 'warning', message: 'Bước kiểm sau dịch không qua — giữ nguyên bản gốc cho đoạn này.' });
+      }
       return result.translated;
     } catch (err) {
       console.error(`[translateText] Error during surgical translation for "${fieldName}":`, err);
+      reportTranslateProgress({ fieldName, kind: 'chunk-error', level: 'error', message: `Lỗi khi dịch: ${err instanceof Error ? err.message : String(err)} — đoạn này giữ nguyên bản gốc.` });
       return text;
     }
   }
@@ -3792,6 +3835,12 @@ async function translateTextCore(
   } else {
     console.log(`[translateText] ${fieldName}: Translating ${chunks.length} chunks ${isParallel ? `(${concurrency} parallel)` : 'sequentially'}...`);
   }
+  reportTranslateProgress({
+    fieldName, kind: 'plan', level: 'info', total: chunks.length,
+    message: hasResume
+      ? `Chia ${chunks.length} mảnh — ${resumePlan.cells.filter(c => !!c).length} mảnh đã có bản dịch, dịch tiếp phần còn lại${isParallel ? ` (${concurrency} luồng)` : ''}.`
+      : `Chia ${chunks.length} mảnh, dịch ${isParallel ? `song song ${concurrency} luồng` : 'lần lượt'}.`,
+  });
 
   const ORIGINAL_BOUNDARY_CHARS = 500;
   // Pre-fill results array with previously completed chunks
@@ -3834,6 +3883,7 @@ async function translateTextCore(
     callModel: (user: string) => Promise<string>,
   ): Promise<string> => {
     console.warn(`[translateText] ⚠️ Chunk ${idx + 1}/${chunks.length}: ${summarizeChunkProblems(problems)} — SỬA có chẩn đoán (không dịch lại máy móc)…`);
+    reportTranslateProgress({ fieldName, kind: 'chunk-repair', level: 'warning', chunk: idx, total: chunks.length, message: `Mảnh ${idx + 1}: ${summarizeChunkProblems(problems)} — đang sửa đúng chỗ.` });
     try {
       const repairUser = buildChunkRepairInstruction({
         rawChunk: chunks[idx],
@@ -4017,11 +4067,13 @@ async function translateTextCore(
           if (onChunkComplete) {
             onChunkComplete(idx, translatedChunks[idx]!, chunks.length);
           }
+          reportTranslateProgress({ fieldName, kind: 'chunk-done', level: 'success', chunk: idx, total: chunks.length, message: `Mảnh ${idx + 1}/${chunks.length} xong.` });
         } catch (err: any) {
           if (signal?.aborted || err?.message === 'Cancelled') {
             return; // Stop this worker
           }
           errors.push({ idx, err: err instanceof Error ? err : new Error(String(err)) });
+          reportTranslateProgress({ fieldName, kind: 'chunk-error', level: 'error', chunk: idx, total: chunks.length, message: `Mảnh ${idx + 1}/${chunks.length} lỗi: ${err?.message || String(err)}` });
           // Continue with other chunks — don't fail entire batch
         }
       }
@@ -4162,10 +4214,12 @@ async function translateTextCore(
         if (onChunkComplete) {
           onChunkComplete(idx, translatedChunks[idx]!, chunks.length);
         }
+        reportTranslateProgress({ fieldName, kind: 'chunk-done', level: 'success', chunk: idx, total: chunks.length, message: `Mảnh ${idx + 1}/${chunks.length} xong.` });
       } catch (err: any) {
         if (signal?.aborted || err?.message === 'Cancelled') {
           throw new Error('Cancelled');
         }
+        reportTranslateProgress({ fieldName, kind: 'chunk-error', level: 'error', chunk: idx, total: chunks.length, message: `Mảnh ${idx + 1}/${chunks.length} lỗi: ${err?.message || String(err)}` });
         // Save completed chunks for resume.
         // (bug 203) GIỮ CHỈ SỐ, không nén mảng — y như nhánh song song ở trên. Nén lại thì mảnh
         // số 2 tụt xuống ô số 1, và lượt chạy tiếp ghép bản dịch của đoạn này vào chỗ đoạn kia:
@@ -4186,6 +4240,7 @@ async function translateTextCore(
   }
 
   console.log(`[translateText] ${fieldName}: All ${chunks.length} chunks done. Verifying seams...`);
+  reportTranslateProgress({ fieldName, kind: 'note', level: 'info', total: chunks.length, message: `Đủ ${chunks.length}/${chunks.length} mảnh — đang ghép và kiểm chỗ nối.` });
 
   // ═══ SEAM VERIFICATION — check chunk boundaries for coherence ═══
   // (bugNeedFix/144) CHỐT CHẶN GHÉP THIẾU.

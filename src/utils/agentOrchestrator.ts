@@ -40,8 +40,10 @@ export const AGENT_DEFS: Record<AgentId, AgentDef> = {
   codefixer: {
     id: 'codefixer',
     label: 'CodeFixer',
-    personaPrompt: '[SUB-AGENT: CODEFIXER] Lượt này tập trung SỬA CODE/REGEX/SCRIPT: chẩn đoán lỗi trước, giải thích ngắn, sửa TRIỆT ĐỂ giữ nguyên cấu trúc; code trả về phải qua được parse (không SyntaxError). Với REGEX: KHÔNG có action ghi thẳng vào thẻ — đưa code đã sửa trong code block và chỉ người dùng dán vào tab "Regex".',
-    allowedActions: ['CREATE_TAVERN_HELPER', 'VIEW_FULL_REGEX', 'VIEW_FULL_ENTRY', 'RUN_SCRIPT'],
+    personaPrompt: '[SUB-AGENT: CODEFIXER] Lượt này tập trung SỬA CODE/REGEX/SCRIPT: chẩn đoán lỗi trước, giải thích ngắn, sửa TRIỆT ĐỂ giữ nguyên cấu trúc; code trả về phải qua được parse (không SyntaxError). Với REGEX: KHÔNG có action ghi thẳng vào thẻ — đưa code đã sửa trong code block và chỉ người dùng dán vào tab "Regex". Lỗi nằm trong ENTRY lorebook (EJS, [initvar], thiếu ```, link hỏng…) thì sửa bằng EDIT_ENTRY.',
+    // (bug 243) Có EDIT_ENTRY: code nằm trong entry lorebook (EJS, [initvar], khối ```…) cũng là
+    // code. Thiếu nó thì "sửa lỗi Lorebook #10" — đúng việc CodeFixer được gọi tới — bị chặn 100%.
+    allowedActions: ['EDIT_ENTRY', 'CREATE_TAVERN_HELPER', 'VIEW_FULL_REGEX', 'VIEW_FULL_ENTRY', 'RUN_SCRIPT'],
   },
   lorearchitect: {
     id: 'lorearchitect',
@@ -70,6 +72,62 @@ export function routeIntent(text: string): AgentId {
   if (RE_TRANSLATE.test(t)) return 'translator';
   if (RE_LORE.test(t)) return 'lorearchitect';
   return 'general';
+}
+
+/* ─── (bug 243) Người dùng dặn "chỉ đọc" — phạm vi lượt này thu về action ĐỌC ───
+ *
+ * User (Pvkhoa): "trợ lý tạo action để chỉnh sửa dù trong prompt đã ghi rõ là chỉ được tạo action
+ * để đọc." Trước đây câu dặn ấy chỉ là chữ trong prompt; không tầng nào của app hiểu nó, nên AI
+ * lỡ tay là action sửa đi thẳng tới bước xác nhận/thực thi. Giờ app tự nhận ra câu dặn, nói rõ cho
+ * AI biết lượt này chỉ được dùng gì, và CHẶN action ghi — với lý do đúng ("bạn đã dặn chỉ đọc"),
+ * không phải câu khó hiểu "ngoài quyền sub-agent". */
+export const READ_ONLY_ACTIONS: readonly EngineAction[] = ['VIEW_FULL_REGEX', 'VIEW_FULL_ENTRY'];
+
+const RE_READ_ONLY = new RegExp([
+  // "chỉ đọc", "chỉ xem", "chỉ được phân tích / kiểm tra / rà soát / góp ý"
+  'chỉ\\s+(?:được\\s+)?(?:đọc|xem|phân\\s*tích|kiểm\\s*tra|rà\\s*soát|góp\\s*ý|nhận\\s*xét|giải\\s*thích)',
+  // "không/đừng tạo action (chỉnh) sửa", "không dùng lệnh sửa"
+  '(?:không|đừng|ko|chớ)\\s+(?:được\\s+)?(?:tạo|dùng|đưa|sinh)\\s+(?:ra\\s+)?(?:action|lệnh)\\s+(?:để\\s+)?(?:chỉnh\\s*)?sửa',
+  // "không sửa thẻ", "đừng chỉnh sửa gì", "không được thay đổi entry"
+  '(?:không|đừng|ko|chớ)\\s+(?:được\\s+)?(?:tự\\s+)?(?:sửa|chỉnh\\s*sửa|thay\\s*đổi|đụng\\s*vào|ghi)\\s+(?:vào\\s+)?(?:thẻ|card|entry|lorebook|regex|gì)',
+  'chỉ\\s+(?:được\\s+)?(?:tạo|dùng)\\s+action\\s+(?:để\\s+)?(?:đọc|xem)',
+  'read[-\\s]?only', '只读', '不要修改', '别改',
+].join('|'), 'i');
+
+/** Người dùng có dặn lượt này CHỈ ĐỌC không. Chỉ xét câu NGƯỜI DÙNG gõ, không xét nội dung entry. */
+export function detectReadOnly(text: string): boolean {
+  return RE_READ_ONLY.test((text || '').slice(0, 2000));
+}
+
+/** Phạm vi của MỘT lượt: sub-agent + cờ chỉ-đọc. Lượt tự gửi tiếp (đọc trọn entry) KẾ THỪA nó. */
+export interface TurnScope {
+  agentId: AgentId;
+  readOnly: boolean;
+}
+
+export function scopeForTurn(userText: string): TurnScope {
+  return { agentId: routeIntent(userText), readOnly: detectReadOnly(userText) };
+}
+
+export function allowedActionsFor(scope: TurnScope): readonly string[] {
+  const def = AGENT_DEFS[scope.agentId] || AGENT_DEFS.general;
+  return scope.readOnly ? def.allowedActions.filter(a => (READ_ONLY_ACTIONS as readonly string[]).includes(a)) : def.allowedActions;
+}
+
+/**
+ * Câu nói thẳng với AI lượt này được dùng action nào. Trước đây AI KHÔNG được báo — nó đọc danh
+ * sách đủ 7 action trong system prompt, dùng EDIT_ENTRY, rồi bị chặn sau khi đã viết xong cả bài
+ * ("Tôi sẽ dùng Action để tự động sửa…" ngay trên dòng báo bị chặn).
+ */
+export function buildScopeInstruction(scope: TurnScope): string {
+  const allowed = allowedActionsFor(scope);
+  if (scope.readOnly) {
+    return `[PHẠM VI LƯỢT NÀY: CHỈ ĐỌC] Người dùng đã dặn KHÔNG chỉnh sửa thẻ. Chỉ được dùng: ${allowed.join(', ')}. `
+      + 'TUYỆT ĐỐI không tạo action ghi (EDIT_ENTRY, CREATE_ENTRY, DELETE_ENTRY, CREATE_TAVERN_HELPER, RUN_SCRIPT) và không nói "tôi sẽ dùng action để sửa". '
+      + 'Cần sửa gì thì MÔ TẢ cách sửa bằng lời / đưa đoạn đã sửa trong code block để người dùng tự quyết.';
+  }
+  if (scope.agentId === 'general') return '';
+  return `[PHẠM VI LƯỢT NÀY] Action được phép: ${allowed.join(', ')}. Action khác sẽ bị chặn — việc ngoài phạm vi thì làm bằng lời.`;
 }
 
 /* ─── Zod schema từng action — params sai kiểu là CHẶN ─── */
@@ -145,7 +203,10 @@ export interface ActionCheck {
  *   2. Engine có nhưng sub-agent này không được phép → nói rõ agent nào đang chạy.
  *   3. Đúng action, sai tham số → chỉ đích danh tham số hỏng + tham số bắt buộc.
  */
-export function validateAgentAction(agentId: AgentId, actionName: string, params: Record<string, any>): ActionCheck {
+export function validateAgentAction(
+  agentId: AgentId, actionName: string, params: Record<string, any>,
+  opts: { readOnly?: boolean } = {},
+): ActionCheck {
   const def = AGENT_DEFS[agentId] || AGENT_DEFS.general;
 
   // 1a. Nhóm action ghi regex ĐÃ GỠ CÓ CHỦ Ý (bug 132) — khác hẳn "engine không biết action này".
@@ -165,6 +226,15 @@ export function validateAgentAction(agentId: AgentId, actionName: string, params
       ok: false,
       reason: `Engine không có action "${actionName}". Action hợp lệ: ${ALL_ACTIONS.join(', ')}. `
         + 'Hãy chọn một trong số đó, hoặc trả lời bằng lời thay vì dùng action.',
+    };
+  }
+
+  // 2a. (bug 243) Người dùng dặn chỉ đọc mà AI vẫn tạo action ghi.
+  if (opts.readOnly && !(READ_ONLY_ACTIONS as readonly string[]).includes(actionName)) {
+    return {
+      ok: false,
+      reason: `Bạn đã dặn lượt này CHỈ ĐỌC, nên ${actionName} (action ghi) bị chặn — thẻ không bị đụng tới. `
+        + 'Muốn áp thay đổi thì nhắn lại mà không kèm câu dặn chỉ đọc.',
     };
   }
 

@@ -1978,7 +1978,12 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
     companionAbortRef.current?.abort(new DOMException('user-stop', 'AbortError'));
   };
 
-  const handleSend = async (forcedCommand?: string) => {
+  /**
+   * `chain` (bug 243 + 245): lượt TỰ GỬI TIẾP sau khi AI đọc trọn entry/regex. Nó mang theo câu hỏi
+   * GỐC của người dùng và phạm vi (sub-agent + chỉ đọc) của lượt gốc — không suy lại từ nội dung
+   * vừa đọc. Xem chú thích ở chỗ tự gửi tiếp.
+   */
+  const handleSend = async (forcedCommand?: string, chain?: { origin: string; scope: import('../utils/agentOrchestrator').TurnScope }) => {
     const textToSend = forcedCommand || inputValue;
     if (!textToSend.trim() || isGenerating || sendingRef.current) return;
     sendingRef.current = true; // chặn NGAY (state React cập nhật sau → Enter đúp lọt lưới)
@@ -2028,9 +2033,14 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
     // (P4 roadmap) Orchestrator: route intent → sub-agent (persona + whitelist action). Mơ hồ thì
     // về 'general' đủ quyền như cũ — routing chỉ THU HẸP khi rõ ràng, zero regression.
     const orch = await import('../utils/agentOrchestrator');
-    const agentId = orch.routeIntent(textToSend);
+    // (bug 243) Lượt tự gửi tiếp KẾ THỪA phạm vi của lượt gốc. Trước đây nó route lại theo chính
+    // nội dung vừa đọc — trong đó có "=== REGEX SCRIPT …", "script", "code" — nên lượt nào đọc
+    // trọn entry xong cũng bị đẩy sang CodeFixer, và EDIT_ENTRY bị chặn "ngoài quyền".
+    const turnOrigin = chain?.origin ?? textToSend;
+    const scope = chain?.scope ?? orch.scopeForTurn(textToSend);
+    const agentId = scope.agentId;
     const agentDef = orch.AGENT_DEFS[agentId];
-    if (agentId !== 'general') console.log(`[Orchestrator] route → ${agentDef.label}`);
+    if (agentId !== 'general' || scope.readOnly) console.log(`[Orchestrator] route → ${agentDef.label}${scope.readOnly ? ' (chỉ đọc)' : ''}`);
 
     // Build effective prompt
     // (User 19/07) Prompt Chỉ Thị đặt CUỐI CÙNG — vị trí ưu tiên cao nhất với LLM, khung
@@ -2065,7 +2075,8 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
     const { loadCoreSettings } = await import('./AiCorePanels');
     const coreInput: import('../utils/promptCore').BuildLayersInput = {
       core: SYSTEM_INSTRUCTION,
-      persona: agentDef.personaPrompt || '',
+      // (bug 243) Nói thẳng cho AI biết lượt này được dùng action nào (và có bị dặn chỉ đọc không).
+      persona: [agentDef.personaPrompt, orch.buildScopeInstruction(scope)].filter(Boolean).join('\n'),
       nsfw: nsfwEnabled,
       skills: skillBlock,
       // Ký ức dài hạn và đoạn tra cứu RAG vốn đã được gộp sẵn thành một khối ở trên.
@@ -2171,7 +2182,7 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
       // TRƯỚC khi vào cả đường auto-execute lẫn đường confirm — thu nhỏ blast-radius.
       const parsed0 = parseAiActions(finalResult);
       let textContent = parsed0.textContent;
-      const actionChecks = parsed0.actions.map(a => ({ a, chk: orch.validateAgentAction(agentId, a.action, (a as any).params || {}) }));
+      const actionChecks = parsed0.actions.map(a => ({ a, chk: orch.validateAgentAction(agentId, a.action, (a as any).params || {}, { readOnly: scope.readOnly }) }));
       const blockedActions = actionChecks.filter(c => !c.chk.ok);
       const parsedActions = actionChecks.filter(c => c.chk.ok).map(c => c.a);
       if (blockedActions.length > 0) {
@@ -2234,8 +2245,18 @@ export default function AiCompanionPanel({ onClose }: { onClose: () => void }) {
           clearInterval(tick);
           sendingRef.current = false; // mở khoá để lượt tự-gửi tiếp theo chạy được
           // Auto-send the view content back to AI as follow-up
+          /* (bug 245) "Hỏi về lỗi regex, trợ lý đọc entry rồi QUÊN luôn câu hỏi đầu lượt, tiếp tục
+           * chủ đề dịch entry của lượt trước." Câu cũ chỉ nói "tiếp tục yêu cầu trước đó của tôi"
+           * — mà ngay trước nó là cả trang nội dung vừa đọc, còn câu hỏi thật thì nằm lẫn giữa 10
+           * lượt lịch sử. AI chọn nhầm "yêu cầu trước đó" là chủ đề cũ. Nay nhắc lại NGUYÊN VĂN câu
+           * hỏi gốc, đặt SAU nội dung đã đọc (vị trí được chú ý nhất), và nói rõ đó là việc phải làm. */
+          const origin = turnOrigin.length > 3000 ? turnOrigin.slice(0, 3000) + '…[cắt]' : turnOrigin;
           setTimeout(() => {
-            handleSend(`[NỘI DUNG ĐẦY ĐỦ ĐÃ ĐỌC]:\n${viewFeedback}\n\nĐây là nội dung TRỌN VẸN, không còn bị cắt. Dựa trên nó, hãy tiếp tục xử lý yêu cầu trước đó của tôi.`);
+            handleSend(
+              `[NỘI DUNG ĐẦY ĐỦ ĐÃ ĐỌC]:\n${viewFeedback}\n\nĐây là nội dung TRỌN VẸN, không còn bị cắt.\n\n`
+              + `[CÂU HỎI GỐC CỦA LƯỢT NÀY — trả lời ĐÚNG câu này, không quay lại chủ đề của các lượt trước]:\n${origin}`,
+              { origin: turnOrigin, scope },
+            );
           }, 500);
           return;
         }

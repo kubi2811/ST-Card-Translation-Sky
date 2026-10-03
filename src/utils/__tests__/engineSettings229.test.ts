@@ -146,15 +146,17 @@ describe('(bug 229c) lỗi key / provider phải báo ra ngoài', () => {
   });
 
   it('key hiện ra dạng ĐÃ CHE, không lộ nguyên key vào log', () => {
-    const i = src.indexOf('setLaneIssueReporter((issue)');
-    expect(i, 'React chưa cắm kênh báo').toBeGreaterThan(0);
+    // Kênh báo nay là hàm cấp module (cắm một lần — xem runControlShared.test.ts, mục B).
+    const i = src.indexOf('function reportLaneIssueToUser(');
+    expect(i, 'chưa cắm kênh báo').toBeGreaterThan(0);
+    expect(src).toContain('setLaneIssueReporter(reportLaneIssueToUser);');
     const body = src.slice(i, i + 1600);
     expect(body).toContain('issue.keyMasked');
     expect(body).not.toMatch(/issue\.key\b(?!Masked|Label)/);
   });
 
   it('nói rõ provider nào, model nào, key nào, lỗi gì', () => {
-    const body = src.slice(src.indexOf('setLaneIssueReporter((issue)'), src.indexOf('setLaneIssueReporter((issue)') + 1600);
+    const body = src.slice(src.indexOf('function reportLaneIssueToUser('), src.indexOf('function reportLaneIssueToUser(') + 1600);
     expect(body).toContain('issue.model');
     expect(body).toContain('issue.keyLabel');
     expect(body).toContain('KEY SAI');

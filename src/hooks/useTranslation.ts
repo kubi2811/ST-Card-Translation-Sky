@@ -8,7 +8,7 @@ import { enforceFormatTagSync, findFormatTagMismatches } from '../utils/formatTa
 import { restoreMacros } from '../utils/macroGuard';
 import { useCallback, useEffect, useRef } from 'react';
 import { useStore } from '../store';
-import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookEntries, ChunkError, ApiError, setExtraProviders, resetProviderPool, computePoolConcurrency, callProvider, setNameStyle, setFandomMode, setMainProviderConfig, setLaneIssueReporter } from '../utils/apiClient';
+import { translateText, translateBatch, fieldGroupToFieldType, generateLorebookEntries, ChunkError, ApiError, setExtraProviders, resetProviderPool, computePoolConcurrency, callProvider, setNameStyle, setFandomMode, setMainProviderConfig, setLaneIssueReporter, type LaneIssue } from '../utils/apiClient';
 import { extractNameCandidates, buildNameGlossaryPrompt, parseNameGlossaryResponse, mergeGlossary, harvestGlossaryFromFields } from '../utils/nameGlossary';
 import { GLOSSARY_PRESETS } from '../utils/glossaryPresets';
 import { extractTranslatableFields, applyTranslationsToCard, autoTranslateLorebookTriggerKeys, injectNewLorebookEntries, isMvuUpdateField } from '../utils/cardFields';
@@ -248,6 +248,36 @@ function bakeModdedFieldsIntoCard() {
 }
 
 /**
+ * (bug 229c) KEY / PROVIDER HỎNG THÌ PHẢI NÓI RA.
+ * User: "key bị lỗi gì thì có thông báo, không thì phải chạy chứ nhỉ — provider 2 im re luôn."
+ * Trước đây lỗi lane chỉ tô đỏ một ô trong bảng; 429/401/500 đều trôi qua không tiếng động.
+ *
+ * (B) Cắm ở CẤP MODULE, một lần duy nhất. Bản cũ cắm trong useEffect của MỌI component gọi
+ * useTranslation() (8 chỗ) và GỠ (`setLaneIssueReporter(null)`) khi component đó unmount — mà các tab
+ * Field / Kiểm tra / Xuất unmount mỗi lần chuyển tab. Chuyển tab một cái là kênh báo tắt, trong khi
+ * vòng dịch vẫn chạy: key hỏng lại im re đúng như trước bản 229c. Hàm này chỉ đọc store qua
+ * getState(), không dính gì tới component, nên không có lý do gì để gắn vòng đời của nó vào React.
+ */
+function reportLaneIssueToUser(issue: LaneIssue): void {
+  const ten = issue.providerId === 'default' ? 'Provider #1' : `Provider phụ (${issue.providerId.slice(0, 8)})`;
+  const viCo = issue.status === 429 ? 'bị chặn vì gọi quá nhanh (429)'
+    : issue.status === 401 || issue.status === 403 ? 'KEY SAI hoặc hết hạn'
+    : issue.status >= 500 ? `máy chủ lỗi ${issue.status}`
+    : 'lỗi mạng/quá hạn chờ';
+  const lanNua = issue.failCount > 1 ? ` — hỏng ${issue.failCount} lần liên tiếp` : '';
+  const loi: 'error' | 'warning' = (issue.status === 401 || issue.status === 403) ? 'error' : 'warning';
+  useStore.getState().addLog(loi,
+    `🔌 ${ten} · ${issue.model} · ${issue.keyLabel} (${issue.keyMasked}): ${viCo}${lanNua}. `
+    + (issue.status === 401 || issue.status === 403
+      ? 'Lane này sẽ KHÔNG chạy được cho tới khi bạn thay key.'
+      : 'Lane nghỉ 15 giây rồi thử lại; các key/provider khác vẫn chạy bình thường.'));
+  if (issue.status === 401 || issue.status === 403) {
+    useStore.getState().addToast('error', `${ten}: ${issue.keyLabel} sai/hết hạn — hãy thay key.`);
+  }
+}
+setLaneIssueReporter(reportLaneIssueToUser);
+
+/**
  * (bug 239) KHOÁ "ĐANG DỊCH" VÀ NÚT HUỶ THEO FIELD PHẢI LÀ MỘT, DÙ BAO NHIÊU COMPONENT GỌI HOOK.
  *
  * Trước đây hai thứ này là useRef — mỗi component gọi useTranslation() có một bản RIÊNG. Lượt dịch
@@ -258,6 +288,25 @@ function bakeModdedFieldsIntoCard() {
  * Đặt ở cấp module thì panel nào cũng nhìn thấy và dừng được đúng lượt đang chạy.
  */
 const SHARED_IN_FLIGHT = { current: new Set<string>() };
+
+/**
+ * (A — cùng họ bug 239) ĐIỀU KHIỂN VÒNG DỊCH THẺ PHẢI LÀ MỘT.
+ *
+ * Vòng dịch thẻ là promise loop đọc store qua getState(), nên nó KHÔNG chết khi khung "Dịch thuật"
+ * (TranslationProgress) bị gỡ — và khung đó BỊ gỡ mỗi lần mở Regex Manager toàn màn hình
+ * (App.tsx trả về riêng panel đó). Đóng Regex Manager thì khung được dựng lại với bộ ref MỚI:
+ *   • abortRef mới = null ⇒ "Tạm dừng"/"Huỷ" abort vào hư không, call đang bay vẫn bay;
+ *   • pauseRef / runIdRef mới ⇒ vòng cũ không bao giờ thấy cờ dừng, cứ dịch tiếp;
+ *   • nhãn lại đổi sang "Đã tạm dừng" ⇒ người dùng tưởng đã dừng trong khi API vẫn bị gọi.
+ * Đặt ở cấp module thì khung nào dựng lại cũng cầm đúng dây cương của vòng đang chạy.
+ */
+const SHARED_RUN = {
+  abort: { current: null as AbortController | null },
+  pause: { current: false },
+  running: { current: false },
+  runId: { current: 0 },
+  lastMode: { current: 'translate' as 'translate' | 'mod' },
+};
 const SHARED_FIELD_ABORTS = { current: new Map<string, AbortController>() };
 
 /**
@@ -295,13 +344,16 @@ export function useTranslation() {
     });
   }
   const store = storeProxyRef.current;
-  const abortRef = useRef<AbortController | null>(null);
-  const pauseRef = useRef(false);
+  // (A — cùng họ bug 239) Bốn ref điều khiển vòng dịch dùng CHUNG cho mọi component — xem
+  // SHARED_RUN ở đầu file. Trước đây mỗi component có bản riêng, nên đóng/mở Regex Manager toàn
+  // màn hình (gỡ rồi dựng lại khung Dịch thuật) là nút Tạm dừng / Huỷ mất đường tới vòng đang chạy.
+  const abortRef = SHARED_RUN.abort;
+  const pauseRef = SHARED_RUN.pause;
   // Track whether the main translation loop is actively running
-  const runningRef = useRef(false);
+  const runningRef = SHARED_RUN.running;
   // Monotonic run token: every startTranslation bumps it. Any older loop still alive
   // bails out at its next checkpoint, so two loops can never translate concurrently.
-  const runIdRef = useRef(0);
+  const runIdRef = SHARED_RUN.runId;
   // Paths currently being translated by SOME context. Prevents the same field from
   // being translated twice at once (e.g. a zombie loop + a fresh resume loop).
   // (bug 239) Dùng CHUNG một bản cho mọi component — xem SHARED_IN_FLIGHT ở đầu file.
@@ -357,7 +409,7 @@ export function useTranslation() {
     store.addLog('info', `🔗 EJS Progressive: +${added} tên entry vào từ điển (${names.slice(0, 3).join(', ')}${names.length > 3 ? '…' : ''})`);
   };
   // Which flow last ran, so Resume (after a hard pause) continues the correct one.
-  const lastRunModeRef = useRef<'translate' | 'mod'>('translate');
+  const lastRunModeRef = SHARED_RUN.lastMode;
   // (Việc 80) Bộ quét chữ Trung sót được khai báo SAU startTranslation (nó cần retranslateField)
   // → startTranslation gọi ngược qua ref này.
   const residualSweepRef = useRef<((maxRounds?: number) => Promise<number>) | null>(null);
@@ -415,31 +467,7 @@ export function useTranslation() {
   }, [syncEngineSettings, store.proxy, store.providers, store.translationConfig.nameStyle,
       store.translationConfig.fandomMode, store.translationConfig.fandomName]);
 
-  /**
-   * (bug 229c) KEY / PROVIDER HỎNG THÌ PHẢI NÓI RA.
-   * User: "key bị lỗi gì thì có thông báo, không thì phải chạy chứ nhỉ — provider 2 im re luôn."
-   * Trước đây lỗi lane chỉ tô đỏ một ô trong bảng; 429/401/500 đều trôi qua không tiếng động.
-   */
-  useEffect(() => {
-    setLaneIssueReporter((issue) => {
-      const ten = issue.providerId === 'default' ? 'Provider #1' : `Provider phụ (${issue.providerId.slice(0, 8)})`;
-      const viCo = issue.status === 429 ? 'bị chặn vì gọi quá nhanh (429)'
-        : issue.status === 401 || issue.status === 403 ? 'KEY SAI hoặc hết hạn'
-        : issue.status >= 500 ? `máy chủ lỗi ${issue.status}`
-        : 'lỗi mạng/quá hạn chờ';
-      const lanNua = issue.failCount > 1 ? ` — hỏng ${issue.failCount} lần liên tiếp` : '';
-      const loi: 'error' | 'warning' = (issue.status === 401 || issue.status === 403) ? 'error' : 'warning';
-      useStore.getState().addLog(loi,
-        `🔌 ${ten} · ${issue.model} · ${issue.keyLabel} (${issue.keyMasked}): ${viCo}${lanNua}. `
-        + (issue.status === 401 || issue.status === 403
-          ? 'Lane này sẽ KHÔNG chạy được cho tới khi bạn thay key.'
-          : 'Lane nghỉ 15 giây rồi thử lại; các key/provider khác vẫn chạy bình thường.'));
-      if (issue.status === 401 || issue.status === 403) {
-        useStore.getState().addToast('error', `${ten}: ${issue.keyLabel} sai/hết hạn — hãy thay key.`);
-      }
-    });
-    return () => setLaneIssueReporter(null);
-  }, []);
+  // (bug 229c) Kênh báo key/provider hỏng: cắm MỘT LẦN ở cấp module — xem reportLaneIssueToUser.
 
   /**
    * Prepare fields for translation.

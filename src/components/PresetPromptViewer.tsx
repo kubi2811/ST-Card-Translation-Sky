@@ -242,7 +242,7 @@ export default function PresetPromptViewer({ onClose }: Props) {
               cursor: 'pointer',
             }}
           >
-            <option value="all">All Roles</option>
+            <option value="all">{ui.l28AllRoles}</option>
             <option value="system">System</option>
             <option value="user">User</option>
             <option value="assistant">Assistant</option>

@@ -3318,7 +3318,7 @@ function SandboxTab({
       <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
         {/* Input */}
         <div>
-          <label className="label">Input Text</label>
+          <label className="label">{ui.l28InputText}</label>
           <textarea
             className="input input-mono"
             value={sandboxInput}
@@ -3338,7 +3338,7 @@ function SandboxTab({
         {/* Find / Replace */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
           <div>
-            <label className="label">Find (Regex)</label>
+            <label className="label">{ui.l28FindRegex}</label>
             <input
               className="input input-mono"
               value={sandboxFind}
@@ -3361,7 +3361,7 @@ function SandboxTab({
         {sandboxResult.error && (
           <div className="ios-warning">
             <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: '1px' }} />
-            <span>Regex error: <code>{sandboxResult.error}</code></span>
+            <span>{ui.l28RegexError} <code>{sandboxResult.error}</code></span>
           </div>
         )}
 
@@ -4561,7 +4561,7 @@ QUY TẮC BẮT BUỘC:
               <>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label className="label" style={{ fontWeight: 600 }}>Zod Schema (TavernHelper script):</label>
+                    <label className="label" style={{ fontWeight: 600 }}>{ui.l28ZodSchema}</label>
                     <textarea
                       value={zodSchema}
                       onChange={e => setZodSchema(e.target.value)}
@@ -4664,7 +4664,7 @@ QUY TẮC BẮT BUỘC:
             {rules && !loading ? (
               <>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label className="label" style={{ fontWeight: 600 }}>Variable Rules Content (XML format):</label>
+                  <label className="label" style={{ fontWeight: 600 }}>{ui.l28VarRules}</label>
                   <textarea
                     value={rules}
                     onChange={e => setRules(e.target.value)}
@@ -4758,7 +4758,7 @@ QUY TẮC BẮT BUỘC:
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <span className="text-[10px] bg-indigo-950/40 border border-indigo-900 text-indigo-400 px-2 py-0.5 rounded font-mono">LB Entry</span>
+                        <span className="text-[10px] bg-indigo-950/40 border border-indigo-900 text-indigo-400 px-2 py-0.5 rounded font-mono">{ui.l28LbEntry}</span>
                         {isExpanded ? <ChevronDown size={14} className="text-slate-400" /> : <ChevronRight size={14} className="text-slate-400" />}
                       </div>
                     </div>
@@ -4802,8 +4802,8 @@ QUY TẮC BẮT BUỘC:
                             >
                               <option value="before_char">Before Character (before_char)</option>
                               <option value="after_char">After Character (after_char)</option>
-                              <option value="top">Top (top)</option>
-                              <option value="bottom">Bottom (bottom)</option>
+                              <option value="top">{ui.l28Top}</option>
+                              <option value="bottom">{ui.l28Bottom}</option>
                             </select>
                           </div>
                           <div className="flex flex-col gap-1">
@@ -4941,7 +4941,7 @@ QUY TẮC BẮT BUỘC:
                         </div>
                         <div className="grid grid-cols-3 gap-3">
                           <div className="flex flex-col gap-1">
-                            <label className="text-[10px] font-semibold text-slate-400">Placement (comma list):</label>
+                            <label className="text-[10px] font-semibold text-slate-400">{ui.l28Placement}</label>
                             <input 
                               type="text" 
                               value={(script.placement || []).join(', ')}

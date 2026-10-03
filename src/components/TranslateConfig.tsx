@@ -495,7 +495,7 @@ export default function TranslateConfig() {
             {/* Source & Target Languages */}
             <div style={{ display: 'flex', gap: '8px' }}>
               <div style={{ flex: 1 }}>
-                <label className="label">Source Language</label>
+                <label className="label">{ui.l28SourceLang}</label>
                 <select className="input" value={translationConfig.sourceLanguage || 'auto'} onChange={(e) => setTranslationConfig({ sourceLanguage: e.target.value })}>
                   {SOURCE_LANGUAGES.map((l) => (<option key={l.value} value={l.value}>{l.label}</option>))}
                 </select>
@@ -507,7 +507,7 @@ export default function TranslateConfig() {
                   <option value="custom">Custom...</option>
                 </select>
                 {translationConfig.targetLanguage === 'custom' && (
-                  <input className="input" style={{ marginTop: '6px' }} placeholder="Enter target language..." onChange={(e) => setTranslationConfig({ targetLanguage: e.target.value || 'custom' })} />
+                  <input className="input" style={{ marginTop: '6px' }} placeholder={ui.l28TargetLangPh} onChange={(e) => setTranslationConfig({ targetLanguage: e.target.value || 'custom' })} />
                 )}
               </div>
             </div>

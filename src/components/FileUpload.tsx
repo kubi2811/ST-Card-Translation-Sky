@@ -379,14 +379,14 @@ export default function FileUpload() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '8px' }}>
               <div {...getRootProps()} style={{ cursor: 'pointer', minWidth: 0 }}>
                 <input {...getInputProps()} />
-                <button className="btn btn-ghost btn-sm" style={{ width: '100%', minWidth: 0, fontSize: '0.75rem', whiteSpace: 'normal', lineHeight: 1.25, border: '1px dashed var(--border-subtle)' }} title="Replace current card completely">
+                <button className="btn btn-ghost btn-sm" style={{ width: '100%', minWidth: 0, fontSize: '0.75rem', whiteSpace: 'normal', lineHeight: 1.25, border: '1px dashed var(--border-subtle)' }} title={ui.l28ReplaceCard}>
                   <Upload size={12} /> {t.dragDropCard}
                 </button>
               </div>
 
               <div {...getUpdateProps()} style={{ cursor: 'pointer', minWidth: 0 }}>
                 <input {...getUpdateInputProps()} />
-                <button className="btn btn-primary btn-sm" style={{ width: '100%', minWidth: 0, fontSize: '0.75rem', whiteSpace: 'normal', lineHeight: 1.25 }} title="Update from a newer original card, keeping existing translations">
+                <button className="btn btn-primary btn-sm" style={{ width: '100%', minWidth: 0, fontSize: '0.75rem', whiteSpace: 'normal', lineHeight: 1.25 }} title={ui.l28UpdateCard}>
                   <Upload size={12} /> {ui.fuUpdateOriginal}
                 </button>
               </div>

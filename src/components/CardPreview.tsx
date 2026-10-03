@@ -148,7 +148,7 @@ export default function CardPreview() {
           <PreviewField label="Description" value={tv('data.description', 'description', card.data?.description || card.description)} truncate />
           <PreviewField label="Personality" value={tv('data.personality', 'personality', card.data?.personality || card.personality)} truncate />
           <PreviewField label="Scenario" value={tv('data.scenario', 'scenario', card.data?.scenario || card.scenario)} truncate />
-          <PreviewField label="First Message" value={tv('data.first_mes', 'first_mes', card.data?.first_mes || card.first_mes)} truncate />
+          <PreviewField label={ui.l28FirstMessage} value={tv('data.first_mes', 'first_mes', card.data?.first_mes || card.first_mes)} truncate />
           {(translated.has('data.system_prompt') || card.data?.system_prompt) && (
             <PreviewField label="System Prompt" value={tv('data.system_prompt', 'system_prompt', card.data?.system_prompt)} truncate />
           )}
@@ -167,6 +167,7 @@ export default function CardPreview() {
 
 /* ─── Worldbook Preview: shows first N entries ─── */
 function WorldbookPreview({ card, translated }: { card: any; translated: Map<string, string> }) {
+  const ui = useUi();
   const entries = card.data?.character_book?.entries || [];
   const [showAll, setShowAll] = useState(false);
   const maxPreview = 5;
@@ -224,7 +225,7 @@ function WorldbookPreview({ card, translated }: { card: any; translated: Map<str
           style={{ alignSelf: 'center', fontSize: '0.7rem', marginTop: '4px' }}
         >
           {showAll ? (
-            <><ChevronDown size={12} /> Show less</>
+            <><ChevronDown size={12} /> {ui.l28ShowLess}</>
           ) : (
             <><ChevronRight size={12} /> Show all {entries.length} entries</>
           )}

@@ -1152,7 +1152,7 @@ function FieldsTab({
                       start` để 2 cột cao khác nhau không bị kéo bằng nhau. */}
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', alignItems: 'start' }}>
                     <div>
-                      <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', marginBottom: '2px' }}>Original Preview:</div>
+                      <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', marginBottom: '2px' }}>{ui.l28OrigPreview}</div>
                       <AutoHeightPreview
                         name={`rmprev-o-${row.path}`}
                         title="Original Preview"
@@ -1160,7 +1160,7 @@ function FieldsTab({
                       />
                     </div>
                     <div>
-                      <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', marginBottom: '2px' }}>Translated Preview:</div>
+                      <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', marginBottom: '2px' }}>{ui.l28TransPreview}</div>
                       <AutoHeightPreview
                         name={`rmprev-t-${row.path}`}
                         title="Translated Preview"

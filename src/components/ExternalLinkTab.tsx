@@ -435,7 +435,7 @@ export default function ExternalLinkTab() {
               <input type="password" value={ghToken} onChange={e => setGhToken(e.target.value)} placeholder="ghp_..." style={{ width: '100%', padding: '6px 8px', fontSize: '0.75rem', borderRadius: '4px', border: '1px solid var(--border-default)', background: 'var(--bg-primary)' }} />
             </div>
             <div>
-              <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Repository (user/repo)</label>
+              <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>{ui.l28Repo}</label>
               <input value={ghRepo} onChange={e => setGhRepo(e.target.value)} placeholder="username/my-repo" style={{ width: '100%', padding: '6px 8px', fontSize: '0.75rem', borderRadius: '4px', border: '1px solid var(--border-default)', background: 'var(--bg-primary)' }} />
             </div>
             <div>
@@ -464,15 +464,15 @@ export default function ExternalLinkTab() {
                 
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
                   <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{ui.eltJsTag}</div>
-                  <CopyBtn text={`<script src="${cdnUrl}"></script>`} label="Copy Script" />
+                  <CopyBtn text={`<script src="${cdnUrl}"></script>`} label={ui.l28CopyScript} />
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
                   <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{ui.eltCssTag}</div>
-                  <CopyBtn text={`<link rel="stylesheet" href="${cdnUrl}">`} label="Copy CSS" />
+                  <CopyBtn text={`<link rel="stylesheet" href="${cdnUrl}">`} label={ui.l28CopyCss} />
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
                   <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>Markdown:</div>
-                  <CopyBtn text={`[Load Script](${cdnUrl})`} label="Copy Markdown" />
+                  <CopyBtn text={`[Load Script](${cdnUrl})`} label={ui.l28CopyMd} />
                 </div>
 
               </div>
@@ -487,11 +487,11 @@ export default function ExternalLinkTab() {
           <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '10px' }}>{ui.eltPreviewTitle}</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
             <div>
-              <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginBottom: '4px' }}>Original Preview:</div>
+              <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginBottom: '4px' }}>{ui.l28OrigPreview}</div>
               <iframe title="Original Preview" srcDoc={renderSafeHtml((input || '').replace(/\$[0-9&]+/g, ui.eltSampleContent))} sandbox="allow-scripts" style={{ width: '100%', height: '300px', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', background: '#0f0f12' }} />
             </div>
             <div>
-              <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginBottom: '4px' }}>Translated Preview:</div>
+              <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginBottom: '4px' }}>{ui.l28TransPreview}</div>
               <iframe title="Translated Preview" srcDoc={renderSafeHtml((output || input || '').replace(/\$[0-9&]+/g, ui.eltSampleContent))} sandbox="allow-scripts" style={{ width: '100%', height: '300px', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', background: '#0f0f12' }} />
             </div>
           </div>

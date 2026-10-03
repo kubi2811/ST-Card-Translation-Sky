@@ -346,7 +346,7 @@ export default function EjsSyncPanel() {
             <span>
               {ejsDetection.isEjs ? (
                 <>
-                  <strong>EJS card detected</strong> — {ejsDetection.ejsBlockCount} blocks, {ejsDetection.entryWithEjsCount} entries with EJS
+                  <strong>{ui.l28EjsDetected}</strong> {fmt(ui.l28EjsDetail, { blocks: ejsDetection.ejsBlockCount, entries: ejsDetection.entryWithEjsCount })}
                   {ejsDetection.hasGetwi && ', getwi()'}
                   {ejsDetection.hasActivewi && ', activewi()'}
                   {ejsDetection.hasDefine && ', define()'}
@@ -360,7 +360,7 @@ export default function EjsSyncPanel() {
 
           {/* ─── Action Buttons ─── */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
-            <button className="btn btn-sm btn-primary" onClick={autoExtractOnly} title="Extract entry names + keywords (no AI)">
+            <button className="btn btn-sm btn-primary" onClick={autoExtractOnly} title={ui.l28ExtractNoAi}>
               <Search size={13} /> {ui.esScan}
             </button>
             <button
@@ -372,10 +372,10 @@ export default function EjsSyncPanel() {
               {isAutoTranslating ? <Loader2 size={13} className="spin" /> : <Wand2 size={13} />}
               {ui.esScanTranslate}
             </button>
-            <button className="btn btn-sm" onClick={exportDict} title="Export dictionaries">
+            <button className="btn btn-sm" onClick={exportDict} title={ui.l28ExportDicts}>
               <Download size={13} />
             </button>
-            <button className="btn btn-sm" onClick={importDict} title="Import dictionaries">
+            <button className="btn btn-sm" onClick={importDict} title={ui.l28ImportDicts}>
               <Upload size={13} />
             </button>
             {/* (User 2026) Đồng nhất từ điển EJS — non-AI: làm sạch value + gom cụm gần-giống về 1 dạng.

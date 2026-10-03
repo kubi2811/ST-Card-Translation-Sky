@@ -1,7 +1,6 @@
 /**
  * src/i18n/locales/vi.ts — Bộ chuỗi TIẾNG VIỆT đầy đủ.
- * ⚠️ HIỆN KHÔNG ĐƯỢC DÙNG để render: tuỳ chọn "Tiếng Việt" map sang bộ `en` để giữ nguyên
- * giao diện user cũ đã quen (xem resolveLocale). Giữ lại làm nguyên liệu cho tương lai.
+ * Chọn "Tiếng Việt" là dùng bộ này (xem resolveLocale — trước đây VI bị ép về bộ `en`).
  */
 import type { TranslationKeys } from './en';
 
@@ -157,7 +156,7 @@ const vi: TranslationKeys = {
   modGenerateError: 'Lỗi khi tạo lorebook entries',
 
   // Patch Mode
-  patchMode: 'Patch Mode (Regex)',
+  patchMode: 'Chế độ vá (Regex)',
   patchModeDesc: 'AI chỉ xuất thay đổi thay vì toàn bộ nội dung — tiết kiệm token cho regex fields',
   patchApplied: '{applied}/{total} thay đổi đã áp dụng',
   patchFailed: 'Patch thất bại — chuyển sang chế độ thường',
@@ -258,7 +257,7 @@ const vi: TranslationKeys = {
   catTemplateLiteralContent: 'Template Literal',
   
   // Streaming Verify
-  verifyStreamingTitle: 'AI Deep Verify (Streaming)',
+  verifyStreamingTitle: 'AI kiểm tra sâu (Streaming)',
   verifyScanning: 'Đang quét: {section}',
   verifySectionProgress: '{current}/{total} phần',
   verifySectionOk: 'OK',

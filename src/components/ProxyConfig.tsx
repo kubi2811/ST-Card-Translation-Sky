@@ -409,7 +409,7 @@ export default function ProxyConfig() {
                     style={{ color: proxy.expertMode ? 'var(--accent-primary)' : 'var(--text-muted)', flexShrink: 0 }}
                   />
                   <div>
-                    <div style={{ fontSize: '0.8rem', fontWeight: 600 }}>Expert Mode</div>
+                    <div style={{ fontSize: '0.8rem', fontWeight: 600 }}>{ui.l28ExpertMode}</div>
                     <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', marginTop: '1px' }}>
                       {proxy.expertMode
                         ? 'XML reasoning active — higher quality, +30% tokens'

@@ -708,7 +708,7 @@ function ChunkStatusAndResume({
                       alignItems: 'center',
                       gap: '3px'
                     }}
-                    title="Download JSON for this chunk"
+                    title={ui.l28DownloadChunk}
                   >
                     <Download size={10} /> JSON
                   </button>
@@ -979,6 +979,7 @@ function HtmlPreviewToggle({ html }: { html: string }) {
 
 /** Live Regex Match Simulator */
 function RegexSimulatorPane({ regexStr }: { regexStr: string }) {
+  const ui = useUi();
   const [testText, setTestText] = useState('');
   
   // Parse regex safely
@@ -1004,7 +1005,7 @@ function RegexSimulatorPane({ regexStr }: { regexStr: string }) {
 
   const highlightedElements = useMemo(() => {
     if (!testText) return null;
-    if (!parsedRegex) return <span style={{color: 'var(--accent-danger)'}}>Invalid Regular Expression</span>;
+    if (!parsedRegex) return <span style={{color: 'var(--accent-danger)'}}>{ui.l28InvalidRegex}</span>;
 
     const elements: React.ReactNode[] = [];
     let lastIndex = 0;
@@ -1037,7 +1038,7 @@ function RegexSimulatorPane({ regexStr }: { regexStr: string }) {
           color: '#ff9ecd', 
           borderRadius: '2px',
           padding: '0 2px'
-        }} title="Matched segment">
+        }} title={ui.l28Matched}>
           {testText.slice(start, end)}
         </mark>
       );
@@ -1050,7 +1051,7 @@ function RegexSimulatorPane({ regexStr }: { regexStr: string }) {
     }
     
     if (elements.length === 1 && typeof elements[0] === 'object' && 'type' in (elements[0] as any) && (elements[0] as any).type === 'span') {
-      return <span style={{color: 'var(--text-muted)'}}>No matches found.</span>;
+      return <span style={{color: 'var(--text-muted)'}}>{ui.l28NoMatch}</span>;
     }
     
     return elements;
@@ -1079,7 +1080,7 @@ function RegexSimulatorPane({ regexStr }: { regexStr: string }) {
       <textarea
         value={testText}
         onChange={e => setTestText(e.target.value)}
-        placeholder="Paste narrative text here to simulate what this regex will match/eat..."
+        placeholder={ui.l28RegexTestPh}
         style={{
           width: '100%',
           minHeight: '60px',

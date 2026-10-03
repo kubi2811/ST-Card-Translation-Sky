@@ -2,5 +2,5 @@
 // BUMP `APP_VERSION` on every fix so builds are distinguishable in the UI (shown in the
 // sidebar header). Use the patch number for small fixes; keep `APP_VERSION_NOTE` to a one-line
 // summary of the most recent change (shown on hover).
-export const APP_VERSION = '2.56.0';
-export const APP_VERSION_NOTE = 'v2.56.0: bug 238 Dich link ngoai co tu dien MVU rieng cua file (quet key, AI dich key thieu, tra/sua) dung chung tu dien the; quet key MVU tinh ca link ngoai; Script nang ap tu dien MVU; khong con xoa tu dien khi the de bien o link ngoai. bug 239 dich link ngoai chay nen, thoat Regex Manager van dich tiep, nhan noi o man hinh chinh, Huy dung that sau khi mo lai. bug 240 nhat ky tung buoc + tien do tung phan/manh (chu Han con sot, do khop) ngay trong giao dien.';
+export const APP_VERSION = '2.57.0';
+export const APP_VERSION_NOTE = 'v2.57.0: bug 243 + 245 Tro Ly AI: luot tu doc tiep giu dung che do + nhac lai nguyen van cau hoi goc, CodeFixer sua duoc entry, hieu cau dan chi doc va chan action ghi voi ly do ro; bug 241 giu tab song cho moi kieu dich (nhieu nguoi giu), watchdog tu dung lai, nut Giu tab tren thanh dau trang; bug 28 dich het 160 chuoi tieng Anh con sot trong giao dien tieng Viet + test chan tai dien.';

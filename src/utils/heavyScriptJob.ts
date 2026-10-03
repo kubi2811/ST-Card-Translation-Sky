@@ -23,7 +23,7 @@ import { splitHeavyScript, mergeHeavyParts, type HeavyPart } from './heavyScript
 import { countResidualHan } from './residualCjkScan';
 import { auditChunks } from './chunkAudit';
 import { safeSetItem } from './safeStorage';
-import { startKeepAlive, stopKeepAlive, isKeepAliveRunning } from './keepAlive';
+import { acquireKeepAlive, releaseKeepAlive } from './keepAlive';
 import { noteActivity } from './translateActivity';
 
 export type HeavyPartStatus = 'pending' | 'translating' | 'done' | 'error';
@@ -172,13 +172,10 @@ export const useHeavyScriptJob = create<HeavyJobState>((set, get) => {
     }
   };
 
-  /** Giữ tab sống trong lúc chạy nền — nhưng chỉ nhả nếu chính lượt này đã bật. */
+  /** Giữ tab sống trong lúc chạy nền (bug 241: giữ theo TÊN — xong việc này không tắt việc khác). */
   const withKeepAlive = async (fn: () => Promise<void>) => {
-    const own = !isKeepAliveRunning();
-    if (own) startKeepAlive();
-    try { await fn(); } finally {
-      if (own && useStore.getState().phase !== 'translating') stopKeepAlive();
-    }
+    acquireKeepAlive('heavy-script');
+    try { await fn(); } finally { releaseKeepAlive('heavy-script'); }
   };
 
   return {

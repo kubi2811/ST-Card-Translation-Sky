@@ -3,6 +3,7 @@ import App from './App';
 import { FLOWS, type FlowDef } from './flows';
 import { RotateCw, ExternalLink, Bug, Play, Square, Bot } from 'lucide-react';
 import HubUpdateButton from './components/HubUpdateButton';
+import KeepAliveToggle from './components/KeepAliveToggle';
 import { APP_VERSION } from './version';
 import { useUi } from './i18n/useLocale';
 import { getUiLang, setUiLang, UI_LANGS, fmt } from './i18n';
@@ -295,6 +296,8 @@ function GlobalHeader({ activeFlow }: { activeFlow?: FlowDef }) {
             <span>{ui[activeFlow.labelKey]}</span>
           </div>
         )}
+        {/* (bug 241) Giữ tab sống: trạng thái thật + bật/tắt tay + bật lại khi bị chặn */}
+        <KeepAliveToggle />
         {/* Nút Báo lỗi → mở file Excel (OneDrive) ở tab mới cho mọi người ghi bug */}
         <a
           href={BUG_REPORT_URL}

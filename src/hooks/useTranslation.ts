@@ -49,7 +49,7 @@ import { collectProblemFields } from '../utils/problemFields';
 // (bug 219) Dịch lại không bao giờ được làm tệ hơn bản đang có.
 import { judgeRetryResult, regressionMessage } from '../utils/retryRegression';
 // (bug 221) Giữ tab sống khi Edge muốn cho nó đi ngủ.
-import { startKeepAlive, stopKeepAlive, measureKeepAliveDbfs, CHROMIUM_SILENCE_DBFS } from '../utils/keepAlive';
+import { startKeepAlive, stopKeepAlive, acquireKeepAlive, releaseKeepAlive, measureKeepAliveDbfs, CHROMIUM_SILENCE_DBFS } from '../utils/keepAlive';
 import { collectExternalCodeForCard } from '../utils/externalLinkVault';
 
 /* ─── (bug 205) Wake lock trong lúc dịch ───
@@ -4041,6 +4041,7 @@ export function useTranslation() {
     }
     const controller = new AbortController();
     fieldAbortMap.current.set(path, controller);
+    acquireKeepAlive(`field:${path}`);   // (bug 241) dịch lẻ cũng giữ tab sống — xem keepAlive.ts
     // (bug 227) Người dùng chủ động bắt dịch lại mục này ⇒ XOÁ dấu "đã chấp nhận có tì vết" và
     // vân tay lý do cũ, để cổng mềm được thử lại từ đầu. Không xoá thì lượt này vừa chạy đã bị
     // chính cái chốt vừa dựng chặn ngay — người dùng bấm mà không thấy gì xảy ra.
@@ -4301,6 +4302,7 @@ export function useTranslation() {
       // Clean up per-field abort controller
       fieldAbortMap.current.delete(path);
       inFlightPaths.current.delete(path);   // (bug 213) nhả khoá chung
+      releaseKeepAlive(`field:${path}`);    // (bug 241)
     }
   }, [store]);
 

@@ -17,6 +17,7 @@ interface FakeNode { connect: ReturnType<typeof vi.fn>; disconnect: ReturnType<t
 const g = globalThis as unknown as Record<string, unknown>;
 let created: { osc: number; started: number; stopped: number; closed: number; gains: number[] };
 let audioEls: Array<{ played: number; paused: number; loop: boolean; volume: number }>;
+let lastCtx: { state: string } | null = null;
 
 function installFakeAudio(opts: { noAudioContext?: boolean; blockAutoplay?: boolean } = {}) {
   created = { osc: 0, started: 0, stopped: 0, closed: 0, gains: [] };
@@ -25,6 +26,7 @@ function installFakeAudio(opts: { noAudioContext?: boolean; blockAutoplay?: bool
   if (!opts.noAudioContext) {
     class FakeCtx {
       state = 'running';
+      constructor() { lastCtx = this; }
       destination = {} as unknown;
       createGain() {
         const node = { gain: { value: 1 }, connect: vi.fn(), disconnect: vi.fn() };
@@ -203,5 +205,92 @@ describe('(bug 221) keepAlive giữ tab khỏi bị Edge cho ngủ', () => {
     // Đã tắt thì resume là no-op, không được tự bật lại.
     k.resumeKeepAlive();
     expect(k.isKeepAliveRunning()).toBe(false);
+  });
+});
+
+describe('(bug 241) giữ tab ổn định: nhiều người giữ, tự dựng lại, bật lại được', () => {
+  it('việc này xong KHÔNG tắt loa của việc khác đang chạy', async () => {
+    installFakeAudio();
+    const k = await load();
+    k.startKeepAlive();                    // lượt dịch thẻ
+    k.acquireKeepAlive('field:x');         // dịch lẻ ở Regex Manager
+    k.stopKeepAlive();                     // lượt dịch thẻ xong
+    expect(k.isKeepAliveRunning()).toBe(true);
+    expect(k.getKeepAliveStatus().holders).toEqual(['field:x']);
+    k.releaseKeepAlive('field:x');
+    expect(k.isKeepAliveRunning()).toBe(false);
+    expect(created.closed).toBe(1);
+  });
+
+  it('dịch lẻ một mình cũng bật loa (trước đây chỉ "Bắt đầu dịch" thẻ mới bật)', async () => {
+    installFakeAudio();
+    const k = await load();
+    k.acquireKeepAlive('heavy-script');
+    expect(k.isKeepAliveRunning()).toBe(true);
+    expect(k.getKeepAliveStatus().health).toBe('ok');
+    k.releaseKeepAlive('heavy-script');
+  });
+
+  it('AudioContext CHẾT (đổi thiết bị âm thanh) ⇒ watchdog dựng lại từ đầu, không chỉ "gọi dậy"', async () => {
+    installFakeAudio();
+    const k = await load();
+    k.startKeepAlive();
+    lastCtx!.state = 'closed';
+    k.checkKeepAliveHealth();
+    expect(created.osc).toBe(2);
+    expect(k.getKeepAliveStatus().restarts).toBe(1);
+    expect(k.getKeepAliveStatus().health).toBe('ok');
+    k.stopKeepAlive();
+  });
+
+  it('<audio> bị dừng (phím media Pause) ⇒ watchdog phát lại', async () => {
+    installFakeAudio({ noAudioContext: true });
+    const k = await load();
+    k.startKeepAlive();
+    await Promise.resolve();
+    const el = audioEls[0] as unknown as { paused: boolean; played: number };
+    el.paused = true;
+    k.checkKeepAliveHealth();
+    expect(el.played).toBe(2);
+    k.stopKeepAlive();
+  });
+
+  it('bị trình duyệt chặn ⇒ báo "blocked" để nút 🔊 hiện "bấm để bật lại"', async () => {
+    installFakeAudio({ noAudioContext: true, blockAutoplay: true });
+    const k = await load();
+    k.startKeepAlive();
+    await new Promise(r => setTimeout(r, 0));
+    expect(k.getKeepAliveStatus().health).toBe('blocked');
+    k.stopKeepAlive();
+    expect(k.getKeepAliveStatus().health).toBe('off');
+  });
+
+  it('bật tay: nhớ qua lần sau, và tắt tay không đụng tới lượt dịch đang giữ', async () => {
+    installFakeAudio();
+    const store = new Map<string, string>();
+    Object.defineProperty(g, 'localStorage', {
+      value: { getItem: (x: string) => store.get(x) ?? null, setItem: (x: string, v: string) => { store.set(x, v); } },
+      configurable: true, writable: true,
+    });
+    const k = await load();
+    k.setManualKeepAlive(true);
+    expect(k.isManualKeepAliveSaved()).toBe(true);
+    k.startKeepAlive();
+    k.setManualKeepAlive(false);
+    expect(k.isKeepAliveRunning()).toBe(true);   // lượt dịch vẫn giữ
+    k.stopKeepAlive();
+    expect(k.isKeepAliveRunning()).toBe(false);
+    delete g.localStorage;
+  });
+
+  it('đăng ký nghe trạng thái: bật/tắt đều báo', async () => {
+    installFakeAudio();
+    const k = await load();
+    let n = 0;
+    const off = k.subscribeKeepAlive(() => { n++; });
+    k.startKeepAlive();
+    k.stopKeepAlive();
+    off();
+    expect(n).toBeGreaterThanOrEqual(2);
   });
 });

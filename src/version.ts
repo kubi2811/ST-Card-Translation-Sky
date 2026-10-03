@@ -2,5 +2,5 @@
 // BUMP `APP_VERSION` on every fix so builds are distinguishable in the UI (shown in the
 // sidebar header). Use the patch number for small fixes; keep `APP_VERSION_NOTE` to a one-line
 // summary of the most recent change (shown on hover).
-export const APP_VERSION = '2.58.1';
-export const APP_VERSION_NOTE = 'v2.58.1: Tam dung/Huy luon dung duoc vong dich dang chay (ke ca sau khi mo-dong Regex Manager); kenh bao loi key/provider khong con bi tat khi chuyen tab; dich link ngoai di dung duong surgical nhu regex (giu nguyen code, chi dich chu CJK).';
+export const APP_VERSION = '2.59.0';
+export const APP_VERSION_NOTE = 'v2.59.0: giu nguyen ten entry EJS khi card ghep ten luc chay (getwi(null, x + manh), endsWith...) + canh bao khi manh ghep bi dich mat; nang vite 8.3.2 / vitest 4.1.11, va lo hong thu vien cac tool con, next 16.3.8 cho Mod Card / Crawler.';

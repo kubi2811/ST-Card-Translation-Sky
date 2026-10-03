@@ -3,7 +3,7 @@ import { useStore } from '../store';
 import { useThrottledStore } from '../hooks/useThrottledStore';
 import { useT, useUi } from '../i18n/useLocale';
 import { fmt } from '../i18n';
-import { detectEjsCard, extractEjsEntryNames, extractEjsKeywords, extractAllDecorators, aiTranslateEjsEntries, enforceEjsDictConsistency, autoFixEjsEntryNames, autoFixEjsKeywords, enforceEjsCovariance, enforceEjsKeywordCasing, autoFixEjsKeywordsExtended, detectEjsConflicts, aiResolveEjsConflicts } from '../utils/ejsSync';
+import { detectEjsCard, extractEjsEntryNames, extractEjsKeywords, extractAllDecorators, aiTranslateEjsEntries, enforceEjsDictConsistency, autoFixEjsEntryNames, autoFixEjsKeywords, enforceEjsCovariance, enforceEjsKeywordCasing, autoFixEjsKeywordsExtended, detectEjsConflicts, aiResolveEjsConflicts, getEjsDynamicLock } from '../utils/ejsSync';
 import { Settings, Plus, Trash2, Wand2, Loader2, Search, Download, Upload, Shield, Zap, Hash, BookOpen, Eye } from 'lucide-react';
 // (bug 223) Thu hoi blob URL SAU khi trinh duyet doc xong - revoke ngay sau click lam hut file.
 import { revokeSoon } from '../utils/downloadFile';
@@ -36,6 +36,8 @@ export default function EjsSyncPanel() {
   if (!card) return null;
 
   // ─── EJS Detection Summary (only scan when enabled to avoid crashes) ───
+  // (D) Tên entry ghép lúc chạy — tính một lần theo object thẻ (đệm WeakMap trong ejsSync).
+  const dynLock = useMemo(() => getEjsDynamicLock(card), [card]);
   const ejsDetection = useMemo(() => {
     if (!enableEjsSync) return { isEjs: false, confidence: 0, ejsBlockCount: 0, entryWithEjsCount: 0, hasGetwi: false, hasActivewi: false, hasDefine: false, hasGetChatMessages: false, hasExecute: false, hasDecorators: false, reasons: [] };
     try { return detectEjsCard(card); } catch { return { isEjs: false, confidence: 0, ejsBlockCount: 0, entryWithEjsCount: 0, hasGetwi: false, hasActivewi: false, hasDefine: false, hasGetChatMessages: false, hasExecute: false, hasDecorators: false, reasons: [] }; }
@@ -357,6 +359,22 @@ export default function EjsSyncPanel() {
               )}
             </span>
           </div>
+
+          {dynLock.fragments.length > 0 && (
+            <div style={{ fontSize: 12, lineHeight: 1.5, marginBottom: 10, padding: '8px 10px', borderRadius: 6,
+              background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.35)', color: 'var(--text-secondary)' }}>
+              <strong style={{ color: '#fbbf24' }}>{fmt(ui.esDynLockTitle, { names: dynLock.lockedNames.length })}</strong>
+              <div>{fmt(ui.esDynLockDesc, {
+                example: dynLock.examples[0] || '',
+                fragments: dynLock.fragments.slice(0, 6).map(f => `"${f}"`).join(', '),
+              })}</div>
+              {dynLock.lockedNames.length > 0 && (
+                <div style={{ marginTop: 4, fontFamily: 'monospace', fontSize: 11, color: 'var(--text-muted)' }}>
+                  {dynLock.lockedNames.slice(0, 8).join(' · ')}{dynLock.lockedNames.length > 8 ? ` · +${dynLock.lockedNames.length - 8}` : ''}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* ─── Action Buttons ─── */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>

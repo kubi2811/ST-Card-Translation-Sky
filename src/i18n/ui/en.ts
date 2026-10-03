@@ -1349,6 +1349,9 @@ const ui = {
   l28ExpertMode: 'Expert Mode',
   l28SourceLang: 'Source Language',
   l28TargetLangPh: 'Enter target language...',
+  // ─── (D) tên entry EJS ghép lúc chạy ───
+  esDynLockTitle: '🔒 Card builds entry names at runtime — keeping {names} entry names unchanged',
+  esDynLockDesc: 'The code calls entries by a composed name (e.g. {example}), so the rest of the name comes from runtime variables. Translating these names would make the entries unreachable. Fragments kept verbatim: {fragments}.',
 };
 
 export default ui;

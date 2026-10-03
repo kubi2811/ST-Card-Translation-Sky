@@ -31,7 +31,7 @@ import { repairUnquotedObjectKeys, repairUnquotedObjectKeysInHtml } from '../uti
 import { parsePatchOutput, applyPatches, validatePatchResult } from '../utils/patchEngine';
 import { injectMvuZodSystem } from '../utils/mvuGenerator';
 import { unifyCrossStrategyDicts } from '../utils/crossStrategySync';
-import { detectEjsCard, extractEjsEntryNames, extractEjsKeywords, aiTranslateEjsEntries, validateEjsSync, autoFixEjsEntryNames, autoFixEjsKeywords, enforceEjsEntryName, enforceEjsCovariance, enforceEjsKeywordCasing, autoFixEjsKeywordsExtended, enforceEjsDictConsistency } from '../utils/ejsSync';
+import { detectEjsCard, extractEjsEntryNames, extractEjsKeywords, aiTranslateEjsEntries, validateEjsSync, autoFixEjsEntryNames, autoFixEjsKeywords, enforceEjsEntryName, enforceEjsCovariance, enforceEjsKeywordCasing, autoFixEjsKeywordsExtended, enforceEjsDictConsistency, getEjsDynamicLock, applyEjsDynamicLock } from '../utils/ejsSync';
 import { isEjsProseField, maskEjsCode, unmaskEjsCode, countEjsBlocks } from '../utils/ejsSegmenter';
 import { isLikelyJsScript, jsParseErrorAny, isImportOnlyScript, hasRealJsSignal, jsErrorFingerprint } from '../utils/scriptSafety';
 import { planTargetedChunkRetry, mergeChunkProgress, normalizeChunkCells, findChunksFailing } from '../utils/chunkRetryPlan';
@@ -1141,6 +1141,13 @@ export function useTranslation() {
         }
       }
 
+      // (D) Tên entry GHÉP lúc chạy ⇒ giữ nguyên tên gốc (kể cả khi tắt Chiến lược C).
+      if (translated) {
+        const lk = applyEjsDynamicLock(field, translated, getEjsDynamicLock(useStore.getState().card));
+        translated = lk.text;
+        if (lk.note) store.addLog(lk.note.level, lk.note.msg);
+      }
+
       // ─── EJS AUTO-FIX: Enforce EJS entry names & keywords (Strategy C) ───
       if (translated && store.translationConfig.enableEjsSync) {
         const ejsEntryDict = useStore.getState().translationConfig.ejsEntryNameDict;
@@ -2092,6 +2099,13 @@ export function useTranslation() {
             }
           }
 
+          // (D) Tên entry GHÉP lúc chạy ⇒ giữ nguyên tên gốc (đường batch).
+          if (translated) {
+            const lk = applyEjsDynamicLock(batchFields[j], translated, getEjsDynamicLock(useStore.getState().card));
+            translated = lk.text;
+            if (lk.note) store.addLog(lk.note.level, lk.note.msg);
+          }
+
           // ─── EJS AUTO-FIX (batch): Enforce EJS entry names & keywords ───
           if (translated && store.translationConfig.enableEjsSync) {
             const ejsEntryDict = useStore.getState().translationConfig.ejsEntryNameDict;
@@ -2822,8 +2836,16 @@ export function useTranslation() {
         store.addLog('info', '🔮 Chiến lược C (đồng bộ EJS): đang quét tên mục & từ khoá EJS…');
         // (Bug 39c) nhả main thread để log trên kịp vẽ trước cụm quét EJS đồng bộ.
         await new Promise<void>((r) => setTimeout(r, 0));
-        const ejsEntryRefs = extractEjsEntryNames(store.card);
-        const ejsKeywords = extractEjsKeywords(store.card);
+        // (D) Tên/mảnh dùng để GHÉP tên entry lúc chạy: không đưa đi dịch, giữ nguyên.
+        const dynLock = getEjsDynamicLock(store.card);
+        const dynKeep = new Set([...dynLock.fragments, ...dynLock.lockedNames]);
+        if (dynLock.fragments.length) {
+          store.addLog('warning',
+            `🔒 Chiến lược C: thẻ GHÉP tên entry lúc chạy (${dynLock.examples.slice(0, 2).join(' · ')}). `
+            + `Giữ nguyên ${dynLock.lockedNames.length} tên entry + ${dynLock.fragments.length} mảnh ghép (${dynLock.fragments.slice(0, 4).map(f => `"${f}"`).join(', ')}) — dịch chúng là entry không được gọi nữa.`);
+        }
+        const ejsEntryRefs = extractEjsEntryNames(store.card).filter(r => !dynKeep.has(r.name));
+        const ejsKeywords = extractEjsKeywords(store.card).filter(k => !dynKeep.has(k.keyword) && ![...dynLock.fragments].some(f => k.keyword.includes(f)));
         const totalEjsPasses = Math.max(1, Math.min(5, store.translationConfig.ejsScanPasses || 1));
 
         for (let ejsPass = 0; ejsPass < totalEjsPasses; ejsPass++) {
@@ -4186,6 +4208,7 @@ export function useTranslation() {
         : store.proxy.model;
       const effectiveProxy = targetModel !== store.proxy.model ? { ...store.proxy, model: targetModel } : store.proxy;
 
+      getEjsDynamicLock(useStore.getState().card);   // (D) nạp khoá tên động cho prompt EJS
       const promptResult = buildEffectivePrompt({
         translationPrompt: store.translationConfig.translationPrompt,
         enableJailbreak: store.translationConfig.enableJailbreak,
@@ -4284,6 +4307,12 @@ export function useTranslation() {
       });
       for (const n of verdict.notes) store.addLog(n.level, n.msg);
       translated = verdict.text;
+      {
+        // (D) như hai đường dịch chính.
+        const lk = applyEjsDynamicLock(field, translated, getEjsDynamicLock(useStore.getState().card));
+        translated = lk.text;
+        if (lk.note) store.addLog(lk.note.level, lk.note.msg);
+      }
 
       // ═══ (bug 219) CHỐT CUỐI: KHÔNG BAO GIỜ ĐỔI BẢN TỐT LẤY BẢN TỆ ═══
       // Đây là chỗ tai nạn của user xảy ra: bản đang có sót 106 chữ Hán, chốt an toàn ở trên trả

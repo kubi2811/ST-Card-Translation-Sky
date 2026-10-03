@@ -1367,6 +1367,9 @@ const ui: UiKeys = {
   l28ExpertMode: 'Chế độ chuyên gia (Expert Mode)',
   l28SourceLang: 'Ngôn ngữ gốc',
   l28TargetLangPh: 'Nhập ngôn ngữ đích...',
+  // ─── (D) tên entry EJS ghép lúc chạy ───
+  esDynLockTitle: '🔒 Thẻ ghép tên entry lúc chạy — giữ nguyên {names} tên entry',
+  esDynLockDesc: 'Code gọi entry bằng tên ghép (vd {example}), nên phần còn lại của tên đến từ biến lúc chạy. Dịch các tên này là entry không được gọi nữa. Mảnh ghép giữ nguyên: {fragments}.',
 };
 
 export default ui;

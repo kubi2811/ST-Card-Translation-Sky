@@ -352,6 +352,142 @@ export function extractEjsEntryNames(card: CharacterCard): EjsEntryRef[] {
   return Array.from(refMap.values());
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+   (D) TÊN ENTRY GHÉP LÚC CHẠY — phải GIỮ NGUYÊN, không dịch
+   ═══════════════════════════════════════════════════════════════════
+ * User (PhatSiz) hỏi: card EJS có 5 entry `历史事件_执行指令`, `技能体系_执行指令`… dịch thành
+ * "Hệ Thống Kỹ Năng Thực Thi Chỉ Thị" — ổn không? Chỉ ổn khi code gọi bằng tên VIẾT SẴN
+ * (`getwi(null, '技能体系_执行指令')`): Chiến lược C đồng bộ được hai đầu. Còn khi code GHÉP tên
+ * lúc chạy — `getwi(null, 模块 + '_执行指令')`, `` getwi(null, `${x}_执行指令`) ``,
+ * `e.comment.endsWith('_执行指令')` — thì phần còn lại của tên đến từ biến/giá trị runtime, tool
+ * không có cách nào dịch khớp. Trước bản này tool chỉ bắt tên viết sẵn: tên ghép bị bỏ qua, entry vẫn
+ * bị dịch tên ⇒ getwi() trả rỗng, không lỗi nào báo.
+ *
+ * Nay: dò mọi lời gọi getwi/getWorldInfo/getWorldInfoData/activewi/activateWorldInfo có đối số tên
+ * KHÔNG phải một chuỗi viết sẵn, cùng các phép so `.comment/.name .endsWith/.startsWith/.includes`.
+ * Mảnh chữ viết sẵn trong đó ('_执行指令') là MẢNH GHÉP. Entry nào có tên chứa mảnh ghép ⇒ KHOÁ:
+ * giữ nguyên tên gốc, và mảnh ghép cũng phải giữ nguyên trong code.
+ */
+export interface EjsDynamicLock {
+  /** Mảnh chữ viết sẵn dùng để ghép tên entry lúc chạy (giữ nguyên trong code). */
+  fragments: string[];
+  /** Tên entry (comment/name) bị khoá — giữ nguyên bản gốc. */
+  lockedNames: string[];
+  /** Vài lời gọi tiêu biểu, để hiện cho người dùng. */
+  examples: string[];
+}
+
+const ENTRY_CALL_RE = /\b(?:getwi|getWorldInfo|getWorldInfoData|getWorldInfoActivatedData|activewi|activateWorldInfo)\s*\(/g;
+
+/** Đọc đối số thứ `n` (0-based) của lời gọi bắt đầu ngay sau `(` ở `start`. Biết chuỗi + ngoặc lồng. */
+function readCallArg(text: string, start: number, n: number): string | null {
+  let depth = 0, quote: string | null = null, argIdx = 0, argStart = start;
+  for (let i = start; i < text.length && i < start + 2000; i++) {
+    const c = text[i];
+    if (quote) {
+      if (c === '\\') { i++; continue; }
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') { quote = c; continue; }
+    if (c === '(' || c === '[' || c === '{') { depth++; continue; }
+    if (c === ')' || c === ']' || c === '}') {
+      if (depth === 0) return argIdx === n ? text.slice(argStart, i) : null;
+      depth--; continue;
+    }
+    if (c === ',' && depth === 0) {
+      if (argIdx === n) return text.slice(argStart, i);
+      argIdx++; argStart = i + 1;
+    }
+  }
+  return null;
+}
+
+/** Mảnh chữ viết sẵn trong một biểu thức (chuỗi '…' "…" và phần tĩnh của template `…${}…`). */
+function literalPieces(expr: string): string[] {
+  const out: string[] = [];
+  for (const m of expr.matchAll(/'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)"/g)) out.push(m[1] ?? m[2] ?? '');
+  for (const m of expr.matchAll(/`((?:[^`\\]|\\.)*)`/g)) out.push(...m[1].split(/\$\{[^}]*\}/));
+  return out.filter(x => x.length >= 2);
+}
+
+/** Đối số tên là MỘT chuỗi viết sẵn (không ghép, không ${}) ⇒ tên tĩnh, Chiến lược C lo được. */
+function isStaticLiteral(arg: string): boolean {
+  const a = arg.trim();
+  return /^'(?:[^'\\]|\\.)*'$/.test(a) || /^"(?:[^"\\]|\\.)*"$/.test(a) || /^`[^`$]*`$/.test(a);
+}
+
+export function detectDynamicEjsEntryRefs(card: CharacterCard): EjsDynamicLock {
+  const fragments = new Set<string>();
+  const examples: string[] = [];
+  for (const { text } of collectAllTexts(card)) {
+    if (!text || (!text.includes('wi') && !text.includes('WorldInfo') && !text.includes('comment') && !text.includes('.name'))) continue;
+    ENTRY_CALL_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = ENTRY_CALL_RE.exec(text)) !== null) {
+      const arg = readCallArg(text, m.index + m[0].length, 1);
+      if (arg === null || !arg.trim() || isStaticLiteral(arg)) continue;
+      const pieces = literalPieces(arg);
+      if (pieces.length === 0) continue;          // tên lấy hẳn từ biến — không có mảnh nào để khoá
+      pieces.forEach(p => fragments.add(p));
+      if (examples.length < 5) examples.push(text.slice(m.index, Math.min(text.length, m.index + m[0].length + arg.length + 1)).replace(/\s+/g, ' ').slice(0, 120));
+    }
+    for (const c of text.matchAll(/\.(?:comment|name)\s*\.\s*(?:endsWith|startsWith|includes)\s*\(\s*(['"`])((?:(?!\1)[^\\]){2,80})\1\s*\)/g)) {
+      fragments.add(c[2]);
+      if (examples.length < 5) examples.push(c[0].slice(0, 120));
+    }
+  }
+  const frags = [...fragments];
+  const data = (card.data || card) as any;
+  const locked = new Set<string>();
+  if (frags.length) {
+    for (const e of data.character_book?.entries || []) {
+      for (const nm of [String(e?.comment || '').trim(), String(e?.name || '').trim()]) {
+        if (nm && frags.some(f => nm.includes(f))) locked.add(nm);
+      }
+    }
+  }
+  return { fragments: frags, lockedNames: [...locked], examples };
+}
+
+/* Bộ nhớ đệm theo ĐÚNG object thẻ — tính một lần, các đường dịch gọi lại bao nhiêu cũng rẻ. */
+const _lockCache = new WeakMap<object, EjsDynamicLock>();
+let _lastLock: EjsDynamicLock = { fragments: [], lockedNames: [], examples: [] };
+
+/** Khoá tên động của thẻ (đệm theo object). Đồng thời ghi nhớ làm "khoá hiện hành" cho prompt. */
+export function getEjsDynamicLock(card: CharacterCard | null | undefined): EjsDynamicLock {
+  if (!card) return (_lastLock = { fragments: [], lockedNames: [], examples: [] });
+  let lock = _lockCache.get(card);
+  if (!lock) { lock = detectDynamicEjsEntryRefs(card); _lockCache.set(card, lock); }
+  _lastLock = lock;
+  return lock;
+}
+
+/**
+ * Áp khoá cho MỘT field vừa dịch xong. Tên entry bị khoá ⇒ trả về bản gốc. Field khác mà bản gốc
+ * có mảnh ghép, bản dịch lại mất ⇒ không tự sửa được (không biết AI đặt nó ở đâu) — trả cảnh báo.
+ */
+export function applyEjsDynamicLock(
+  field: { path: string; group?: string; original: string; label?: string },
+  translated: string,
+  lock: EjsDynamicLock,
+): { text: string; note?: { level: 'info' | 'warning'; msg: string } } {
+  if (!lock.fragments.length || !translated) return { text: translated };
+  const isEntryName = field.path.includes('character_book.entries[') && (field.path.endsWith('.comment') || field.path.endsWith('.name'));
+  if (isEntryName) {
+    const o = field.original.trim();
+    if (lock.lockedNames.includes(o) && translated.trim() !== o) {
+      return { text: field.original, note: { level: 'info', msg: `🔒 Giữ nguyên tên entry "${o}" — code ghép tên này lúc chạy (mảnh: ${lock.fragments.filter(f => o.includes(f)).join(', ')}), dịch tên là entry không được gọi nữa.` } };
+    }
+    return { text: translated };
+  }
+  const lost = lock.fragments.filter(f => field.original.includes(f) && !translated.includes(f));
+  if (lost.length) {
+    return { text: translated, note: { level: 'warning', msg: `⚠️ ${field.label || field.path}: mảnh ghép tên entry ${lost.map(f => `"${f}"`).join(', ')} bị dịch mất — code ghép tên lúc chạy sẽ không tìm thấy entry. Hãy dịch lại mục này hoặc khôi phục tay.` } };
+  }
+  return { text: translated };
+}
+
 /**
  * Deep extract keywords from EJS blocks: string comparisons, alias arrays,
  * decorator triggers, and define() names.
@@ -917,6 +1053,15 @@ Rules:
 - getChatMessages() scan targets MUST use translated keywords
 - Narrative text that triggers these keywords MUST also use the same translated versions
 - EXCEPTION: NEVER change a keyword that is only PART of a URL, file path or file name (e.g. src="https://…/变身状态agp4lq.png", 'img/变身.webp'). Those names are set by the image host — copy them byte-for-byte or the image link breaks`;
+  }
+
+  // ─── (D) Tên entry ghép lúc chạy: GIỮ NGUYÊN ───
+  if (_lastLock.fragments.length) {
+    const keep = [..._lastLock.fragments, ..._lastLock.lockedNames].slice(0, 60).map(x => `  "${x}"`).join('\n');
+    block += `\n\nEJS DYNAMIC ENTRY NAMES (ABSOLUTE — KEEP VERBATIM):
+This card BUILDS some lorebook entry names at runtime (e.g. getwi(null, prefix + '_suffix') or entry.comment.endsWith('_suffix')).
+The following strings MUST be copied byte-for-byte — do NOT translate, re-space or re-case them, wherever they appear (code, strings, entry titles):
+${keep}`;
   }
 
   // ─── Decorator Preservation ───

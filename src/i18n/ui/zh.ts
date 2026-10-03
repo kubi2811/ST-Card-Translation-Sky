@@ -1344,6 +1344,9 @@ const ui: UiKeys = {
   l28ExpertMode: '专家模式',
   l28SourceLang: '源语言',
   l28TargetLangPh: '输入目标语言…',
+  // ─── (D) tên entry EJS ghép lúc chạy ───
+  esDynLockTitle: '🔒 此卡在运行时拼接条目名 —— 保留 {names} 个条目名不翻译',
+  esDynLockDesc: '代码以拼接名调用条目（如 {example}），名称其余部分来自运行时变量。翻译这些名称会导致条目无法被调用。原样保留的片段：{fragments}。',
 };
 
 export default ui;

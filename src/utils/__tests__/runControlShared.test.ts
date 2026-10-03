@@ -33,3 +33,18 @@ describe('(B) kênh báo lane cắm một lần, không bao giờ bị component
   });
 });
 
+describe('(C) field link ngoài đi đường SURGICAL như regex', () => {
+  it('engineFieldName gắn dấu replaceString cho field regex/replaceString có nhãn không chứa nó', async () => {
+    vi.resetModules();
+    const { engineFieldName } = await import('../../hooks/useTranslation');
+    expect(engineFieldName({ label: 'Dịch link ngoài', group: 'regex', entryType: 'replaceString' })).toBe('Dịch link ngoài · replaceString');
+    // Field regex thật đã có sẵn ⇒ giữ nguyên; field khác ⇒ giữ nguyên.
+    expect(engineFieldName({ label: 'regex[3].replaceString (Tô màu)', group: 'regex', entryType: 'replaceString' })).toBe('regex[3].replaceString (Tô màu)');
+    expect(engineFieldName({ label: 'Mô tả', group: 'description' })).toBe('Mô tả');
+  });
+  it('retranslateField gửi engineFieldName(field), không gửi nhãn trần', () => {
+    const fn = hookSrc.slice(hookSrc.indexOf('const retranslateField = useCallback'));
+    const call = fn.slice(fn.indexOf('let translated = await translateText('), fn.indexOf('let translated = await translateText(') + 120);
+    expect(call).toContain('engineFieldName(field)');
+  });
+});

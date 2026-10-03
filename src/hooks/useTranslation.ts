@@ -248,6 +248,22 @@ function bakeModdedFieldsIntoCard() {
 }
 
 /**
+ * (C) TÊN FIELD GỬI CHO ENGINE — engine chọn đường dịch theo TÊN (`translateText`: có "replaceString"
+ * ⇒ đường SURGICAL chỉ dịch chuỗi chữ CJK, giữ 100% code; có "regex/script/code" ⇒ chế độ code).
+ * Field regex thật có nhãn `regex[3].replaceString…` nên đi đúng đường. Field "Dịch link ngoài"
+ * (ExternalLinkTab) khai đúng group 'regex' + entryType 'replaceString', và giao diện hứa "Cơ chế dịch
+ * như Regex" — nhưng nhãn hiển thị không chứa chữ nào trong số đó, nên trước bản này nó rơi xuống
+ * đường dịch THƯỜNG: AI viết lại cả khối code theo chunk 15.000 ký tự, không lớp bảo vệ code nào.
+ * Giữ nhãn hiển thị, chỉ gắn dấu cho engine. Nhật ký tiến độ vẫn bắt đầu bằng nhãn gốc.
+ */
+export function engineFieldName(field: { label: string; group?: string; entryType?: string }): string {
+  if (field.group === 'regex' && field.entryType === 'replaceString' && !field.label.includes('replaceString')) {
+    return `${field.label} · replaceString`;
+  }
+  return field.label;
+}
+
+/**
  * (bug 229c) KEY / PROVIDER HỎNG THÌ PHẢI NÓI RA.
  * User: "key bị lỗi gì thì có thông báo, không thì phải chạy chứ nhỉ — provider 2 im re luôn."
  * Trước đây lỗi lane chỉ tô đỏ một ô trong bảng; 429/401/500 đều trôi qua không tiếng động.
@@ -4206,7 +4222,7 @@ export function useTranslation() {
 
       let translated = await translateText(
         field.original,
-        field.label,
+        engineFieldName(field),
         effectiveProxy,
         store.translationConfig.targetLanguage,
         store.translationConfig.sourceLanguage,

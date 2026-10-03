@@ -61,9 +61,12 @@ export default function TranslateActivityLog({ fieldPrefix, max = 60, hideSurgic
       {events.map((e, i) => (
         <div key={`${e.at}-${i}`} style={{ color: COLOR[e.level] }}>
           <span style={{ color: 'var(--text-muted)' }}>{hhmmss(e.at)}</span>{' '}
-          {e.fieldName !== fieldPrefix && e.fieldName.startsWith(fieldPrefix)
-            ? <span style={{ color: 'var(--text-muted)' }}>[{e.fieldName.slice(fieldPrefix.length).trim()}] </span>
-            : null}
+          {(() => {
+            // Phần đuôi sau tiền tố (vd "phần 2/3"). Dấu "· replaceString" chỉ là nhãn cho engine
+            // (xem engineFieldName) — không có nghĩa gì với người dùng nên bỏ đi.
+            const sub = e.fieldName.slice(fieldPrefix.length).replace(/·?\s*replaceString/g, '').trim();
+            return sub ? <span style={{ color: 'var(--text-muted)' }}>[{sub}] </span> : null;
+          })()}
           {e.message}
         </div>
       ))}

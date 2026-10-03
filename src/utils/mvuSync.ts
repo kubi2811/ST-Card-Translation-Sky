@@ -4146,6 +4146,43 @@ export function fixBrokenOptionalChaining(text: string): string {
  * (các fix path cũ chỉ khớp _.get/_.set của lodash & bỏ qua field tavern_helper). An toàn: chỉ động
  * vào đúng mẫu BỊ VỠ; chuỗi thường, arr['x'] đứng riêng, hay nháy đã escape \' đều không bị đụng.
  */
+/**
+ * (bug 242) ĐƯỜNG DẪN BIẾN BỊ LẶP TÊN NHÓM: `Nhân Vật Chính['Nhân Vật Chính.Ngày Sinh']`.
+ *
+ * User (PhatSiz) gửi ảnh: trong các entry [mvu_update], bản dịch viết đường dẫn kiểu
+ * `Đánh Giá Chuyên Môn['Đánh Giá Chuyên Môn.Vị Thế Hiện Tại']` — nhét lại tên nhóm vào bên trong
+ * thuộc tính. MVU hiểu đó là MỘT thuộc tính tên dài ngoằng "Đánh Giá Chuyên Môn.Vị Thế Hiện Tại"
+ * nằm trong nhóm, nên ghi vào đường không tồn tại và chỉ số đứng im, không lỗi nào báo.
+ * Đúng phải là `Đánh Giá Chuyên Môn['Vị Thế Hiện Tại']`.
+ *
+ * Chỉ sửa khi phần trước dấu chấm TRÙNG ĐÚNG tên đứng ngay trước `[` — mẫu này không có nghĩa nào
+ * khác. Và chỉ sửa khi bản GỐC không tự viết như vậy (card cố ý dùng key có chấm thì giữ nguyên).
+ * Duyệt tuyến tính: tìm `['…']`, rồi so đuôi văn bản phía trước — không dùng regex lùi.
+ */
+export function fixRedundantParentInBracketPath(text: string, original?: string): { text: string; fixes: number } {
+  if (!text || typeof text !== 'string' || !text.includes('[')) return { text, fixes: 0 };
+  const scan = (src: string, apply: boolean): { out: string; n: number } => {
+    let n = 0;
+    const out = src.replace(/\[\s*(['"])([^'"\]\n]{1,200})\1\s*\]/g, (m, q: string, inner: string, offset: number) => {
+      const dot = inner.indexOf('.');
+      if (dot <= 0) return m;
+      const head = inner.slice(0, dot).trim();
+      const rest = inner.slice(dot + 1).trim();
+      if (!head || !rest) return m;
+      const before = src.slice(Math.max(0, offset - head.length - 1), offset);
+      if (!before.endsWith(head)) return m;
+      const boundary = before.length > head.length ? before[0] : '';
+      if (boundary && !/[\s'"`(\[{.,;:=+!&|?>]/.test(boundary)) return m;   // `XNhân Vật Chính[...` ⇒ không phải cùng tên
+      n++;
+      return apply ? `[${q}${rest}${q}]` : m;
+    });
+    return { out, n };
+  };
+  if (original && scan(original, false).n > 0) return { text, fixes: 0 };
+  const r = scan(text, true);
+  return { text: r.out, fixes: r.n };
+}
+
 export function fixNestedQuoteBracketPaths(text: string): string {
   if (!text || typeof text !== 'string') return text;
   let result = text;

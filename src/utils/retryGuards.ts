@@ -23,7 +23,7 @@
  * Hàm THUẦN, không đụng store/log — caller tự ghi `notes` vào log của mình.
  */
 
-import { postProcessRegexHtml, normalizeSmartQuotesInCode, fixNestedQuoteBracketPaths } from './mvuSync';
+import { postProcessRegexHtml, normalizeSmartQuotesInCode, fixNestedQuoteBracketPaths, fixRedundantParentInBracketPath } from './mvuSync';
 import { restoreMacros } from './macroGuard';
 import { countEjsBlocks } from './ejsSegmenter';
 import { isLikelyJsScript, hasRealJsSignal, jsParseErrorAny } from './scriptSafety';
@@ -95,6 +95,15 @@ export function finalizeRetryTranslation(input: RetryGuardInput): RetryGuardResu
   if (isCodeGroup(group)) {
     text = normalizeSmartQuotesInCode(text);
     text = fixNestedQuoteBracketPaths(text);
+  }
+  // (bug 242) `Nhóm['Nhóm.Thuộc tính']` → `Nhóm['Thuộc tính']` — áp cho MỌI field: [mvu_update]
+  // nằm trong lorebook chứ không phải nhóm code.
+  {
+    const rp = fixRedundantParentInBracketPath(text, original);
+    if (rp.fixes > 0) {
+      text = rp.text;
+      notes.push({ level: 'warning', msg: `🔧 ${label}: sửa ${rp.fixes} đường dẫn biến bị lặp tên nhóm (Nhóm['Nhóm.X'] → Nhóm['X']).` });
+    }
   }
 
   // Macro {{…}} về nguyên văn — áp cho MỌI loại field (bugNeedFix/180).

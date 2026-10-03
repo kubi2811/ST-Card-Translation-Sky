@@ -14,7 +14,7 @@ import { GLOSSARY_PRESETS } from '../utils/glossaryPresets';
 import { extractTranslatableFields, applyTranslationsToCard, autoTranslateLorebookTriggerKeys, injectNewLorebookEntries, isMvuUpdateField } from '../utils/cardFields';
 import { applyMythicToCard } from '../utils/cardFields';
 import { syncEmbeddedWorldLink } from '../utils/worldLink';
-import { syncMvuVariables, postProcessRegexHtml, normalizeSmartQuotesInCode, fixNestedQuoteBracketPaths, fixBrokenLodashPaths, fixDotNotationPaths, extractPotentialMvuKeyStrings, extractMvuKeysFromCode, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, enforceInitvarCovariance, extractMappingFromTranslatedInitvar, enforceExactConsistency, enforceVariableCasing, fixZodSyntaxErrors, validateDictionaryConflicts, aiResolveMvuConflicts, recanonicalizeMvuInFields, unifyVietnameseUnderscoresInText } from '../utils/mvuSync';
+import { syncMvuVariables, postProcessRegexHtml, normalizeSmartQuotesInCode, fixNestedQuoteBracketPaths, fixRedundantParentInBracketPath, fixBrokenLodashPaths, fixDotNotationPaths, extractPotentialMvuKeyStrings, extractMvuKeysFromCode, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, enforceInitvarCovariance, extractMappingFromTranslatedInitvar, enforceExactConsistency, enforceVariableCasing, fixZodSyntaxErrors, validateDictionaryConflicts, aiResolveMvuConflicts, recanonicalizeMvuInFields, unifyVietnameseUnderscoresInText } from '../utils/mvuSync';
 import { shouldSkipTranslation, detectLanguage, detectResidualCjk } from '../utils/langDetect';
 import { clearRAGCache } from '../utils/ragContext';
 import { storeTranslation, lookupTranslationMemory } from '../utils/translationMemory';
@@ -1202,6 +1202,14 @@ export function useTranslation() {
         // — lỗi này làm vỡ cả kịch bản JS; path-fixer cũ chỉ khớp _.get nên không bắt được.
         translated = fixNestedQuoteBracketPaths(translated);
       }
+      // (bug 242) Nhóm['Nhóm.Thuộc tính'] → Nhóm['Thuộc tính'] — mọi field (kể cả [mvu_update] lorebook).
+      if (translated) {
+        const rp = fixRedundantParentInBracketPath(translated, field.original);
+        if (rp.fixes > 0) {
+          translated = rp.text;
+          store.addLog('info', `🔧 ${field.label}: sửa ${rp.fixes} đường dẫn biến bị lặp tên nhóm.`);
+        }
+      }
 
       // ─── LODASH PATH FIX: Fix broken _.get/getvar paths for ALL code-containing fields ───
       // AI often breaks string paths by inserting newlines or using dot notation with spaced keys.
@@ -2138,6 +2146,14 @@ export function useTranslation() {
         if (translated && (batchFields[j].group === 'regex' || batchFields[j].group === 'tavern_helper')) {
           translated = normalizeSmartQuotesInCode(translated);
           translated = fixNestedQuoteBracketPaths(translated);
+        }
+        // (bug 242) đường BATCH — như đường dịch lẻ.
+        if (translated) {
+          const rp = fixRedundantParentInBracketPath(translated, batchFields[j].original);
+          if (rp.fixes > 0) {
+            translated = rp.text;
+            store.addLog('info', `🔧 ${batchFields[j].label}: sửa ${rp.fixes} đường dẫn biến bị lặp tên nhóm.`);
+          }
         }
 
         // ═══ (User 2026) GUARD TOÀN VẸN KHỐI EJS (đường BATCH) — nếu bản dịch LỆCH số khối <%…%> so với

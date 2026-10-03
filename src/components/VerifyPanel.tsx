@@ -210,7 +210,7 @@ export default function VerifyPanel() {
       const types: Record<string, number> = {};
       for (const r of origRefs) types[r.type] = (types[r.type] || 0) + 1;
       setRefStats({ total: origRefs.length, types });
-      const issues = quickVerify(card, exportCard);
+      const issues = quickVerify(card, exportCard, translationConfig.mvuDictionary || {});
       setVerifyResult({
         totalIssues: issues.length,
         errors: issues.filter(i => i.severity === 'error').length,

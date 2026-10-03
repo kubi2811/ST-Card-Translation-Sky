@@ -104,10 +104,14 @@ export function extractGuidePathRoots(guide: string): string[] {
   const out = new Set<string>();
   const text = String(guide || '')
     .replace(/\$\{[^}]*\}/g, '')       // ${/path/to/variable} là ví dụ, không phải biến thật
-    .replace(/<\/?[A-Za-z][^>\n]*>/g, ''); // thẻ <Analysis> </JSONPatch> …
+    .replace(/<\/?[A-Za-z][^>\n]*>/g, '') // thẻ <Analysis> </JSONPatch> …
+    // (bug 249) Chú thích `/* Bên trong mỗi trang: Tiêu đề cố định */` trông y một đường `/X/` —
+    // từng bị báo "biến chỉ có trong hướng dẫn, schema không khai". Bỏ chú thích trước khi dò.
+    .replace(/\/\*[\s\S]*?\*\//g, ' ');
   for (const m of text.matchAll(/(?:^|[\s'"`([])\/([^/\n{}'"`,\]]{1,60})\//gm)) {
     const n = stripAnno(m[1]);
-    if (n && !/^(path|to)$/i.test(n)) out.add(n);
+    // Tên biến không mở đầu bằng `*` và không chứa `:` (đó là dấu của chú thích / câu mô tả).
+    if (n && !/^(path|to)$/i.test(n) && !/^\*/.test(n) && !n.includes(':')) out.add(n);
   }
   return [...out];
 }

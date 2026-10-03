@@ -155,7 +155,7 @@ export default function ExportPanel() {
     try {
       const fieldIssues = verifyFields(fields, translationConfig.mvuDictionary, translationConfig.sourceLanguage);
       const exportCard = getExportCard();
-      const cardIssues = card && exportCard ? quickVerify(card, exportCard) : [];
+      const cardIssues = card && exportCard ? quickVerify(card, exportCard, useStore.getState().translationConfig.mvuDictionary || {}) : [];
       setDeepCheck({ fieldIssues, cardIssues, at: Date.now() });
       setShowIssues(true);
     } finally {

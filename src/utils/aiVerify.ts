@@ -6,7 +6,7 @@ import { detectStructuralTruncation, callProvider, computePoolConcurrency } from
 // (bugNeedFix/177) Dò lỗi phải chạy đa luồng như mọi luồng khác — xem ghi chú ở verifyConcurrency().
 import { runWorkerPool } from './runWorkerPool';
 import { countFenceLines } from './fenceGuard';
-import { applyMvuToText } from './mvuSync';
+import { applyMvuToText, fixRedundantParentInBracketPath } from './mvuSync';
 
 /**
  * (bugNeedFix/177) SỐ LUỒNG CHO CÁC LƯỢT "DÒ LỖI"/"SỬA LỖI" BẰNG AI.
@@ -116,7 +116,7 @@ export interface AIFixReport {
 /* ═══ Extract all system references from a card ═══ */
 
 interface SystemReference {
-  type: 'variable' | 'macro' | 'data-var' | 'zod-field' | 'ejs' | 'css-class' | 'css-id' | 'function';
+  type: 'variable' | 'macro' | 'data-var' | 'zod-field' | 'zod-default' | 'ejs' | 'css-class' | 'css-id' | 'function';
   name: string;
   source: string; // where it was found
 }
@@ -161,9 +161,13 @@ export function extractSystemReferences(card: CharacterCard): SystemReference[] 
     }
 
     // .prefault("XXX") or .default("XXX")
+    // (bug 249) Đây là GIÁ TRỊ mặc định (chữ người chơi thấy: "未描述", "太阳风暴后第30天"…), KHÔNG
+    // phải tên trường. Trước đây bị gắn nhãn 'zod-field' ⇒ dịch đúng giá trị là bị báo lỗi đỏ "Zod
+    // schema field missing … will break the card" — thẻ MVU nào dịch xong cũng dính. Tách loại riêng;
+    // bộ kiểm chỉ báo khi CHÍNH LỜI GỌI .prefault/.default bị mất, không báo khi giá trị được dịch.
     const prefaultRegex = /\.(?:prefault|default)\s*\(\s*["']([^"']+)["']/g;
     while ((m = prefaultRegex.exec(text)) !== null) {
-      refs.push({ type: 'zod-field', name: `prefault:${m[1]}`, source });
+      refs.push({ type: 'zod-default', name: m[1], source });
     }
 
     // EJS templates: <%= ... %>, <% ... %>
@@ -262,7 +266,9 @@ export function normalizeEjsExpr(name: string): string {
 
 export function quickVerify(
   originalCard: CharacterCard,
-  translatedCard: CharacterCard
+  translatedCard: CharacterCard,
+  /** (bug 249) Từ điển MVU: tên trường Zod được Chiến lược B đổi tên có chủ ý thì không phải "mất". */
+  mvuDictionary: Record<string, string> = {},
 ): VerifyIssue[] {
   const issues: VerifyIssue[] = [];
   const origRefs = extractSystemReferences(originalCard);
@@ -295,6 +301,23 @@ export function quickVerify(
     const transEjsCount = transList.filter(r => r.type === 'ejs').length;
     const ejsBlockLost = transEjsCount < origEjsCount;
 
+    // (bug 249) Giá trị .prefault/.default: chỉ báo khi SỐ LỜI GỌI giảm (code bị cắt mất), không báo
+    // khi giá trị đã được dịch — dịch giá trị hiển thị là việc ĐÚNG.
+    const origDefaults = origList.filter(r => r.type === 'zod-default');
+    const transDefaultCount = transList.filter(r => r.type === 'zod-default').length;
+    if (origDefaults.length > transDefaultCount) {
+      issues.push({
+        id: crypto.randomUUID(),
+        severity: 'error',
+        location: source,
+        description: `Mất ${origDefaults.length - transDefaultCount}/${origDefaults.length} lời gọi .prefault()/.default() của schema Zod — biến không còn giá trị mặc định, MVU có thể lỗi khi khởi tạo.`,
+        original: origDefaults.slice(0, 5).map(r => r.name).join(', '),
+        current: `${transDefaultCount} lời gọi`,
+        suggestion: 'Đối chiếu schema gốc và khôi phục các .prefault()/.default() bị mất (giá trị bên trong được phép dịch).',
+        autoFixable: false,
+      });
+    }
+
     for (const ref of origList) {
       // Check if a variable/macro/data-var reference is missing in the translation
       if (!transNames.has(ref.name)) {
@@ -325,7 +348,8 @@ export function quickVerify(
           });
         }
         // Zod fields
-        else if (ref.type === 'zod-field') {
+        // (bug 249) Tên trường được Chiến lược B đổi theo từ điển MVU (好感度 → Độ Hảo Cảm) ⇒ không mất.
+        else if (ref.type === 'zod-field' && !(mvuDictionary[ref.name] && transNames.has(mvuDictionary[ref.name]))) {
           issues.push({
             id: crypto.randomUUID(),
             severity: 'error',
@@ -1074,6 +1098,26 @@ export function verifyFields(
             fixValue: currentAutoFix,
           });
         }
+      }
+    }
+
+    // ─── 7b. (bug 242) Đường dẫn biến lặp tên nhóm: Nhóm['Nhóm.X'] ⇒ MVU ghi vào đường không tồn tại ───
+    {
+      const rp = fixRedundantParentInBracketPath(currentAutoFix, orig);
+      if (rp.fixes > 0) {
+        currentAutoFix = rp.text;
+        issues.push({
+          id: crypto.randomUUID(), fieldPath: field.path,
+          severity: 'error', category: 'mvu_inconsistent',
+          location: field.label,
+          description: `${rp.fixes} đường dẫn biến bị lặp tên nhóm, kiểu Nhóm['Nhóm.Thuộc tính'] — MVU sẽ tìm một thuộc tính tên dài "Nhóm.Thuộc tính" không tồn tại, chỉ số đứng im.`,
+          original: "Nhóm['Nhóm.Thuộc tính']",
+          current: `${rp.fixes} chỗ`,
+          suggestion: "Đổi về Nhóm['Thuộc tính'] (Sửa nhanh làm được, không tốn API).",
+          autoFixable: true,
+          fixPath: field.path,
+          fixValue: currentAutoFix,
+        });
       }
     }
 

@@ -7,6 +7,7 @@ import { fmt } from '../i18n';
 import { getCardSummary } from '../utils/cardFields';
 import { getWorldbookSummary } from '../utils/worldbookParser';
 import CardRenamePanel from './CardRenamePanel';
+import WorkspaceIOPanel from './WorkspaceIOPanel';
 import {
   Upload,
   FileJson,
@@ -261,6 +262,8 @@ export default function FileUpload() {
                 {isFetchingUrl ? <Loader size={14} className="spin" /> : ui.fuLoad}
               </button>
             </div>
+            {/* (bug 251) Nạp workspace người khác chia sẻ */}
+            <WorkspaceIOPanel compact />
           </>
           )
         ) : (
@@ -391,6 +394,9 @@ export default function FileUpload() {
                 </button>
               </div>
             </div>
+
+            {/* (bug 251) Xuất / nhập workspace — chia sẻ nguyên phiên dịch, không kèm API */}
+            <WorkspaceIOPanel />
           </div>
         )}
       </div>

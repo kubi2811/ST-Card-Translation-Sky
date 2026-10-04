@@ -14,7 +14,7 @@ import { GLOSSARY_PRESETS } from '../utils/glossaryPresets';
 import { extractTranslatableFields, applyTranslationsToCard, autoTranslateLorebookTriggerKeys, injectNewLorebookEntries, isMvuUpdateField } from '../utils/cardFields';
 import { applyMythicToCard } from '../utils/cardFields';
 import { syncEmbeddedWorldLink } from '../utils/worldLink';
-import { syncMvuVariables, postProcessRegexHtml, normalizeSmartQuotesInCode, fixNestedQuoteBracketPaths, fixRedundantParentInBracketPath, fixBrokenLodashPaths, fixDotNotationPaths, extractPotentialMvuKeyStrings, extractMvuKeysFromCode, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, enforceInitvarCovariance, extractMappingFromTranslatedInitvar, enforceExactConsistency, enforceVariableCasing, fixZodSyntaxErrors, validateDictionaryConflicts, aiResolveMvuConflicts, recanonicalizeMvuInFields, unifyVietnameseUnderscoresInText } from '../utils/mvuSync';
+import { syncMvuVariables, postProcessRegexHtml, normalizeSmartQuotesInCode, fixNestedQuoteBracketPaths, fixRedundantParentInBracketPath, fixBrokenLodashPaths, fixDotNotationPaths, extractPotentialMvuKeyStrings, extractMvuKeysFromCode, isPlausibleMvuKey, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, enforceInitvarCovariance, extractMappingFromTranslatedInitvar, enforceExactConsistency, enforceVariableCasing, fixZodSyntaxErrors, validateDictionaryConflicts, aiResolveMvuConflicts, recanonicalizeMvuInFields, unifyVietnameseUnderscoresInText } from '../utils/mvuSync';
 import { shouldSkipTranslation, detectLanguage, detectResidualCjk } from '../utils/langDetect';
 import { clearRAGCache } from '../utils/ragContext';
 import { storeTranslation, lookupTranslationMemory } from '../utils/translationMemory';
@@ -24,6 +24,7 @@ import { validateMvuVariables, autoFixMvuVariables, generateSyncReport, buildEnt
 import { buildEffectivePrompt } from '../utils/promptBuilder';
 import { applyRegexAlternation, restoreMachineRegexCharacterClasses } from '../scriptTranslate/regexAlternation';
 import { surgicalTranslate, verifyCodeStructureParity, detectInventedDeclarations } from '../utils/surgical';
+import { isProseDominantDoc } from '../utils/docShape';
 // (bug 237) Vỏ base64 dùng chung — nhánh phẫu thuật cũng phải đi qua, không riêng translateText.
 import { translateThroughBase64Shell } from '../utils/base64Payload';
 import { decideSoftGate } from '../utils/softGate';
@@ -843,6 +844,14 @@ export function useTranslation() {
         if (useEjsSurgical) return false; // EJS surgical (mask code) lo — bỏ surgical CJK-token generic
         if (!store.translationConfig.surgicalMode) return false;
         if (field.group === 'regex' || field.group === 'tavern_helper') return true;
+        // (bug 253) Tài liệu VĂN XUÔI (hướng dẫn markdown xen ví dụ code — vd entry [mvu_update]
+        // "controller") ⇒ dịch như văn bản. Surgical tách từng cụm chữ Hán dịch riêng nên ra
+        // "`<UpdateVariable>` Bắt đầu、", "2026Năm3Tháng15Ngày", "20 Dưới Tuổi". [initvar] luôn là dữ
+        // liệu ⇒ vẫn surgical. Xem utils/docShape.ts.
+        if (field.entryType !== 'initvar' && isProseDominantDoc(field.original)) {
+          store.addLog('info', `📝 ${field.label}: tài liệu văn xuôi (xen ví dụ code) — dịch như văn bản, không tách từng cụm chữ.`);
+          return false;
+        }
         if (field.group === 'lorebook') {
           if (field.entryType === 'initvar' || field.entryType === 'controller' || field.entryType === 'mvu_logic') {
             return true;
@@ -2640,6 +2649,19 @@ export function useTranslation() {
       store.setTranslationConfig({ ejsEntryNameDict: {}, ejsKeywordDict: {} });
     }
 
+    // (bug 253) Dọn key rác (nhặt nhầm từ markdown) khỏi từ điển trước khi áp — xem isPlausibleMvuKey.
+    {
+      const st0 = useStore.getState();
+      const dict0 = st0.translationConfig.mvuDictionary || {};
+      const junk = Object.keys(dict0).filter(k => st0.mvuKeyMetadata?.[k]?.confidence !== 'manual' && !isPlausibleMvuKey(k));
+      if (junk.length) {
+        const cleaned = { ...dict0 };
+        for (const k of junk) delete cleaned[k];
+        if (writeMvuDictAuto(cleaned, 'dọn key rác')) {
+          store.addLog('info', `🧹 Bỏ ${junk.length} "biến" nhặt nhầm từ văn bản markdown khỏi từ điển MVU (${junk.slice(0, 3).map(k => JSON.stringify(k)).join(', ')}) — áp chúng là nuốt mất dấu / và backtick.`);
+        }
+      }
+    }
     // ═══ Strategy B: Build MVU Dictionary BEFORE starting loop ═══
     // In continueMode, skip if dictionary already populated (avoid re-calling AI)
     const existingMvuDictForCheck = useStore.getState().translationConfig.mvuDictionary;

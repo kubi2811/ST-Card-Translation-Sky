@@ -1472,6 +1472,7 @@ const ui = {
   evKind_style: 'CSS',
   evKind_html_ui: 'HTML UI',
   evKind_other: 'Other',
+  epHealthSkippedOnly: '⚠️ Not ready to export: {n} field(s) were auto-skipped (never sent to the AI) but still contain Chinese — run "Retranslate unfinished items" first.',
 };
 
 export default ui;

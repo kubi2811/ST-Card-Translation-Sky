@@ -457,9 +457,12 @@ function countHtmlTags(text: string): { open: number; close: number; selfClose: 
   const ejsCount = (text.match(/<%[=-]?[\s\S]*?%>/g) || []).length;
   const noEjs = text.replace(/<%[=-]?[\s\S]*?%>/g, '');
   
-  const open = (noEjs.match(/<[a-zA-Z][^/>]*>/gi) || []).length;
-  const close = (noEjs.match(/<\/[a-zA-Z][^>]*>/gi) || []).length;
-  const selfClose = (noEjs.match(/<[a-zA-Z][^>]*\/>/gi) || []).length;
+  // (bug 253) Tên thẻ phải là định danh ASCII LIỀN rồi mới tới dấu cách / `/` / `>`. Bản cũ
+  // (`<[a-zA-Z][^/>]*>`) đếm cả chỗ giữ chỗ đã dịch như `<Tên Khu Tị Nạn>`, `<Loại>` là thẻ mở, trong
+  // khi bản gốc `<避难所名>` không bị đếm ⇒ dịch xong số thẻ mở "tăng gấp đôi" (11 → 22), báo HTML hỏng oan.
+  const open = (noEjs.match(/<[a-zA-Z][a-zA-Z0-9:-]*(?=[\s/>])[^/>]*>/g) || []).length;
+  const close = (noEjs.match(/<\/[a-zA-Z][a-zA-Z0-9:-]*\s*>/g) || []).length;
+  const selfClose = (noEjs.match(/<[a-zA-Z][a-zA-Z0-9:-]*(?=[\s/])[^>]*\/>/g) || []).length;
   return { open, close, selfClose, ejs: ejsCount };
 }
 

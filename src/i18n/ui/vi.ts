@@ -1490,6 +1490,7 @@ const ui: UiKeys = {
   evKind_style: 'CSS',
   evKind_html_ui: 'HTML giao diện',
   evKind_other: 'Khác',
+  epHealthSkippedOnly: '⚠️ Chưa nên xuất: {n} trường bị tự động bỏ qua (chưa hề gửi cho AI) mà bản gốc vẫn còn chữ Hán — bấm "Dịch lại mục chưa đạt" ở thanh tiến độ trước.',
 };
 
 export default ui;

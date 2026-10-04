@@ -19,6 +19,7 @@ import {
   recanonicalizeMvuInFields,
   enforceVariableCasing,
   sanitizeAutomaticSchemaMappings,
+  isPlausibleMvuKey,
 } from '../utils/mvuSync';
 import { isMvuCard, getMvuZodSummary } from '../utils/mvuDetector';
 import { collectExternalCodeForCard } from '../utils/externalLinkVault';
@@ -109,6 +110,11 @@ export default function MvuSyncPanel() {
       }
     }
     const { removed } = sanitizeAutomaticSchemaMappings(autoSchema);
+    // (bug 253) Key rác nhặt nhầm từ văn bản markdown (vd "`.`　`/`　空格　`") — áp vào là nuốt dấu
+    // `/` và backtick. Chỉ dọn mục máy tự sinh; mục người dùng tự nhập (`manual`) giữ nguyên.
+    for (const key of Object.keys(mvuDictionary)) {
+      if (mvuKeyMetadata[key]?.confidence !== 'manual' && !isPlausibleMvuKey(key) && !removed.includes(key)) removed.push(key);
+    }
     if (removed.length === 0) return;
 
     pushDictionaryHistory(mvuDictionary);

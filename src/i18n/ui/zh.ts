@@ -1467,6 +1467,7 @@ const ui: UiKeys = {
   evKind_style: 'CSS',
   evKind_html_ui: 'HTML 界面',
   evKind_other: '其他',
+  epHealthSkippedOnly: '⚠️ 暂不宜导出：有 {n} 个字段被自动跳过（从未发送给 AI），但原文仍含汉字 —— 请先在进度栏点击「重新翻译未达标项」。',
 };
 
 export default ui;

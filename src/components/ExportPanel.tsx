@@ -41,7 +41,7 @@ const KEY_MODE_OPTIONS: { value: ExportKeyMode; labelKey: 'epKeyModeMerge' | 'ep
 
 /** (bugNeedFix/37) Báo cáo rỗng dùng làm giá trị chờ trong lúc quét sức khoẻ chạy ở idle tick. */
 const EMPTY_HEALTH: import('../utils/cardHealth').HealthReport = {
-  counts: { total: 0, done: 0, error: 0, pending: 0, skipped: 0, brokenScripts: 0, brokenJson: 0, invalidRegex: 0, residualCjkCode: 0, residualCjkText: 0, emptyBrackets: 0, emptyPropertyAccesses: 0, renamedMacros: 0, lostFences: 0, glossaryUnapplied: 0 },
+  counts: { total: 0, done: 0, error: 0, pending: 0, skipped: 0, skippedWithSource: 0, brokenScripts: 0, brokenJson: 0, invalidRegex: 0, residualCjkCode: 0, residualCjkText: 0, emptyBrackets: 0, emptyPropertyAccesses: 0, renamedMacros: 0, lostFences: 0, glossaryUnapplied: 0 },
   issues: [],
   ok: true,
 };
@@ -254,7 +254,8 @@ export default function ExportPanel() {
    * bấm Tải rồi nạp vào SillyTavern mới phát hiện. Nay chữ Hán sót và mục bị bỏ qua đều tính vào
    * phép "đạt hay chưa". */
   const residualCjkCount = health?.counts?.residualCjkText ?? 0;
-  const skippedCount = health?.counts?.skipped ?? 0;
+  // (bug 253) Chỉ trường bị bỏ qua mà CÒN chữ Hán mới chặn xuất — xem cardHealth.skippedWithSource.
+  const skippedCount = health?.counts?.skippedWithSource ?? 0;
   const checkOk = errCount === 0 && residualCjkCount === 0 && skippedCount === 0;
 
   const handleExportReport = () => {
@@ -619,10 +620,13 @@ export default function ExportPanel() {
               /* (bug 234) errCount === 0 mà vẫn KHÔNG ĐẠT ⇒ thủ phạm là chữ Hán sót / mục bị bỏ
                  qua. Câu cũ in "còn 0 lỗi nặng" — vô nghĩa và không chỉ được đường sửa. */
               : errCount === 0
-                ? fmt(ui.epHealthCjkLeft, {
-                    cjk: residualCjkCount,
-                    skipped: skippedCount > 0 ? fmt(ui.epHealthCjkSkipped, { n: skippedCount }) : '',
-                  })
+                ? (residualCjkCount === 0
+                    // (bug 253) Không còn chữ Hán, chỉ còn trường bị bỏ qua ⇒ đừng in "còn 0 trường".
+                    ? fmt(ui.epHealthSkippedOnly, { n: skippedCount })
+                    : fmt(ui.epHealthCjkLeft, {
+                        cjk: residualCjkCount,
+                        skipped: skippedCount > 0 ? fmt(ui.epHealthCjkSkipped, { n: skippedCount }) : '',
+                      }))
                 : (deepCheck ? fmt(ui.epTotalFail, { count: errCount }) : fmt(ui.epHealthBad, { count: errCount }))}
           </span>
           <button

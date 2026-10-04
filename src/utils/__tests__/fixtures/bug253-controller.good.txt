@@ -1,0 +1,165 @@
+【Định Dạng Đầu Ra Biến Số · Định Dạng Cố Định Bắt Buộc】
+
+## 1. Cấu trúc hợp lệ duy nhất (sao chép từng chữ, không được thêm bớt thẻ, không được đổi tên, không được đổi chữ hoa chữ thường)
+
+<!--CANONICAL-->
+<UpdateVariable>
+<Analysis>Giải thích thay đổi vòng này, ≤100 ký tự, một dòng, không được xuống dòng, không được xuất hiện dấu ngoặc góc</Analysis>
+<JSONPatch>
+[{"op":"replace","path":"/Thế Giới/Thời Gian","value":"Ngày 15 Tháng 3 Năm 2026 14:30"},
+{"op":"replace","path":"/Thế Giới/Địa Điểm","value":"Siêu Thị Thành Nam"},
+{"op":"delta","path":"/Người Chơi/Trạng Thái/Tinh Lực","value":-5},
+{"op":"delta","path":"/Khu Tị Nạn/Khu Tị Nạn Tiểu Học Thành Nam/Dân Số","value":3},
+{"op":"delta","path":"/Khu Tị Nạn/Khu Tị Nạn Tiểu Học Thành Nam/Thống Kê Thần Dân/Giới Tính/Nam Giới","value":2},
+{"op":"delta","path":"/Khu Tị Nạn/Khu Tị Nạn Tiểu Học Thành Nam/Thống Kê Thần Dân/Giới Tính/Nữ Giới","value":1},
+{"op":"insert","path":"/Vật Tư/Trong Khu Tị Nạn/Thức Ăn Và Nước/Mì Gói","value":{"count":20}},
+{"op":"insert","path":"/Nhân Vật/Vương Cường","value":{"Tên":"Vương Cường","Giới Tính":"Nam","Tuổi":35,"Thân Phận":"Lao Động","Trạng Thái":"Khỏe Mạnh","Độ Hảo Cảm":"Trung Lập","Độ Trung Thành":60,"Đang Đồng Hành":true}}]
+</JSONPatch>
+</UpdateVariable>
+<!--/CANONICAL-->
+
+**Ba chỗ phải hoàn toàn giống nhau:**
+1. Thẻ ngoài cùng: mở bằng `<UpdateVariable>`, đóng bằng `</UpdateVariable>` (phân biệt chữ hoa chữ thường)
+2. Thẻ giải thích `<Analysis>` … `</Analysis>`
+3. Thẻ dữ liệu `<JSONPatch>` … `</JSONPatch>`
+
+**Giữa `<JSONPatch>` và `</JSONPatch>` phải là một mảng JSON `[ … ]`.**
+Mỗi phần tử trong mảng là một đối tượng thao tác; trước và sau mảng không được có bất kỳ nội dung nào khác.
+
+---
+
+## 2. Năm loại op hợp lệ (**viết thường từng chữ, không được viết lại**)
+
+| op | Công dụng | Kiểu value |
+|---|---|---|
+| `replace` | Ghi đè bằng một giá trị mới | Bất kỳ |
+| `delta` | **Tăng giảm số** (cách hợp lệ duy nhất) | **Số**, số dương là cộng, số âm là trừ |
+| `insert` | Thêm một khóa mới (thêm khóa vào đối tượng / nối thêm vào mảng) | Bất kỳ |
+| `add` | Đồng nghĩa với `insert`, hiệu quả hoàn toàn giống nhau | Bất kỳ |
+| `remove` | Xóa một khóa | **Không viết value** |
+
+**Mỗi vòng: thêm khóa mới luôn dùng `insert`; thay đổi giá trị số luôn dùng `delta`.**
+
+---
+
+## 3. Ba quy tắc đường dẫn (cố định)
+
+1. **Đường dẫn phân tách từng tầng bằng `/`, mỗi tầng đều có dấu gạch chéo đứng trước.**
+   - Đúng: `/Người Chơi/Trạng Thái/Tinh Lực`, `/Vật Tư/Trong Khu Tị Nạn/Thức Ăn Và Nước/Mì Gói/count`
+   - Sai: dùng dấu chấm để nối các tầng (`.` là **ký tự bị cấm**, xem mục dưới)
+2. **Tên khóa không được chứa các ký tự sau:**
+   `.`　`/`　`:`　`，`　`、`　`（`　`）`　`"`　`<`　`>`
+   **Tên khóa tiếng Việt được phép có dấu cách** (ví dụ `Thế Giới`, `Khu Tị Nạn`, `21-40 Tuổi`), nhưng phải chép đúng từng chữ như trong ví dụ.
+   Khi cần phân tách ý nghĩa, dùng `_` hoặc `-`, ví dụ `Bão Tuyết_20260320`, `21-40 Tuổi`.
+   **Cấm dùng dạng `<Tên Giữ Chỗ>`** (như `<Tên Khu Tị Nạn>`): đó là văn bản giải thích, không phải tên khóa thật.
+3. **Phải có đối tượng cha trước rồi mới ghi khóa con.** Nếu đối tượng cha chưa tồn tại, trước tiên dùng `insert` để tạo đối tượng cha, sau đó mới ghi khóa con.
+   Khi tạo khu tị nạn mới, phải `insert` một lần toàn bộ đối tượng khu tị nạn (gồm ba mục Công Nghệ / Quy Tắc / Thống Kê Thần Dân).
+
+---
+
+## 4. Các cách viết sẽ bị loại bỏ âm thầm (không báo lỗi, nhưng biến số hoàn toàn không được cập nhật. Tuyệt đối cấm)
+
+> Dưới đây đều là **danh sách phản mẫu**, đừng bắt chước. Để tránh chép nhầm, ở đây cố ý không viết JSON hoàn chỉnh.
+
+1. ❌ **op viết hoa toàn bộ hoặc viết hoa chữ cái đầu**: như `Replace`, `REPLACE`, `Delta`, `Insert`
+2. ❌ **op dùng các động từ không được nhận diện sau đây**:
+   `set`　`update`　`assign`　`delete`　`unset`　`merge`　`push`　`copy`
+3. ❌ **Trong thẻ `JSONPatch` đặt đối tượng thay vì mảng** (thiếu cặp ngoặc vuông ngoài cùng)
+4. ❌ **Bọc thêm một lớp khóa đối tượng bên ngoài mảng** (ví dụ nhét mảng vào một khóa tên `json_patch`)
+5. ❌ **Viết mã dạng lệnh**: `_.set(...)`, `_.update(...)`, `_.assign(...)`... đều vô hiệu
+6. ❌ **Tách thành nhiều khối `JSONPatch`** (tuy vẫn phân tích được nhưng rất dễ sai, cấm)
+7. ❌ **Trong `Analysis` xuất hiện dấu ngoặc góc `<` `>`**
+8. ❌ **Đường dẫn dùng dấu chấm để phân tách**: sẽ bị coi là **một tên khóa duy nhất**, vừa không cập nhật được giá trị gốc, vừa để lại khóa rác ở tầng trên cùng
+9. ❌ **Dùng `replace` để thêm khóa mới**: khóa chưa tồn tại sẽ bị loại bỏ âm thầm, phải dùng `insert`
+10. ❌ **Thao tác `remove` nhưng lại kèm trường value**
+
+---
+
+## 5. Giá trị số luôn dùng `delta`, cấm tính nhẩm
+
+Đúng: `{"op":"delta","path":"/Người Chơi/Trạng Thái/Tinh Lực","value":-5}`
+Sai: tự tính ra giá trị mới rồi mới `replace` (dễ ghi sai do vấn đề đồng thời/thứ tự)
+
+---
+
+## 6. Ví dụ hoàn chỉnh (có thể chép thẳng cấu trúc, thay giá trị và đường dẫn bằng nội dung thực tế)
+
+<!--CANONICAL-->
+<UpdateVariable>
+<Analysis>Kiểm tra thay đổi vòng này: Cảnh/Thời Gian/Chiêu Mộ/Nhân Vật/Tinh Lực/Sức Thống Trị/Lớp Tuyết</Analysis>
+<JSONPatch>
+[
+{"op":"replace","path":"/Thế Giới/Thời Gian","value":"Ngày 15 Tháng 3 Năm 2026 14:30"},
+{"op":"replace","path":"/Thế Giới/Địa Điểm","value":"Siêu Thị Huyện Ninh Tấn"},
+{"op":"delta","path":"/Người Chơi/Trạng Thái/Tinh Lực","value":-5},
+{"op":"replace","path":"/Người Chơi/Trạng Thái/Sức Thống Trị","value":45},
+{"op":"delta","path":"/Khu Tị Nạn/Khu Tị Nạn Tiểu Học Thành Nam/Dân Số","value":3},
+{"op":"delta","path":"/Khu Tị Nạn/Khu Tị Nạn Tiểu Học Thành Nam/Thống Kê Thần Dân/Nghề Nghiệp/Lao Động Phổ Thông","value":3},
+{"op":"delta","path":"/Khu Tị Nạn/Khu Tị Nạn Tiểu Học Thành Nam/Thống Kê Thần Dân/Giới Tính/Nam Giới","value":2},
+{"op":"delta","path":"/Khu Tị Nạn/Khu Tị Nạn Tiểu Học Thành Nam/Thống Kê Thần Dân/Giới Tính/Nữ Giới","value":1},
+{"op":"delta","path":"/Khu Tị Nạn/Khu Tị Nạn Tiểu Học Thành Nam/Thống Kê Thần Dân/Tuổi/Nam Giới/21-40 Tuổi","value":2},
+{"op":"delta","path":"/Khu Tị Nạn/Khu Tị Nạn Tiểu Học Thành Nam/Thống Kê Thần Dân/Tuổi/Nữ Giới/Dưới 20 Tuổi","value":1},
+{"op":"insert","path":"/Vật Tư/Trong Khu Tị Nạn/Thức Ăn Và Nước/Mì Gói","value":{"count":20}},
+{"op":"insert","path":"/Nhân Vật/Vương Cường","value":{"Tên":"Vương Cường","Giới Tính":"Nam","Tuổi":35,"Thân Phận":"Lao Động Phổ Thông","Trạng Thái":"Khỏe Mạnh","Độ Hảo Cảm":"Trung Lập","Độ Trung Thành":60,"Đang Đồng Hành":true}}
+]
+</JSONPatch>
+</UpdateVariable>
+<!--/CANONICAL-->
+
+---
+
+## 7. Tên khóa hợp lệ của `Thống Kê Thần Dân` (**cố định từng chữ, không được thêm bớt, không được viết lại**)
+
+`Thống Kê Thần Dân` **không nằm dưới Người Chơi mà nằm trong từng khu tị nạn**: `/Khu Tị Nạn/<Tên Khu Tị Nạn Thực Tế>/Thống Kê Thần Dân/...`
+(`<Tên Khu Tị Nạn Thực Tế>` chỉ là chú thích, khi viết phải dùng tên thật, ví dụ `Khu Tị Nạn Tiểu Học Thành Nam`)
+
+```
+Nghề Nghiệp:         Công Nhân Kỹ Thuật　Nhân Viên Hành Chính　Trí Thức Cấp Cao　An Ninh　Lao Động Phổ Thông　Già Yếu Bệnh Tật
+Giới Tính:           Nam Giới　Nữ Giới
+Tuổi.Nam Giới:       Dưới 20 Tuổi　21-40 Tuổi　41-60 Tuổi　Trên 60 Tuổi
+Tuổi.Nữ Giới:        Dưới 20 Tuổi　21-40 Tuổi　41-60 Tuổi　Trên 60 Tuổi
+Trạng Thái Nữ Giới:  Còn Trinh　Mất Trinh　Kỳ Kinh Nguyệt　Mang Thai
+Tù Nhân:             Nam Giới　Nữ Giới
+Thống Kê Đặc Biệt:   Còn Trinh Dưới 20 Tuổi　Còn Trinh 21-40 Tuổi
+```
+
+**Sáu tên nhóm**: `Nghề Nghiệp`　`Giới Tính`　`Tuổi`　`Trạng Thái Nữ Giới`　`Tù Nhân`　`Thống Kê Đặc Biệt`
+
+**Các cách viết sai bị cấm**:
+
+| Cấm viết | Phải viết |
+|---|---|
+| Đặt `Thống Kê Thần Dân` dưới `/Người Chơi/Trạng Thái/` | Đặt dưới `/Khu Tị Nạn/<Tên Thực Tế>/` |
+| `Tuổi/Dưới 20 Tuổi` (không phân nam nữ) | `Tuổi/Nam Giới/Dưới 20 Tuổi` hoặc `Tuổi/Nữ Giới/Dưới 20 Tuổi` |
+| `Vị Thành Niên` / `Học Sinh` | `Dưới 20 Tuổi` |
+| `Trên 50 Tuổi` | `Trên 60 Tuổi` |
+| `Đã Mang Thai` | `Mang Thai` |
+| `Chưa Mang Thai` | `Mất Trinh` |
+| `21-30 Tuổi` / `31-40 Tuổi` | `21-40 Tuổi` |
+| `41-50 Tuổi` / `51-60 Tuổi` | `41-60 Tuổi` |
+| `Tù Nhân` (không phân nam nữ) | `Tù Nhân/Nam Giới` hoặc `Tù Nhân/Nữ Giới` |
+
+**Các đường dẫn đã bỏ, không được dùng lại**: [CẦN ĐIỀN: liệt kê các path cũ thực sự cần cấm]
+(Dân số ghi ở `/Khu Tị Nạn/<Tên Thực Tế>/Dân Số`; vật phẩm ghi ở `/Vật Tư/Trong Khu Tị Nạn/<Loại>/<Tên Vật Phẩm>`;
+nhân vật ghi ở `/Nhân Vật/<Tên Người>`)
+
+---
+
+## 8. Khối trống và vị trí
+
+- Khi không có thay đổi nào thì viết: `<JSONPatch>[]</JSONPatch>`
+- **Cấm bỏ qua** khối này
+- Khối phải nằm **sau phần nội dung chính**, và **sau** `<StatusPlaceHolderImpl/>`
+
+---
+
+## 9. Danh sách tự kiểm tra (xác nhận từng mục trước khi xuất ở mỗi vòng)
+
+1. Ba thẻ đều đúng chính tả và đúng chữ hoa chữ thường?
+2. Trong `JSONPatch` là **mảng**, không phải đối tượng, không bọc thêm lớp nào?
+3. Mỗi op đều là một trong `replace` / `delta` / `insert` / `add` / `remove` và viết thường hoàn toàn?
+4. Mỗi path đều phân tách từng tầng bằng `/`, tên khóa không chứa các ký tự bị cấm, cũng không có `<Tên Giữ Chỗ>`?
+5. Mọi thay đổi giá trị số đều dùng `delta`?
+6. Mọi khóa mới đều dùng `insert`, và đối tượng cha đã tồn tại?
+7. `Thống Kê Thần Dân` nằm dưới `/Khu Tị Nạn/<Tên Thực Tế>/Thống Kê Thần Dân`, tên khóa **giống từng chữ** với mục 7 (tuổi và tù nhân phân nam nữ)?
+8. Thao tác `remove` **không có** trường value?

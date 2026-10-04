@@ -1,4 +1,5 @@
 import type { CharacterCard, ProxySettings, TranslationField } from '../types/card';
+import { applyVietnameseFonts } from './vnFonts';
 import { fandomNameOverride } from './fandomMode';
 import type { ZodFieldDef } from '../types/mvuZodTypes';
 import { extractPatchFieldNames } from './jsonPatchValidator';
@@ -2747,6 +2748,24 @@ export function extractSchemaContextFromCard(card: CharacterCard | null | undefi
   return thScripts.map(s => s.content || s.script || s.code || '').filter(Boolean).join('\n\n');
 }
 
+/**
+ * (bug 253) TÊN BIẾN CÓ HỢP LÝ KHÔNG — chặn "key" nhặt nhầm từ văn bản markdown.
+ *
+ * Entry hướng dẫn [mvu_update] có dòng liệt kê ký tự cấm: `` `.`　`/`　空格　`:`　`，` … ``. Bộ quét YAML
+ * (`^key:`) thấy dấu `:` nằm trong backtick nên cắt ra "key" = "`.`　`/`　空格　`", AI dịch thành
+ * ".Khoảng Trắng", rồi lúc áp từ điển cả cụm bị thay ⇒ MẤT dấu `/`, dính các backtick vào nhau
+ * (cảnh báo "Backtick count changed: 264 → 250" trong ảnh user gửi).
+ * Tên biến MVU thật không bao giờ chứa backtick, dấu `|` của bảng markdown, `**`, khoảng trắng toàn
+ * rộng hay ngoặc 【】, và không mở đầu bằng ký hiệu danh sách/tiêu đề.
+ */
+export function isPlausibleMvuKey(key: string): boolean {
+  const k = String(key || '');
+  if (!k.trim() || k.length > 60) return false;
+  if (/[`|【】\u3000]/.test(k) || k.includes('**')) return false;
+  if (/^\s*(?:[-*>#]|\d+\.\s)/.test(k)) return false;
+  return true;
+}
+
 export function extractPotentialMvuKeys(
   card: CharacterCard,
   /**
@@ -2779,7 +2798,8 @@ export function extractPotentialMvuKeys(
     let match;
     while ((match = yamlKeyRegex.exec(text)) !== null) {
       const key = (match[1] || match[2])?.trim();
-      if (key && !key.startsWith('[') && !key.startsWith('<') && !key.startsWith('//') && !key.startsWith('#') && !key.startsWith('{') && !key.startsWith('*')) {
+      if (key && !key.startsWith('[') && !key.startsWith('<') && !key.startsWith('//') && !key.startsWith('#') && !key.startsWith('{') && !key.startsWith('*')
+        && isPlausibleMvuKey(key)) {   // (bug 253) không nhặt dòng markdown làm tên biến
         trackKey(key, 'yaml');
       }
     }
@@ -3919,42 +3939,7 @@ RULES:
 
 /* ═══ Regex HTML Post-Processing ═══ */
 
-/**
- * Bản đồ font Trung → font tương thích tiếng Việt.
- * Khi gặp font-family chứa tên font Trung, thay bằng font Việt tương ứng.
- */
-const CHINESE_FONT_MAP: [RegExp, string][] = [
-  // Tên tiếng Trung
-  [/['"']?微软雅黑['"']?/gi, "'Segoe UI', Tahoma, sans-serif"],
-  [/['"']?黑体['"']?/gi, "'Segoe UI', Arial, sans-serif"],
-  [/['"']?宋体['"']?/gi, "'Times New Roman', 'Noto Serif', serif"],
-  [/['"']?新宋体['"']?/gi, "'Times New Roman', serif"],
-  [/['"']?楷体['"']?/gi, "'Georgia', serif"],
-  [/['"']?仿宋['"']?/gi, "'Georgia', serif"],
-  [/['"']?幼圆['"']?/gi, "'Segoe UI', sans-serif"],
-  [/['"']?华文[^'",;}\s]+['"']?/gi, "'Segoe UI', sans-serif"],
-  [/['"']?方正[^'",;}\s]+['"']?/gi, "'Segoe UI', sans-serif"],
-  // Tên tiếng Anh của font Trung
-  [/['"']?SimSun['"']?/gi, "'Times New Roman', 'Noto Serif', serif"],
-  [/['"']?SimHei['"']?/gi, "'Segoe UI', Arial, sans-serif"],
-  [/['"']?NSimSun['"']?/gi, "'Times New Roman', serif"],
-  [/['"']?FangSong['"']?/gi, "'Georgia', serif"],
-  [/['"']?KaiTi['"']?/gi, "'Georgia', serif"],
-  [/['"']?Microsoft YaHei['"']?/gi, "'Segoe UI', Tahoma, sans-serif"],
-  [/['"']?Microsoft JhengHei['"']?/gi, "'Segoe UI', Tahoma, sans-serif"],
-  [/['"']?STSong['"']?/gi, "'Times New Roman', serif"],
-  [/['"']?STHeiti['"']?/gi, "'Segoe UI', sans-serif"],
-  [/['"']?STKaiti['"']?/gi, "'Georgia', serif"],
-  [/['"']?STFangsong['"']?/gi, "'Georgia', serif"],
-  [/['"']?PingFang SC['"']?/gi, "'Segoe UI', sans-serif"],
-  [/['"']?PingFang TC['"']?/gi, "'Segoe UI', sans-serif"],
-  [/['"']?Hiragino Sans GB['"']?/gi, "'Segoe UI', sans-serif"],
-  // Font Nhật thường gặp
-  [/['"']?MS Gothic['"']?/gi, "'Segoe UI', sans-serif"],
-  [/['"']?MS Mincho['"']?/gi, "'Times New Roman', serif"],
-  [/['"']?Meiryo['"']?/gi, "'Segoe UI', sans-serif"],
-  [/['"']?Yu Gothic['"']?/gi, "'Segoe UI', sans-serif"],
-];
+/* (bug 252) Bản đồ font cũ CHINESE_FONT_MAP đã thay bằng utils/vnFonts.ts. */
 
 /**
  * Fix broken lodash/utility paths that were split across lines during AI translation.
@@ -4252,10 +4237,9 @@ export function postProcessRegexHtml(html: string): string {
   // Chuẩn hoá dấu nháy thông minh/toàn rộng → dấu nháy thẳng (sửa "lỗi dấu" làm hỏng regex)
   result = normalizeSmartQuotesInCode(result);
 
-  // Thay font Trung/Nhật → font Việt
-  for (const [pattern, replacement] of CHINESE_FONT_MAP) {
-    result = result.replace(pattern, replacement);
-  }
+  // (bug 252) Font hiển thị được tiếng Việt: chèn web font hỗ trợ đủ dấu lên trước font CJK, nạp kèm
+  // từ Google Fonts. Thay cho CHINESE_FONT_MAP cũ (chỉ font Windows, chèn kèm nháy ⇒ vỡ chuỗi JS).
+  result = applyVietnameseFonts(result).text;
 
   // Sửa đường dẫn _.get/_.set bị ngắt dòng
   result = fixBrokenLodashPaths(result);

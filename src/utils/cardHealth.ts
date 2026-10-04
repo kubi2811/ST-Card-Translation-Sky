@@ -11,6 +11,7 @@ import { restoreMacros } from './macroGuard';
 import { extractScriptBodies, isJsSyntaxOk, isLikelyJsScript, jsParseErrorAny } from './scriptSafety';
 import { parseFindRegex } from './stPreview';
 import { countFenceLines } from './fenceGuard';
+import { countResidualHan } from './residualCjkScan';
 import type { TranslationField, GlossaryEntry } from '../types/card';
 
 /** Ideograph CJK (Trung/Nhật/Hàn) — dùng để phát hiện chữ chưa dịch còn sót. */
@@ -47,6 +48,13 @@ export interface HealthReport {
     error: number;
     pending: number;
     skipped: number;
+    /**
+     * (bug 253) Trường bị TỰ ĐỘNG bỏ qua mà bản gốc VẪN còn chữ Hán — thứ duy nhất trong nhóm
+     * "skipped" thật sự cần dịch lại. `skipped` ở trên đếm cả trường không có chữ Hán nào (chỉ số,
+     * chữ Latin…) và trường người dùng tự chọn bỏ qua ('ignored'): chặn xuất theo con số đó là chặn
+     * oan — ra câu "còn 0 trường có chữ Hán … và 8 trường bị tự động bỏ qua".
+     */
+    skippedWithSource: number;
     brokenScripts: number;
     brokenJson: number;
     invalidRegex: number;
@@ -121,7 +129,7 @@ export function scanFieldsHealth(fields: TranslationField[], glossary?: Glossary
   let emptyPropertyAccesses = 0;
   let renamedMacros = 0;
   let lostFences = 0;
-  let done = 0, error = 0, pending = 0, skipped = 0;
+  let done = 0, error = 0, pending = 0, skipped = 0, skippedWithSource = 0;
 
   // Chỉ giữ mục từ điển hợp lệ (source≠target, đủ dài để không báo nhầm 1 ký tự).
   const activeGlossary = (glossary || []).filter(
@@ -132,7 +140,10 @@ export function scanFieldsHealth(fields: TranslationField[], glossary?: Glossary
     if (f.status === 'done') done++;
     else if (f.status === 'error') error++;
     else if (f.status === 'pending' || f.status === 'translating') pending++;
-    else if (f.status === 'skipped' || f.status === 'ignored') skipped++;
+    else if (f.status === 'skipped' || f.status === 'ignored') {
+      skipped++;
+      if (f.status === 'skipped' && countResidualHan(f.original || '') > 0) skippedWithSource++;
+    }
 
     if (f.status === 'error') {
       issues.push({ severity: 'error', kind: 'field_error', label: f.label, path: f.path,
@@ -302,7 +313,7 @@ export function scanFieldsHealth(fields: TranslationField[], glossary?: Glossary
   issues.sort((a, b) => rank[a.severity] - rank[b.severity]);
 
   return {
-    counts: { total: fields.length, done, error, pending, skipped, brokenScripts, brokenJson, invalidRegex, residualCjkCode, residualCjkText, emptyBrackets, emptyPropertyAccesses, renamedMacros, lostFences, glossaryUnapplied },
+    counts: { total: fields.length, done, error, pending, skipped, skippedWithSource, brokenScripts, brokenJson, invalidRegex, residualCjkCode, residualCjkText, emptyBrackets, emptyPropertyAccesses, renamedMacros, lostFences, glossaryUnapplied },
     issues,
     ok: !issues.some((i) => i.severity === 'error'),
   };

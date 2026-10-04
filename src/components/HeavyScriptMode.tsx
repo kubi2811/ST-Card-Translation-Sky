@@ -80,7 +80,7 @@ export default function HeavyScriptMode({ source }: Props) {
         <h4 style={{ margin: 0, fontSize: '0.9rem', color: 'var(--accent-warning, #f59e0b)' }}>{ui.hsTitle}</h4>
         {job.running && (
           <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)' }}>
-            · chạy nền — đóng Regex Manager vẫn dịch tiếp
+            · {ui.hjBackground}
           </span>
         )}
         <button onClick={() => setExpanded(e => !e)} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}>
@@ -90,7 +90,7 @@ export default function HeavyScriptMode({ source }: Props) {
 
       {job.running && job.sig !== sig && (
         <div style={{ fontSize: '0.7rem', color: 'var(--accent-warning, #f59e0b)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <AlertTriangle size={13} /> Đang dịch một script KHÁC với nội dung ở ô nháp. Bản ghép bên dưới là của script đang chạy.
+          <AlertTriangle size={13} /> {ui.hjOtherScript}
         </div>
       )}
 
@@ -132,7 +132,7 @@ export default function HeavyScriptMode({ source }: Props) {
                     ? fmt(ui.hsProgressActive, { i: job.activeIdx + 1, n: parts.length })
                     : fmt(ui.hsProgress, { done: doneCount, n: parts.length })}
                   {' · '}{totalChars.toLocaleString()} {ui.hsChars}
-                  {job.running && job.startedAt ? ` · đã chạy ${fmtDuration(now - job.startedAt)}` : ''}
+                  {job.running && job.startedAt ? ` · ${fmt(ui.hjElapsed, { t: fmtDuration(now - job.startedAt) })}` : ''}
                 </span>
               </>
             )}
@@ -145,11 +145,11 @@ export default function HeavyScriptMode({ source }: Props) {
                 <div style={{ width: `${pct}%`, height: '100%', background: 'var(--accent-success, #4ade80)', transition: 'width 0.3s' }} />
               </div>
               <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: 4 }}>
-                {pct}% · chữ Hán: gốc {hanSrc.toLocaleString()}
+                {pct}% · {fmt(ui.hjHanSrc, { n: hanSrc.toLocaleString() })}
                 {doneCount > 0 && (
                   <> · <span style={{ color: hanLeft ? 'var(--accent-warning, #f59e0b)' : 'var(--accent-success, #4ade80)' }}>
-                    còn sót {hanLeft.toLocaleString()}
-                  </span> (trong các phần đã dịch, không tính link/CSS giữ nguyên)</>
+                    {fmt(ui.hjHanLeft, { n: hanLeft.toLocaleString() })}
+                  </span> {ui.hjHanNote}</>
                 )}
               </div>
             </div>
@@ -175,13 +175,13 @@ export default function HeavyScriptMode({ source }: Props) {
                       <span style={{ color: 'var(--text-muted)' }}>{p.chars.toLocaleString()} {ui.hsChars}</span>
                       {time && <span style={{ color: 'var(--text-muted)' }}>· {time}</span>}
                       {st === 'done' && inf.ratio !== undefined && (
-                        <span style={{ color: 'var(--text-muted)' }} title="Độ dài bản dịch so với bản gốc. Code dịch ra thường xấp xỉ 1×; lệch nhiều là dấu hiệu cụt hoặc phình.">
-                          · khớp độ dài {inf.ratio.toFixed(2)}×
+                        <span style={{ color: 'var(--text-muted)' }} title={ui.hjRatioTip}>
+                          · {fmt(ui.hjRatio, { r: inf.ratio.toFixed(2) })}
                         </span>
                       )}
                       {st === 'done' && (
                         <span style={{ color: inf.leftHan ? '#f59e0b' : '#4ade80' }}>
-                          · {inf.leftHan ? `còn ${inf.leftHan}/${inf.srcHan} chữ Hán` : 'sạch chữ Hán'}
+                          · {inf.leftHan ? fmt(ui.xpHanLeft, { left: inf.leftHan, src: inf.srcHan }) : ui.xpFinalClean}
                         </span>
                       )}
                       <button onClick={() => void job.retryOne(i)} disabled={job.running}
@@ -214,7 +214,7 @@ export default function HeavyScriptMode({ source }: Props) {
           {parts.length > 0 && (
             <div style={{ marginTop: 8 }}>
               <button onClick={() => setShowLog(v => !v)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: 4, padding: 0, marginBottom: 4 }}>
-                {showLog ? <ChevronDown size={12} /> : <ChevronRight size={12} />} Nhật ký từng bước
+                {showLog ? <ChevronDown size={12} /> : <ChevronRight size={12} />} {ui.hjLog}
               </button>
               {showLog && <TranslateActivityLog fieldPrefix={HEAVY_FIELD_PREFIX} hideSurgicalTicks />}
             </div>

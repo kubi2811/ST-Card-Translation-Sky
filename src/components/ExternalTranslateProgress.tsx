@@ -15,6 +15,8 @@ import type { TranslationField } from '../types/card';
 import { auditChunks } from '../utils/chunkAudit';
 import { countResidualHan } from '../utils/residualCjkScan';
 import TranslateActivityLog from './TranslateActivityLog';
+import { useUi } from '../i18n/useLocale';
+import { fmt } from '../i18n';
 import { Check, X, Loader2, ChevronDown, ChevronRight } from 'lucide-react';
 
 interface Props {
@@ -25,6 +27,7 @@ interface Props {
 
 export default function ExternalTranslateProgress({ field, label }: Props) {
   const css = useStore((s) => s.translationConfig.cssCjkHandling) || 'preserve';
+  const ui = useUi();
   const [open, setOpen] = useState(true);
   const translating = field.status === 'translating';
 
@@ -79,22 +82,22 @@ export default function ExternalTranslateProgress({ field, label }: Props) {
         <button onClick={() => setOpen(v => !v)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: 0, display: 'flex' }}>
           {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         </button>
-        <b style={{ fontSize: '0.78rem' }}>Tiến độ dịch</b>
+        <b style={{ fontSize: '0.78rem' }}>{ui.xpTitle}</b>
         <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
           {translating
-            ? (total > 0 ? `đang dịch — ${doneCount}/${total} mảnh` : 'đang chuẩn bị…')
-            : field.status === 'error' ? `dừng vì lỗi — ${doneCount}/${total || '?'} mảnh đã lưu`
-            : total > 0 ? `${doneCount}/${total} mảnh` : 'xong (1 lượt, không chia mảnh)'}
+            ? (total > 0 ? fmt(ui.xpRunning, { done: doneCount, total }) : ui.xpPreparing)
+            : field.status === 'error' ? fmt(ui.xpStoppedErr, { done: doneCount, total: total || '?' })
+            : total > 0 ? fmt(ui.xpChunks, { done: doneCount, total }) : ui.xpDoneSingle}
           {translating && elapsed > 0 ? ` · ${elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}p${String(elapsed % 60).padStart(2, '0')}`}` : ''}
         </span>
         {finalHan !== undefined && (
           <span style={{ fontSize: '0.72rem', color: finalHan ? 'var(--accent-warning, #f59e0b)' : 'var(--accent-success, #4ade80)' }}>
-            · bản cuối {finalHan ? `còn ${finalHan} chữ Hán` : 'sạch chữ Hán'}
+            · {finalHan ? fmt(ui.xpFinalLeft, { n: finalHan }) : ui.xpFinalClean}
           </span>
         )}
         {translating && (
           <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginLeft: 'auto' }}>
-            Thoát Regex Manager vẫn dịch tiếp — quay lại là thấy đúng chỗ này.
+            {ui.xpBackgroundHint}
           </span>
         )}
       </div>
@@ -116,17 +119,17 @@ export default function ExternalTranslateProgress({ field, label }: Props) {
                     <span style={{ color, width: 14, textAlign: 'center' }}>
                       {r.failed ? <X size={11} /> : r.has ? <Check size={11} /> : translating ? <Loader2 size={11} className="spin" /> : '•'}
                     </span>
-                    <span style={{ fontWeight: 600, minWidth: 58 }}>Mảnh {r.i + 1}/{total}</span>
-                    <span style={{ color: 'var(--text-muted)' }}>{r.chars.toLocaleString()} ký tự</span>
+                    <span style={{ fontWeight: 600, minWidth: 58 }}>{fmt(ui.xpChunkLabel, { i: r.i + 1, n: total })}</span>
+                    <span style={{ color: 'var(--text-muted)' }}>{r.chars.toLocaleString()} {ui.hsChars}</span>
                     {r.ratio !== undefined && (
-                      <span style={{ color: 'var(--text-muted)' }} title="Độ dài bản dịch so với bản gốc của mảnh.">· khớp {r.ratio.toFixed(2)}×</span>
+                      <span style={{ color: 'var(--text-muted)' }} title={ui.xpRatioTip}>· {fmt(ui.xpRatio, { r: r.ratio.toFixed(2) })}</span>
                     )}
                     {r.leftHan !== undefined && (
                       <span style={{ color: r.leftHan ? '#f59e0b' : '#4ade80' }}>
-                        · {r.leftHan ? `còn ${r.leftHan}/${r.srcHan} chữ Hán` : 'sạch'}
+                        · {r.leftHan ? fmt(ui.xpHanLeft, { left: r.leftHan, src: r.srcHan }) : ui.xpClean}
                       </span>
                     )}
-                    {r.failed && <span style={{ color: '#f87171' }}>· lỗi ở mảnh này</span>}
+                    {r.failed && <span style={{ color: '#f87171' }}>· {ui.xpChunkFailed}</span>}
                     {r.issue && <span style={{ color: '#f59e0b', flexBasis: '100%', paddingLeft: 22 }}>{r.issue}</span>}
                   </div>
                 );
@@ -136,7 +139,7 @@ export default function ExternalTranslateProgress({ field, label }: Props) {
 
           {field.status === 'error' && field.error && (
             <div style={{ fontSize: '0.68rem', color: '#f87171', marginBottom: 6 }}>
-              {field.error} — bấm Dịch lại: các mảnh đã xong được giữ, chỉ dịch phần còn thiếu.
+              {field.error} — {ui.xpRetryHint}
             </div>
           )}
 

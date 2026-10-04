@@ -5,6 +5,7 @@
 import { useMemo } from 'react';
 import { useTranslateActivity } from '../utils/translateActivity';
 import type { TranslateProgressEvent } from '../utils/apiClient';
+import { useUi } from '../i18n/useLocale';
 
 const COLOR: Record<TranslateProgressEvent['level'], string> = {
   info: 'var(--text-secondary)',
@@ -28,6 +29,7 @@ interface Props {
 }
 
 export default function TranslateActivityLog({ fieldPrefix, max = 60, hideSurgicalTicks }: Props) {
+  const ui = useUi();
   const byField = useTranslateActivity(s => s.byField);
   const events = useMemo(() => {
     const all: TranslateProgressEvent[] = [];
@@ -48,7 +50,7 @@ export default function TranslateActivityLog({ fieldPrefix, max = 60, hideSurgic
   if (events.length === 0) {
     return (
       <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
-        Chưa có diễn biến nào — bấm dịch là các bước sẽ hiện ở đây.
+        {ui.alEmpty}
       </div>
     );
   }

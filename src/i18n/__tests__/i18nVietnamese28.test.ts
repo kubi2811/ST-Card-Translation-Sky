@@ -21,6 +21,7 @@ const ALLOW = new Set([
   'eltGuidePatLink',            // đường dẫn menu trên trang GitHub — người dùng phải thấy đúng chữ đó
   'appTitle', 'apiKey', 'corsProxy', 'depthPrompt', 'groupDepthPrompt', 'catTemplateLiteralContent',
   'frequencyPenalty', 'presencePenalty', 'repetitionPenalty',
+  'evKind_tavern_helper',       // tên extension SillyTavern (TavernHelper / JS-Slash-Runner)
 ]);
 
 function leftovers(vi: Record<string, unknown>, en: Record<string, unknown>, path = ''): string[] {

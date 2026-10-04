@@ -8,6 +8,8 @@
 import { useStore } from '../store';
 import { useHeavyScriptJob } from '../utils/heavyScriptJob';
 import { Loader2, Link2 } from 'lucide-react';
+import { useUi } from '../i18n/useLocale';
+import { fmt } from '../i18n';
 
 export const EXTERNAL_FIELD_PATH = 'custom_external_link';
 
@@ -18,6 +20,7 @@ export function isExternalTranslateActive(): boolean {
 }
 
 export default function ExternalJobBadge({ onOpen }: { onOpen: () => void }) {
+  const ui = useUi();
   const heavyRunning = useHeavyScriptJob((s) => s.running);
   const heavyActive = useHeavyScriptJob((s) => s.activeIdx);
   const heavyTotal = useHeavyScriptJob((s) => s.parts.length);
@@ -28,17 +31,17 @@ export default function ExternalJobBadge({ onOpen }: { onOpen: () => void }) {
 
   let text: string;
   if (heavyRunning) {
-    text = `Script nặng đang dịch — phần ${Math.max(1, heavyActive + 1)}/${heavyTotal} (xong ${heavyDone})`;
+    text = fmt(ui.xbHeavy, { i: Math.max(1, heavyActive + 1), n: heavyTotal, done: heavyDone });
   } else {
     const total = field!.totalChunks || 0;
     const done = (field!.completedChunks || []).filter(c => !!c?.trim()).length;
-    text = total > 0 ? `Link ngoài đang dịch — ${done}/${total} mảnh` : 'Link ngoài đang dịch…';
+    text = total > 0 ? fmt(ui.xbExternal, { done, total }) : ui.xbExternalNoChunks;
   }
 
   return (
     <button
       onClick={onOpen}
-      title="Lượt dịch link ngoài vẫn chạy nền. Bấm để mở lại Regex Manager → Link ngoài."
+      title={ui.xbTip}
       style={{
         position: 'fixed', right: 16, bottom: 16, zIndex: 900,
         display: 'flex', alignItems: 'center', gap: 8,

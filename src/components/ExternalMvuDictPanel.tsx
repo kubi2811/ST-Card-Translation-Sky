@@ -19,6 +19,8 @@ import {
   enforceExactConsistency, type MvuKeyInfo,
 } from '../utils/mvuSync';
 import { computePoolConcurrency } from '../utils/apiClient';
+import { useUi } from '../i18n/useLocale';
+import { fmt } from '../i18n';
 import { BookOpen, Wand2, Search, Square, ChevronDown, ChevronRight, Lock } from 'lucide-react';
 
 interface Props {
@@ -27,6 +29,7 @@ interface Props {
 }
 
 export default function ExternalMvuDictPanel({ code }: Props) {
+  const ui = useUi();
   const card = useStore((s) => s.card);
   const proxy = useStore((s) => s.proxy);
   const translationConfig = useStore((s) => s.translationConfig);
@@ -93,7 +96,7 @@ export default function ExternalMvuDictPanel({ code }: Props) {
 
   const translateMissing = async () => {
     const missing = keys.filter(k => !mvuDictionary[k.key]?.trim()).map(k => k.key);
-    if (missing.length === 0) { addToast('info', 'Mọi key trong file này đều đã có trong từ điển.'); return; }
+    if (missing.length === 0) { addToast('info', ui.xdAllHave); return; }
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     setBusy({ done: 0, total: missing.length });
@@ -121,10 +124,10 @@ export default function ExternalMvuDictPanel({ code }: Props) {
       writeDict(pairs, 'ai');
       const got = Object.keys(pairs).length;
       addToast(got === missing.length ? 'success' : 'info',
-        `Đã thêm ${got}/${missing.length} key vào từ điển MVU của thẻ`
-        + (got < missing.length ? ' — key còn trống thì điền tay ở danh sách.' : '.'));
+        fmt(ui.xdAdded, { got, total: missing.length })
+        + (got < missing.length ? ui.xdAddedPartial : '.'));
     } catch (err) {
-      if (!ctrl.signal.aborted) addToast('error', `AI dịch key lỗi: ${err instanceof Error ? err.message : String(err)}`);
+      if (!ctrl.signal.aborted) addToast('error', fmt(ui.xdAiErr, { msg: err instanceof Error ? err.message : String(err) }));
     } finally {
       setBusy(null);
       abortRef.current = null;
@@ -138,20 +141,20 @@ export default function ExternalMvuDictPanel({ code }: Props) {
           {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         </button>
         <BookOpen size={14} color="var(--accent-primary)" />
-        <b style={{ fontSize: '0.8rem' }}>Từ điển MVU của link này</b>
+        <b style={{ fontSize: '0.8rem' }}>{ui.xdTitle}</b>
         <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-          {stats.total} key · <span style={{ color: 'var(--accent-success, #4ade80)' }}>{stats.has} đã có</span>
-          {stats.missing > 0 && <> · <span style={{ color: 'var(--accent-warning, #f59e0b)' }}>{stats.missing} còn thiếu</span></>}
+          {fmt(ui.xdKeys, { n: stats.total })} · <span style={{ color: 'var(--accent-success, #4ade80)' }}>{fmt(ui.xdHave, { n: stats.has })}</span>
+          {stats.missing > 0 && <> · <span style={{ color: 'var(--accent-warning, #f59e0b)' }}>{fmt(ui.xdMissing, { n: stats.missing })}</span></>}
         </span>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
           {busy ? (
             <button className="btn btn-ghost btn-sm" onClick={() => abortRef.current?.abort()}>
-              <Square size={12} /> Dừng ({busy.done}/{busy.total})
+              <Square size={12} /> {fmt(ui.xdStop, { done: busy.done, total: busy.total })}
             </button>
           ) : (
             <button className="btn btn-primary btn-sm" onClick={translateMissing} disabled={stats.missing === 0 || mvuDictLocked}
-              title={mvuDictLocked ? 'Từ điển đang khoá — mở khoá ở panel MVU để thêm key.' : 'Gọi AI dịch các key còn thiếu rồi ghi vào từ điển MVU chung của thẻ.'}>
-              <Wand2 size={12} /> AI dịch {stats.missing} key thiếu
+              title={mvuDictLocked ? ui.xdLockedTip : ui.xdAiTip}>
+              <Wand2 size={12} /> {fmt(ui.xdAiBtn, { n: stats.missing })}
             </button>
           )}
         </div>
@@ -159,28 +162,27 @@ export default function ExternalMvuDictPanel({ code }: Props) {
 
       {!enableMvuSync && (
         <div style={{ marginTop: 8, fontSize: '0.7rem', color: 'var(--accent-warning, #f59e0b)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          Đồng bộ MVU đang TẮT — từ điển sẽ không được áp khi dịch link này, tên biến có thể lệch với thẻ.
-          <button className="btn btn-ghost btn-sm" onClick={() => setTranslationConfig({ enableMvuSync: true })}>Bật đồng bộ MVU</button>
+          {ui.xdSyncOff}
+          <button className="btn btn-ghost btn-sm" onClick={() => setTranslationConfig({ enableMvuSync: true })}>{ui.xdEnableSync}</button>
         </div>
       )}
       {mvuDictLocked && (
         <div style={{ marginTop: 8, fontSize: '0.7rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
-          <Lock size={12} /> Từ điển đang khoá: vẫn được áp khi dịch, nhưng không thêm/sửa ở đây.
+          <Lock size={12} /> {ui.xdLockedNote}
         </div>
       )}
 
       {open && (
         <>
           <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', margin: '8px 0', lineHeight: 1.5 }}>
-            Đây là từ điển MVU <b>chung</b> của thẻ (cùng bảng ở panel MVU) — biến trong link ngoài và
-            biến trong thẻ phải là một. Key ở đây được quét từ chính file đang mở.
+            {ui.xdExplain}
           </div>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6, flexWrap: 'wrap' }}>
             <Search size={12} color="var(--text-muted)" />
-            <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Tra key gốc hoặc bản dịch…"
+            <input value={query} onChange={e => setQuery(e.target.value)} placeholder={ui.xdSearchPh}
               style={{ flex: '1 1 180px', padding: '4px 8px', fontSize: '0.72rem', borderRadius: 4, border: '1px solid var(--border-default)', background: 'var(--bg-secondary)', color: 'var(--text-primary)' }} />
             <label style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 4 }}>
-              <input type="checkbox" checked={onlyMissing} onChange={e => setOnlyMissing(e.target.checked)} /> chỉ key thiếu
+              <input type="checkbox" checked={onlyMissing} onChange={e => setOnlyMissing(e.target.checked)} /> {ui.xdOnlyMissing}
             </label>
           </div>
           <div style={{ maxHeight: 260, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -193,15 +195,15 @@ export default function ExternalMvuDictPanel({ code }: Props) {
                     defaultValue={v}
                     key={`${k.key}:${v}`}
                     disabled={mvuDictLocked}
-                    placeholder="(chưa có — điền tay hoặc bấm AI dịch)"
+                    placeholder={ui.xdValuePh}
                     onBlur={e => { const nv = e.target.value.trim(); if (nv && nv !== v) writeDict({ [k.key]: nv }, 'manual'); }}
                     style={{ padding: '2px 6px', fontSize: '0.72rem', borderRadius: 4, border: `1px solid ${v ? 'var(--border-default)' : 'rgba(245,158,11,0.5)'}`, background: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
                   />
-                  <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }} title={`Nguồn: ${k.sources.join(', ')}`}>×{k.occurrences}</span>
+                  <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }} title={fmt(ui.xdSources, { s: k.sources.join(', ') })}>×{k.occurrences}</span>
                 </div>
               );
             })}
-            {rows.length === 0 && <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Không có key nào khớp.</div>}
+            {rows.length === 0 && <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{ui.xdNoMatch}</div>}
           </div>
         </>
       )}

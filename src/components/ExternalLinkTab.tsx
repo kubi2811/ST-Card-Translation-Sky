@@ -6,6 +6,7 @@ import { Code2, Play, Loader2, Trash2, CheckCircle2, Copy, Check, X, Globe, Arch
 import { publishToGithub } from '../utils/githubApi';
 import { safeSetItem } from '../utils/safeStorage';
 import { useUi } from '../i18n/useLocale';
+import { fmt } from '../i18n';
 import HeavyScriptMode from './HeavyScriptMode';
 import ExternalTranslateProgress from './ExternalTranslateProgress';
 import ExternalMvuDictPanel from './ExternalMvuDictPanel';
@@ -164,7 +165,7 @@ export default function ExternalLinkTab() {
   /** Cất nội dung đang có trong ô nháp thành một mục của kho (hoặc cập nhật mục đang mở). */
   function saveCurrentToVault(url = '', nameHint = ''): void {
     const code = output || input;
-    if (!code.trim()) { addToast('error', 'Chưa có nội dung nào để lưu.'); return; }
+    if (!code.trim()) { addToast('error', ui.evEmptyDraft); return; }
 
     const existing = editingId ? vault.find(e => e.id === editingId) : undefined;
     const name = (saveName.trim() || nameHint || existing?.name
@@ -187,7 +188,7 @@ export default function ExternalLinkTab() {
     commitVault(next);
     setEditingId(next.find(e => e.name === name)?.id ?? null);
     setSaveName('');
-    addToast('success', `Đã lưu "${name}" vào kho (${next.length} link).`);
+    addToast('success', fmt(ui.evSaved, { name, n: next.length }));
   }
 
   /** Mở một mục ra sửa: đổ lại vào ô nháp để dịch tiếp / dịch lại. */
@@ -196,7 +197,7 @@ export default function ExternalLinkTab() {
     if (e.translated) updateField(fieldPath, { original: e.original, translated: e.translated, status: 'done', error: undefined });
     setEditingId(e.id);
     setSaveName(e.name);
-    addToast('info', `Đang mở "${e.name}". Sửa xong bấm Lưu vào kho để cập nhật.`);
+    addToast('info', fmt(ui.evOpened, { name: e.name }));
   };
 
   const setEntryKind = (id: string, kind: ExternalLinkKind) => {
@@ -259,32 +260,30 @@ export default function ExternalLinkTab() {
       <div style={{ padding: '16px 20px', background: 'var(--bg-primary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', gap: '10px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
           <Archive size={16} color="var(--accent-primary)" />
-          <h4 style={{ margin: 0, fontSize: '0.85rem' }}>Kho link ngoài ({vault.length})</h4>
+          <h4 style={{ margin: 0, fontSize: '0.85rem' }}>{fmt(ui.evVaultTitle, { n: vault.length })}</h4>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: '6px' }}>
             <button className="btn btn-ghost" onClick={runRefCheck} disabled={vault.length === 0}
-              title="Đối chiếu biến/hàm/id giữa các link ngoài với nhau và với thẻ đang mở. Không gọi API, chạy cục bộ.">
-              <Search size={12} /> Kiểm tra tham chiếu
+              title={ui.evRefCheckTip}>
+              <Search size={12} /> {ui.evRefCheck}
             </button>
             {refReport && (
-              <button className="btn btn-ghost" onClick={downloadRefReport} title="Tải báo cáo Markdown để lưu hoặc gửi kèm.">
-                <Download size={12} /> Tải báo cáo
+              <button className="btn btn-ghost" onClick={downloadRefReport} title={ui.evReportTip}>
+                <Download size={12} /> {ui.evReport}
               </button>
             )}
           </div>
         </div>
 
         <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', lineHeight: 1.6, background: 'rgba(0,0,0,0.2)', padding: '8px 10px', borderRadius: '6px', borderLeft: '3px solid var(--accent-primary)' }}>
-          Mỗi link ngoài lưu ở đây một mục riêng (gốc + bản dịch + phân loại), nên dịch link thứ hai
-          không còn đè mất link thứ nhất. Có kho thì bộ kiểm mới đọc được code đã dịch để soi lệch
-          tên biến giữa các file — thứ mà dịch từng file riêng lẻ không bao giờ thấy.
+          {ui.evVaultExplain}
         </div>
 
         {/* Thẻ đang nạp bao nhiêu link, kho đã có bao nhiêu — phần thiếu chính là VÙNG MÙ. */}
         {cardUrls.length > 0 && (
           <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
-            Thẻ đang nạp <b>{cardUrls.length}</b> link ngoài · kho đã có <b>{coverage.covered.length}</b>
+            {fmt(ui.evCoverage, { card: cardUrls.length, vault: coverage.covered.length })}
             {coverage.missing.length > 0 && (
-              <span style={{ color: 'var(--accent-warning)' }}> · thiếu {coverage.missing.length} (kiểm tra sẽ không nhìn thấy code trong đó)</span>
+              <span style={{ color: 'var(--accent-warning)' }}>{fmt(ui.evCoverageMissing, { n: coverage.missing.length })}</span>
             )}
             {coverage.missing.length > 0 && (
               <ul style={{ margin: '4px 0 0', paddingLeft: '18px', color: 'var(--text-muted)', fontSize: '0.68rem' }}>
@@ -304,28 +303,28 @@ export default function ExternalLinkTab() {
                 border: `1px solid ${e.id === editingId ? 'var(--accent-primary)' : 'var(--border-subtle)'}`,
               }}>
                 <span style={{ fontSize: '0.75rem', fontWeight: 600, flex: '1 1 160px', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                  title={e.url || 'chưa đăng lên Git'}>{e.name}</span>
+                  title={e.url || ui.evNotPublished}>{e.name}</span>
 
                 <select
                   value={e.kind}
                   onChange={ev => setEntryKind(e.id, ev.target.value as ExternalLinkKind)}
-                  title={e.kindLocked ? 'Loại do bạn tự chọn.' : `Máy đoán: ${e.kindReason}. Sai thì đổi ở đây.`}
+                  title={e.kindLocked ? ui.evKindLockedTip : fmt(ui.evKindGuessTip, { reason: e.kindReason })}
                   style={{ fontSize: '0.68rem', padding: '2px 4px', borderRadius: '4px', background: 'var(--bg-primary)', color: 'var(--text-primary)', border: '1px solid var(--border-default)' }}
                 >
                   {(Object.keys(KIND_LABEL) as ExternalLinkKind[]).map(k => (
-                    <option key={k} value={k}>{KIND_LABEL[k]}</option>
+                    <option key={k} value={k}>{(ui as unknown as Record<string, string>)[`evKind_${k}`] || KIND_LABEL[k]}</option>
                   ))}
                 </select>
-                {!e.kindLocked && <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>máy đoán</span>}
+                {!e.kindLocked && <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>{ui.evKindGuess}</span>}
 
                 <span style={{ fontSize: '0.65rem', color: e.translated ? 'var(--accent-success)' : 'var(--accent-warning)' }}>
-                  {e.translated ? `đã dịch · ${e.translated.length.toLocaleString()} ký tự` : 'chưa dịch'}
+                  {e.translated ? fmt(ui.evTranslated, { n: e.translated.length.toLocaleString() }) : ui.evNotTranslated}
                 </span>
 
-                <button className="btn btn-ghost" onClick={() => openEntry(e)} title="Đổ lại vào ô nháp bên dưới để sửa/dịch tiếp.">
-                  <FolderOpen size={12} /> Mở
+                <button className="btn btn-ghost" onClick={() => openEntry(e)} title={ui.evOpenTip}>
+                  <FolderOpen size={12} /> {ui.evOpen}
                 </button>
-                <button className="btn btn-ghost" onClick={() => { commitVault(removeLink(vault, e.id)); if (editingId === e.id) setEditingId(null); }} title="Xoá khỏi kho.">
+                <button className="btn btn-ghost" onClick={() => { commitVault(removeLink(vault, e.id)); if (editingId === e.id) setEditingId(null); }} title={ui.evDeleteTip}>
                   <Trash2 size={12} />
                 </button>
               </div>
@@ -334,8 +333,7 @@ export default function ExternalLinkTab() {
         )}
         {vaultLoaded && vault.length === 0 && (
           <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-            Kho đang trống. Dịch một link ở ô bên dưới rồi bấm “Lưu vào kho” — hoặc đăng lên GitHub,
-            lúc đó tool tự lưu kèm URL.
+            {ui.evEmptyVault}
           </div>
         )}
 
@@ -344,16 +342,16 @@ export default function ExternalLinkTab() {
           <input
             value={saveName}
             onChange={ev => setSaveName(ev.target.value)}
-            placeholder={editingId ? 'tên mục đang mở' : 'tên cho link này (vd: status-bar.js)'}
+            placeholder={editingId ? ui.evNamePhEditing : ui.evNamePh}
             style={{ flex: '1 1 200px', padding: '6px 8px', fontSize: '0.75rem', borderRadius: '4px', border: '1px solid var(--border-default)', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
           />
           <button className="btn btn-ghost" onClick={() => saveCurrentToVault()} disabled={!input.trim() && !output.trim()}
-            title="Cất nội dung đang có ở ô nháp thành một mục trong kho (tự phân loại theo nội dung).">
-            <Archive size={12} /> {editingId ? 'Cập nhật mục đang mở' : 'Lưu vào kho'}
+            title={ui.evSaveTip}>
+            <Archive size={12} /> {editingId ? ui.evUpdate : ui.evSave}
           </button>
           {editingId && (
-            <button className="btn btn-ghost" onClick={() => { setEditingId(null); setSaveName(''); }} title="Thôi sửa mục này (không xoá gì).">
-              <X size={12} /> Bỏ chọn
+            <button className="btn btn-ghost" onClick={() => { setEditingId(null); setSaveName(''); }} title={ui.evDeselectTip}>
+              <X size={12} /> {ui.evDeselect}
             </button>
           )}
         </div>
@@ -366,7 +364,7 @@ export default function ExternalLinkTab() {
             </div>
             {refReport.issues.length === 0 && (
               <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '6px' }}>
-                Không thấy tham chiếu nào lệch giữa các link và thẻ.
+                {ui.evNoRefIssues}
               </div>
             )}
             <div style={{ maxHeight: '260px', overflowY: 'auto', marginTop: '6px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -376,7 +374,7 @@ export default function ExternalLinkTab() {
                 return (
                   <div key={i} style={{ fontSize: '0.7rem', lineHeight: 1.5, padding: '6px 8px', borderRadius: '4px', background: 'var(--bg-secondary)', borderLeft: `3px solid ${color}` }}>
                     <b style={{ color }}>{iss.link}</b> — {iss.detail}
-                    {iss.suggestion && <> <span style={{ color: 'var(--text-muted)' }}>(gợi ý: <code>{iss.suggestion}</code>)</span></>}
+                    {iss.suggestion && <> <span style={{ color: 'var(--text-muted)' }}>({ui.evSuggestion} <code>{iss.suggestion}</code>)</span></>}
                   </div>
                 );
               })}

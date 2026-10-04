@@ -17,8 +17,11 @@ import {
   subscribeKeepAlive, getKeepAliveStatus, setManualKeepAlive, isManualKeepAliveSaved, pokeKeepAlive,
   acquireKeepAlive,
 } from '../utils/keepAlive';
+import { useUi } from '../i18n/useLocale';
+import { fmt } from '../i18n';
 
 export default function KeepAliveToggle() {
+  const ui = useUi();
   const st = useSyncExternalStore(subscribeKeepAlive, getKeepAliveStatus, getKeepAliveStatus);
   const manual = st.holders.includes('manual');
   // Thanh đầu trang chật ở màn hẹp — lúc đó chỉ hiện biểu tượng (màu vẫn báo trạng thái).
@@ -46,25 +49,25 @@ export default function KeepAliveToggle() {
 
   const others = st.holders.filter(h => h !== 'manual');
   let color = 'var(--text-muted, #9a96ad)';
-  let label = 'Giữ tab: tắt';
+  let label = ui.kaOff;
   let Icon = VolumeX;
   if (st.running && st.health === 'ok') {
     color = '#7ee2a8'; Icon = Volume2;
-    label = manual ? 'Giữ tab: bật' : 'Giữ tab: tự động';
+    label = manual ? ui.kaOn : ui.kaAuto;
   } else if (st.running) {
     color = '#ffcf70'; Icon = AlertTriangle;
-    label = st.health === 'blocked' ? 'Giữ tab: bị chặn — bấm' : 'Giữ tab: yếu — bấm';
+    label = st.health === 'blocked' ? ui.kaBlocked : ui.kaWeak;
   }
 
   const title = [
     label,
-    'Phát một dòng âm thanh tai người không nghe được để trình duyệt (Edge/Chrome) KHÔNG cho tab ngủ khi chạy nền.',
+    ui.kaDesc,
     st.running
-      ? `Đang giữ cho: ${[manual ? 'bật tay' : '', ...others.map(h => h === 'translation' ? 'lượt dịch thẻ' : h === 'heavy-script' ? 'Script nặng' : h.startsWith('field:') ? 'dịch lẻ' : h)].filter(Boolean).join(', ')}.`
-      : 'Đang tắt — tự bật khi có lượt dịch, hoặc bấm để bật tay.',
-    st.db !== null && Number.isFinite(st.db) ? `Mức đo: ${st.db.toFixed(0)} dBFS (cần trên -72).` : '',
-    st.restarts ? `Đã tự dựng lại ${st.restarts} lần.` : '',
-    st.running && st.health !== 'ok' ? 'Bấm để bật lại ngay.' : (manual ? 'Bấm để tắt giữ tay.' : 'Bấm để bật giữ tay (nhớ cho lần sau).'),
+      ? fmt(ui.kaHolding, { list: [manual ? ui.kaHManual : '', ...others.map(h => h === 'translation' ? ui.kaHTranslation : h === 'heavy-script' ? ui.kaHHeavy : h.startsWith('field:') ? ui.kaHField : h)].filter(Boolean).join(', ') })
+      : ui.kaOffDesc,
+    st.db !== null && Number.isFinite(st.db) ? fmt(ui.kaDb, { db: st.db.toFixed(0) }) : '',
+    st.restarts ? fmt(ui.kaRestarts, { n: st.restarts }) : '',
+    st.running && st.health !== 'ok' ? ui.kaClickRestart : (manual ? ui.kaClickOff : ui.kaClickOn),
   ].filter(Boolean).join('\n');
 
   return (

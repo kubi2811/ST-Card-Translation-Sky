@@ -242,6 +242,15 @@ function LangSwitcher() {
 /** Header thương hiệu chung — nằm trên shell Hub nên hiển thị nhất quán trên cả 5 app. */
 function GlobalHeader({ activeFlow }: { activeFlow?: FlowDef }) {
   const ui = useUi();
+  // (E) Màn hẹp: tiêu đề tràn đè lên nhãn tool đang mở ("v2.58.0" chồng lên "Dịch Card"). Dưới
+  // ngưỡng này chỉ giữ biểu tượng của tool — tên tool đã có ở thanh bên trái.
+  const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && window.innerWidth < 1100);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 1099px)');
+    const on = () => setNarrow(mq.matches);
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, []);
   return (
     <header
       style={{
@@ -268,16 +277,17 @@ function GlobalHeader({ activeFlow }: { activeFlow?: FlowDef }) {
       >
         ST
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0, flex: '1 1 auto', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 9, minWidth: 0 }}>
           <span style={{ fontSize: '1.18rem', fontWeight: 800, letterSpacing: 0.3, whiteSpace: 'nowrap',
+            overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0,
             background: 'linear-gradient(90deg, #a99cff, #4ecdc4)', WebkitBackgroundClip: 'text',
             WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>
             Silly Tavern Multitools
           </span>
-          <span style={{ fontSize: '0.74rem', color: 'var(--text-muted, #b6b2c9)' }}>v{APP_VERSION}</span>
+          <span style={{ fontSize: '0.74rem', color: 'var(--text-muted, #b6b2c9)', whiteSpace: 'nowrap', flexShrink: 0 }}>v{APP_VERSION}</span>
         </div>
-        <span style={{ fontSize: '0.64rem', fontWeight: 500, letterSpacing: 0.2, whiteSpace: 'nowrap',
+        <span style={{ fontSize: '0.64rem', fontWeight: 500, letterSpacing: 0.2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
           color: 'var(--text-muted, #8b88a0)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
           <span style={{ opacity: 0.7 }}>{ui.hubMadeBy}</span>
           <span style={{ fontWeight: 700, background: 'linear-gradient(90deg, #a99cff, #4ecdc4)',
@@ -288,12 +298,12 @@ function GlobalHeader({ activeFlow }: { activeFlow?: FlowDef }) {
       </div>
 
       {/* Bên phải header: tool đang mở + nút đổi ngôn ngữ */}
-      <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 14 }}>
+      <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: narrow ? 8 : 14, flexShrink: 0 }}>
         {activeFlow && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7,
+          <div title={ui[activeFlow.labelKey]} style={{ display: 'flex', alignItems: 'center', gap: 7, whiteSpace: 'nowrap',
             fontSize: '0.86rem', color: activeFlow.color || 'var(--text-secondary, #d6d3e4)', fontWeight: 600 }}>
             <span style={{ fontSize: '1.2rem' }}>{activeFlow.emoji}</span>
-            <span>{ui[activeFlow.labelKey]}</span>
+            {!narrow && <span>{ui[activeFlow.labelKey]}</span>}
           </div>
         )}
         {/* (bug 241) Giữ tab sống: trạng thái thật + bật/tắt tay + bật lại khi bị chặn */}

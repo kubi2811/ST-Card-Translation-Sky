@@ -2098,8 +2098,43 @@ export function unifyVarWordSeparators(word: string): string {
   if (parts.some((p) => /\d/.test(p))) return word;
   const allCjk = parts.every((p) => CJK_PART_RE.test(p));
   const allLatin = parts.every((p) => LATIN_PART_RE.test(p));
+  if (allLatin && parts.length > 1 && isAsciiCodeSuffix(parts[parts.length - 1], parts.slice(0, -1))) {
+    // (bug 254) `Giày_tag` / `Phụ Kiện_tag`: đuôi ASCII là hậu tố CODE mirror từ nguồn (`鞋子_tag`) —
+    // script có thể ghép `部位 + '_tag'`, đổi thành "Giày tag" là ghép ra key không tồn tại. Chỉ nối
+    // space phần thân trước đuôi.
+    const m = core.match(/([_-]+)([a-z0-9]+)[_-]*$/)!;
+    const headRaw = core.slice(0, m.index);
+    const head = LATIN_DIACRITIC_RE.test(headRaw) ? headRaw.split(/[_-]+/).filter(Boolean).join(' ') : headRaw;
+    return marker + head + m[1] + m[2];
+  }
   if (allCjk || (allLatin && LATIN_DIACRITIC_RE.test(core))) return marker + parts.join(' ');
   return word;
+}
+
+/**
+ * (bug 254) Hậu tố CODE thường gặp sau tên biến: `鞋子_tag`, `场景_sfw`, `好感_max`… Card hay ghép key
+ * động bằng chuỗi (`部位 + '_tag'`, `${名}_max`) nên đuôi này phải giữ NGUYÊN cả dấu `_` sau khi dịch.
+ * Không có từ điển (sweep trên text) thì nhận diện bằng: mảnh cuối ASCII thường, không dấu, VÀ
+ *  - nằm trong danh sách hậu tố code quen thuộc, hoặc
+ *  - thân trước nó viết Hoa Đầu Từ (kiểu tên biến đã dịch) — lệch kiểu chữ ⇒ là đuôi code, không phải
+ *    chữ Việt (`tình_cảm_với_user` toàn chữ thường ⇒ vẫn là từ Việt bị nối, về dấu cách như bug #8).
+ */
+const CODE_SUFFIXES = new Set([
+  'tag', 'tags', 'id', 'ids', 'sfw', 'nsfw', 'max', 'min', 'cur', 'now', 'val', 'num', 'cnt', 'count',
+  'list', 'map', 'flag', 'img', 'url', 'key', 'desc', 'type', 'lv', 'lvl', 'level', 'hp', 'mp', 'exp',
+  'old', 'new', 'prev', 'next', 'raw', 'str', 'txt', 'icon', 'color', 'css', 'html', 'on', 'off',
+]);
+function isAsciiCodeSuffix(last: string, head: string[]): boolean {
+  if (!/^[a-z][a-z0-9]*$/.test(last)) return false;
+  if (!LATIN_DIACRITIC_RE.test(head.join('')) && !head.some((h) => /^[A-ZÀ-ỸĐ]/.test(h))) return false;
+  if (CODE_SUFFIXES.has(last)) return true;
+  return head.every((h) => /^[A-ZÀ-ỸĐ0-9]/.test(h));
+}
+
+/** Đuôi code ASCII của KEY NGUỒN: `鞋子_tag` → `_tag`; `场景-sfw` → `-sfw`. Không có → null. */
+export function sourceAsciiSuffix(sourceKey: string): string | null {
+  const m = String(sourceKey || '').trim().match(/[぀-ヿ㐀-䶿一-鿿가-힯]([_-]+[A-Za-z][A-Za-z0-9]*)$/);
+  return m ? m[1] : null;
 }
 
 /**
@@ -2597,6 +2632,20 @@ export function enforceExactConsistency(
     if (clean !== v) {
       fixedDict[k] = clean;
       fixes.push(`"${k}": "${v}" → "${clean}" (chuẩn hoá dấu)`);
+    }
+  }
+
+  // (bug 254) Biến đuôi code PHẢI = bản dịch của thân + đúng đuôi: có cả 鞋子 → "Giày" và 鞋子_tag thì
+  // 鞋子_tag là "Giày_tag" — script ghép `部位 + '_tag'` mới ra đúng key. Mục user tự sửa thì để nguyên.
+  for (const [k, v] of Object.entries(fixedDict)) {
+    const suf = sourceAsciiSuffix(k);
+    if (!suf || !v || metadata?.[k]?.confidence === 'manual') continue;
+    const base = fixedDict[k.trim().slice(0, -suf.length)];
+    if (!base || base === k.trim().slice(0, -suf.length)) continue;
+    const want = base + suf;
+    if (want !== v) {
+      fixedDict[k] = want;
+      fixes.push(`"${k}": "${v}" → "${want}" (khớp thân + đuôi code)`);
     }
   }
 
@@ -3281,20 +3330,35 @@ export function sanitizeMvuVarName(originalKey: string, translated: string): str
   const sourceParts = originalKey.split('.');
   const dotted = normalizeMvuPathDots(originalKey, translated);
   const targetParts = dotted.split('.');
-  const cleanSegment = (part: string) => canonicalizeMvuVarName(
+  const cleanSegment = (part: string, sourcePart: string) => mirrorAsciiSuffix(sourcePart, canonicalizeMvuVarName(
     part.trim()
       // Đây là tên KEY, không phải văn xuôi. Ký tự điều khiển/nháy/slash/dấu phân cách có thể
       // đóng chuỗi, mở comment, đổi YAML hoặc làm regex literal chết sau khi thay từ điển.
       .replace(/[\u0000-\u001f\u007f'"`\\\/:{}\[\],#]+/g, ' ')
       .replace(/\s+/g, ' ')
       .trim(),
-  );
+  ));
   // Dấu chấm là toán tử PATH của MVU. Một key nguồn đơn không được tự mọc thêm tầng sau dịch.
   // Với mục từ path, chỉ giữ dấu chấm khi số tầng hai phía khớp; mỗi tầng được làm sạch riêng.
   if (sourceParts.length === targetParts.length && sourceParts.length > 1) {
-    return targetParts.map((part, i) => cleanSegment(part) || sourceParts[i].trim()).join('.');
+    return targetParts.map((part, i) => cleanSegment(part, sourceParts[i]) || sourceParts[i].trim()).join('.');
   }
-  return cleanSegment(dotted) || originalKey.trim();
+  return cleanSegment(dotted, originalKey) || originalKey.trim();
+}
+
+/**
+ * (bug 254) Key nguồn có đuôi code (`鞋子_tag`) ⇒ bản dịch giữ ĐÚNG đuôi đó: "Giày tag" / "Giày-Tag" /
+ * "Giày" → "Giày_tag". Prompt đã dặn AI "mirror separator của nguồn", nhưng lượt chuẩn hoá dấu cách
+ * (bug #8) lại ghi đè — đây là chốt cuối.
+ */
+export function mirrorAsciiSuffix(sourceKey: string, translated: string): string {
+  const suf = sourceAsciiSuffix(sourceKey);
+  if (!suf || !translated) return translated;
+  const word = suf.replace(/^[_-]+/, '');
+  const esc = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const body = translated.replace(new RegExp(`[\\s_-]+${esc}$`, 'i'), '').trim();
+  if (!body) return translated;
+  return body + suf;
 }
 
 export async function aiTranslateMvuKeys(

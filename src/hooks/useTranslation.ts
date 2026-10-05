@@ -14,7 +14,7 @@ import { GLOSSARY_PRESETS } from '../utils/glossaryPresets';
 import { extractTranslatableFields, applyTranslationsToCard, autoTranslateLorebookTriggerKeys, injectNewLorebookEntries, isMvuUpdateField } from '../utils/cardFields';
 import { applyMythicToCard } from '../utils/cardFields';
 import { syncEmbeddedWorldLink } from '../utils/worldLink';
-import { syncMvuVariables, postProcessRegexHtml, normalizeSmartQuotesInCode, fixNestedQuoteBracketPaths, fixRedundantParentInBracketPath, fixBrokenLodashPaths, fixDotNotationPaths, extractPotentialMvuKeyStrings, extractMvuKeysFromCode, isPlausibleMvuKey, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, enforceInitvarCovariance, extractMappingFromTranslatedInitvar, enforceExactConsistency, enforceVariableCasing, fixZodSyntaxErrors, validateDictionaryConflicts, aiResolveMvuConflicts, recanonicalizeMvuInFields, unifyVietnameseUnderscoresInText } from '../utils/mvuSync';
+import { syncMvuVariables, postProcessRegexHtml, normalizeSmartQuotesInCode, fixNestedQuoteBracketPaths, fixRedundantParentInBracketPath, fixBrokenLodashPaths, fixDotNotationPaths, extractPotentialMvuKeyStrings, extractMvuKeysFromCode, isPlausibleMvuKey, isRenamedAsciiKey, aiTranslateMvuKeys, aiRenameMvuKeys, extractZodDescriptions, extractSchemaContextFromCard, extractMappingFromTranslatedSchemas, enforceInitvarCovariance, extractMappingFromTranslatedInitvar, enforceExactConsistency, enforceVariableCasing, fixZodSyntaxErrors, validateDictionaryConflicts, aiResolveMvuConflicts, recanonicalizeMvuInFields, unifyVietnameseUnderscoresInText } from '../utils/mvuSync';
 import { shouldSkipTranslation, detectLanguage, detectResidualCjk } from '../utils/langDetect';
 import { clearRAGCache } from '../utils/ragContext';
 import { storeTranslation, lookupTranslationMemory } from '../utils/translationMemory';
@@ -2653,12 +2653,14 @@ export function useTranslation() {
     {
       const st0 = useStore.getState();
       const dict0 = st0.translationConfig.mvuDictionary || {};
-      const junk = Object.keys(dict0).filter(k => st0.mvuKeyMetadata?.[k]?.confidence !== 'manual' && !isPlausibleMvuKey(k));
+      // (bug 255) + mục đổi tên key ASCII (`user` → "Tỷ Lệ Mang Thai") — học lệch, áp là hỏng script.
+      const junk = Object.keys(dict0).filter(k => st0.mvuKeyMetadata?.[k]?.confidence !== 'manual'
+        && (!isPlausibleMvuKey(k) || isRenamedAsciiKey(k, dict0[k])));
       if (junk.length) {
         const cleaned = { ...dict0 };
         for (const k of junk) delete cleaned[k];
         if (writeMvuDictAuto(cleaned, 'dọn key rác')) {
-          store.addLog('info', `🧹 Bỏ ${junk.length} "biến" nhặt nhầm từ văn bản markdown khỏi từ điển MVU (${junk.slice(0, 3).map(k => JSON.stringify(k)).join(', ')}) — áp chúng là nuốt mất dấu / và backtick.`);
+          store.addLog('info', `🧹 Bỏ ${junk.length} mục rác khỏi từ điển MVU (${junk.slice(0, 3).map(k => JSON.stringify(k)).join(', ')}) — áp chúng là hỏng code (nuốt dấu / và backtick, đổi nhầm 'user'…).`);
         }
       }
     }

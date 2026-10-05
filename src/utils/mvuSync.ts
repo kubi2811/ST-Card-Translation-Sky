@@ -74,6 +74,10 @@ function parseJsonFromAi(responseText: string): any {
    `stat_data`, `mpPool`), hoặc `]`/`)` (`arr[0].`, `fn().`). Lookbehind chặn ca "định danh giả":
    `Giới` bị loại vì ngay trước `i` là `ớ`. Chữ Việt/CJK trước dấu chấm ⇒ đó là path, chừa lại.
 */
+/** (bug 255) Chữ Hán / kana / Hangul — ranh giới "từ" cho key tiếng Trung khi thay từ điển. */
+const CJK_CLASS = '[\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uac00-\\ud7af]';
+const CJK_KEY_RE = new RegExp(CJK_CLASS);
+const ST_ROLE_WORDS = new Set(['user', 'char', '{{user}}', '{{char}}', '<user>', '<char>']);
 const JS_RECEIVER = String.raw`(?:(?<![\w$À-ỹĐđ぀-ヿ一-鿿])[A-Za-z_$][\w$]*|[\]\)])`;
 
 /** Một mục từ path `A.B` phải được hiểu là HAI đoạn path, không phải một key chứa dấu chấm. */
@@ -320,6 +324,11 @@ export function applyMvuToText(
   
   const entries = Object.entries(variableDictionary)
     .filter(([k, v]) => k && v && k !== v)
+    // (bug 255) `user` / `char` là tên vai của SillyTavern ({{user}}, 'user'), không bao giờ là biến
+    // MVU để dịch. Một mục học lệch `user` → "Tỷ Lệ Mang Thai" từng biến `'user', 'User', 'USER'` trong
+    // HERO_ALIASES thành "Tỷ Lệ Mang Thai" ×3 — script nhận nhầm nhân vật chính. Mục ASCII khác do máy
+    // tự sinh thì bị dọn khỏi từ điển (isRenamedAsciiKey); mục người dùng tự nhập vẫn được áp.
+    .filter(([k]) => !ST_ROLE_WORDS.has(k.trim().toLowerCase()))
     .map(([k, v]) => [k, sanitizeMvuVarName(k, v)] as [string, string])
     .filter(([, v]) => !!v)
     .sort((a, b) => b[0].length - a[0].length);
@@ -337,6 +346,11 @@ export function applyMvuToText(
   for (const [original, translated] of entries) {
     const escaped = escapeRegExp(original);
     const safeTranslated = safeReplacement(translated);
+    // (bug 255) Tiếng Trung không có dấu cách nên "khớp chuỗi con" là khớp NHẦM TỪ: key 来源 nằm
+    // trong `基准来源` (một key KHÁC) ⇒ `{ 基准Nguồn Gốc: … }` — khoá có dấu cách, vỡ cú pháp JS, cả
+    // script tavernHelper chết. Key chứa chữ Hán chỉ được thay khi KHÔNG dính chữ Hán/kana hai bên.
+    const cjkL = CJK_KEY_RE.test(original) && CJK_KEY_RE.test(original[0]) ? `(?<!${CJK_CLASS})` : '';
+    const cjkR = CJK_KEY_RE.test(original) && CJK_KEY_RE.test(original[original.length - 1]) ? `(?!${CJK_CLASS})` : '';
     
     if (aggressive) {
       // ── 1. Macro double-curly: {{getvar::KEY}} / {{setvar::KEY::VAL}} ──
@@ -402,20 +416,20 @@ export function applyMvuToText(
         const bracket = `['${safeTranslated.replace(/'/g, "\\'")}']`;
         // Dot thường: obj.KEY / arr[0].KEY / fn().KEY
         newText = newText.replace(
-          new RegExp(`(${JS_RECEIVER})\\.${escaped}`, 'g'),
+          new RegExp(`(${JS_RECEIVER})\\.${escaped}${cjkR}`, 'g'),
           `$1${bracket}`
         );
         // Optional chaining: obj?.KEY — dạng bracket đúng là obj?.['KEY'] (file bug/119 dòng 940:
         // detail.能量池?.当前值 — vá tầng đầu xong thì tầng sau đứng sau `?.`).
         newText = newText.replace(
-          new RegExp(`\\?\\.${escaped}`, 'g'),
+          new RegExp(`\\?\\.${escaped}${cjkR}`, 'g'),
           `?.${bracket}`
         );
       }
 
       // ── 6. General standalone occurrences (fallback) ──
       const isAsciiOnly = /^[a-zA-Z0-9_]+$/.test(original);
-      let pattern = isAsciiOnly ? `\\b${escaped}\\b` : escaped;
+      let pattern = isAsciiOnly ? `\\b${escaped}\\b` : `${cjkL}${escaped}${cjkR}`;
       
       // Prevent double replacement if 'translated' contains 'original'
       // Example: original = "A", translated = "A (B)"
@@ -2807,6 +2821,14 @@ export function extractSchemaContextFromCard(card: CharacterCard | null | undefi
  * Tên biến MVU thật không bao giờ chứa backtick, dấu `|` của bảng markdown, `**`, khoảng trắng toàn
  * rộng hay ngoặc 【】, và không mở đầu bằng ký hiệu danh sách/tiêu đề.
  */
+/**
+ * (bug 255) Mục từ điển đổi tên một key ASCII (`user` → "Tỷ Lệ Mang Thai") — tool không bao giờ tự
+ * dịch key ASCII (identifier/macro của code), nên mục kiểu này chỉ có thể là học lệch. Dọn đi.
+ */
+export function isRenamedAsciiKey(key: string, value: unknown): boolean {
+  return /^[\x00-\x7F]+$/.test(key) && typeof value === 'string' && !!value && value !== key;
+}
+
 export function isPlausibleMvuKey(key: string): boolean {
   const k = String(key || '');
   if (!k.trim() || k.length > 60) return false;

@@ -1,0 +1,794 @@
+(() => {
+  const CYCLE_VERSION = 'V1.5';
+
+  const PHASE_MENSTRUATION = '月经期';
+  const PHASE_SAFE = '安全期';
+  const PHASE_OVULATION = '排卵期';
+  const PHASE_LUTEAL = '黄体期';
+  const PHASE_PREGNANT = '妊娠期';
+
+  const isPlainObject = value => value && typeof value === 'object' && !Array.isArray(value);
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  const asNumber = (value, fallback) => { const n = Number(value); return Number.isFinite(n) ? n : (fallback || 0); };
+  const asStr = value => (value === undefined || value === null) ? '' : String(value).trim();
+
+  /* ---- 就绪探测：宿主窗口上溯 + 全局接口（对齐 Bridge 已验证范式，V1.2.49） ---- */
+  function resolveHostWindow() {
+    let current = window;
+    try {
+      for (let i = 0; i < 6; i++) {
+        if (!current.parent || current.parent === current) break;
+        try {
+          if (current.parent.document && current.parent.document.body) current = current.parent;
+          else break;
+        } catch (secErr) { break; }
+      }
+    } catch (_) {}
+    return current;
+  }
+  const HOST_WINDOW = resolveHostWindow();
+  let mvuSource = 'none';
+
+  function getMvu() {
+    let value = null;
+    try { if (typeof Mvu !== 'undefined' && Mvu) { value = Mvu; mvuSource = 'bare'; } } catch (_) {}
+    try { if (!value && window.Mvu) { value = window.Mvu; mvuSource = 'window'; } } catch (_) {}
+    try { if (!value && HOST_WINDOW.Mvu) { value = HOST_WINDOW.Mvu; mvuSource = 'host'; } } catch (_) {}
+    if (!value) mvuSource = 'none';
+    return value;
+  }
+  function getEventOn() {
+    try { if (typeof eventOn === 'function') return eventOn; } catch (_) {}
+    try { if (typeof window.eventOn === 'function') return window.eventOn; } catch (_) {}
+    try { if (typeof HOST_WINDOW.eventOn === 'function') return HOST_WINDOW.eventOn; } catch (_) {}
+    return null;
+  }
+  function getTavernEvents() {
+    try { if (typeof tavern_events !== 'undefined' && tavern_events) return tavern_events; } catch (_) {}
+    try { return HOST_WINDOW.tavern_events || {}; } catch (_) { return {}; }
+  }
+  function getVariablesReader() {
+    try { if (typeof getVariables === 'function') return getVariables; } catch (_) {}
+    try { if (typeof HOST_WINDOW.getVariables === 'function') return HOST_WINDOW.getVariables.bind(HOST_WINDOW); } catch (_) {}
+    return null;
+  }
+  function getVariablesReplacer() {
+    try { if (typeof replaceVariables === 'function') return replaceVariables; } catch (_) {}
+    try { if (typeof HOST_WINDOW.replaceVariables === 'function') return HOST_WINDOW.replaceVariables.bind(HOST_WINDOW); } catch (_) {}
+    return null;
+  }
+
+
+  function hashName(key) {
+    const s = String(key || '');
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+    return h >>> 0;
+  }
+
+  const RACE_CYCLE_BASE = {
+    人族: [28, 5, 280],
+    猫裔: [24, 4, 120],
+    犬裔: [26, 5, 150],
+    狐裔: [25, 4, 140],
+    兔裔: [18, 3, 90],
+    蛇裔: [60, 0, 240],
+    羽裔: [30, 4, 160],
+    角裔: [32, 6, 330],
+    草木裔: [90, 0, 240],
+    器物裔: [365, 0, 200],
+    水裔: [29, 5, 270],
+    幽灵: [0, 0, 300],
+    神裔: [30, 5, 360],
+    魔裔: [45, 2, 90],
+    血族: [0, 0, 540]
+  };
+
+  function raceNameOf(stat, name) {
+    const arch = stat && stat['女性角色档案'] && stat['女性角色档案'][name];
+    return asStr(arch && arch.族裔);
+  }
+
+  // 日期解析：返回天数序号、年份与精度。无年份时继承参考年份，月日超出范围时判为无效
+  function buildDate(year, month, day, precision) {
+    if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    const t = Date.UTC(year, month - 1, day);
+    if (!Number.isFinite(t)) return null;
+    const d = new Date(t);
+    if (d.getUTCFullYear() !== year || d.getUTCMonth() + 1 !== month || d.getUTCDate() !== day) return null;
+    return { idx: Math.floor(t / 86400000), year: year, precision: precision };
+  }
+
+  function parseDateValue(str, refYear) {
+    const s = asStr(str);
+    if (!s || s === '未知' || s === '无' || s === '从未' || s === '--') return null;
+    let m = s.match(/(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]/);
+    if (m) return buildDate(+m[1], +m[2], +m[3], 'day');
+    m = s.match(/(\d{4})\s*年\s*(\d{1,2})\s*月/);
+    if (m) return buildDate(+m[1], +m[2], 1, 'month');
+    m = s.match(/(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]/);
+    if (m && Number.isFinite(refYear)) return buildDate(refYear, +m[1], +m[2], 'day');
+    m = s.match(/(\d{4})\s*[-/.]\s*(\d{1,2})\s*[-/.]\s*(\d{1,2})/);
+    if (m) return buildDate(+m[1], +m[2], +m[3], 'day');
+    m = s.match(/(?:^|\D)(\d{4})(\d{2})(\d{2})(?:\D|$)/);
+    if (m) return buildDate(+m[1], +m[2], +m[3], 'day');
+    return null;
+  }
+
+  function formatDateIdx(days) {
+    const d = new Date(days * 86400000);
+    const p2 = n => String(n).padStart(2, '0');
+    return d.getUTCFullYear() + '年' + p2(d.getUTCMonth() + 1) + '月' + p2(d.getUTCDate()) + '日';
+  }
+
+  // 时间基准解析：按四层来源给出今天的天数序号，回传来源标记供日志使用
+  function resolveTodayIdx(stat, sys) {
+    const anchor = parseDateValue(sys && sys['上次处理日期'], null);
+    const refYear = anchor ? anchor.year : new Date().getUTCFullYear();
+    const today = parseDateValue(stat && stat['日期'], refYear);
+    if (today) return { idx: today.idx, source: today.precision === 'month' ? '日期月精度' : '日期' };
+    if (anchor) return { idx: anchor.idx, source: '沿用锚点' };
+    return { idx: Math.floor(Date.now() / 86400000), source: '系统当前日期' };
+  }
+
+  function derivedParams(name, race) {
+    const h = hashName('cycle#' + name);
+    const base = RACE_CYCLE_BASE[race];
+    if (base) {
+      if (base[0] <= 0) return { L: 0, P: 0 };
+      return { L: Math.max(1, base[0] + (h % 5) - 2), P: Math.max(0, base[1] + (Math.floor(h / 15) % 3) - 1) };
+    }
+    const Lv = 21 + (h % 15);
+    const Pv = 3 + (Math.floor(h / 15) % 5);
+    return { L: Lv, P: Pv };
+  }
+
+  function derivedGestationDays(name, race) {
+    const h = hashName('gestation#' + name);
+    const base = RACE_CYCLE_BASE[race];
+    if (base) return base[2] > 0 ? Math.max(30, base[2] + (h % 11) - 5) : 0;
+    return 259 + (h % 17);
+  }
+
+  function layoutOf(rec) {
+    const Lv = clamp(Math.round(asNumber(rec.周期长度, 28)), 0, 400);
+    const Pv = clamp(Math.round(asNumber(rec.经期长度, 5)), 0, 20);
+    const Ov = Lv > 0 ? clamp(Lv - 14, Pv + 3, Lv - 2) : 0;
+    return { L: Lv, P: Pv, O: Ov };
+  }
+
+  function computePhase(day, lay) {
+    if (day <= lay.P) return PHASE_MENSTRUATION;
+    if (day < lay.O - 2) return PHASE_SAFE;
+    if (day <= lay.O + 1) return PHASE_OVULATION;
+    return PHASE_LUTEAL;
+  }
+
+  function nextPhaseInfo(day, lay) {
+    if (day <= lay.P) return { remain: Math.max(0, lay.P + 1 - day), next: PHASE_SAFE };
+    if (day < lay.O - 2) return { remain: Math.max(0, (lay.O - 2) - day), next: PHASE_OVULATION };
+    if (day <= lay.O + 1) return { remain: Math.max(0, (lay.O + 2) - day), next: PHASE_LUTEAL };
+    return { remain: Math.max(0, lay.L + 1 - day), next: PHASE_MENSTRUATION };
+  }
+
+  function refreshDerived(rec) {
+    const lay = layoutOf(rec);
+    rec.周期长度 = lay.L;
+    rec.经期长度 = lay.P;
+    rec.排卵日 = lay.O;
+    if (lay.L <= 0) {
+      rec.周期第几天 = 0;
+      rec.当前阶段 = PHASE_SAFE;
+      rec.下一阶段 = PHASE_SAFE;
+      rec.距下一阶段天数 = 0;
+      return;
+    }
+    rec.周期第几天 = clamp(Math.round(asNumber(rec.周期第几天, 1)) || 1, 1, lay.L);
+    rec.当前阶段 = computePhase(rec.周期第几天, lay);
+    const ni = nextPhaseInfo(rec.周期第几天, lay);
+    rec.下一阶段 = ni.next;
+    rec.距下一阶段天数 = ni.remain;
+  }
+
+  function representativeDay(phase, lay) {
+    if (phase === PHASE_MENSTRUATION) return clamp(2, 1, lay.P);
+    if (phase === PHASE_OVULATION) return lay.O;
+    if (phase === PHASE_LUTEAL) return clamp(lay.O + 3, lay.O + 2, lay.L);
+    if (phase === PHASE_SAFE) {
+      const lo = lay.P + 1;
+      const hi = Math.max(lo, lay.O - 3);
+      return clamp(lay.P + 2, lo, hi);
+    }
+    return -1;
+  }
+
+  function femaleCopies(stat, name) {
+    const out = [];
+    ['当前在场互动女性', '女性角色档案'].forEach(k => {
+      const copy = isPlainObject(stat[k]) ? stat[k][name] : undefined;
+      if (isPlainObject(copy)) out.push(copy);
+    });
+    return out;
+  }
+
+  function syncPrivate(stat, name, patch) {
+    femaleCopies(stat, name).forEach(copy => {
+      if (!isPlainObject(copy.私密档案)) return;
+      Object.keys(patch).forEach(k => { copy.私密档案[k] = patch[k]; });
+    });
+  }
+
+  // 预产期只从有证据的来源推算，证据等级写入 source 供状态栏区分展示
+  function findDueDate(name, stat, rec) {
+    for (const copy of femaleCopies(stat, name)) {
+      if (isPlainObject(copy.私密档案) && asStr(copy.私密档案.预产期类型) === '确诊') {
+        const d = parseDateValue(copy.私密档案.预产期, null);
+        if (d !== null) return { idx: d.idx, type: '确诊', source: '长期档案确诊' };
+      }
+    }
+    const events = isPlainObject(stat?.['角色追踪事件']) ? Object.values(stat['角色追踪事件']) : [];
+    for (const ev of events) {
+      if (!isPlainObject(ev)) continue;
+      if (asStr(ev.角色) !== name && asStr(ev.关联对象) !== name) continue;
+      if (asStr(ev.预产期类型) === '确诊' || asStr(ev.当前状态) === '确诊') {
+        const d = parseDateValue(ev.预产期, null);
+        if (d !== null) return { idx: d.idx, type: '确诊', source: '追踪事件确诊' };
+        const note = parseDateValue(ev.处理备注, null);
+        if (note !== null) return { idx: note.idx, type: '确诊', source: '追踪事件备注' };
+      }
+    }
+    if (rec && asStr(rec.预产期状态) === '确诊') {
+      const d = parseDateValue(rec.预产期, null);
+      if (d !== null) return { idx: d.idx, type: '确诊', source: '周期记录确诊' };
+    }
+    for (const copy of femaleCopies(stat, name)) {
+      if (isPlainObject(copy.私密档案) && asStr(copy.私密档案.预产期类型) === '预估') {
+        const d = parseDateValue(copy.私密档案.预产期, null);
+        if (d !== null) return { idx: d.idx, type: '预估', source: '长期档案预估' };
+      }
+    }
+    if (rec && asStr(rec.预产期状态) === '预估') {
+      const d = parseDateValue(rec.预产期, null);
+      if (d !== null) return { idx: d.idx, type: '预估', source: '周期记录预估' };
+    }
+    const gDays = derivedGestationDays(name, raceNameOf(stat, name));
+    for (const copy of femaleCopies(stat, name)) {
+      if (isPlainObject(copy.私密档案)) {
+        const sexDate = parseDateValue(copy.私密档案.上次内射时间, null);
+        if (sexDate !== null) return { idx: sexDate.idx + gDays, type: '预估', source: '内射时间推算' };
+      }
+    }
+    return null;
+  }
+
+  function initRecord(name, sys, todayIdx, stat) {
+    const dp = derivedParams(name, raceNameOf(stat, name));
+    const rec = {
+      周期长度: dp.L,
+      经期长度: dp.P,
+      排卵日: clamp(dp.L - 14, dp.P + 3, dp.L - 2),
+      周期第几天: 1,
+      当前阶段: PHASE_SAFE,
+      下一阶段: PHASE_OVULATION,
+      距下一阶段天数: 0,
+      本次周期开始日期: '',
+      妊娠中: false,
+      预产期: '',
+      预产期状态: '未怀孕',
+      历史周期: {}
+    };
+    let startDay = -1;
+    femaleCopies(stat, name).forEach(copy => {
+      if (startDay > 0 || !isPlainObject(copy.私密档案)) return;
+      const guess = representativeDay(asStr(copy.私密档案.生理期), layoutOf(rec));
+      if (guess > 0) startDay = guess;
+    });
+    if (startDay < 0 && layoutOf(rec).L > 0) startDay = 1 + (hashName('phase#' + name) % layoutOf(rec).L);
+    if (startDay < 0) startDay = 1;
+    rec.周期第几天 = startDay;
+    refreshDerived(rec);
+    rec.本次周期开始日期 = formatDateIdx(todayIdx - (rec.周期第几天 - 1));
+    sys.角色[name] = rec;
+    syncPrivate(stat, name, { 生理期: rec.当前阶段, 排卵特征日: rec.排卵日 });
+    return rec;
+  }
+
+  function pushHistory(rec) {
+    if (!isPlainObject(rec.历史周期)) rec.历史周期 = {};
+    const key = asStr(rec.本次周期开始日期);
+    if (!key) return;
+    rec.历史周期[key] = { 长度: clamp(Math.round(asNumber(rec.周期长度, 28)), 0, 400) };
+    const keys = Object.keys(rec.历史周期);
+    while (keys.length > 8) {
+      delete rec.历史周期[keys[0]];
+      keys.shift();
+    }
+  }
+
+  function advanceRecord(rec, days, todayIdx) {
+    const lay = layoutOf(rec);
+    if (lay.L <= 0) { refreshDerived(rec); return; }
+    let day = Math.round(asNumber(rec.周期第几天, 1)) + days;
+    const cycleCount = Math.ceil(days / lay.L) + 2;
+    let guard = 0;
+    while (day > lay.L && guard < cycleCount) {
+      day -= lay.L;
+      guard++;
+      pushHistory(rec);
+      const base = parseDateValue(rec.本次周期开始日期, null);
+      rec.本次周期开始日期 = formatDateIdx((base === null ? todayIdx : base.idx) + lay.L);
+    }
+    if (day > lay.L) day = ((day - 1) % lay.L) + 1;
+    rec.周期第几天 = clamp(day, 1, lay.L);
+    refreshDerived(rec);
+  }
+
+  function restartFromMenstruation(rec, todayIdx) {
+    rec.妊娠中 = false;
+    rec.预产期 = '';
+    rec.预产期状态 = '未怀孕';
+    rec.周期第几天 = 1;
+    rec.本次周期开始日期 = formatDateIdx(todayIdx);
+    refreshDerived(rec);
+  }
+
+  function copyIsPregnant(copy) {
+    const p = copy && copy.私密档案;
+    if (!isPlainObject(p)) return false;
+    if (asStr(p.是否怀孕) === '是') return true;
+    if (asStr(p.生理期) === PHASE_PREGNANT && asStr(p.是否怀孕) !== '否') return true;
+    return false;
+  }
+
+  const PREGNANT_STATES = ['已确认怀孕', '孕期推进', '临产待处理'];
+
+  // 追踪事件作为妊娠状态的第二个来源，私密档案漏写时依然成立
+  function trackedPregnancy(stat, name) {
+    const events = isPlainObject(stat && stat['角色追踪事件']) ? stat['角色追踪事件'] : null;
+    if (!events) return false;
+    return Object.values(events).some(ev => {
+      if (!isPlainObject(ev)) return false;
+      if (asStr(ev.角色) !== name && asStr(ev.关联对象) !== name) return false;
+      return PREGNANT_STATES.indexOf(asStr(ev.当前状态)) >= 0;
+    });
+  }
+
+  // 汇总已到期的追踪事件，供正文优先处理
+  function collectDueChecks(stat, todayIdx) {
+    const out = [];
+    const events = isPlainObject(stat && stat['角色追踪事件']) ? stat['角色追踪事件'] : null;
+    if (!events) return out;
+    Object.keys(events).forEach(key => {
+      const ev = events[key];
+      if (!isPlainObject(ev)) return;
+      if (PREGNANT_STATES.indexOf(asStr(ev.当前状态)) >= 0) return;
+      const check = parseDateValue(ev.下次检查日期, null);
+      const due = parseDateValue(ev.确认截止日期, null);
+      const reached = (check !== null && todayIdx >= check.idx) || (due !== null && todayIdx >= due.idx);
+      if (reached) out.push({ 事件: key, 角色: asStr(ev.角色), 怀孕几率: asStr(ev.怀孕几率) });
+    });
+    return out;
+  }
+
+  // 汇总已确认怀孕但尚未告知主角的女性，供正文安排通知
+  function collectPendingNotice(stat) {
+    const out = [];
+    const names = [];
+    const seen = {};
+    ['当前在场互动女性', '女性角色档案'].forEach(k => {
+      const bucket = stat && stat[k];
+      if (!isPlainObject(bucket)) return;
+      Object.keys(bucket).forEach(n => { if (n && !seen[n]) { seen[n] = true; names.push(n); } });
+    });
+    names.forEach(name => {
+      const copies = femaleCopies(stat, name);
+      const told = copies.some(copy => isPlainObject(copy.私密档案) && asStr(copy.私密档案.怀孕已告知) === '是');
+      if (told) return;
+      const pregnant = copies.some(copyIsPregnant) || trackedPregnancy(stat, name);
+      if (pregnant) out.push(name);
+    });
+    return out;
+  }
+
+  // 把确诊预产期回写到追踪事件，并记录证据来源
+  function syncDueTracking(stat, name, dueStr, source) {
+    if (!isPlainObject(stat?.['角色追踪事件'])) return;
+    Object.values(stat['角色追踪事件']).forEach(ev => {
+      if (!isPlainObject(ev)) return;
+      if (asStr(ev.角色) !== name && asStr(ev.关联对象) !== name) return;
+      if (!parseDateValue(ev.预产期, null)) ev.预产期 = dueStr;
+      if (source) ev.预产期来源 = source;
+    });
+  }
+
+  /* ---- 名册性别闸：女性白名单 + 主角/男方排除 + 自愈清理（V1.2.49） ---- */
+  const FEMALE_SOURCES = ['当前在场互动女性', '女性角色档案', '后宫状态'];
+  const MALE_SOURCES = ['当前在场互动男性', '男性角色档案'];
+  const HERO_ALIASES = ['都市神豪之我爱装逼', '都市神壕之我爱装逼', '都市神豪', '都市神壕', '主角', '宿主', 'user', 'User', 'USER', '{{user}}', '<user>', '你', '玩家', '用户'];
+
+  function collectNames(stat, sources) {
+    const out = [];
+    const seen = {};
+    sources.forEach(k => {
+      const bucket = stat[k];
+      if (!isPlainObject(bucket)) return;
+      Object.keys(bucket).forEach(n => {
+        const s = asStr(n);
+        if (!s || seen[s] || s === '未知') return;
+        seen[s] = true;
+        out.push(s);
+      });
+    });
+    return out;
+  }
+
+  function isUsableName(value) {
+    const s = asStr(value);
+    if (!s || s.length > 30) return false;
+    if (HERO_ALIASES.indexOf(s) >= 0) return false;
+    if (/^(?:都市神[豪壕]|kaidan|system|TH-)/i.test(s)) return false;
+    return true;
+  }
+
+  // 主角名：先读变量，再上溯宿主窗口，取值链与 Bridge 的 resolveHostUserName 一致
+  function resolveHeroName(stat) {
+    const u = (stat && stat.user) || {};
+    const keys = ['姓名', '用户名', '玩家名', 'name'];
+    for (let i = 0; i < keys.length; i++) if (isUsableName(u[keys[i]])) return asStr(u[keys[i]]);
+    try {
+      const host = HOST_WINDOW || {};
+      if (host.SillyTavern && typeof host.SillyTavern.getContext === 'function') {
+        const ctx = host.SillyTavern.getContext();
+        if (ctx && isUsableName(ctx.name2)) return asStr(ctx.name2);
+      }
+      if (isUsableName(host.user_name)) return asStr(host.user_name);
+      if (isUsableName(host.name2)) return asStr(host.name2);
+      if (typeof host.substituteParams === 'function') {
+        const sub = host.substituteParams('{{user}}');
+        if (isUsableName(sub)) return asStr(sub);
+      }
+    } catch (_) {}
+    return '';
+  }
+
+  // 受孕追踪里的男方：关联对象 / 父亲来源 / 父亲 只当「对方」用，绝不据此建档
+  function collectPartnerNames(stat) {
+    const out = {};
+    if (!isPlainObject(stat['角色追踪事件'])) return out;
+    Object.values(stat['角色追踪事件']).forEach(ev => {
+      if (!isPlainObject(ev)) return;
+      [ev.关联对象, ev.父亲来源, ev.父亲].forEach(v => {
+        const s = asStr(v);
+        if (isUsableName(s)) out[s] = true;
+      });
+    });
+    return out;
+  }
+
+  function isFemaleEvidence(name, g) {
+    if (!isUsableName(name)) return false;
+    if (g.male[name]) return false;
+    if (g.hero && name === g.hero) return false;
+    if (g.archived[name] || g.trackedFemale[name]) return true;
+    return false;
+  }
+
+  function buildGenderContext(stat) {
+    const hero = resolveHeroName(stat);
+    const male = {};
+    collectNames(stat, MALE_SOURCES).forEach(n => { male[n] = true; });
+    const partner = collectPartnerNames(stat);
+    const archived = {};
+    collectNames(stat, FEMALE_SOURCES).forEach(n => { archived[n] = true; });
+    const trackedFemale = {};
+    if (isPlainObject(stat['角色追踪事件'])) {
+      Object.values(stat['角色追踪事件']).forEach(ev => {
+        if (!isPlainObject(ev)) return;
+        const s = asStr(ev.角色);
+        if (isUsableName(s)) trackedFemale[s] = true;
+      });
+    }
+    const g = { hero, male, partner, archived, trackedFemale, roster: [] };
+    const seen = {};
+    Object.keys(archived).forEach(n => { if (!seen[n]) { seen[n] = true; g.roster.push(n); } });
+    Object.keys(trackedFemale).forEach(n => { if (!seen[n]) { seen[n] = true; g.roster.push(n); } });
+    g.roster = g.roster.filter(n => isFemaleEvidence(n, g));
+    return g;
+  }
+
+  // 自愈：把已被证伪为男性 / 主角的记录摘掉，只在有反证时动手
+  function pruneInvalidRecords(sys, g) {
+    const removed = [];
+    Object.keys(sys.角色).forEach(name => {
+      if (!isPlainObject(sys.角色[name])) return;
+      if (isFemaleEvidence(name, g)) return;
+      const maleEvidence = !!g.male[name]
+        || (!!g.hero && name === g.hero)
+        || (!!g.partner[name] && !g.archived[name] && !g.trackedFemale[name]);
+      if (!maleEvidence) return;
+      delete sys.角色[name];
+      removed.push(name);
+    });
+    return removed;
+  }
+
+  function maintainCycles(stat) {
+    if (!isPlainObject(stat)) return '';
+    if (!isPlainObject(stat['生理周期系统'])) stat['生理周期系统'] = {};
+    const sys = stat['生理周期系统'];
+    if (!isPlainObject(sys['角色'])) sys['角色'] = {};
+
+    const resolved = resolveTodayIdx(stat, sys);
+    const todayIdx = resolved.idx;
+    const anchor = parseDateValue(sys['上次处理日期'], null);
+    const raw = asStr(stat['日期']);
+
+    let D = anchor === null ? 0 : todayIdx - anchor.idx;
+    if (D < 0) {
+      console.warn('[都市神壕 生理周期调度] 日期早于锚点，按 0 处理', { 日期原文: raw, 基准来源: resolved.source });
+      D = 0;
+    }
+    if (D > 400) {
+      console.warn('[都市神壕 生理周期调度] 单轮跨度超过上限，收束到 400 天', { 日期原文: raw, 原始差值: D });
+      D = 400;
+    } else if (D > 60) {
+      console.warn('[都市神壕 生理周期调度] 单轮跨度较大', { 日期原文: raw, 天数: D });
+    }
+
+    if (resolved.source === '沿用锚点' || resolved.source === '系统当前日期') {
+      console.warn('[都市神壕 生理周期调度] 日期未能解析，本轮不推进', { 日期原文: raw, 基准来源: resolved.source });
+    }
+    sys['上次处理日期'] = formatDateIdx(todayIdx);
+
+    const gender = buildGenderContext(stat);
+    const names = gender.roster;
+    const pruned = pruneInvalidRecords(sys, gender);
+
+    const changed = [];
+    if (pruned.length) changed.push('清理误收录(' + pruned.join('/') + ')');
+    names.forEach(name => {
+      let rec = isPlainObject(sys.角色[name]) ? sys.角色[name] : null;
+      const pregnant = femaleCopies(stat, name).some(copyIsPregnant) || trackedPregnancy(stat, name);
+
+      if (pregnant) {
+        if (!rec) rec = initRecord(name, sys, todayIdx, stat);
+        rec.妊娠中 = true;
+        rec.当前阶段 = PHASE_PREGNANT;
+        rec.下一阶段 = PHASE_MENSTRUATION;
+        rec.距下一阶段天数 = 0;
+        const dueInfo = findDueDate(name, stat, rec);
+        if (dueInfo !== null) {
+          const dueStr = formatDateIdx(dueInfo.idx);
+          rec.预产期 = dueStr;
+          rec.预产期状态 = dueInfo.type;
+          syncPrivate(stat, name, { 生理期: PHASE_PREGNANT, 是否怀孕: '是', 预产期: dueStr, 预产期类型: dueInfo.type });
+          syncDueTracking(stat, name, dueStr, dueInfo.source);
+          const diff = dueInfo.idx - todayIdx;
+          const tail = diff > 0 ? (diff + '天后临产') : (diff === 0 ? '今日临产' : '已超期' + Math.abs(diff) + '天');
+          changed.push(name + '=妊娠中(' + dueInfo.type + '预产期' + dueStr + ',' + tail + ')');
+        } else {
+          syncPrivate(stat, name, { 生理期: PHASE_PREGNANT, 是否怀孕: '是' });
+          changed.push(name + '=妊娠期，预产期等待确认');
+        }
+        return;
+      }
+
+      if (!rec) {
+        rec = initRecord(name, sys, todayIdx, stat);
+        changed.push(name + '=建档(' + rec.当前阶段 + ',第' + rec.周期第几天 + '/' + rec.周期长度 + '天)');
+        return;
+      }
+
+      if (rec.妊娠中 === true) {
+        restartFromMenstruation(rec, todayIdx);
+        changed.push(name + '=产后重启(月经期第1天)');
+        syncPrivate(stat, name, { 生理期: rec.当前阶段, 排卵特征日: rec.排卵日, 预产期: '无', 预产期类型: '无' });
+        return;
+      }
+
+      if (D > 0) {
+        advanceRecord(rec, D, todayIdx);
+        changed.push(name + '=+' + D + '天→' + rec.当前阶段 + '(' + rec.距下一阶段天数 + '天后' + rec.下一阶段 + ')');
+        syncPrivate(stat, name, { 生理期: rec.当前阶段, 排卵特征日: rec.排卵日 });
+      } else {
+        refreshDerived(rec);
+      }
+    });
+
+    sys['待结算事件'] = collectDueChecks(stat, todayIdx);
+    sys['待通知'] = collectPendingNotice(stat);
+
+    const head = '日期=' + raw + ' 基准=' + resolved.source + ' 推进=' + D + '天';
+    return changed.length ? head + ' | ' + changed.join('；') : head;
+  }
+
+  function pickStat(variables) {
+    if (!variables) return null;
+    if (isPlainObject(variables.stat_data)) return variables.stat_data;
+    if (isPlainObject(variables.variables?.stat_data)) return variables.variables.stat_data;
+    if (isPlainObject(variables.data?.stat_data)) return variables.data.stat_data;
+    if (isPlainObject(variables) && (isPlainObject(variables['生理周期系统']) || '日期' in variables)) return variables;
+    return null;
+  }
+
+  function pickStatContainer(source) {
+    if (!isPlainObject(source)) return null;
+    if (isPlainObject(source.stat_data)) return { holder: source, key: 'stat_data' };
+    if (isPlainObject(source.variables?.stat_data)) return { holder: source.variables, key: 'stat_data' };
+    if (isPlainObject(source.data?.stat_data)) return { holder: source.data, key: 'stat_data' };
+    return null;
+  }
+
+  async function persistStat(stat, reason = 'cycle-update') {
+    if (!isPlainObject(stat)) return false;
+    const mvu = getMvu();
+    let ok = false;
+    try {
+      if (mvu && typeof mvu.getMvuData === 'function' && typeof mvu.replaceMvuData === 'function') {
+        const mvuData = JSON.parse(JSON.stringify(mvu.getMvuData({ type: 'message', message_id: 'latest' }) || {}));
+        const container = pickStatContainer(mvuData);
+        if (container) {
+          container.holder[container.key] = JSON.parse(JSON.stringify(stat));
+          await mvu.replaceMvuData(mvuData, { type: 'message', message_id: 'latest' });
+          ok = true;
+        }
+      }
+    } catch (e) {
+      console.warn('[都市神壕 生理周期调度] Mvu persist failed:', e);
+    }
+    if (!ok) {
+      const reader = getVariablesReader();
+      const replacer = getVariablesReplacer();
+      try {
+        if (reader && replacer) {
+          const vars = JSON.parse(JSON.stringify(reader({ type: 'message', message_id: 'latest' }) || {}));
+          const container = pickStatContainer(vars);
+          if (container) {
+            container.holder[container.key] = JSON.parse(JSON.stringify(stat));
+            replacer(vars, { type: 'message', message_id: 'latest' });
+            ok = true;
+          }
+        }
+      } catch (e) {
+        console.warn('[都市神壕 生理周期调度] variables persist failed:', e);
+      }
+    }
+    return ok;
+  }
+
+  function maintainCyclesSafe(stat) {
+    try {
+      return maintainCycles(stat);
+    } catch (error) {
+      console.warn('[都市神壕 生理周期调度] maintain failed:', error && error.message || error);
+      return '';
+    }
+  }
+
+  async function reconcileLatest(reason = 'boot') {
+    let stat = null;
+    const mvu = getMvu();
+    try {
+      if (mvu && typeof mvu.getMvuData === 'function') stat = pickStat(mvu.getMvuData({ type: 'message', message_id: 'latest' }));
+    } catch (_) {}
+    if (!stat) {
+      const reader = getVariablesReader();
+      if (reader) {
+        try { stat = pickStat(reader({ type: 'message', message_id: 'latest' })); } catch (_) {}
+      }
+    }
+    if (isPlainObject(stat)) {
+      const log = maintainCyclesSafe(stat);
+      if (log) {
+        console.info('[都市神壕 生理周期调度] ' + reason + ' reconciliation applied:', log);
+        await persistStat(stat, reason);
+      }
+    }
+  }
+
+  async function onVariables(variables) {
+    try {
+      const stat = pickStat(variables);
+      const log = maintainCyclesSafe(stat);
+      if (log) {
+        console.info('[都市神壕 生理周期调度]', log);
+        await persistStat(stat, 'VARIABLE_UPDATE_ENDED');
+      }
+    } catch (error) {
+      console.warn('[都市神壕 生理周期调度] handler failed:', error && error.message || error);
+    }
+  }
+
+  async function onGenerationEnded() {
+    await reconcileLatest('GENERATION_ENDED');
+  }
+
+  const RETRY_LIMIT = 120;   // 250ms × 120 ≈ 30 秒
+  const RETRY_GAP = 250;
+  let bindDone = false;
+  const bindStops = [];
+
+  // 双挂点：变量更新完成（主） + 生成结束（兜底）。两者都只做幂等对账。
+  function tryBind() {
+    const mvu = getMvu();
+    const on = getEventOn();
+    if (!mvu || !mvu.events || typeof on !== 'function') return false;
+    const stops = [];
+    const add = (type, handler) => {
+      if (!type) return false;
+      try {
+        const listener = on(type, handler);
+        if (listener && typeof listener.stop === 'function') stops.push(() => { try { listener.stop(); } catch (_) {} });
+        return true;
+      } catch (error) {
+        console.warn('[都市神壕 生理周期调度] bind failed:', type, error && error.message || error);
+        return false;
+      }
+    };
+    const okInit = add(mvu.events.VARIABLE_INITIALIZED, () => reconcileLatest('VARIABLE_INITIALIZED'));
+    const okEnded = add(mvu.events.VARIABLE_UPDATE_ENDED, onVariables);
+    const tav = getTavernEvents();
+    const okGen = add(tav && tav.GENERATION_ENDED, onGenerationEnded);
+    if (!okEnded && !okGen) {
+      stops.splice(0).forEach(fn => fn());
+      return false;
+    }
+    stops.forEach(fn => bindStops.push(fn));
+    bindDone = true;
+    const parts = [];
+    if (okInit) parts.push('init');
+    if (okEnded) parts.push('update_ended');
+    if (okGen) parts.push('generation_ended');
+    console.info('[都市神壕 生理周期调度] ready ' + CYCLE_VERSION + ' | bind=' + parts.join('+') + ' | mvu=' + mvuSource);
+    return true;
+  }
+
+  function awaitMvu(attempt) {
+    if (bindDone || tryBind()) return;
+    if (attempt === 0) {
+      try {
+        if (typeof waitGlobalInitialized === 'function') Promise.resolve(waitGlobalInitialized('Mvu')).catch(() => {});
+      } catch (_) {}
+    }
+    if (attempt >= RETRY_LIMIT) {
+      console.error('[都市神壕 生理周期调度] 变量事件挂载失败：本会话只在刷新页面时对账，游玩期间不推进。mvu=' + mvuSource + ' eventOn=' + (getEventOn() ? 'ok' : 'none'));
+      return;
+    }
+    if (attempt > 0 && attempt % 20 === 0) {
+      console.warn('[都市神壕 生理周期调度] 变量事件仍在等待挂载 ' + attempt + '/' + RETRY_LIMIT);
+    }
+    HOST_WINDOW.setTimeout(() => awaitMvu(attempt + 1), RETRY_GAP);
+  }
+
+  async function waitOptionalGlobal(name, timeout = 1500) {
+    if (name === 'Mvu' && getMvu()) return getMvu();
+    if (window[name]) return window[name];
+    try {
+      if (typeof waitGlobalInitialized === 'function') {
+        await Promise.race([
+          waitGlobalInitialized(name),
+          new Promise(resolve => setTimeout(resolve, timeout)),
+        ]);
+      }
+    } catch (error) {
+      console.warn('[都市神壕 生理周期调度] wait global failed:', name, error && error.message || error);
+    }
+    return name === 'Mvu' ? (getMvu() || null) : (window[name] || null);
+  }
+
+  async function boot() {
+    await waitOptionalGlobal('Mvu');
+    await reconcileLatest('boot');
+    awaitMvu(0);
+  }
+
+  const runner = typeof errorCatched === 'function' ? errorCatched(boot) : boot;
+  if (typeof $ === 'function') {
+    $(runner);
+  } else if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', runner);
+  } else {
+    runner();
+  }
+})();

@@ -49,6 +49,7 @@ import { isRefusalError } from '../utils/refusalGuard';
 import { collectProblemFields } from '../utils/problemFields';
 // (bug 219) Dịch lại không bao giờ được làm tệ hơn bản đang có.
 import { judgeRetryResult, regressionMessage } from '../utils/retryRegression';
+import { stringLiteralDrop } from '../utils/codeLiterals';
 // (bug 221) Giữ tab sống khi Edge muốn cho nó đi ngủ.
 import { startKeepAlive, stopKeepAlive, acquireKeepAlive, releaseKeepAlive, measureKeepAliveDbfs, CHROMIUM_SILENCE_DBFS } from '../utils/keepAlive';
 import { collectExternalCodeForCard } from '../utils/externalLinkVault';
@@ -1622,6 +1623,13 @@ export function useTranslation() {
             translated = field.original;
           }
         }
+      }
+
+      // (bug 257) Chuỗi bị GỘP (`'[' + x + ']'` → `"[' + x + ']"`): code vẫn chạy nên chốt cú pháp
+      // không thấy — chỉ giao diện in nguyên văn đoạn code. Báo để người dùng soát/dịch lại.
+      if (translated && translated !== field.original && (field.group === 'regex' || field.group === 'tavern_helper')) {
+        const drop = stringLiteralDrop(field.original, translated);
+        if (drop > 0) store.addLog('warning', `⚠️ ${field.label}: bản dịch có ít hơn bản gốc ${drop} chuỗi trong code — nghi hai chuỗi bị gộp làm một (giao diện sẽ in nguyên văn đoạn code). Soát chỗ có dấu nháy ' / " bị đổi, hoặc dịch lại riêng mục này.`);
       }
 
       // ═══ (User 2026 — bugNeedFix/33) GUARD CHỐNG "AI BỊA THÊM CODE" (safeString & đồng bọn) ═══

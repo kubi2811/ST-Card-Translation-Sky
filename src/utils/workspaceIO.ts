@@ -215,7 +215,7 @@ export function buildWorkspace(
   // (bug 255) Từ điển / thuật ngữ / metadata: chỉ phần thuộc thẻ này — xem scopeDictToCard.
   const hay = cardSourceText(src.fields);
   let droppedForeign = 0;
-  for (const name of ['mvuDictionary', 'ejsEntryNameDict', 'ejsKeywordDict']) {
+  for (const name of ['mvuDictionary', 'ejsEntryNameDict', 'ejsKeywordDict', 'codeLiteralDict']) {
     if (tc[name] && typeof tc[name] === 'object') {
       const r = scopeDictToCard(tc[name] as Record<string, string>, hay);
       tc[name] = r.dict;
@@ -285,7 +285,7 @@ export function parseWorkspace(text: string): WorkspaceFile {
   // (bug 255) File cũ (trước bản này) chép cả từ điển của máy người gửi — lọc lại theo thẻ.
   const hay = cardSourceText(raw.fields);
   const tc = raw.translationConfig as Record<string, unknown>;
-  for (const name of ['mvuDictionary', 'ejsEntryNameDict', 'ejsKeywordDict']) {
+  for (const name of ['mvuDictionary', 'ejsEntryNameDict', 'ejsKeywordDict', 'codeLiteralDict']) {
     if (tc[name] && typeof tc[name] === 'object') tc[name] = scopeDictToCard(tc[name] as Record<string, string>, hay).dict;
   }
   if (raw.mvuKeyMetadata && typeof raw.mvuKeyMetadata === 'object') raw.mvuKeyMetadata = scopeDictToCard(raw.mvuKeyMetadata, hay).dict;

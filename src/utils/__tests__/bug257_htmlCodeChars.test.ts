@@ -97,4 +97,10 @@ describe('bug 257 — bước 2: chữ Hán đơn trong code theo bảng cố đ
     const toks = extractCJKTokens(r.text).map(t => t.text);
     expect(toks).toEqual(expect.arrayContaining(['月', '日', '号']));
   });
+  it('`次?` trong regex ⇒ `(?:次)?` (dịch ra `(?:lần)?`, không phải `lần?`)', () => {
+    const src = 'var mm = seg.match(/(\\d+)\\s*人\\s*(\\d+)\\s*次?\\s*$/);';
+    const r = cjkCharClassesToAlternation(src);
+    expect(r.text).toContain('\\s*(?:次)?\\s*$/');
+    expect(r.text).toContain('\\s*人\\s*');
+  });
 });

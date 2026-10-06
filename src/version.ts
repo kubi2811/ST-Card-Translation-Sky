@@ -2,5 +2,5 @@
 // BUMP `APP_VERSION` on every fix so builds are distinguishable in the UI (shown in the
 // sidebar header). Use the patch number for small fixes; keep `APP_VERSION_NOTE` to a one-line
 // summary of the most recent change (shown on hover).
-export const APP_VERSION = '2.62.0';
-export const APP_VERSION_NOTE = 'v2.62.0: bug 257 giao dien HTML dich xong khong gay: giu nguyen ten font CJK, class CSS chu Han thanh :is(.a-B-C, .a-B.C), lang=vi; chu Han don trong code (无 年月日 次 人 你 千万亿 thu trong tuan…) dich theo bang co dinh thay vi phien am Han-Viet; [日号] trong regex thanh (?:日|号).';
+export const APP_VERSION = '2.63.0';
+export const APP_VERSION_NOTE = 'v2.63.0: bug 257 (buoc 3-4) chuoi tieng Trung trong code mot goc mot ban dich ca the (tu dien chuoi theo the; het ban trung bi dich lai kieu Han-Viet), dau cach o cho noi chuoi, het gop nham \'[\' + x + \']\', canh bao chuoi bi gop, 次? trong regex thanh (?:lan)?.';

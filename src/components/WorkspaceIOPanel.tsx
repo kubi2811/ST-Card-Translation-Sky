@@ -54,7 +54,7 @@ function dataUrlToArrayBuffer(url: string): ArrayBuffer | null {
   } catch { return null; }
 }
 
-const DICT_NAMES = ['mvuDictionary', 'ejsEntryNameDict', 'ejsKeywordDict'] as const;
+const DICT_NAMES = ['mvuDictionary', 'ejsEntryNameDict', 'ejsKeywordDict', 'codeLiteralDict'] as const;
 
 /** Đổ workspace vào app. Kết nối/API của người nhận GIỮ NGUYÊN — file không chạm tới chúng. */
 export async function applyWorkspace(ws: WorkspaceFile): Promise<{ links: number }> {

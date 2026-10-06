@@ -4258,14 +4258,20 @@ export function fixRedundantParentInBracketPath(text: string, original?: string)
 export function fixNestedQuoteBracketPaths(text: string): string {
   if (!text || typeof text !== 'string') return text;
   let result = text;
+  // (bug 257) Ruột ngoặc phải là TÊN KEY (`['Độ Hảo Cảm']`), không phải biểu thức. Bản cũ cho phép
+  // mọi ký tự nên nuốt nhầm hai chuỗi NỐI quanh một biến:
+  //   '[' + Object.keys(s).length + ']'   →   "[' + Object.keys(s).length + ']"
+  // — code biến thành MỘT chuỗi hằng, giao diện in nguyên văn "[' + Object.keys(s).length + ']".
+  // Tên key không chứa `+`, ngoặc tròn, và không mở/đóng bằng khoảng trắng.
+  const KEY = String.raw`[^'"\]\s+()](?:[^'"\]+()]*[^'"\]\s+()])?`;
   // Nháy ĐƠN bao ngoài chứa ['key'] dùng nháy đơn → đổi nháy ngoài thành nháy KÉP
   result = result.replace(
-    /'([A-Za-z_$][\w$.]*)?((?:\[\s*'[^'\]]*'\s*\])+)'/g,
+    new RegExp(String.raw`'([A-Za-z_$][\w$.]*)?((?:\[\s*'${KEY}'\s*\])+)'`, 'g'),
     (m, prefix: string | undefined, brackets: string) => (m.includes('"') ? m : `"${prefix || ''}${brackets}"`)
   );
   // Nháy KÉP bao ngoài chứa ["key"] dùng nháy kép → đổi nháy ngoài thành nháy ĐƠN
   result = result.replace(
-    /"([A-Za-z_$][\w$.]*)?((?:\[\s*"[^"\]]*"\s*\])+)"/g,
+    new RegExp(String.raw`"([A-Za-z_$][\w$.]*)?((?:\[\s*"${KEY}"\s*\])+)"`, 'g'),
     (m, prefix: string | undefined, brackets: string) => (m.includes("'") ? m : `'${prefix || ''}${brackets}'`)
   );
   return result;

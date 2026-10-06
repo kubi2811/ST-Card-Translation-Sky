@@ -6,6 +6,10 @@ import { writeDebugLog } from './debugLogger';
 import { extractScriptBodies, hasRealJsSignal, jsParseError } from './scriptSafety';
 import { cjkFileNameRanges } from './cjk';
 import { lookupCodeChars, cjkCharClassesToAlternation } from './codeChars';
+import {
+  isWholeLiteralToken, isLiteralKeyCandidate, padConcatBoundaries, isRememberableLiteral,
+  getCodeLiteralDict, mergeCodeLiteralDict,
+} from './codeLiterals';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Public types
@@ -1901,6 +1905,19 @@ export async function surgicalTranslate(
   const { callProvider, computePoolConcurrency } = await import('./apiClient');
   // (bug 257) `[日号]` trong regex ⇒ `(?:日|号)` trước khi dịch — xem cjkCharClassesToAlternation.
   text = cjkCharClassesToAlternation(text).text;
+  // (bug 257) Từ điển chuỗi của thẻ — chuỗi đã dịch ở field trước thì dùng lại y nguyên.
+  const literalDict = getCodeLiteralDict();
+  /** Trước khi ghép: thêm dấu cách ở chỗ nối chuỗi + ghi chuỗi trọn vào từ điển của thẻ. */
+  const finalizeTokens = (ts: CJKToken[]) => {
+    const learned: Record<string, string> = {};
+    for (const t of ts) {
+      if (!t.translated || t.translated === t.text) continue;
+      const tr = t.translated.trim();
+      if (isLiteralKeyCandidate(text, t) && isRememberableLiteral(tr) && !literalDict[t.text.trim()]) learned[t.text.trim()] = tr;
+      t.translated = padConcatBoundaries(text, t, t.translated);
+    }
+    mergeCodeLiteralDict(learned);
+  };
   // Bang Hán → Việt cua chinh lan dich nay. Nguoi goi can no de va regex trong code:
   // regex khop nhan tieng Trung ma khong duoc va thi sau khi dich literal se het khop,
   // chuc nang chet im lang (khong loi, khong canh bao).
@@ -1955,6 +1972,12 @@ export async function surgicalTranslate(
     if (local) {
       token.translated = local;
       writeDebugLog(`[surgicalTranslate] CodeChar: "${trimmed}" → "${local}"`);
+      continue;
+    }
+    // (bug 257) Chuỗi trọn đã có bản dịch ở field khác của thẻ ⇒ dùng lại, không hỏi AI.
+    if (literalDict[trimmed] && isLiteralKeyCandidate(text, token)) {
+      token.translated = literalDict[trimmed];
+      writeDebugLog(`[surgicalTranslate] Literal: "${trimmed}" → "${token.translated}"`);
     }
   }
 
@@ -1972,6 +1995,7 @@ export async function surgicalTranslate(
 
   const pendingTokens = tokens.filter(t => !t.translated);
   if (pendingTokens.length === 0) {
+    finalizeTokens(tokens);
     const rawReinserted = reinsertTranslations(text, tokens);
     const normalized = normalizeFullwidthPunctuation(rawReinserted);
     const cssValidated = postValidateCSSProperties(text, normalized);
@@ -1999,7 +2023,9 @@ export async function surgicalTranslate(
 
   for (const token of pendingTokens) {
     const trimmed = token.text.trim();
-    const needsConsistency = isLogicField || token.isIdentifier || token.isObjectKey || token.isDotNotation || token.isCssClass || token.isHtmlAttr;
+    // (bug 257) + chuỗi trọn (`'房产地产'` trong mảng / sau return / sau ===) — code tra theo nó.
+    const needsConsistency = isLogicField || token.isIdentifier || token.isObjectKey || token.isDotNotation || token.isCssClass || token.isHtmlAttr
+      || isWholeLiteralToken(text, token);
 
     if (needsConsistency) {
       if (!textToRepToken.has(trimmed)) {
@@ -2274,6 +2300,22 @@ ${langRules}${glossaryPrompt}${mvuPrompt}` +
       }
     }
 
+    // ── (bug 257) Chép bản dịch của token ĐẠI DIỆN sang các bản trùng TRƯỚC lượt dự phòng ──
+    // Trước đây việc chép này nằm ở Step 9 (SAU lượt dự phòng), nên mọi bản trùng — chưa có bản
+    // dịch — bị gửi đi lần nữa ở lượt Hán-Việt dưới đây: cùng `'房产地产'` ra 'Bất động sản' ở chỗ
+    // đại diện và 'nhà đất' ở các chỗ còn lại, và chữ đơn ra phiên âm (无 → vô, 你 → nễ).
+    {
+      const repMap = new Map<string, string>();
+      for (const t of uniqueTokens) if (t.translated?.trim()) repMap.set(t.text.trim(), t.translated);
+      for (const t of tokens) {
+        if (t.translated?.trim()) continue;
+        const needsConsistency = isLogicField || t.isIdentifier || t.isObjectKey || t.isDotNotation || t.isCssClass || t.isHtmlAttr
+          || isWholeLiteralToken(text, t);
+        const v = needsConsistency ? repMap.get(t.text.trim()) : undefined;
+        if (v) t.translated = v;
+      }
+    }
+
     // ── Step 8.5: Hán Việt / Sino-Vietnamese Fallback Wave for remaining untranslated tokens ──
     const fallbackUntranslated = tokens.filter(t => !t.translated?.trim());
     if (fallbackUntranslated.length > 0) {
@@ -2384,7 +2426,8 @@ CRITICAL RULES:
 
     for (const t of tokens) {
       const trimmed = t.text.trim();
-      const needsConsistency = isLogicField || t.isIdentifier || t.isObjectKey || t.isDotNotation || t.isCssClass || t.isHtmlAttr;
+      const needsConsistency = isLogicField || t.isIdentifier || t.isObjectKey || t.isDotNotation || t.isCssClass || t.isHtmlAttr
+        || isWholeLiteralToken(text, t);
       if (!t.translated?.trim() && needsConsistency) {
         if (translationMap.has(trimmed)) {
           t.translated = translationMap.get(trimmed);
@@ -2435,6 +2478,7 @@ CHỈ trả về JSON object ánh xạ nguyên bản gốc → bản dịch mớ
     }
 
     // ── Step 10: Reinsertion + post-processing ─────────────────────────────
+    finalizeTokens(tokens);
     const rawReinserted = reinsertTranslations(text, tokens);
     const normalized    = normalizeFullwidthPunctuation(rawReinserted);
     // Pass the original `text` so CSS property names can be compared and restored

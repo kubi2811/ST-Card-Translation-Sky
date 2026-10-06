@@ -30,6 +30,7 @@ import { isLikelyJsScript, hasRealJsSignal, jsParseErrorAny } from './scriptSafe
 import { repairUnquotedObjectKeys, repairUnquotedObjectKeysInHtml } from './repairObjectKeys';
 import { verifyCodeStructureParity, detectInventedDeclarations } from './surgical';
 import { detectRefusal, refusalMessage } from './refusalGuard';
+import { stringLiteralDrop } from './codeLiterals';
 
 export interface RetryGuardInput {
   original: string;
@@ -163,6 +164,14 @@ export function finalizeRetryTranslation(input: RetryGuardInput): RetryGuardResu
         msg: `⚠️ Script toàn vẹn: ${label} vỡ cú pháp JS sau dịch (dòng ~${jsErr.line}) → GIỮ NGUYÊN bản gốc để script KHÔNG liệt trong SillyTavern.`,
       });
       return { text: original, keptOriginal: true, guardReason, notes };
+    }
+  }
+
+  // ─── 4b. (bug 257) Chuỗi bị gộp làm một — chỉ cảnh báo (code vẫn chạy) ───
+  if (isCodeGroup(group)) {
+    const drop = stringLiteralDrop(original, text);
+    if (drop > 0) {
+      notes.push({ level: 'warning', msg: `⚠️ ${label}: bản dịch có ít hơn bản gốc ${drop} chuỗi trong code — nghi hai chuỗi bị gộp làm một. Soát chỗ có dấu nháy bị đổi.` });
     }
   }
 

@@ -61,21 +61,27 @@ export function lookupCodeChars(token: string, text: string, start: number, end:
 }
 
 const CJK_ONLY_CLASS = /\[([㐀-䶿一-鿿]{2,})\]/g;
+/** Một chữ Hán (không đứng sau chữ Hán khác hay `\\`) mang lượng từ `?` `*` `+` `{n}`: `次?`. */
+const CJK_QUANTIFIED = /(^|[^\u3400-\u4dbf\u4e00-\u9fff\\])([\u3400-\u4dbf\u4e00-\u9fff])([?*+]|\{\d+(?:,\d*)?\})/g;
 
 /**
  * (bug 257) `[日号]` trong REGEX là "một trong các chữ này". Dịch từng chữ ra từ nhiều chữ cái là
  * thành `[Ngày mùng]` — "một trong các CHỮ CÁI N,g,à,y,…". Trước khi dịch, đổi nhóm ký tự chỉ toàn
  * chữ Hán trong regex literal sang nhóm lựa chọn tương đương `(?:日|号)` — dịch xong vẫn đúng nghĩa.
+ * Cùng lý do: `次?` (một chữ + lượng từ) ⇒ `(?:次)?` — không thì dịch ra `lần?` là chỉ chữ `n` tuỳ chọn.
  * Chỉ đụng regex literal (`/…/flags` đứng sau toán tử hoặc `(`, `,`, `=`, `:`…), không đụng chuỗi.
  */
 export function cjkCharClassesToAlternation(code: string): { text: string; count: number } {
-  if (!code || !/\[[㐀-䶿一-鿿]{2,}\]/.test(code)) return { text: code, count: 0 };
+  if (!code || !/\[[㐀-䶿一-鿿]{2,}\]|[㐀-䶿一-鿿][?*+{]/.test(code)) return { text: code, count: 0 };
   let count = 0;
   const re = /((?:^|[(,=:!&|?{};[]|\breturn)\s*)\/((?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n[])+)\/([gimsuy]*)/gm;
   const text = code.replace(re, (whole, pre: string, body: string, flags: string) => {
-    if (!CJK_ONLY_CLASS.test(body)) { CJK_ONLY_CLASS.lastIndex = 0; return whole; }
+    if (!CJK_ONLY_CLASS.test(body) && !CJK_QUANTIFIED.test(body)) { CJK_ONLY_CLASS.lastIndex = 0; CJK_QUANTIFIED.lastIndex = 0; return whole; }
     CJK_ONLY_CLASS.lastIndex = 0;
-    const nb = body.replace(CJK_ONLY_CLASS, (_m, chars: string) => { count++; return `(?:${[...chars].join('|')})`; });
+    CJK_QUANTIFIED.lastIndex = 0;
+    let nb = body.replace(CJK_ONLY_CLASS, (_m, chars: string) => { count++; return `(?:${[...chars].join('|')})`; });
+    // `次?` — lượng từ áp lên MỘT chữ; dịch ra `lần?` là chỉ còn chữ `n` tuỳ chọn ⇒ bọc `(?:次)?`.
+    nb = nb.replace(CJK_QUANTIFIED, (_m, before: string, ch: string, q: string) => { count++; return `${before}(?:${ch})${q}`; });
     try { new RegExp(nb, flags); } catch { return whole; }
     return `${pre}/${nb}/${flags}`;
   });

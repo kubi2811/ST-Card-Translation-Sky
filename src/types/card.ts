@@ -483,6 +483,8 @@ export interface TranslationConfig {
   enableEjsSync: boolean;             // Enable Strategy C (EJS Entry Name & Keyword Sync)
   ejsEntryNameDict: Record<string, string>;  // EJS getwi() entry name → translated name
   ejsKeywordDict: Record<string, string>;    // EJS keyword/alias → translated
+  /** (bug 257) Chuỗi tiếng Trung chiếm trọn một chuỗi trong code → bản dịch, dùng chung cả thẻ. */
+  codeLiteralDict?: Record<string, string>;
   ejsDecoratorPreserve: boolean;       // Auto-detect & protect EJS decorators (@@, [GENERATE:], @INJECT)
   enableChunkVerification: boolean;     // Enable AI-powered chunk verification (compare original vs translated)
   enableTranslationMemory: boolean;    // Enable Translation Memory (persistent cross-session term/translation cache)

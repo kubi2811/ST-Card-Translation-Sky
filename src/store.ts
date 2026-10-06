@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { registerCodeLiteralStore } from './utils/codeLiterals';
 import type { Locale } from './i18n/translations';
 import { getUiLang, resolveLocale } from './i18n';
 import type {
@@ -78,6 +79,7 @@ export function buildProgressSnapshot(cur: AppState) {
       mvuDictionary: cur.translationConfig.mvuDictionary,
       ejsEntryNameDict: cur.translationConfig.ejsEntryNameDict,
       ejsKeywordDict: cur.translationConfig.ejsKeywordDict,
+      codeLiteralDict: cur.translationConfig.codeLiteralDict,
     },
   };
 }
@@ -295,6 +297,7 @@ export const useStore = create<AppState>((set) => ({
         mvuDictionary: s.translationConfig.mvuDictLocked ? s.translationConfig.mvuDictionary : {},
         ejsEntryNameDict: {}, // Clear EJS dictionaries for new card
         ejsKeywordDict: {},
+        codeLiteralDict: {},
       },
       mvuKeyMetadata: {},
       mvuDictionaryHistory: [],
@@ -382,6 +385,7 @@ export const useStore = create<AppState>((set) => ({
         mvuDictionary: s.translationConfig.mvuDictLocked ? s.translationConfig.mvuDictionary : {},
         ejsEntryNameDict: {},
         ejsKeywordDict: {},
+        codeLiteralDict: {},
         // (Fix bug #10) dọn mục glossary TỰ SINH cho card cũ (Pha 0/tự nạp/tự trích); giữ mục user tự gõ.
         glossary: s.translationConfig.glossary.filter(g => !g.auto),
       },
@@ -638,6 +642,8 @@ export const useStore = create<AppState>((set) => ({
     enableEjsSync: LS.get('st-translator-ejs-sync-enabled', false),
     ejsEntryNameDict: LS.get('st-translator-ejs-entry-dict', {}) as Record<string, string>,
     ejsKeywordDict: LS.get('st-translator-ejs-keyword-dict', {}) as Record<string, string>,
+    // (bug 257) Từ điển chuỗi trong code của thẻ đang dịch — xem utils/codeLiterals.
+    codeLiteralDict: LS.get('st-translator-code-literal-dict', {}) as Record<string, string>,
     ejsDecoratorPreserve: LS.get('st-translator-ejs-decorator-preserve', true),
     enableChunkVerification: LS.get('st-translator-chunk-verification', false),
     enableTranslationMemory: LS.get('st-translator-tm-enabled', true),
@@ -755,6 +761,9 @@ export const useStore = create<AppState>((set) => ({
       }
       if ('ejsEntryNameDict' in partial) {
         LS.set('st-translator-ejs-entry-dict', next.ejsEntryNameDict);
+      }
+      if ('codeLiteralDict' in partial) {
+        LS.set('st-translator-code-literal-dict', next.codeLiteralDict);
       }
       if ('ejsKeywordDict' in partial) {
         LS.set('st-translator-ejs-keyword-dict', next.ejsKeywordDict);
@@ -908,6 +917,7 @@ export const useStore = create<AppState>((set) => ({
       enableEjsSync: false,
       ejsEntryNameDict: {},
       ejsKeywordDict: {},
+      codeLiteralDict: {},
       ejsDecoratorPreserve: true,
       enableChunkVerification: false,
       enableTranslationMemory: true,
@@ -962,6 +972,7 @@ export const useStore = create<AppState>((set) => ({
     LS.set('st-translator-ejs-thinking', defaultTranslationConfig.enableEjsThinking);
     LS.set('st-translator-ejs-entry-dict', defaultTranslationConfig.ejsEntryNameDict);
     LS.set('st-translator-ejs-keyword-dict', defaultTranslationConfig.ejsKeywordDict);
+    LS.set('st-translator-code-literal-dict', {});
     LS.set('st-translator-ejs-decorator-preserve', defaultTranslationConfig.ejsDecoratorPreserve);
     LS.set('st-translator-chunk-verification', defaultTranslationConfig.enableChunkVerification);
     LS.set('st-translator-tm-enabled', defaultTranslationConfig.enableTranslationMemory);
@@ -1223,6 +1234,7 @@ export const useStore = create<AppState>((set) => ({
         mvuDictionary: snap.dicts?.mvuDictionary ?? s.translationConfig.mvuDictionary,
         ejsEntryNameDict: snap.dicts?.ejsEntryNameDict ?? s.translationConfig.ejsEntryNameDict,
         ejsKeywordDict: snap.dicts?.ejsKeywordDict ?? s.translationConfig.ejsKeywordDict,
+        codeLiteralDict: snap.dicts?.codeLiteralDict ?? s.translationConfig.codeLiteralDict,
       },
     }));
     return true;
@@ -1313,6 +1325,7 @@ export const useStore = create<AppState>((set) => ({
           mvuDictionary: {},
           ejsEntryNameDict: {},
           ejsKeywordDict: {},
+          codeLiteralDict: {},
           // (Fix bug #10) dọn mục glossary TỰ SINH cho card này; giữ mục user tự gõ.
           glossary: state.translationConfig.glossary.filter(g => !g.auto),
         },
@@ -1363,6 +1376,7 @@ export const useStore = create<AppState>((set) => ({
         mvuDictionary: {},
         ejsEntryNameDict: {},
         ejsKeywordDict: {},
+        codeLiteralDict: {},
         // (Fix bug #10) dọn mục glossary TỰ SINH; giữ mục user tự gõ.
         glossary: state.translationConfig.glossary.filter(g => !g.auto),
       },
@@ -1379,3 +1393,12 @@ export const useStore = create<AppState>((set) => ({
 
   },
 }));
+
+// (bug 257) Đường surgical (util, không import store) đọc/ghi từ điển chuỗi của thẻ qua đây.
+registerCodeLiteralStore({
+  get: () => useStore.getState().translationConfig.codeLiteralDict || {},
+  merge: (add) => {
+    const cur = useStore.getState().translationConfig.codeLiteralDict || {};
+    useStore.getState().setTranslationConfig({ codeLiteralDict: { ...add, ...cur } });
+  },
+});

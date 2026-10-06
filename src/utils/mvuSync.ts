@@ -74,7 +74,7 @@ function parseJsonFromAi(responseText: string): any {
    `stat_data`, `mpPool`), hoặc `]`/`)` (`arr[0].`, `fn().`). Lookbehind chặn ca "định danh giả":
    `Giới` bị loại vì ngay trước `i` là `ớ`. Chữ Việt/CJK trước dấu chấm ⇒ đó là path, chừa lại.
 */
-/** (bug 255) Chữ Hán / kana / Hangul — ranh giới "từ" cho key tiếng Trung khi thay từ điển. */
+/** (bug 254) Chữ Hán / kana / Hangul — ranh giới "từ" cho key tiếng Trung khi thay từ điển. */
 const CJK_CLASS = '[\\u3040-\\u30ff\\u3400-\\u4dbf\\u4e00-\\u9fff\\uac00-\\ud7af]';
 const CJK_KEY_RE = new RegExp(CJK_CLASS);
 const ST_ROLE_WORDS = new Set(['user', 'char', '{{user}}', '{{char}}', '<user>', '<char>']);
@@ -324,7 +324,7 @@ export function applyMvuToText(
   
   const entries = Object.entries(variableDictionary)
     .filter(([k, v]) => k && v && k !== v)
-    // (bug 255) `user` / `char` là tên vai của SillyTavern ({{user}}, 'user'), không bao giờ là biến
+    // (bug 254) `user` / `char` là tên vai của SillyTavern ({{user}}, 'user'), không bao giờ là biến
     // MVU để dịch. Một mục học lệch `user` → "Tỷ Lệ Mang Thai" từng biến `'user', 'User', 'USER'` trong
     // HERO_ALIASES thành "Tỷ Lệ Mang Thai" ×3 — script nhận nhầm nhân vật chính. Mục ASCII khác do máy
     // tự sinh thì bị dọn khỏi từ điển (isRenamedAsciiKey); mục người dùng tự nhập vẫn được áp.
@@ -346,7 +346,7 @@ export function applyMvuToText(
   for (const [original, translated] of entries) {
     const escaped = escapeRegExp(original);
     const safeTranslated = safeReplacement(translated);
-    // (bug 255) Tiếng Trung không có dấu cách nên "khớp chuỗi con" là khớp NHẦM TỪ: key 来源 nằm
+    // (bug 254) Tiếng Trung không có dấu cách nên "khớp chuỗi con" là khớp NHẦM TỪ: key 来源 nằm
     // trong `基准来源` (một key KHÁC) ⇒ `{ 基准Nguồn Gốc: … }` — khoá có dấu cách, vỡ cú pháp JS, cả
     // script tavernHelper chết. Key chứa chữ Hán chỉ được thay khi KHÔNG dính chữ Hán/kana hai bên.
     const cjkL = CJK_KEY_RE.test(original) && CJK_KEY_RE.test(original[0]) ? `(?<!${CJK_CLASS})` : '';
@@ -2113,7 +2113,7 @@ export function unifyVarWordSeparators(word: string): string {
   const allCjk = parts.every((p) => CJK_PART_RE.test(p));
   const allLatin = parts.every((p) => LATIN_PART_RE.test(p));
   if (allLatin && parts.length > 1 && isAsciiCodeSuffix(parts[parts.length - 1], parts.slice(0, -1))) {
-    // (bug 254) `Giày_tag` / `Phụ Kiện_tag`: đuôi ASCII là hậu tố CODE mirror từ nguồn (`鞋子_tag`) —
+    // (bug 254a) `Giày_tag` / `Phụ Kiện_tag`: đuôi ASCII là hậu tố CODE mirror từ nguồn (`鞋子_tag`) —
     // script có thể ghép `部位 + '_tag'`, đổi thành "Giày tag" là ghép ra key không tồn tại. Chỉ nối
     // space phần thân trước đuôi.
     const m = core.match(/([_-]+)([a-z0-9]+)[_-]*$/)!;
@@ -2126,7 +2126,7 @@ export function unifyVarWordSeparators(word: string): string {
 }
 
 /**
- * (bug 254) Hậu tố CODE thường gặp sau tên biến: `鞋子_tag`, `场景_sfw`, `好感_max`… Card hay ghép key
+ * (bug 254a) Hậu tố CODE thường gặp sau tên biến: `鞋子_tag`, `场景_sfw`, `好感_max`… Card hay ghép key
  * động bằng chuỗi (`部位 + '_tag'`, `${名}_max`) nên đuôi này phải giữ NGUYÊN cả dấu `_` sau khi dịch.
  * Không có từ điển (sweep trên text) thì nhận diện bằng: mảnh cuối ASCII thường, không dấu, VÀ
  *  - nằm trong danh sách hậu tố code quen thuộc, hoặc
@@ -2649,7 +2649,7 @@ export function enforceExactConsistency(
     }
   }
 
-  // (bug 254) Biến đuôi code PHẢI = bản dịch của thân + đúng đuôi: có cả 鞋子 → "Giày" và 鞋子_tag thì
+  // (bug 254a) Biến đuôi code PHẢI = bản dịch của thân + đúng đuôi: có cả 鞋子 → "Giày" và 鞋子_tag thì
   // 鞋子_tag là "Giày_tag" — script ghép `部位 + '_tag'` mới ra đúng key. Mục user tự sửa thì để nguyên.
   for (const [k, v] of Object.entries(fixedDict)) {
     const suf = sourceAsciiSuffix(k);
@@ -2822,7 +2822,7 @@ export function extractSchemaContextFromCard(card: CharacterCard | null | undefi
  * rộng hay ngoặc 【】, và không mở đầu bằng ký hiệu danh sách/tiêu đề.
  */
 /**
- * (bug 255) Mục từ điển đổi tên một key ASCII (`user` → "Tỷ Lệ Mang Thai") — tool không bao giờ tự
+ * (bug 254) Mục từ điển đổi tên một key ASCII (`user` → "Tỷ Lệ Mang Thai") — tool không bao giờ tự
  * dịch key ASCII (identifier/macro của code), nên mục kiểu này chỉ có thể là học lệch. Dọn đi.
  */
 export function isRenamedAsciiKey(key: string, value: unknown): boolean {
@@ -3369,7 +3369,7 @@ export function sanitizeMvuVarName(originalKey: string, translated: string): str
 }
 
 /**
- * (bug 254) Key nguồn có đuôi code (`鞋子_tag`) ⇒ bản dịch giữ ĐÚNG đuôi đó: "Giày tag" / "Giày-Tag" /
+ * (bug 254a) Key nguồn có đuôi code (`鞋子_tag`) ⇒ bản dịch giữ ĐÚNG đuôi đó: "Giày tag" / "Giày-Tag" /
  * "Giày" → "Giày_tag". Prompt đã dặn AI "mirror separator của nguồn", nhưng lượt chuẩn hoá dấu cách
  * (bug #8) lại ghi đè — đây là chốt cuối.
  */

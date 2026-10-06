@@ -1,4 +1,4 @@
-@PhatSiz — bug 254 (từ điển MVU: `鞋子_tag` → "Giày tag") ✅ đã sửa ở **v2.60.1**
+@PhatSiz — bug 254a (câu hỏi kèm, từ điển MVU: `鞋子_tag` → "Giày tag") ✅ đã sửa ở **v2.60.1**
 
 **Có ổn không?** Trước bản này thì *thường* vẫn chạy, nhưng có một trường hợp hỏng âm thầm:
 - Nếu card ghi tên biến đầy đủ ở mọi nơi (`stat_data.服装.鞋子_tag`) → tool thay đồng loạt, "Giày tag" vẫn khớp.

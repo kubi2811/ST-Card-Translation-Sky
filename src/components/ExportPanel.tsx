@@ -281,9 +281,20 @@ export default function ExportPanel() {
     revokeSoon(url);
   };
 
+  /**
+   * (bug 255) Xuất thẻ khi CHƯA dịch xong ⇒ nhắc dùng workspace. User chuyển máy bằng file thẻ đã
+   * xuất: máy kia nạp vào thì "bản gốc" chính là tiếng Việt đã dịch — mất đường đối chiếu, không
+   * chia việc được. Thẻ xuất ra vốn là bản để CHƠI; bản để LÀM TIẾP là workspace.
+   */
+  const remindWorkspaceIfUnfinished = () => {
+    const unfinished = useStore.getState().fields.some(f => f.status !== 'done' && f.status !== 'skipped' && f.status !== 'ignored');
+    if (unfinished) addToast('info', ui.epCardNotWorkspace);
+  };
+
   const handleExport = () => {
     // Auto-save translation cache before export
     saveTranslationCache();
+    remindWorkspaceIfUnfinished();
 
     const exportCard = getExportCard();
     if (!exportCard) return;
@@ -335,6 +346,7 @@ export default function ExportPanel() {
    */
   const handleExportPng = async (overrideImage?: ArrayBuffer) => {
     saveTranslationCache();
+    remindWorkspaceIfUnfinished();
 
     const exportCard = getExportCard();
     if (!exportCard) return;

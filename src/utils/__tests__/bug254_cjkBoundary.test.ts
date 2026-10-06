@@ -1,5 +1,5 @@
 /**
- * (bug 255 — PhatSiz) Script tavernHelper "生理周期调度" dịch xong vỡ cú pháp JS, dịch lại cũng không
+ * (bug 254 — PhatSiz) Script tavernHelper "生理周期调度" dịch xong vỡ cú pháp JS, dịch lại cũng không
  * cứu được:
  *   1. từ điển MVU thay key 来源 NẰM GIỮA key khác 基准来源 ⇒ `{ 基准Nguồn Gốc: … }` (khoá có dấu cách);
  *   2. mục từ điển học lệch `user` → "Tỷ Lệ Mang Thai" ⇒ HERO_ALIASES mất 'user'/'User'/'USER';
@@ -14,8 +14,8 @@ import { repairUnquotedObjectKeys } from '../repairObjectKeys';
 import { judgeRetryResult } from '../retryRegression';
 
 const fx = (n: string) => readFileSync(join(__dirname, 'fixtures', n), 'utf8');
-const RAW = fx('bug255-cycle.raw.js.txt');
-const BROKEN = fx('bug255-cycle.broken.js.txt');
+const RAW = fx('bug254-cycle.raw.js.txt');
+const BROKEN = fx('bug254-cycle.broken.js.txt');
 
 const DICT: Record<string, string> = {
   '来源': 'Nguồn Gốc', '日期': 'Ngày', '事件': 'Sự Kiện', '时间': 'Thời Gian', '确诊': 'Xác Chẩn',
@@ -23,7 +23,7 @@ const DICT: Record<string, string> = {
   '角色': 'Nhân Vật', '全局': 'Toàn Cục',
 };
 
-describe('bug 255 — key tiếng Trung chỉ thay khi đứng riêng, không thay giữa từ khác', () => {
+describe('bug 254 — key tiếng Trung chỉ thay khi đứng riêng, không thay giữa từ khác', () => {
   it('file thật: không còn chữ Việt dính chữ Hán, script vẫn chạy', () => {
     const out = repairUnquotedObjectKeys(applyMvuToText(RAW, DICT, true)).code;
     expect(jsParseErrorAny(out)).toBeNull();
@@ -50,7 +50,7 @@ describe('bug 255 — key tiếng Trung chỉ thay khi đứng riêng, không th
   });
 });
 
-describe('bug 255 — dịch lại: bản đang có VỠ CÚ PHÁP thì không được giữ', () => {
+describe('bug 254 — dịch lại: bản đang có VỠ CÚ PHÁP thì không được giữ', () => {
   it('bản cũ vỡ JS (ít Hán hơn) vs bản gốc chạy được ⇒ nhận bản gốc', () => {
     expect(jsParseErrorAny(BROKEN)).not.toBeNull();
     const v = judgeRetryResult({ original: RAW, previous: BROKEN, next: RAW });

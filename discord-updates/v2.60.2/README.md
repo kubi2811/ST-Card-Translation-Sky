@@ -4,4 +4,4 @@ Mỗi file là **một tin nhắn** gửi cho **một người báo bug**. Copy 
 
 | File | Bug | Người báo | Tình trạng |
 |---|---|---|---|
-| `bug-255-phatsiz.md` | 255 — script tavernHelper vỡ cú pháp sau dịch, dịch lại bị kẹt | PhatSiz | Đã sửa |
+| `bug-254-phatsiz.md` | 254 — script tavernHelper vỡ cú pháp sau dịch, dịch lại bị kẹt | PhatSiz | Đã sửa |

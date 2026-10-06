@@ -132,7 +132,7 @@ describe('(bug 227) cổng mềm: "giữ bản dịch" phải THẬT SỰ giữ,
 
   it('mã nguồn: người dùng tự bấm dịch lại thì cờ chấp nhận bị xoá', () => {
     const fn = hookSrc.slice(hookSrc.indexOf('const retranslateField = useCallback'));
-    expect(fn.slice(0, 2000)).toContain('keptWithWarning: undefined');
+    expect(fn.slice(0, 4000)).toContain('keptWithWarning: undefined');
   });
 });
 

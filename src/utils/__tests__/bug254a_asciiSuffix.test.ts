@@ -1,5 +1,5 @@
 /**
- * (bug 254 — PhatSiz) Key MVU có đuôi code ASCII: 鞋子_tag → "Giày tag" (mất `_`). Card ghép key
+ * (bug 254a — PhatSiz) Key MVU có đuôi code ASCII: 鞋子_tag → "Giày tag" (mất `_`). Card ghép key
  * động `部位 + '_tag'` sẽ ra "Giày_tag" — không khớp. Đuôi code phải giữ nguyên cả dấu `_`.
  */
 import { describe, it, expect } from 'vitest';
@@ -8,7 +8,7 @@ import {
   enforceExactConsistency, mirrorAsciiSuffix, sourceAsciiSuffix,
 } from '../mvuSync';
 
-describe('bug 254 — đuôi code ASCII của key MVU', () => {
+describe('bug 254a — đuôi code ASCII của key MVU', () => {
   it('sourceAsciiSuffix chỉ nhận đuôi ASCII sau chữ Hán', () => {
     expect(sourceAsciiSuffix('鞋子_tag')).toBe('_tag');
     expect(sourceAsciiSuffix('场景-sfw')).toBe('-sfw');

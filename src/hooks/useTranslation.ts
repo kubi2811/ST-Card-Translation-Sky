@@ -327,6 +327,27 @@ const SHARED_RUN = {
 const SHARED_FIELD_ABORTS = { current: new Map<string, AbortController>() };
 
 /**
+ * (bug 255) AI ĐANG GIỮ KHOÁ DỊCH CỦA TỪNG FIELD — và cách CƯỚP khoá khi người dùng bấm tay.
+ *
+ * User: bấm "dịch lại chunk này" trong khung xem chunk thì lúc được, lúc báo "đang dịch ở luồng
+ * khác" — dù nhìn tiến trình không có call nào cả (lượt cũ treo cả tiếng) — và chunk vừa bấm bị
+ * XOÁ luôn bản dịch. Muốn chữa phải huỷ toàn bộ tiến trình.
+ * Ba khúc gây ra cảnh đó:
+ *   1. nút xoá ô chunk TRƯỚC rồi mới xin khoá — xin không được thì ô đã mất;
+ *   2. lượt của vòng dịch chính không có công tắc dừng riêng (chỉ có abort của CẢ vòng) ⇒ không
+ *      ai dừng được đúng một field đang treo;
+ *   3. khoá là một Set trần — lượt cũ dù có dừng, lúc kết thúc vẫn `delete` mất khoá của lượt mới.
+ * Nên: mỗi lượt giữ khoá có MÃ CHỦ riêng (chỉ chủ mới được nhả), lượt của vòng chính có
+ * AbortController riêng nối vào abort của vòng, và nút bấm tay được quyền dừng lượt cũ để chạy.
+ */
+const LOCK_OWNER = new Map<string, symbol>();
+const LOOP_FIELD_ABORTS = new Map<string, AbortController>();
+/** Lượt này đã bị lượt bấm tay CƯỚP khoá — nó phải lặng lẽ rút, không ghi gì vào field nữa. */
+class FieldTakenOverError extends Error {
+  constructor() { super('TakenOver'); }
+}
+
+/**
  * Field chạy ĐỘC LẬP với vòng dịch thẻ: Bắt đầu/Tạm dừng/Huỷ dịch thẻ không được giết nó, vì nó
  * là việc riêng người dùng bấm ở tab khác (một file link ngoài lớn chạy 10-20 phút). Chỉ nút Huỷ
  * của chính nó (cancelFieldTranslation) mới dừng.
@@ -593,7 +614,9 @@ export function useTranslation() {
   };
 
   /* ─── Translate a single field (inner — wrapped below with an in-flight lock) ─── */
-  const _translateSingleFieldInner = async (field: TranslationField, index: number, fields: TranslationField[]) => {
+  const _translateSingleFieldInner = async (field: TranslationField, index: number, fields: TranslationField[], fieldSignal?: AbortSignal) => {
+    /** (bug 255) Bị lượt bấm tay cướp khoá (không phải huỷ cả vòng). */
+    const takenOver = () => !!fieldSignal?.aborted && !checkAbort();
     // #2: nếu đã bấm Dừng/Hủy thì KHÔNG đánh dấu 'translating' (tránh task nền set lại sau khi
     // pause đã reset → kẹt 'translating' hoài / "vẫn dịch nền"). Bail ngay để loop trên bắt Cancelled.
     if (checkAbort()) throw new Error('Cancelled');
@@ -883,7 +906,7 @@ export function useTranslation() {
          */
         let sResult!: Awaited<ReturnType<typeof surgicalTranslate>>;
         translated = await translateThroughBase64Shell(field.original, field.label, {
-          signal: abortRef.current?.signal,
+          signal: (fieldSignal ?? abortRef.current?.signal),
           /**
            * (bug 237) NHẬT KÝ PHẢI VÀO APP, KHÔNG PHẢI CHỈ VÀO CONSOLE.
            * Chạy thật thẻ 237: sau dòng "🔪 Dịch phẫu thuật…" là IM LẶNG hơn 10 phút, trong khi
@@ -896,7 +919,7 @@ export function useTranslation() {
               masked,
               effectiveProxy,
               store.translationConfig.targetLanguage,
-              abortRef.current?.signal,
+              (fieldSignal ?? abortRef.current?.signal),
               store.translationConfig.glossary,
               currentMvuDict,
               true,
@@ -914,7 +937,7 @@ export function useTranslation() {
             decoded, innerName, effectiveProxy,
             store.translationConfig.targetLanguage, store.translationConfig.sourceLanguage,
             promptResult.effectivePrompt, store.translationConfig.customSchema,
-            abortRef.current?.signal, undefined, store.translationConfig.glossary,
+            (fieldSignal ?? abortRef.current?.signal), undefined, store.translationConfig.glossary,
             undefined, resolvedFieldType, currentMvuDict,
           ),
         });
@@ -953,7 +976,7 @@ export function useTranslation() {
           store.translationConfig.sourceLanguage,
           promptResult.effectivePrompt,
           promptResult.schemaForApi,
-          abortRef.current?.signal,
+          (fieldSignal ?? abortRef.current?.signal),
           contextHint,
           promptResult.glossaryForApi,
           field.previousTranslation,
@@ -963,6 +986,7 @@ export function useTranslation() {
           prevChunks,
           // onChunkComplete: save chunk progress in real-time (supports out-of-order for parallel)
           (chunkIdx, translatedChunk, totalChunks) => {
+            if (takenOver()) return;   // (bug 255) lượt bấm tay đã cướp khoá — không ghi đè ô của nó
             const currentField = useStore.getState().fields.find(f => f.path === field.path);
             const currentCompleted = currentField?.completedChunks || [];
             // Index-based storage: safe for both sequential and parallel
@@ -1690,6 +1714,8 @@ export function useTranslation() {
       }
       return 'done';
     } catch (err) {
+      // (bug 255) Bị cướp khoá: lượt bấm tay đang làm chủ field — KHÔNG ghi status/chunk gì nữa.
+      if (takenOver()) throw new FieldTakenOverError();
       const msg = err instanceof Error ? err.message : String(err);
       if (msg === 'Cancelled' || checkAbort()) {
         // On cancel, preserve any completed chunks for resume
@@ -1811,10 +1837,27 @@ export function useTranslation() {
     }
 
     inFlightPaths.current.add(field.path);
+    const lockToken = Symbol(field.path);
+    LOCK_OWNER.set(field.path, lockToken);
+    // (bug 255) Công tắc dừng RIÊNG của field này, nối vào abort của cả vòng.
+    const fieldCtrl = new AbortController();
+    const runSignal = abortRef.current?.signal;
+    if (runSignal) {
+      if (runSignal.aborted) fieldCtrl.abort();
+      else runSignal.addEventListener('abort', () => fieldCtrl.abort(), { once: true });
+    }
+    LOOP_FIELD_ABORTS.set(field.path, fieldCtrl);
     try {
-      return await _translateSingleFieldInner(field, index, fields);
+      return await _translateSingleFieldInner(field, index, fields, fieldCtrl.signal);
+    } catch (err) {
+      if (err instanceof FieldTakenOverError) return 'skip';
+      throw err;
     } finally {
-      inFlightPaths.current.delete(field.path);
+      if (LOCK_OWNER.get(field.path) === lockToken) {
+        inFlightPaths.current.delete(field.path);
+        LOCK_OWNER.delete(field.path);
+      }
+      if (LOOP_FIELD_ABORTS.get(field.path) === fieldCtrl) LOOP_FIELD_ABORTS.delete(field.path);
     }
   };
 
@@ -2653,7 +2696,7 @@ export function useTranslation() {
     {
       const st0 = useStore.getState();
       const dict0 = st0.translationConfig.mvuDictionary || {};
-      // (bug 255) + mục đổi tên key ASCII (`user` → "Tỷ Lệ Mang Thai") — học lệch, áp là hỏng script.
+      // (bug 254) + mục đổi tên key ASCII (`user` → "Tỷ Lệ Mang Thai") — học lệch, áp là hỏng script.
       const junk = Object.keys(dict0).filter(k => st0.mvuKeyMetadata?.[k]?.confidence !== 'manual'
         && (!isPlausibleMvuKey(k) || isRenamedAsciiKey(k, dict0[k])));
       if (junk.length) {
@@ -4120,7 +4163,15 @@ export function useTranslation() {
    * `extraInstruction` (User 2026 — việc 80): câu nhắc gắn thêm vào cuối prompt cho lượt dịch lại.
    * Dịch lại y nguyên prompt cũ thì AI rất dễ ra đúng kết quả cũ — phải chỉ mặt chỗ hỏng.
    */
-  const retranslateField = useCallback(async (path: string, resume = false, extraInstruction?: string) => {
+  const retranslateField = useCallback(async (
+    path: string, resume = false, extraInstruction?: string,
+    /**
+     * (bug 255) `clearChunks`: các ô chunk cần dịch lại — chỉ xoá SAU KHI đã cầm khoá (xin khoá
+     * hụt thì ô vẫn nguyên). `takeOver`: người dùng bấm tay ⇒ được dừng lượt cũ đang giữ khoá
+     * field này (kể cả lượt treo) để chạy ngay; các chunk lượt cũ đã xong vẫn giữ.
+     */
+    opts?: { clearChunks?: number[]; takeOver?: boolean },
+  ) => {
     const field = store.fields.find((f) => f.path === path);
     if (!field) return;
     // (bug 229) Đường này chạy được mà KHÔNG cần qua "Bắt đầu dịch" — nút "Dịch lại mục này",
@@ -4134,10 +4185,17 @@ export function useTranslation() {
     // mục này" chạy song song đúng lúc vòng chính đang dịch cùng field → hai call cùng bay,
     // ai xong sau ghi đè, chunk-progress của nhau trộn vào nhau. Giờ dùng CHUNG một khoá.
     if (inFlightPaths.current.has(path)) {
-      store.addLog('warning', `⏭️ Bỏ qua dịch lại trùng: ${field.label} (đang được dịch ở luồng khác)`);
-      return;
+      if (!opts?.takeOver) {
+        store.addLog('warning', `⏭️ Bỏ qua dịch lại trùng: ${field.label} (đang được dịch ở luồng khác)`);
+        return;
+      }
+      LOOP_FIELD_ABORTS.get(path)?.abort('takeover');
+      fieldAbortMap.current.get(path)?.abort();
+      store.addLog('warning', `🔓 ${field.label}: lượt dịch trước của mục này còn giữ khoá — đã dừng nó để chạy lượt bạn vừa bấm. Các chunk đã dịch xong vẫn giữ nguyên.`);
     }
     inFlightPaths.current.add(path);
+    const lockToken = Symbol(path);
+    LOCK_OWNER.set(path, lockToken);
 
     // ═══ Cancel any previous in-flight translation for this field ═══
     const prevController = fieldAbortMap.current.get(path);
@@ -4158,7 +4216,7 @@ export function useTranslation() {
 
     // Read fresh field state from store to prevent stale reference
     const freshField = useStore.getState().fields.find(f => f.path === path) || field;
-    const prevChunks = resume && freshField.completedChunks && freshField.completedChunks.length > 0
+    let prevChunks = resume && freshField.completedChunks && freshField.completedChunks.length > 0
       ? freshField.completedChunks
       : undefined;
 
@@ -4185,6 +4243,15 @@ export function useTranslation() {
       store.saveTranslationCache();
     };
     const hadTranslation = !!snapshot.translated && snapshot.translated !== field.original;
+
+    // (bug 255) Xoá đúng các ô được yêu cầu — bây giờ mới xoá, khi khoá đã nằm trong tay và ảnh
+    // chụp (để trả lại nếu lượt này hỏng) đã có.
+    if (opts?.clearChunks?.length && resume) {
+      const cur = [...(freshField.completedChunks || [])];
+      for (const i of opts.clearChunks) { while (cur.length <= i) cur.push(''); cur[i] = ''; }
+      store.updateField(path, { completedChunks: cur });
+      prevChunks = cur;
+    }
 
     if (prevChunks) {
       /**
@@ -4285,6 +4352,7 @@ export function useTranslation() {
         prevChunks,
         // onChunkComplete: save chunk progress in real-time (supports out-of-order for parallel)
         (chunkIdx, translatedChunk, totalChunks) => {
+          if (controller.signal.aborted) return;   // (bug 255) đã bị lượt bấm tay khác cướp khoá
           const currentField = useStore.getState().fields.find(f => f.path === field.path);
           const currentCompleted = currentField?.completedChunks || [];
           // (bug 227) Cắt đuôi thừa của lượt trước — xem chú thích ở chỗ ghi chính.
@@ -4374,6 +4442,8 @@ export function useTranslation() {
       // TavernHelper…) đều được, khỏi phải nhớ gọi ở từng nút.
       store.saveTranslationCache();
     } catch (err) {
+      // (bug 255) Lượt bấm tay khác đã cướp khoá — field giờ là của nó, rút lặng lẽ.
+      if (controller.signal.aborted && LOCK_OWNER.get(path) !== lockToken) return;
       const msg = err instanceof Error ? err.message : String(err);
       if (msg === 'Cancelled' || msg === 'The operation was aborted' || msg === 'The user aborted a request.') {
         // Silently ignore abort — field was cancelled because a new retranslate started
@@ -4413,8 +4483,12 @@ export function useTranslation() {
       }
     } finally {
       // Clean up per-field abort controller
-      fieldAbortMap.current.delete(path);
-      inFlightPaths.current.delete(path);   // (bug 213) nhả khoá chung
+      if (fieldAbortMap.current.get(path) === controller) fieldAbortMap.current.delete(path);
+      // (bug 213) nhả khoá chung — (bug 255) chỉ khi khoá còn là của lượt này
+      if (LOCK_OWNER.get(path) === lockToken) {
+        inFlightPaths.current.delete(path);
+        LOCK_OWNER.delete(path);
+      }
       releaseKeepAlive(`field:${path}`);    // (bug 241)
     }
   }, [store]);

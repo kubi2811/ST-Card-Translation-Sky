@@ -292,7 +292,7 @@ function ChunkStatusAndResume({
   phase,
 }: {
   field: any;
-  retranslateField: (path: string, resume?: boolean) => void;
+  retranslateField: (path: string, resume?: boolean, extraInstruction?: string, opts?: { clearChunks?: number[]; takeOver?: boolean }) => void;
   phase: string;
 }) {
   const proxy = useStore((s) => s.proxy);
@@ -414,12 +414,11 @@ function ChunkStatusAndResume({
    * lượt gọi API nào cho chúng.
    */
   const retranslateOneChunk = (idx: number) => {
-    const cur = [...(field.completedChunks || [])];
-    while (cur.length <= idx) cur.push('');
-    cur[idx] = '';
-    useStore.getState().updateField(field.path, { completedChunks: cur, status: 'pending' });
+    // (bug 255) KHÔNG tự xoá ô ở đây nữa: engine chỉ xoá sau khi cầm được khoá field. Xoá trước
+    // mà khoá đang bị lượt khác giữ là ô mất bản dịch còn chẳng ai dịch lại. Bấm tay ⇒ takeOver:
+    // lượt cũ (kể cả đang treo) bị dừng để lượt này chạy ngay.
     useStore.getState().addLog('info', `🔁 Dịch lại riêng chunk ${idx + 1}/${totalChunks} của ${field.label} — các chunk khác giữ nguyên.`);
-    retranslateField(field.path, true);
+    retranslateField(field.path, true, undefined, { clearChunks: [idx], takeOver: true });
   };
 
   /** Ghép lại từ các chunk đang có — đúng quy tắc engine dùng (HTML/code nối liền). */
@@ -462,12 +461,9 @@ function ChunkStatusAndResume({
       {audit.suspectIndices.length > 0 && (
         <button
           onClick={() => {
-            const cur = [...(field.completedChunks || [])];
-            for (const i of audit.suspectIndices) { while (cur.length <= i) cur.push(''); cur[i] = ''; }
-            useStore.getState().updateField(field.path, { completedChunks: cur, status: 'pending' });
             useStore.getState().addLog('info',
               `🔁 Dịch lại ${audit.suspectIndices.length} chunk có vấn đề (số ${audit.suspectIndices.map(i => i + 1).join(', ')}) — ${totalChunks - audit.suspectIndices.length} chunk còn lại giữ nguyên.`);
-            retranslateField(field.path, true);
+            retranslateField(field.path, true, undefined, { clearChunks: [...audit.suspectIndices], takeOver: true });
           }}
           title="Chỉ dịch lại những chunk bị đánh dấu — không đụng tới chunk đã tốt"
           style={{ padding: '2px 6px', fontSize: '0.55rem', fontWeight: 600, background: 'rgba(245,158,11,0.15)',

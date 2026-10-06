@@ -1,4 +1,4 @@
-@PhatSiz — bug 255 (tavernHelper "生理周期调度" dịch xong vỡ, dịch lại cũng không được) ✅ đã sửa ở **v2.60.2**
+@PhatSiz — bug 254 (tavernHelper "生理周期调度" dịch xong vỡ, dịch lại cũng không được) ✅ đã sửa ở **v2.60.2**
 
 Cảm ơn bạn gửi cả bản gốc lẫn bản dịch, soi ra **3 lỗi chồng nhau**:
 

@@ -4,6 +4,7 @@ import { fandomNameOverride } from './fandomMode';
 import type { ProxySettings, GlossaryEntry } from '../types/card';
 import { writeDebugLog } from './debugLogger';
 import { extractScriptBodies, hasRealJsSignal, jsParseError } from './scriptSafety';
+import { cjkFileNameRanges } from './cjk';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Public types
@@ -656,6 +657,10 @@ export function extractCJKTokens(
   // (bugNeedFix/128) Định danh JS trần — gặp token TRÙNG KHỚP tên này ngoài chuỗi là bỏ qua,
   // không đưa đi dịch. Văn xuôi thuần không có const/let/`.` nên tập này rỗng, không tốn gì.
   const protectedIds = collectProtectedJsIdentifiers(text);
+  // (bug 255) Tên file có chữ Hán (`状态机.js`, `scripts/02_大乾风华录后台GM修改器.js`) — tên file
+  // KHÁC của tác giả, dịch ra là trỏ vào file không tồn tại. Giữ nguyên từng byte.
+  const fileRanges = cjkFileNameRanges(text);
+  const inFileName = (a: number, b: number) => fileRanges.some(([s, e]) => a >= s && b <= e);
   // CJK ideograph ranges (primary text characters)
   const CJK = '\\u4e00-\\u9fff\\u3400-\\u4dbf\\u3040-\\u30ff\\uac00-\\ud7af\\uff65-\\uffdc';
   // CJK punctuation joiners: ，。、！？：；…—–\u2018\u2019\u201c\u201d～．（）「」『』【】〈〉《》〔〕〖〗〘〙〚〛
@@ -680,6 +685,7 @@ export function extractCJKTokens(
     const mStart = match.index;
     let   mEnd   = match.index + match[0].length;
     let   mText  = match[0];
+    if (inFileName(mStart, mEnd)) continue;
 
     // ═══ (bug 171) KHOÁ THUỘC TÍNH TRỘN CJK + ASCII PHẢI LÀ **MỘT** TOKEN ═══
     // Bằng chứng user: `${f.与user关系 || 'Không Rõ'}` dịch ra `${f['Với']user Quan Hệ || …}` — sai

@@ -41,6 +41,11 @@ export interface WorkspaceFile {
   translationConfig: Record<string, unknown>;
   activePreset: SavedPreset | null;
   externalLinks: ExternalLinkEntry[];
+  /**
+   * (bug 255) Ảnh thẻ (data URL) — để người nhận xuất lại được PNG. Trước đây file không mang ảnh,
+   * người nhận xuất PNG là nhét thẻ vào ẢNH CỦA THẺ CŨ đang mở trên máy họ.
+   */
+  image?: string | null;
   /** Thống kê để người nhận biết trước khi nạp. */
   stats: { fields: number; done: number; dictMvu: number; dictEjs: number; glossary: number; externalLinks: number };
 }
@@ -99,6 +104,102 @@ export interface WorkspaceSource {
   mvuKeyMetadata: Record<string, unknown>;
   translationConfig: object;
   activePreset: SavedPreset | null;
+  /** (bug 255) Ảnh thẻ dạng data URL, nếu có. */
+  image?: string | null;
+}
+
+/**
+ * (bug 255) CHỈ GIỮ MỤC TỪ ĐIỂN THUỘC THẺ NÀY.
+ *
+ * User: "với dữ liệu mvu, ejs thì càng đưa qua nhiều lần tổng số key càng nhiều hơn (phình to)".
+ * Từ điển MVU sống ở cấp MÁY (khoá 🔒 thì giữ qua mọi thẻ), nên file workspace cũ chép NGUYÊN cả
+ * từ điển — tên biến của mọi thẻ khác người gửi từng dịch — và người nhận nạp vào là thừa kế hết,
+ * lần chuyền sau lại cộng thêm phần của họ. Mục thuộc thẻ = khoá xuất hiện trong văn bản GỐC của
+ * thẻ; mục không xuất hiện ở đâu cả không có tác dụng gì với thẻ này.
+ */
+export function scopeDictToCard<T>(dict: Record<string, T> | undefined, haystack: string): { dict: Record<string, T>; dropped: number } {
+  const out: Record<string, T> = {};
+  let dropped = 0;
+  for (const [k, v] of Object.entries(dict || {})) {
+    if (k && haystack.includes(k)) out[k] = v;
+    else dropped++;
+  }
+  return { dict: out, dropped };
+}
+
+/** Văn bản GỐC của thẻ — thước đo "mục này thuộc thẻ". */
+export function cardSourceText(fields: Array<{ original?: string }>): string {
+  return fields.map(f => f.original || '').join('\n');
+}
+
+export interface MergeReport {
+  /** Field lấy bản dịch từ file (máy mình chưa dịch). */
+  taken: number;
+  /** Field cả hai cùng dịch nhưng KHÁC nhau — giữ bản của máy mình. */
+  conflicts: string[];
+  /** Field có trong file nhưng không khớp thẻ đang mở (khác gốc) — bỏ qua. */
+  mismatched: number;
+  dictAdded: number;
+}
+
+type MergeField = TranslationField & { completedChunks?: string[]; totalChunks?: number; rawChunks?: string[] };
+
+const progressOf = (f: MergeField) => (f.status === 'done' ? 1e9 : 0) + (f.completedChunks || []).filter(Boolean).length;
+
+/**
+ * (bug 255) GỘP TIẾN ĐỘ của một workspace vào thẻ ĐANG MỞ — chia việc cho nhiều người.
+ * Khớp field theo `path` + văn bản GỐC giống hệt (khác gốc = thẻ khác/phiên bản khác ⇒ bỏ qua).
+ *  • máy mình chưa xong mà file đã tiến xa hơn ⇒ lấy của file (bản dịch + tiến độ chunk);
+ *  • cả hai đều xong mà khác nhau ⇒ GIỮ bản của máy mình, liệt kê ra để người dùng tự xem;
+ *  • từ điển: chỉ THÊM mục máy mình chưa có — mục đang có không bao giờ bị đè.
+ */
+export function mergeWorkspaceInto(
+  current: { fields: MergeField[]; dicts: Record<string, Record<string, string>> },
+  ws: Pick<WorkspaceFile, 'fields' | 'translationConfig'>,
+): { fields: MergeField[]; dicts: Record<string, Record<string, string>>; report: MergeReport } {
+  const byPath = new Map((ws.fields as MergeField[]).map(f => [f.path, f]));
+  const report: MergeReport = { taken: 0, conflicts: [], mismatched: 0, dictAdded: 0 };
+  const fields = current.fields.map((cur) => {
+    const other = byPath.get(cur.path);
+    if (!other) return cur;
+    if (other.original !== cur.original) { report.mismatched++; return cur; }
+    if (cur.status === 'done' && other.status === 'done') {
+      if ((other.translated || '') !== (cur.translated || '')) report.conflicts.push(cur.label || cur.path);
+      return cur;
+    }
+    if (progressOf(other) > progressOf(cur)) {
+      report.taken++;
+      return {
+        ...cur,
+        status: other.status === 'translating' ? 'pending' : other.status,
+        translated: other.translated,
+        completedChunks: other.completedChunks,
+        rawChunks: other.rawChunks,
+        totalChunks: other.totalChunks,
+        error: undefined,
+      } as MergeField;
+    }
+    return cur;
+  });
+  const dicts: Record<string, Record<string, string>> = {};
+  const tc = (ws.translationConfig || {}) as Record<string, unknown>;
+  for (const name of Object.keys(current.dicts)) {
+    const mine = { ...(current.dicts[name] || {}) };
+    for (const [k, v] of Object.entries((tc[name] as Record<string, string>) || {})) {
+      if (!(k in mine) && v) { mine[k] = v; report.dictAdded++; }
+    }
+    dicts[name] = mine;
+  }
+  return { fields, dicts, report };
+}
+
+/** Thẻ trong file có phải CÙNG thẻ đang mở không (≥ 80% field trùng path + gốc). */
+export function isSameCardWorkspace(curFields: Array<{ path: string; original?: string }>, ws: Pick<WorkspaceFile, 'fields'>): boolean {
+  if (!curFields.length || !ws.fields.length) return false;
+  const mine = new Map(curFields.map(f => [f.path, f.original]));
+  let same = 0;
+  for (const f of ws.fields) if (mine.get(f.path) === f.original) same++;
+  return same / Math.max(curFields.length, ws.fields.length) >= 0.8;
 }
 
 /** Dựng file workspace + soát bí mật. Ném lỗi khi chưa có thẻ. */
@@ -107,10 +208,26 @@ export function buildWorkspace(
   externalLinks: ExternalLinkEntry[],
   secrets: string[],
   appVersion: string,
-): { json: string; removedKeys: string[]; scrubbedHits: number; file: WorkspaceFile } {
+): { json: string; removedKeys: string[]; scrubbedHits: number; droppedForeign: number; file: WorkspaceFile } {
   if (!src.card) throw new Error('Chưa nạp thẻ nào để xuất workspace.');
   const removedKeys: string[] = [];
   const tc = stripSensitiveKeys(src.translationConfig as Record<string, unknown>, removedKeys, 'translationConfig');
+  // (bug 255) Từ điển / thuật ngữ / metadata: chỉ phần thuộc thẻ này — xem scopeDictToCard.
+  const hay = cardSourceText(src.fields);
+  let droppedForeign = 0;
+  for (const name of ['mvuDictionary', 'ejsEntryNameDict', 'ejsKeywordDict']) {
+    if (tc[name] && typeof tc[name] === 'object') {
+      const r = scopeDictToCard(tc[name] as Record<string, string>, hay);
+      tc[name] = r.dict;
+      droppedForeign += r.dropped;
+    }
+  }
+  if (Array.isArray(tc.glossary)) {
+    const before = (tc.glossary as Array<{ source?: string }>).length;
+    tc.glossary = (tc.glossary as Array<{ source?: string }>).filter(g => !!g?.source && hay.includes(g.source));
+    droppedForeign += before - (tc.glossary as unknown[]).length;
+  }
+  const meta = scopeDictToCard(src.mvuKeyMetadata || {}, hay).dict;
   const preset = src.activePreset ? stripSensitiveKeys(src.activePreset, removedKeys, 'activePreset') : null;
   const links = externalLinks.map(e => ({ ...e }));
   const fields = src.fields.map(f => (f.status === 'translating' ? { ...f, status: 'pending' as const } : f));
@@ -126,10 +243,11 @@ export function buildWorkspace(
     fields,
     phase: src.phase === 'translating' ? 'paused' : src.phase,
     currentFieldIndex: src.currentFieldIndex || 0,
-    mvuKeyMetadata: src.mvuKeyMetadata || {},
+    mvuKeyMetadata: meta,
     translationConfig: tc,
     activePreset: preset,
     externalLinks: links,
+    image: src.image || null,
     stats: {
       fields: fields.length,
       done: fields.filter(f => f.status === 'done').length,
@@ -140,7 +258,7 @@ export function buildWorkspace(
     },
   };
   const scrub = scrubSecrets(JSON.stringify(file), secrets);
-  return { json: scrub.json, removedKeys, scrubbedHits: scrub.hits, file: JSON.parse(scrub.json) };
+  return { json: scrub.json, removedKeys, scrubbedHits: scrub.hits, droppedForeign, file: JSON.parse(scrub.json) };
 }
 
 /** Đọc + kiểm file workspace. Ném lỗi tiếng Việt dễ hiểu khi file không hợp lệ. */
@@ -162,6 +280,15 @@ export function parseWorkspace(text: string): WorkspaceFile {
   raw.activePreset = raw.activePreset ? stripSensitiveKeys(raw.activePreset) : null;
   raw.externalLinks = Array.isArray(raw.externalLinks) ? raw.externalLinks.filter((e: any) => e && typeof e.id === 'string') : [];
   raw.fields = raw.fields.map((f: any) => (f?.status === 'translating' ? { ...f, status: 'pending' } : f));
+  // Ảnh chỉ nhận data URL ảnh thật — không nạp URL ngoài/blob lạ từ file người khác gửi.
+  if (typeof raw.image !== 'string' || !/^data:image\/(?:png|jpe?g|webp|gif);base64,/i.test(raw.image)) raw.image = null;
+  // (bug 255) File cũ (trước bản này) chép cả từ điển của máy người gửi — lọc lại theo thẻ.
+  const hay = cardSourceText(raw.fields);
+  const tc = raw.translationConfig as Record<string, unknown>;
+  for (const name of ['mvuDictionary', 'ejsEntryNameDict', 'ejsKeywordDict']) {
+    if (tc[name] && typeof tc[name] === 'object') tc[name] = scopeDictToCard(tc[name] as Record<string, string>, hay).dict;
+  }
+  if (raw.mvuKeyMetadata && typeof raw.mvuKeyMetadata === 'object') raw.mvuKeyMetadata = scopeDictToCard(raw.mvuKeyMetadata, hay).dict;
   return raw as WorkspaceFile;
 }
 

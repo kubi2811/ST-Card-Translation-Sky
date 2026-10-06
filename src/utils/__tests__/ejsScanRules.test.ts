@@ -97,7 +97,7 @@ describe('canonicalizeEjsValue — đồng nhất separator _/- theo quy tắc T
     // (bug #8) quy tắc cũ giữ 'từ_khóa_sfw' vì mảnh 'sfw' ASCII — nhưng chính kiểu "mảnh ASCII lẫn
     // từ Việt" (Lưu_Tam_Bảo, Tình_Cảm_Với_User) là lỗ hổng làm underscore tràn vào lorebook.
     // Quy tắc mới: cả từ đều chữ Latin + có dấu → về space. Entry rác này thực tế đã bị prune trước đó.
-    // (bug 254) …nhưng đuôi code ASCII (`_sfw`, `_tag`) thì GIỮ dấu `_` — card ghép key động
+    // (bug 254a) …nhưng đuôi code ASCII (`_sfw`, `_tag`) thì GIỮ dấu `_` — card ghép key động
     // `名 + '_sfw'`; phần thân Việt vẫn về space.
     expect(canonicalizeEjsValue('từ_khóa_sfw')).toBe('từ khóa_sfw');
     expect(canonicalizeEjsValue('stat_data')).toBe('stat_data');

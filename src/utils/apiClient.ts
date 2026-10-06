@@ -1,4 +1,4 @@
-import { stripUrlsForCjkCheck } from './cjk';
+import { stripUrlsForCjkCheck, replaceCjkFileNames } from './cjk';
 import { setFandom } from './fandomMode';
 import type { AIProvider, ProxySettings, ProviderConfig, GlossaryEntry, CharacterBookEntry } from '../types/card';
 import {
@@ -3351,6 +3351,14 @@ function maskUrls(text: string): { maskedText: string; map: UrlMaskMap } {
       return match.replace(url, ph);
     }
   );
+
+  // 5. (bug 255) Tên file trần có chữ Hán (`状态机.js`, `scripts/02_大乾风华录后台GM修改器.js`) —
+  //    tên một file KHÁC; AI dịch ra là trỏ vào file không tồn tại.
+  maskedText = replaceCjkFileNames(maskedText, (m) => {
+    const ph = makePlaceholder();
+    map[ph] = m;
+    return ph;
+  });
 
   return { maskedText, map };
 }

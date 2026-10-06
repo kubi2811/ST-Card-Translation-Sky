@@ -58,7 +58,7 @@ export function judgeRetryResult(input: RegressionInput): RegressionVerdict {
   const nothingToLose = !previous.trim() || previous === original;
   if (nothingToLose) return { worse: false, prevHan, nextHan };
 
-  // (bug 255) Script: bản đang có mà VỠ CÚ PHÁP JS (gốc thì sạch) là bản HỎNG — nạp vào SillyTavern
+  // (bug 254) Script: bản đang có mà VỠ CÚ PHÁP JS (gốc thì sạch) là bản HỎNG — nạp vào SillyTavern
   // là cả script chết, ít chữ Hán hơn cũng vô nghĩa. Trước đây chốt này giữ lại bản hỏng (662 chữ
   // Hán) và bỏ bản gốc chạy được ⇒ field kẹt mãi ở trạng thái vỡ, dịch lại bao nhiêu lần cũng vậy.
   if (isLikelyJsScript(original) && hasRealJsSignal(original) && jsParseErrorAny(original) === null) {

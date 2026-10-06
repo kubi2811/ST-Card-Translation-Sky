@@ -40,7 +40,63 @@ export function stripUrlsForCjkCheck(text: string): string {
   s = s.replace(/(?:\.\.?\/)[^\s'"<>(){}\\]+/g, '');
   // 7. Link markdown [...](url) — chỉ bỏ phần URL
   s = s.replace(/(!?\[[^\]]*\])\([^)]+\)/g, '$1()');
+  // 8. (bug 255) Tên file trần có chữ Hán: `状态机.js`, `scripts/02_大乾风华录后台GM修改器.js`
+  s = replaceCjkFileNames(s, () => '');
   return s;
+}
+
+/**
+ * (bug 255) TÊN FILE có chữ Hán nằm trần trong văn bản/comment — `状态机.js`, `_src/状态栏面板.模板.js`,
+ * `scripts/02_大乾风华录后台GM修改器.js`. Đó là tên một file KHÁC của tác giả: dịch ra là trỏ vào file
+ * không tồn tại, và đếm nó là "còn chữ Hán chưa dịch" thì vòng dịch lại không bao giờ hết báo.
+ * Biên của cụm: khoảng trắng, nháy, ngoặc, dấu nhấn markdown `**`, dấu câu tiếng Trung (`／`, `：`, `《》`…).
+ */
+const FILE_BOUNDARY_RE = /[\s'"`<>()[\]{},;|=*~：，。、；！？（）「」『』【】《》〈〉／]/;
+const FILE_EXT_RE = /\.(?:js|mjs|cjs|ts|json|ya?ml|txt|md|html?|css|png|jpe?g|gif|webp|svg|mp3|wav|ogg|mp4|webm|woff2?|ttf|otf)(?![A-Za-z0-9_])/gi;
+const HAN_ONE_RE = /[\u3400-\u4dbf\u4e00-\u9fff]/;
+/** Tên file dài hơn mức này thì không phải tên file — chặn cả chi phí dò ngược trên chuỗi khổng lồ. */
+const MAX_FILE_TOKEN = 160;
+
+/**
+ * Vị trí các tên file có chữ Hán trong `text`. Quét TUYẾN TÍNH: tìm đuôi file trước rồi lùi về
+ * biên gần nhất (tối đa MAX_FILE_TOKEN ký tự) — regex kiểu `[^biên]*Hán[^biên]*\.js` dò ngược bậc
+ * hai trên script minify / base64 dài hàng trăm nghìn ký tự không có dấu cách.
+ */
+export function cjkFileNameRanges(text: string): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  if (!text || !HAN_ONE_RE.test(text)) return out;
+  const re = new RegExp(FILE_EXT_RE.source, 'gi');
+  let m: RegExpExecArray | null;
+  let lastEnd = 0;
+  while ((m = re.exec(text)) !== null) {
+    const end = m.index + m[0].length;
+    let a = m.index;
+    const floor = Math.max(lastEnd, m.index - MAX_FILE_TOKEN);
+    while (a > floor && !FILE_BOUNDARY_RE.test(text[a - 1])) a--;
+    if (a === floor && a > 0 && a !== lastEnd && !FILE_BOUNDARY_RE.test(text[a - 1])) continue; // quá dài
+    const token = text.slice(a, end);
+    if (HAN_ONE_RE.test(token.slice(0, token.length - m[0].length)) && isLikelyCjkFileName(token)) {
+      out.push([a, end]);
+      lastEnd = end;
+    }
+  }
+  return out;
+}
+
+/** Thay mọi tên file có chữ Hán bằng `fn(tên)`. */
+export function replaceCjkFileNames(text: string, fn: (name: string) => string): string {
+  const ranges = cjkFileNameRanges(text);
+  if (!ranges.length) return text;
+  let out = '';
+  let last = 0;
+  for (const [a, b] of ranges) { out += text.slice(last, a) + fn(text.slice(a, b)); last = b; }
+  return out + text.slice(last);
+}
+
+export function isLikelyCjkFileName(token: string): boolean {
+  const stem = token.replace(/\.[A-Za-z0-9]+$/, '');
+  if (/[\/\\A-Za-z0-9_-]/.test(stem)) return true;
+  return stem.replace(/\./g, '').length <= 6;
 }
 
 /**

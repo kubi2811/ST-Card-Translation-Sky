@@ -23,7 +23,8 @@ const card = {
 } as unknown as CharacterCard;
 
 const fields = [
-  { path: 'data.description', label: 'desc', group: 'description', original: '你好', translated: 'Xin chào', status: 'done', retries: 0 },
+  // (bug 255) Từ điển chỉ đi theo mục có trong văn bản gốc — gốc phải chứa đủ các khoá dùng bên dưới.
+  { path: 'data.description', label: 'desc', group: 'description', original: '你好 好感度 甲 A', translated: 'Xin chào', status: 'done', retries: 0 },
   { path: 'data.character_book.entries[0].content', label: 'e0', group: 'lorebook', original: '内容', translated: '', status: 'translating', retries: 0,
     completedChunks: ['Nội'], rawChunks: ['内'], totalChunks: 2 },
 ] as unknown as TranslationField[];

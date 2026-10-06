@@ -8,7 +8,9 @@ import { useStore } from '../store';
 import { APP_VERSION } from '../version';
 import {
   buildWorkspace, parseWorkspace, collectSecrets, workspaceFileName, type WorkspaceFile,
+  isSameCardWorkspace, mergeWorkspaceInto,
 } from '../utils/workspaceIO';
+import type { GlossaryEntry } from '../types/card';
 import {
   loadVault, saveVault, upsertLink, vaultCodeForCard, extractCardExternalUrls, type ExternalLinkEntry,
 } from '../utils/externalLinkVault';
@@ -25,9 +27,41 @@ async function vaultEntriesForCard(cardName: string | undefined, fields: Array<{
   return vault.filter(e => (!!cardName && e.cardName === cardName) || codes.has(e.original));
 }
 
+/** (bug 255) Ảnh thẻ đang mở → data URL để đi kèm file workspace. */
+async function currentImageDataUrl(): Promise<string | null> {
+  const st = useStore.getState();
+  try {
+    let blob: Blob | null = null;
+    if (st._pngArrayBuffer) blob = new Blob([st._pngArrayBuffer], { type: 'image/png' });
+    else if (st.originalImage?.startsWith('data:image/')) return st.originalImage;
+    else if (st.originalImage?.startsWith('blob:')) blob = await (await fetch(st.originalImage)).blob();
+    if (!blob) return null;
+    return await new Promise<string>((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(String(r.result));
+      r.onerror = () => rej(r.error);
+      r.readAsDataURL(blob!);
+    });
+  } catch { return null; }
+}
+
+function dataUrlToArrayBuffer(url: string): ArrayBuffer | null {
+  try {
+    const bin = atob(url.slice(url.indexOf(',') + 1));
+    const buf = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    return buf.buffer;
+  } catch { return null; }
+}
+
+const DICT_NAMES = ['mvuDictionary', 'ejsEntryNameDict', 'ejsKeywordDict'] as const;
+
 /** Đổ workspace vào app. Kết nối/API của người nhận GIỮ NGUYÊN — file không chạm tới chúng. */
 export async function applyWorkspace(ws: WorkspaceFile): Promise<{ links: number }> {
   const st = useStore.getState();
+  const prevBlob = st._blobUrl;
+  // (bug 255) Ảnh đi theo thẻ — không có thì xoá ảnh cũ, đừng để thẻ mới dính ảnh thẻ trước.
+  const pngBuf = ws.image && /^data:image\/png/i.test(ws.image) ? dataUrlToArrayBuffer(ws.image) : null;
   useStore.setState({
     card: ws.card,
     cardFileName: ws.cardFileName || workspaceFileName(ws),
@@ -36,9 +70,25 @@ export async function applyWorkspace(ws: WorkspaceFile): Promise<{ links: number
     phase: (ws.phase === 'translating' ? 'paused' : (ws.phase || 'idle')) as never,
     currentFieldIndex: ws.currentFieldIndex || 0,
     mvuKeyMetadata: (ws.mvuKeyMetadata || {}) as never,
-  });
+    originalImage: ws.image || null,
+    _pngArrayBuffer: pngBuf,
+    _blobUrl: null,
+  } as never);
+  if (prevBlob) { try { URL.revokeObjectURL(prevBlob); } catch { /* đã thu hồi */ } }
+  // (bug 255) Từ điển: file chỉ mang mục CỦA THẺ NÀY. Máy nhận đang khoá 🔒 từ điển ⇒ giữ mục
+  // của họ, thêm/ghi mục của thẻ; không khoá ⇒ như mở thẻ mới: chỉ còn mục của thẻ. Trước đây
+  // file ghi đè NGUYÊN từ điển (kèm mọi thẻ khác của người gửi) ⇒ chuyền mấy lần là phình.
+  // Thuật ngữ: gộp, mục trùng nguồn lấy theo file — không xoá thuật ngữ riêng của người nhận.
+  const tc = { ...(ws.translationConfig as Record<string, unknown>) };
+  const mine = st.translationConfig;
+  if (mine.mvuDictLocked) tc.mvuDictionary = { ...(mine.mvuDictionary || {}), ...((tc.mvuDictionary as object) || {}) };
+  if (Array.isArray(tc.glossary)) {
+    const theirs = tc.glossary as GlossaryEntry[];
+    const src = new Set(theirs.map(g => g.source));
+    tc.glossary = [...(mine.glossary || []).filter(g => !src.has(g.source)), ...theirs];
+  }
   // Qua setter để cấu hình được lưu xuống trình duyệt như khi người dùng tự chỉnh.
-  st.setTranslationConfig(ws.translationConfig as never);
+  st.setTranslationConfig(tc as never);
   if (ws.activePreset) st.setActivePreset(ws.activePreset);
 
   let links = 0;
@@ -71,12 +121,17 @@ export default function WorkspaceIOPanel({ compact }: { compact?: boolean }) {
       let gh = '';
       try { gh = localStorage.getItem('gh-token') || ''; } catch { /* chế độ riêng tư */ }
       const secrets = collectSecrets(st, gh ? [gh] : []);
-      const { json, removedKeys, scrubbedHits, file } = buildWorkspace({
+      const image = await currentImageDataUrl();
+      const { json, removedKeys, scrubbedHits, droppedForeign, file } = buildWorkspace({
         card: st.card, cardFileName: st.cardFileName, contentType: st.contentType,
         fields: st.fields, phase: st.phase, currentFieldIndex: st.currentFieldIndex,
         mvuKeyMetadata: st.mvuKeyMetadata as Record<string, unknown>,
         translationConfig: st.translationConfig, activePreset: st.activePreset,
+        image,
       }, links, secrets, APP_VERSION);
+      if (droppedForeign > 0) {
+        st.addLog('info', fmt(ui.wsDroppedForeign, { n: droppedForeign }));
+      }
 
       const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
       const a = document.createElement('a');
@@ -101,8 +156,27 @@ export default function WorkspaceIOPanel({ compact }: { compact?: boolean }) {
     setBusy(true);
     try {
       const ws = parseWorkspace(await f.text());
-      const cur = useStore.getState().card;
+      const st0 = useStore.getState();
+      const cur = st0.card;
       const name = ws.card?.data?.name || ws.card?.name || ws.cardFileName;
+      // (bug 255) CHIA VIỆC: file là của CHÍNH thẻ đang mở ⇒ cho GỘP tiến độ thay vì thay cả thẻ.
+      if (cur && isSameCardWorkspace(st0.fields, ws) && window.confirm(fmt(ui.wsConfirmMerge, { name: String(name) }))) {
+        const dicts = Object.fromEntries(DICT_NAMES.map(n => [n, { ...(st0.translationConfig[n] || {}) }]));
+        const m = mergeWorkspaceInto({ fields: st0.fields, dicts }, ws);
+        useStore.setState({
+          fields: m.fields as never,
+          mvuKeyMetadata: { ...(ws.mvuKeyMetadata || {}), ...st0.mvuKeyMetadata } as never,
+        });
+        st0.setTranslationConfig(m.dicts as never);
+        useStore.getState().saveTranslationCache();
+        const r = m.report;
+        addToast('success', fmt(ui.wsMerged, { taken: r.taken, dict: r.dictAdded, conflicts: r.conflicts.length }));
+        if (r.conflicts.length) {
+          st0.addLog('warning', fmt(ui.wsMergeConflicts, { n: r.conflicts.length, list: r.conflicts.slice(0, 8).join(', ') + (r.conflicts.length > 8 ? '…' : '') }));
+        }
+        if (r.mismatched) st0.addLog('warning', fmt(ui.wsMergeMismatch, { n: r.mismatched }));
+        return;
+      }
       if (cur && !window.confirm(fmt(ui.wsConfirmReplace, { name: String(name) }))) return;
       const { links } = await applyWorkspace(ws);
       const s = ws.stats || { done: ws.fields.filter(x => x.status === 'done').length, fields: ws.fields.length };

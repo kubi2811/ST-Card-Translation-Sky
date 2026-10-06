@@ -414,7 +414,7 @@ function ChunkStatusAndResume({
    * lượt gọi API nào cho chúng.
    */
   const retranslateOneChunk = (idx: number) => {
-    // (bug 255) KHÔNG tự xoá ô ở đây nữa: engine chỉ xoá sau khi cầm được khoá field. Xoá trước
+    // (bug 256) KHÔNG tự xoá ô ở đây nữa: engine chỉ xoá sau khi cầm được khoá field. Xoá trước
     // mà khoá đang bị lượt khác giữ là ô mất bản dịch còn chẳng ai dịch lại. Bấm tay ⇒ takeOver:
     // lượt cũ (kể cả đang treo) bị dừng để lượt này chạy ngay.
     useStore.getState().addLog('info', `🔁 Dịch lại riêng chunk ${idx + 1}/${totalChunks} của ${field.label} — các chunk khác giữ nguyên.`);

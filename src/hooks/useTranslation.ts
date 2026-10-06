@@ -327,7 +327,7 @@ const SHARED_RUN = {
 const SHARED_FIELD_ABORTS = { current: new Map<string, AbortController>() };
 
 /**
- * (bug 255) AI ĐANG GIỮ KHOÁ DỊCH CỦA TỪNG FIELD — và cách CƯỚP khoá khi người dùng bấm tay.
+ * (bug 256) AI ĐANG GIỮ KHOÁ DỊCH CỦA TỪNG FIELD — và cách CƯỚP khoá khi người dùng bấm tay.
  *
  * User: bấm "dịch lại chunk này" trong khung xem chunk thì lúc được, lúc báo "đang dịch ở luồng
  * khác" — dù nhìn tiến trình không có call nào cả (lượt cũ treo cả tiếng) — và chunk vừa bấm bị
@@ -615,7 +615,7 @@ export function useTranslation() {
 
   /* ─── Translate a single field (inner — wrapped below with an in-flight lock) ─── */
   const _translateSingleFieldInner = async (field: TranslationField, index: number, fields: TranslationField[], fieldSignal?: AbortSignal) => {
-    /** (bug 255) Bị lượt bấm tay cướp khoá (không phải huỷ cả vòng). */
+    /** (bug 256) Bị lượt bấm tay cướp khoá (không phải huỷ cả vòng). */
     const takenOver = () => !!fieldSignal?.aborted && !checkAbort();
     // #2: nếu đã bấm Dừng/Hủy thì KHÔNG đánh dấu 'translating' (tránh task nền set lại sau khi
     // pause đã reset → kẹt 'translating' hoài / "vẫn dịch nền"). Bail ngay để loop trên bắt Cancelled.
@@ -986,7 +986,7 @@ export function useTranslation() {
           prevChunks,
           // onChunkComplete: save chunk progress in real-time (supports out-of-order for parallel)
           (chunkIdx, translatedChunk, totalChunks) => {
-            if (takenOver()) return;   // (bug 255) lượt bấm tay đã cướp khoá — không ghi đè ô của nó
+            if (takenOver()) return;   // (bug 256) lượt bấm tay đã cướp khoá — không ghi đè ô của nó
             const currentField = useStore.getState().fields.find(f => f.path === field.path);
             const currentCompleted = currentField?.completedChunks || [];
             // Index-based storage: safe for both sequential and parallel
@@ -1270,11 +1270,11 @@ export function useTranslation() {
       // Post-process regex HTML: font swap + underscore display + lodash path fix
       const isRegexContent = field.group === 'regex' && (field.path.includes('replaceString') || field.path.includes('trimStrings'));
       if (isRegexContent && translated) {
-        translated = postProcessRegexHtml(translated);
+        translated = postProcessRegexHtml(translated, field.original);
       }
       // Post-process TavernHelper content that contains HTML
       if (field.group === 'tavern_helper' && translated && /<[a-z][^>]*>/i.test(translated)) {
-        translated = postProcessRegexHtml(translated);
+        translated = postProcessRegexHtml(translated, field.original);
       }
       // ─── SMART-QUOTE FIX for ALL code fields ───
       // Fixes the "lỗi dấu": AI emits “ ” ‘ ’ ＂ ＇ inside JS/HTML/regex, breaking the script.
@@ -1714,7 +1714,7 @@ export function useTranslation() {
       }
       return 'done';
     } catch (err) {
-      // (bug 255) Bị cướp khoá: lượt bấm tay đang làm chủ field — KHÔNG ghi status/chunk gì nữa.
+      // (bug 256) Bị cướp khoá: lượt bấm tay đang làm chủ field — KHÔNG ghi status/chunk gì nữa.
       if (takenOver()) throw new FieldTakenOverError();
       const msg = err instanceof Error ? err.message : String(err);
       if (msg === 'Cancelled' || checkAbort()) {
@@ -1839,7 +1839,7 @@ export function useTranslation() {
     inFlightPaths.current.add(field.path);
     const lockToken = Symbol(field.path);
     LOCK_OWNER.set(field.path, lockToken);
-    // (bug 255) Công tắc dừng RIÊNG của field này, nối vào abort của cả vòng.
+    // (bug 256) Công tắc dừng RIÊNG của field này, nối vào abort của cả vòng.
     const fieldCtrl = new AbortController();
     const runSignal = abortRef.current?.signal;
     if (runSignal) {
@@ -2247,10 +2247,10 @@ export function useTranslation() {
         // Post-process regex HTML
         const isRegexField = batchFields[j].group === 'regex' && (batchFields[j].path.includes('replaceString') || batchFields[j].path.includes('trimStrings'));
         if (isRegexField && translated) {
-          translated = postProcessRegexHtml(translated);
+          translated = postProcessRegexHtml(translated, batchFields[j].original);
         }
         if (batchFields[j].group === 'tavern_helper' && translated && /<[a-z][^>]*>/i.test(translated)) {
-          translated = postProcessRegexHtml(translated);
+          translated = postProcessRegexHtml(translated, batchFields[j].original);
         }
         // Smart-quote fix for code fields not covered above (fixes "lỗi dấu" breaking regex/JS)
         if (translated && (batchFields[j].group === 'regex' || batchFields[j].group === 'tavern_helper')) {
@@ -3314,7 +3314,7 @@ export function useTranslation() {
             // ═══ Post-process regex HTML ═══
             const isRegexContent = rf.path.includes('replaceString') || rf.path.includes('trimStrings');
             if (isRegexContent && regexTranslated) {
-              regexTranslated = postProcessRegexHtml(regexTranslated);
+              regexTranslated = postProcessRegexHtml(regexTranslated, rf.original);
             }
 
             // ═══ EJS AUTO-FIX (Strategy C) ═══
@@ -4166,7 +4166,7 @@ export function useTranslation() {
   const retranslateField = useCallback(async (
     path: string, resume = false, extraInstruction?: string,
     /**
-     * (bug 255) `clearChunks`: các ô chunk cần dịch lại — chỉ xoá SAU KHI đã cầm khoá (xin khoá
+     * (bug 256) `clearChunks`: các ô chunk cần dịch lại — chỉ xoá SAU KHI đã cầm khoá (xin khoá
      * hụt thì ô vẫn nguyên). `takeOver`: người dùng bấm tay ⇒ được dừng lượt cũ đang giữ khoá
      * field này (kể cả lượt treo) để chạy ngay; các chunk lượt cũ đã xong vẫn giữ.
      */
@@ -4244,7 +4244,7 @@ export function useTranslation() {
     };
     const hadTranslation = !!snapshot.translated && snapshot.translated !== field.original;
 
-    // (bug 255) Xoá đúng các ô được yêu cầu — bây giờ mới xoá, khi khoá đã nằm trong tay và ảnh
+    // (bug 256) Xoá đúng các ô được yêu cầu — bây giờ mới xoá, khi khoá đã nằm trong tay và ảnh
     // chụp (để trả lại nếu lượt này hỏng) đã có.
     if (opts?.clearChunks?.length && resume) {
       const cur = [...(freshField.completedChunks || [])];
@@ -4352,7 +4352,7 @@ export function useTranslation() {
         prevChunks,
         // onChunkComplete: save chunk progress in real-time (supports out-of-order for parallel)
         (chunkIdx, translatedChunk, totalChunks) => {
-          if (controller.signal.aborted) return;   // (bug 255) đã bị lượt bấm tay khác cướp khoá
+          if (controller.signal.aborted) return;   // (bug 256) đã bị lượt bấm tay khác cướp khoá
           const currentField = useStore.getState().fields.find(f => f.path === field.path);
           const currentCompleted = currentField?.completedChunks || [];
           // (bug 227) Cắt đuôi thừa của lượt trước — xem chú thích ở chỗ ghi chính.
@@ -4442,7 +4442,7 @@ export function useTranslation() {
       // TavernHelper…) đều được, khỏi phải nhớ gọi ở từng nút.
       store.saveTranslationCache();
     } catch (err) {
-      // (bug 255) Lượt bấm tay khác đã cướp khoá — field giờ là của nó, rút lặng lẽ.
+      // (bug 256) Lượt bấm tay khác đã cướp khoá — field giờ là của nó, rút lặng lẽ.
       if (controller.signal.aborted && LOCK_OWNER.get(path) !== lockToken) return;
       const msg = err instanceof Error ? err.message : String(err);
       if (msg === 'Cancelled' || msg === 'The operation was aborted' || msg === 'The user aborted a request.') {
@@ -4484,7 +4484,7 @@ export function useTranslation() {
     } finally {
       // Clean up per-field abort controller
       if (fieldAbortMap.current.get(path) === controller) fieldAbortMap.current.delete(path);
-      // (bug 213) nhả khoá chung — (bug 255) chỉ khi khoá còn là của lượt này
+      // (bug 213) nhả khoá chung — (bug 256) chỉ khi khoá còn là của lượt này
       if (LOCK_OWNER.get(path) === lockToken) {
         inFlightPaths.current.delete(path);
         LOCK_OWNER.delete(path);
@@ -5305,10 +5305,10 @@ export function useTranslation() {
 
       // Post-process regex HTML
       if (isRegexContent && result) {
-        result = postProcessRegexHtml(result);
+        result = postProcessRegexHtml(result, field.original);
       }
       if (field.group === 'tavern_helper' && result && /<[a-z][^>]*>/i.test(result)) {
-        result = postProcessRegexHtml(result);
+        result = postProcessRegexHtml(result, field.original);
       }
 
       if (!result || !result.trim()) {

@@ -40,13 +40,13 @@ export function stripUrlsForCjkCheck(text: string): string {
   s = s.replace(/(?:\.\.?\/)[^\s'"<>(){}\\]+/g, '');
   // 7. Link markdown [...](url) — chỉ bỏ phần URL
   s = s.replace(/(!?\[[^\]]*\])\([^)]+\)/g, '$1()');
-  // 8. (bug 255) Tên file trần có chữ Hán: `状态机.js`, `scripts/02_大乾风华录后台GM修改器.js`
+  // 8. (bug 256) Tên file trần có chữ Hán: `状态机.js`, `scripts/02_大乾风华录后台GM修改器.js`
   s = replaceCjkFileNames(s, () => '');
   return s;
 }
 
 /**
- * (bug 255) TÊN FILE có chữ Hán nằm trần trong văn bản/comment — `状态机.js`, `_src/状态栏面板.模板.js`,
+ * (bug 256) TÊN FILE có chữ Hán nằm trần trong văn bản/comment — `状态机.js`, `_src/状态栏面板.模板.js`,
  * `scripts/02_大乾风华录后台GM修改器.js`. Đó là tên một file KHÁC của tác giả: dịch ra là trỏ vào file
  * không tồn tại, và đếm nó là "còn chữ Hán chưa dịch" thì vòng dịch lại không bao giờ hết báo.
  * Biên của cụm: khoảng trắng, nháy, ngoặc, dấu nhấn markdown `**`, dấu câu tiếng Trung (`／`, `：`, `《》`…).

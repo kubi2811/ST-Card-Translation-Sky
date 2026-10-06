@@ -4,4 +4,5 @@ Mỗi file là **một tin nhắn** gửi cho **một người báo bug**. Copy 
 
 | File | Bug | Người báo | Tình trạng |
 |---|---|---|---|
-| `bug-255-phatsiz.md` | 255 — chuyển máy/chia việc (workspace), chunk kẹt "luồng khác", tên file chữ Hán | PhatSiz | Đã sửa (phần "chunk 3 tiếng ra nguyên văn" cần log) |
+| `bug-255-gogopikachu.md` | 255 — chuyển máy / chia việc (workspace mất gốc, từ điển phình, gộp tiến độ) | gogopikachu. | Đã sửa |
+| `bug-256-gogopikachu.md` | 256 — dịch lại chunk kẹt "luồng khác" + xoá chunk; tên file chữ Hán | gogopikachu. | Đã sửa (phần "chunk 3 tiếng ra nguyên văn" cần log) |

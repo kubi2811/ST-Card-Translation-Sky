@@ -2,7 +2,7 @@
  * (bug 255 — PhatSiz) Chia việc / chuyển máy:
  *   1. workspace chép NGUYÊN từ điển của máy (mọi thẻ) ⇒ chuyền vài lần là phình — giờ chỉ mục của thẻ;
  *   2. không gộp được tiến độ của hai người dịch cùng thẻ — giờ có mergeWorkspaceInto;
- *   3. tên file có chữ Hán (`状态机.js`) bị đếm là "còn chữ Hán" và bị đưa đi dịch.
+ *   3. (bug 256) tên file có chữ Hán (`状态机.js`) bị đếm là "còn chữ Hán" và bị đưa đi dịch.
  */
 import { describe, it, expect } from 'vitest';
 import {
@@ -87,7 +87,7 @@ describe('bug 255 — gộp tiến độ của hai người dịch cùng thẻ',
   });
 });
 
-describe('bug 255 — tên file có chữ Hán không bị đếm, không bị dịch', () => {
+describe('bug 256 — tên file có chữ Hán không bị đếm, không bị dịch', () => {
   const C = "/**\n * 形态照抄外卡《大乾风华录 Ver2.0》的 `scripts/02_大乾风华录后台GM修改器.js`：\n * ⚠️ 本脚本**不改**状态机.js／状态栏面板.js／_build_card.js\n */\nconst a = 1;";
   it('không đếm chữ Hán trong tên file', () => {
     const all = (C.match(/[一-鿿]/g) || []).length;

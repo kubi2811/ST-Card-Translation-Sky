@@ -5,6 +5,7 @@ import type { ProxySettings, GlossaryEntry } from '../types/card';
 import { writeDebugLog } from './debugLogger';
 import { extractScriptBodies, hasRealJsSignal, jsParseError } from './scriptSafety';
 import { cjkFileNameRanges } from './cjk';
+import { lookupCodeChars, cjkCharClassesToAlternation } from './codeChars';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Public types
@@ -657,7 +658,7 @@ export function extractCJKTokens(
   // (bugNeedFix/128) Định danh JS trần — gặp token TRÙNG KHỚP tên này ngoài chuỗi là bỏ qua,
   // không đưa đi dịch. Văn xuôi thuần không có const/let/`.` nên tập này rỗng, không tốn gì.
   const protectedIds = collectProtectedJsIdentifiers(text);
-  // (bug 255) Tên file có chữ Hán (`状态机.js`, `scripts/02_大乾风华录后台GM修改器.js`) — tên file
+  // (bug 256) Tên file có chữ Hán (`状态机.js`, `scripts/02_大乾风华录后台GM修改器.js`) — tên file
   // KHÁC của tác giả, dịch ra là trỏ vào file không tồn tại. Giữ nguyên từng byte.
   const fileRanges = cjkFileNameRanges(text);
   const inFileName = (a: number, b: number) => fileRanges.some(([s, e]) => a >= s && b <= e);
@@ -1898,6 +1899,8 @@ export async function surgicalTranslate(
   fieldLabel?: string
 ): Promise<{ translated: string; success: boolean; fallbackTriggered: boolean; dict?: Record<string, string> }> {
   const { callProvider, computePoolConcurrency } = await import('./apiClient');
+  // (bug 257) `[日号]` trong regex ⇒ `(?:日|号)` trước khi dịch — xem cjkCharClassesToAlternation.
+  text = cjkCharClassesToAlternation(text).text;
   // Bang Hán → Việt cua chinh lan dich nay. Nguoi goi can no de va regex trong code:
   // regex khop nhan tieng Trung ma khong duoc va thi sau khi dich literal se het khop,
   // chuc nang chet im lang (khong loi, khong canh bao).
@@ -1944,7 +1947,14 @@ export async function surgicalTranslate(
       if (match?.target.trim()) {
         token.translated = match.target.trim();
         writeDebugLog(`[surgicalTranslate] Glossary: "${trimmed}" → "${token.translated}"`);
+        continue;
       }
+    }
+    // (bug 257) Chữ Hán đơn trong code (无 / 年月日 / 次 / 人 / 你…) — bảng cố định, không hỏi AI.
+    const local = lookupCodeChars(trimmed, text, token.start, token.end);
+    if (local) {
+      token.translated = local;
+      writeDebugLog(`[surgicalTranslate] CodeChar: "${trimmed}" → "${local}"`);
     }
   }
 

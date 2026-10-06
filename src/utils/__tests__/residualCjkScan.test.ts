@@ -46,7 +46,10 @@ describe('countResidualHan — KHÔNG tính chữ Hán trong link', () => {
   it('cssCjkHandling=preserve → bỏ qua font-family giữ nguyên có chủ ý', () => {
     const css = "body { font-family: '微软雅黑'; } Nội dung đã dịch";
     expect(countResidualHan(css, 'preserve')).toBe(0);
-    expect(countResidualHan(css, 'translate')).toBeGreaterThan(0);
+    // (bug 257) Tên font không bao giờ được dịch ('黑体' → 'Hắc Thể' là font không tồn tại) nên ở
+    // chế độ "dịch CSS" cũng không được tính là "còn chữ Hán". Chữ hiển thị (content:) thì vẫn tính.
+    expect(countResidualHan(css, 'translate')).toBe(0);
+    expect(countResidualHan(`.a::after { content: '商品'; }`, 'translate')).toBeGreaterThan(0);
   });
 
   it('chuỗi rỗng/null → 0, không nổ', () => {

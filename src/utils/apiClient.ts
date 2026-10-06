@@ -3352,7 +3352,7 @@ function maskUrls(text: string): { maskedText: string; map: UrlMaskMap } {
     }
   );
 
-  // 5. (bug 255) Tên file trần có chữ Hán (`状态机.js`, `scripts/02_大乾风华录后台GM修改器.js`) —
+  // 5. (bug 256) Tên file trần có chữ Hán (`状态机.js`, `scripts/02_大乾风华录后台GM修改器.js`) —
   //    tên một file KHÁC; AI dịch ra là trỏ vào file không tồn tại.
   maskedText = replaceCjkFileNames(maskedText, (m) => {
     const ph = makePlaceholder();
@@ -3383,6 +3383,23 @@ export function maskCssCjkValues(text: string, mode: 'preserve' | 'translate' = 
   const map: CssCjkMaskMap = {};
   let maskedText = text;
   let counter = 0;
+
+  // (bug 257) TÊN FONT không bao giờ được dịch, ở CẢ HAI chế độ: '黑体' → 'Hắc Thể' là một font
+  // không tồn tại. Chế độ "dịch CSS" chỉ nhằm chữ hiển thị (content: "…"), không nhằm tên font.
+  maskedText = maskedText.replace(
+    /(font-family\s*:\s*)([^;{}\n]*[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff\uac00-\ud7af][^;{}\n]*)/gi,
+    (_m, prop: string, value: string) => {
+      // Dừng ở nháy đóng của thuộc tính/chuỗi bao ngoài (style="font-family: 宋体") — nháy lẻ cặp
+      // là của lớp ngoài, chỉ che phần bên trong nó.
+      let inner = value;
+      for (const q of ['"', "'"]) {
+        if ((inner.split(q).length - 1) % 2 === 1) inner = inner.slice(0, inner.lastIndexOf(q));
+      }
+      const placeholder = `__CSS_FONT_${counter++}__`;
+      map[placeholder] = inner;
+      return `${prop}${placeholder}${value.slice(inner.length)}`;
+    },
+  );
 
   if (mode === 'translate') {
     return { maskedText, map, mode };
@@ -3417,7 +3434,9 @@ export function unmaskCssCjkValues(text: string, map: CssCjkMaskMap, mode: 'pres
   let unmasked = text;
   for (const [placeholder, value] of Object.entries(map)) {
     // preserve: restore original CJK char | translate: remove it (replace with empty)
-    unmasked = unmasked.split(placeholder).join(mode === 'translate' ? '' : value);
+    // (bug 257) Tên font thì LUÔN trả lại nguyên văn — xoá đi là mất font.
+    const keep = mode !== 'translate' || placeholder.startsWith('__CSS_FONT_');
+    unmasked = unmasked.split(placeholder).join(keep ? value : '');
   }
   return unmasked;
 }

@@ -1,5 +1,6 @@
 import type { CharacterCard, ProxySettings, TranslationField } from '../types/card';
-import { applyVietnameseFonts } from './vnFonts';
+import { applyVietnameseFonts, restoreCjkFontNames } from './vnFonts';
+import { fixCjkClassSelectors, setHtmlLangVi } from './htmlLocalize';
 import { fandomNameOverride } from './fandomMode';
 import type { ZodFieldDef } from '../types/mvuZodTypes';
 import { extractPatchFieldNames } from './jsonPatchValidator';
@@ -4315,13 +4316,21 @@ export function normalizeSmartQuotesInCode(code: string): string {
  * 3. Sửa đường dẫn _.get() bị ngắt dòng hoặc dùng dot notation sai cú pháp
  * 4. Sửa optional chaining bị lỗi bracket notation
  */
-export function postProcessRegexHtml(html: string): string {
+export function postProcessRegexHtml(html: string, original?: string): string {
   if (!html || typeof html !== 'string') return html;
 
   let result = html;
 
   // Chuẩn hoá dấu nháy thông minh/toàn rộng → dấu nháy thẳng (sửa "lỗi dấu" làm hỏng regex)
   result = normalizeSmartQuotesInCode(result);
+
+  // (bug 257) Ba chỗ dịch chữ là gãy giao diện — cần bản GỐC để biết chỗ nào:
+  //   tên font CJK bị dịch ('黑体' → 'Hắc Thể'), class CSS chữ Hán thành nhiều từ (.q-Tinh Anh).
+  if (original) {
+    result = restoreCjkFontNames(original, result);
+    result = fixCjkClassSelectors(original, result).text;
+  }
+  result = setHtmlLangVi(result);
 
   // (bug 252) Font hiển thị được tiếng Việt: chèn web font hỗ trợ đủ dấu lên trước font CJK, nạp kèm
   // từ Google Fonts. Thay cho CHINESE_FONT_MAP cũ (chỉ font Windows, chèn kèm nháy ⇒ vỡ chuỗi JS).

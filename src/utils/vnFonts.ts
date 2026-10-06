@@ -103,7 +103,7 @@ export function fixFontList(list: string): { list: string; added: FontStyleClass
  * dấu nháy KHÔNG có cặp trong phần còn lại của khai báo (đó là nháy đóng của chuỗi/thuộc tính bao
  * ngoài, vd style="font-family: X" hay 'font-family:"X"').
  */
-function readDeclValue(text: string, start: number): number {
+export function readDeclValue(text: string, start: number): number {
   let i = start, q: string | null = null;
   while (i < text.length) {
     const c = text[i];
@@ -179,4 +179,55 @@ export function applyVietnameseFonts(input: string): VnFontResult {
   }
 
   return { text, fixes, used: [...used] };
+}
+
+/** Mọi danh sách font trong văn bản, theo thứ tự xuất hiện (CSS `font-family:` + JS `fontFamily`). */
+function fontLists(text: string): Array<{ start: number; end: number }> {
+  const out: Array<{ start: number; end: number }> = [];
+  const re = /font-family\s*:\s*/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const vStart = m.index + m[0].length;
+    out.push({ start: vStart, end: readDeclValue(text, vStart) });
+  }
+  const js = /fontFamily\s*[:=]\s*(['"`])((?:(?!\1)[^\n])*)\1/g;
+  while ((m = js.exec(text)) !== null) {
+    const vStart = m.index + m[0].indexOf(m[1]) + 1;
+    out.push({ start: vStart, end: vStart + m[2].length });
+  }
+  return out.sort((a, b) => a.start - b.start);
+}
+
+/**
+ * (bug 257) TÊN FONT KHÔNG ĐƯỢC DỊCH. Thẻ thật: `font-family: 'SimHei', '黑体', sans-serif` thành
+ * `'SimHei', 'Hắc Thể', sans-serif` — "Hắc Thể" không phải font nào cả. Lớp che CSS chỉ chạy ở chế
+ * độ "giữ CJK trong CSS", còn mặc định là "dịch"; đường surgical cũng lọt. Nên chốt ở hậu xử lý:
+ * ghép từng danh sách font của bản dịch với bản GỐC theo thứ tự, tên font gốc có chữ CJK thì trả
+ * lại nguyên văn đúng vị trí. Font Việt do tool chèn (Noto Serif, Be Vietnam Pro, Lora) được bỏ
+ * qua khi ghép, nên chạy lại bao nhiêu lần cũng không lệch.
+ */
+export function restoreCjkFontNames(original: string, translated: string): string {
+  if (!original || !translated || !CJK_NAME.test(original) || !/font/i.test(original)) return translated;
+  const o = fontLists(original);
+  const t = fontLists(translated);
+  if (!o.length || o.length !== t.length) return translated;
+  const vnNames = new Set(Object.values(VN_FONT).map(v => v.family.toLowerCase()));
+  let out = translated;
+  for (let i = t.length - 1; i >= 0; i--) {
+    const oParts = splitFamilies(original.slice(o[i].start, o[i].end));
+    if (!oParts.some(p => CJK_NAME.test(p))) continue;
+    const tParts = splitFamilies(out.slice(t[i].start, t[i].end));
+    const realIdx = tParts.map((p, j) => (vnNames.has(familyName(p)) && !oParts.some(q => familyName(q) === familyName(p)) ? -1 : j)).filter(j => j >= 0);
+    if (realIdx.length !== oParts.length) continue;
+    let changed = false;
+    realIdx.forEach((j, k) => {
+      if (CJK_NAME.test(oParts[k]) && tParts[j].trim() !== oParts[k].trim()) {
+        const lead = tParts[j].match(/^\s*/)?.[0] ?? '';
+        tParts[j] = lead + oParts[k].trim();
+        changed = true;
+      }
+    });
+    if (changed) out = out.slice(0, t[i].start) + tParts.join(',') + out.slice(t[i].end);
+  }
+  return out;
 }

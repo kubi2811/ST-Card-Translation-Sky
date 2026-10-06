@@ -87,10 +87,10 @@ export function finalizeRetryTranslation(input: RetryGuardInput): RetryGuardResu
   // ─── 1. Hậu xử lý (giống retranslateField cũ — nay bulk cũng được hưởng) ───
   const isRegexContent = group === 'regex' && (path.includes('replaceString') || path.includes('trimStrings'));
   if (isRegexContent) {
-    text = postProcessRegexHtml(text);
+    text = postProcessRegexHtml(text, original);
   }
   if (group === 'tavern_helper' && /<[a-z][^>]*>/i.test(text)) {
-    text = postProcessRegexHtml(text);
+    text = postProcessRegexHtml(text, original);
   }
   if (isCodeGroup(group)) {
     text = normalizeSmartQuotesInCode(text);

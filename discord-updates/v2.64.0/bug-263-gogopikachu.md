@@ -5,7 +5,7 @@
 Có gì mới / đã fix:
 
 **1) Chunk đã dịch bị gắn "chưa dịch":**
-- Trước đây: chunk dịch 27.000 ký tự mà sót vài chữ Hán cũng bị gắn "chưa dịch" y như chunk chưa dịch thật.
+- Trước đây: chunk dịch xong mà sót vài chữ Hán cũng bị gắn "chưa dịch".
 - Bây giờ nhãn nói đúng: **chưa dịch** (giống hệt bản gốc) · **còn N/M chữ Hán** (sót nặng) · **sót N chữ Hán** (đã dịch, chỉ sót lẻ tẻ) · **trống**.
 
 **2) Bấm dịch lại thì cả loạt chunk "có vẻ ổn" bị dịch lại theo:**
@@ -18,4 +18,4 @@ Có gì mới / đã fix:
 
 **4) Bản dịch chunk hiện `__PROTECTED_URL_0__`:** đó là ký hiệu che link/tên file bị lưu nhầm vào chunk — bấm "Ghép lại" là lọt vào thẻ. Giờ chunk lưu bản đã gỡ che; chunk lưu từ bản cũ cũng được tự gỡ khi ghép.
 
-Bạn nên mở lại entry, xem nhãn mới rồi: chunk **hỏng** → "Dịch lại N chunk hỏng"; chunk **sót** → "Vá chữ Hán sót". Còn kẹt chunk nào thì gửi mình log nhé.
+Mở lại entry: chunk **hỏng** → "Dịch lại N chunk hỏng", chunk **sót** → "Vá chữ Hán sót". Còn kẹt thì gửi mình log nhé.

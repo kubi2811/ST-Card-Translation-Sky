@@ -1,4 +1,6 @@
-import { stripUrlsForCjkCheck, replaceCjkFileNames } from './cjk';
+import { stripUrlsForCjkCheck } from './cjk';
+import { maskUrls, unmaskUrls } from './urlMask';
+export { maskUrls } from './urlMask';
 import { setFandom } from './fandomMode';
 import type { AIProvider, ProxySettings, ProviderConfig, GlossaryEntry, CharacterBookEntry } from '../types/card';
 import {
@@ -3298,79 +3300,7 @@ function unmaskSecrets(text: string, map: SecretMaskMap): string {
   return unmaskedText;
 }
 
-// ─── URL Masking Utilities ───
-// Protect URLs/image links from being translated by the AI.
-// Similar to secret masking, but for URLs in src, href, CSS url(), standalone URLs, and markdown images.
-interface UrlMaskMap {
-  [placeholder: string]: string;
-}
-
-function maskUrls(text: string): { maskedText: string; map: UrlMaskMap } {
-  const map: UrlMaskMap = {};
-  let maskedText = text;
-  let counter = 0;
-
-  // Helper to create unique placeholder
-  const makePlaceholder = () => `__PROTECTED_URL_${counter++}__`;
-
-  // 1. Markdown image links: ![alt](url)
-  maskedText = maskedText.replace(/(!\[[^\]]*\]\()([^)\s]+)(\))/g, (_match, prefix, url, suffix) => {
-    const ph = makePlaceholder();
-    map[ph] = url;
-    return `${prefix}${ph}${suffix}`;
-  });
-
-  // 2. HTML attributes: src="...", href="...", url="...", action="...", data-src="...", poster="...", srcset="..."
-  maskedText = maskedText.replace(
-    /((?:src|href|action|data-src|data-url|poster|srcset)\s*=\s*)(["'])(https?:\/\/[^"'<>\s]+|[^"'<>\s]+\.(?:png|jpg|jpeg|gif|svg|webp|mp4|webm|mp3|ogg|wav|pdf|zip|css|js|html?)(?:[?#][^"'<>\s]*)?)\2/gi,
-    (_match, attr, quote, url) => {
-      const ph = makePlaceholder();
-      map[ph] = url;
-      return `${attr}${quote}${ph}${quote}`;
-    }
-  );
-
-  // 3. CSS url() patterns
-  maskedText = maskedText.replace(
-    /(url\s*\(\s*)(["']?)(https?:\/\/[^"')\s]+|[^"')\s]+\.(?:png|jpg|jpeg|gif|svg|webp|woff2?|ttf|eot)(?:[?#][^"')\s]*)?)\2(\s*\))/gi,
-    (_match, prefix, quote, url, suffix) => {
-      const ph = makePlaceholder();
-      map[ph] = url;
-      return `${prefix}${quote}${ph}${quote}${suffix}`;
-    }
-  );
-
-  // 4. Standalone URLs (https://... not already captured)
-  // Only match URLs that aren't already placeholders
-  maskedText = maskedText.replace(
-    /(?<=[\s\n(]|^)(https?:\/\/[^\s<>"'`)\]]{10,})/gm,
-    (match, url) => {
-      if (url.includes('__PROTECTED_URL_')) return match; // Already masked
-      const ph = makePlaceholder();
-      map[ph] = url;
-      return match.replace(url, ph);
-    }
-  );
-
-  // 5. (bug 256) Tên file trần có chữ Hán (`状态机.js`, `scripts/02_大乾风华录后台GM修改器.js`) —
-  //    tên một file KHÁC; AI dịch ra là trỏ vào file không tồn tại.
-  maskedText = replaceCjkFileNames(maskedText, (m) => {
-    const ph = makePlaceholder();
-    map[ph] = m;
-    return ph;
-  });
-
-  return { maskedText, map };
-}
-
-function unmaskUrls(text: string, map: UrlMaskMap): string {
-  let unmaskedText = text;
-  for (const [placeholder, url] of Object.entries(map)) {
-    // Use split+join for safety (avoids regex special char issues in URLs)
-    unmaskedText = unmaskedText.split(placeholder).join(url);
-  }
-  return unmaskedText;
-}
+// ─── URL Masking Utilities ─── (bug 263: tách ra utils/urlMask.ts để module nhẹ dùng được)
 
 // ─── CSS CJK Value Masking ───
 // Protects CJK characters inside CSS property values from being translated.
@@ -3768,6 +3698,20 @@ async function translateTextCore(
     unmasked = unmaskCodeBlocks(unmasked, codeMap);
     return unmasked;
   });
+  /**
+   * (bug 263) Bản dịch từng mảnh phải được LƯU ở dạng ĐÃ GỠ CHE — như rawChunks. Trước đây ô dịch
+   * lưu còn `__PROTECTED_URL_0__`; vòng dịch đầy đủ gỡ che lúc ghép nên không sao, nhưng nút
+   * "Ghép lại" và bước tự ghép khi mở lại phiên ghép thẳng các ô ⇒ ký hiệu che lọt vào thẻ thay
+   * cho link / tên file thật (ảnh user: `改 __PROTECTED_URL_0__`). Lưu bản gỡ che thì an toàn cả
+   * khi resume: mảnh cũ ghép vào rồi gỡ che lần nữa cũng không đổi gì.
+   */
+  const unmaskForStore = (c: string): string => {
+    if (!c) return c;
+    let u = unmaskUrls(c, urlMap);
+    u = unmaskSecrets(u, secretMap);
+    u = unmaskCssCjkValues(u, cssCjkMap, cssCjkHandling || 'preserve');
+    return unmaskCodeBlocks(u, codeMap);
+  };
   if (onChunksReady) onChunksReady(unmaskedChunks);
 
   // ═══ SINGLE CHUNK — fast path (no parallelism needed) ═══
@@ -4092,7 +4036,7 @@ async function translateTextCore(
           }
 
           if (onChunkComplete) {
-            onChunkComplete(idx, translatedChunks[idx]!, chunks.length);
+            onChunkComplete(idx, unmaskForStore(translatedChunks[idx]!), chunks.length);
           }
           reportTranslateProgress({ fieldName, kind: 'chunk-done', level: 'success', chunk: idx, total: chunks.length, message: `Mảnh ${idx + 1}/${chunks.length} xong.` });
         } catch (err: any) {
@@ -4136,7 +4080,7 @@ async function translateTextCore(
       if (completedList.length > 0) {
         throw new ChunkError(
           errorMsg,
-          completedForResume,
+          completedForResume.map(unmaskForStore),
           firstMissingIdx !== -1 ? firstMissingIdx : 0,
           chunks.length,
           errors.length > 0 ? errors[0].err : new Error('Workers exited before completing all chunks'),
@@ -4239,7 +4183,7 @@ async function translateTextCore(
         }
 
         if (onChunkComplete) {
-          onChunkComplete(idx, translatedChunks[idx]!, chunks.length);
+          onChunkComplete(idx, unmaskForStore(translatedChunks[idx]!), chunks.length);
         }
         reportTranslateProgress({ fieldName, kind: 'chunk-done', level: 'success', chunk: idx, total: chunks.length, message: `Mảnh ${idx + 1}/${chunks.length} xong.` });
       } catch (err: any) {
@@ -4255,7 +4199,7 @@ async function translateTextCore(
         if (completedForResume.some(c => c)) {
           throw new ChunkError(
             `Chunk ${idx + 1}/${chunks.length} failed: ${err?.message || String(err)}`,
-            completedForResume,
+            completedForResume.map(unmaskForStore),
             idx,
             chunks.length,
             err instanceof Error ? err : new Error(String(err)),
@@ -4283,7 +4227,7 @@ async function translateTextCore(
     const soFar = translatedChunks.slice(0, chunks.length).map(c => c || '') as string[];
     throw new ChunkError(
       `Ghép hụt: ${missingIdx.length}/${chunks.length} chunk rỗng sau khi dịch (chunk ${missingIdx.slice(0, 5).map(i => i + 1).join(', ')}${missingIdx.length > 5 ? '…' : ''}). Giữ lại phần đã dịch để chạy tiếp đúng chỗ.`,
-      soFar,
+      soFar.map(unmaskForStore),
       missingIdx[0],
       chunks.length,
       new Error('empty chunk after translation'),

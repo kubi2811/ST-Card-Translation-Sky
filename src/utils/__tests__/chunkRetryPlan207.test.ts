@@ -107,7 +107,7 @@ describe('nối dây (L1/L2/L3/L4/L5)', () => {
     // (L4) totalChunks có NGAY khi cắt xong — (bug 211) 4 → 3, lý do như trên.
     expect((SRC.match(/totalChunks: rawChunks\.length/g) ?? []).length).toBe(3);
     // (bug 211) và chốt kiến trúc mới: bulk phải đi qua retranslateField, không tự gọi API.
-    expect(SRC).toContain('await retranslateField(field.path, resume, extra)');
+    expect(SRC).toContain('await retranslateField(field.path, resume, extra, clearChunks ? { clearChunks } : undefined)');
   });
 
   it('repairObjectKeys có ngân sách thời gian + trần vòng co theo độ dài (L5)', () => {

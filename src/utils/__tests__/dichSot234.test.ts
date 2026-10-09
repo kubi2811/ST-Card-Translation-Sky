@@ -155,7 +155,9 @@ describe('(bug 234) bảng soi chunk', () => {
     const out = 'Bản dịch tiếng Việt rất dài. '.repeat(400) + '道'.repeat(60);
     const a = auditChunks([src], [out]);
     expect(a.suspectIndices).toEqual([0]);
-    expect(a.issues[0].kind).toBe('untranslated');
+    // (bug 263) loại riêng 'residual' — đã dịch, sót vài chữ ⇒ đi đường VÁ, nhãn "sót N chữ Hán"
+    expect(a.issues[0].kind).toBe('residual');
+    expect(a.issues[0].han).toBe(60);
   });
 
   it('…nhưng sót lơ thơ chỉ là CẢNH BÁO, không khoá nút Ghép lại', () => {

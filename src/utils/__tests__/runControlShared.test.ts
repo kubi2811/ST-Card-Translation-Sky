@@ -41,7 +41,9 @@ describe('(C) field link ngoài đi đường SURGICAL như regex', () => {
     // Field regex thật đã có sẵn ⇒ giữ nguyên; field khác ⇒ giữ nguyên.
     expect(engineFieldName({ label: 'regex[3].replaceString (Tô màu)', group: 'regex', entryType: 'replaceString' })).toBe('regex[3].replaceString (Tô màu)');
     expect(engineFieldName({ label: 'Mô tả', group: 'description' })).toBe('Mô tả');
-  });
+    // resetModules ⇒ nạp lại useTranslation (file rất lớn) từ đầu; chạy chung cả bộ test song song
+    // thì lượt biên dịch lạnh này vượt 5s mặc định — chờ lâu hơn, nội dung kiểm giữ nguyên.
+  }, 30000);
   it('retranslateField gửi engineFieldName(field), không gửi nhãn trần', () => {
     const fn = hookSrc.slice(hookSrc.indexOf('const retranslateField = useCallback'));
     const call = fn.slice(fn.indexOf('let translated = await translateText('), fn.indexOf('let translated = await translateText(') + 120);

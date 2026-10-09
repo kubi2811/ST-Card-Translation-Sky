@@ -18,6 +18,34 @@
  */
 
 import { stripUrlsForCjkCheck } from './cjk';
+import { maskUrls } from './urlMask';
+
+const LEAKED_URL_RE = /__PROTECTED_URL_(\d+)__/g;
+
+/**
+ * (bug 263) Ô dịch lưu từ bản cũ còn ký hiệu che `__PROTECTED_URL_n__` (xem unmaskForStore trong
+ * apiClient). Dựng lại bảng che từ CHÍNH ô gốc tương ứng: ký hiệu trong ô xuất hiện theo đúng thứ
+ * tự link / tên file trong ô gốc, nên số hiệu tăng dần ↔ mục che thứ 1, 2… của ô gốc. Chỉ thay khi
+ * số lượng khớp đúng — lệch là trả nguyên, không đoán.
+ */
+export function restoreLeakedUrlPlaceholders(cell: string, rawCell: string): string {
+  if (!cell || !rawCell || !cell.includes('__PROTECTED_URL_')) return cell;
+  const nums = [...new Set([...cell.matchAll(LEAKED_URL_RE)].map(m => Number(m[1])))].sort((a, b) => a - b);
+  const { map } = maskUrls(rawCell);
+  const values = Object.entries(map)
+    .sort((a, b) => Number(a[0].match(/\d+/)![0]) - Number(b[0].match(/\d+/)![0]))
+    .map(([, v]) => v);
+  if (!nums.length || nums.length !== values.length) return cell;
+  let out = cell;
+  nums.forEach((n, i) => { out = out.split(`__PROTECTED_URL_${n}__`).join(values[i]); });
+  return out;
+}
+
+/** Áp restoreLeakedUrlPlaceholders cho cả mảng ô (cùng nhịp với ô gốc). */
+export function restoreLeakedCells(done: (string | undefined)[], raw: string[] | undefined): (string | undefined)[] {
+  if (!raw?.length) return done;
+  return done.map((c, i) => (c && raw[i] ? restoreLeakedUrlPlaceholders(c, raw[i]) : c));
+}
 
 /** Ký tự Hán/Nhật/Hàn — dùng để biết chunk đã thật sự được dịch chưa. */
 const CJK_RE = /[一-鿿㐀-䶿぀-ヿ가-힯]/g;
@@ -36,6 +64,13 @@ function countCjkNoUrl(text: string): number {
 export type ChunkIssueKind =
   | 'missing'        // chưa dịch / rỗng
   | 'untranslated'   // dịch xong nhưng vẫn nguyên chữ Hán ⇒ nhiều khả năng là bản gốc chép lại
+  /**
+   * (bug 263) ĐÃ DỊCH nhưng còn sót vài chữ Hán. Trước đây gộp chung 'untranslated' nên giao
+   * diện gắn nhãn "chưa dịch" cho cả chunk 27.000 ký tự tiếng Việt chỉ sót vài chữ — người dùng
+   * không phân biệt được chunk nào thật sự hỏng, và nút "dịch lại chunk lỗi" xoá trắng cả loạt.
+   * Loại này phải VÁ (sửa đúng chỗ sót), không phải dịch lại.
+   */
+  | 'residual'
   | 'too-short'      // ngắn bất thường so với chunk gốc ⇒ nghi bị cắt cụt
   | 'too-long';      // dài bất thường ⇒ nghi AI lặp lại/bịa thêm
 
@@ -51,6 +86,11 @@ export interface ChunkIssue {
    * không xong sẽ khoá luôn cả entry, người dùng không ghép nổi.
    */
   severity: 'block' | 'warn';
+  /** (bug 263) Số chữ Hán còn trong bản dịch / trong bản gốc của chunk (khi có so CJK). */
+  han?: number;
+  srcHan?: number;
+  /** (bug 263) Bản dịch giống hệt bản gốc — chưa hề được dịch. */
+  identical?: boolean;
 }
 
 export interface ChunkAudit {
@@ -61,6 +101,8 @@ export interface ChunkAudit {
   suspectIndices: number[];
   /** (bug 234) Chunk mà ghép lúc này là ra bản hỏng — nút Ghép phải từ chối. */
   blockingIndices: number[];
+  /** (bug 263) Chunk đã dịch, chỉ sót vài chữ Hán — đi đường VÁ, không xoá ô. */
+  residualIndices: number[];
 }
 
 export interface AuditOptions {
@@ -132,6 +174,7 @@ export function auditChunks(
           kind: 'untranslated',
           severity: 'block',
           detail: `Bản dịch GIỐNG HỆT bản gốc (${outCjk} chữ Hán) — chunk này chưa hề được dịch.`,
+          han: outCjk, srcHan: srcCjk, identical: true,
         });
         continue;
       }
@@ -142,6 +185,7 @@ export function auditChunks(
           kind: 'untranslated',
           severity: 'block',
           detail: `Còn ${outCjk} chữ Hán (gốc ${srcCjk}) — nhiều khả năng chunk này bị giữ nguyên bản gốc chứ chưa dịch.`,
+          han: outCjk, srcHan: srcCjk,
         });
         continue;
       }
@@ -150,9 +194,10 @@ export function auditChunks(
       //    Chỉ 'warn': ghép vẫn cho ra bản dùng được, và bộ vá chữ Hán sót ở cuối lượt sẽ dọn nốt.
       issues.push({
         index: i,
-        kind: 'untranslated',
+        kind: 'residual',
         severity: 'warn',
-        detail: `Còn ${outCjk} chữ Hán chưa dịch (gốc ${srcCjk}) — dịch sót, cần vá trước khi xuất thẻ.`,
+        detail: `Đã dịch, còn sót ${outCjk} chữ Hán (gốc ${srcCjk}) — bấm "Vá chữ Hán sót" để sửa đúng chỗ, không cần dịch lại cả chunk.`,
+        han: outCjk, srcHan: srcCjk,
       });
       continue;
     }
@@ -180,7 +225,8 @@ export function auditChunks(
 
   const suspectIndices = [...new Set(issues.map(x => x.index))].sort((a, b) => a - b);
   const blockingIndices = [...new Set(issues.filter(x => x.severity === 'block').map(x => x.index))].sort((a, b) => a - b);
-  return { total, okCount: total - suspectIndices.length, issues, suspectIndices, blockingIndices };
+  const residualIndices = [...new Set(issues.filter(x => x.kind === 'residual').map(x => x.index))].sort((a, b) => a - b);
+  return { total, okCount: total - suspectIndices.length, issues, suspectIndices, blockingIndices, residualIndices };
 }
 
 /**
@@ -204,6 +250,7 @@ export function summarizeAudit(a: ChunkAudit): string {
   const label: Record<ChunkIssueKind, string> = {
     missing: 'thiếu bản dịch',
     untranslated: 'còn nguyên tiếng Trung',
+    residual: 'còn sót vài chữ Hán',
     'too-short': 'nghi cắt cụt',
     'too-long': 'nghi lặp/thừa',
   };
@@ -239,6 +286,7 @@ export interface JoinableField {
   original: string;
   translated?: string;
   completedChunks?: string[];
+  rawChunks?: string[];
   totalChunks?: number;
   keptOriginalOnPurpose?: boolean;
 }
@@ -266,7 +314,8 @@ export function planAutoJoin(fields: JoinableField[]): AutoJoinPlan[] {
     if (!cells?.length || total <= 1 || cells.length !== total) continue;
     if (cells.some((c) => !c || !c.trim())) continue;   // còn ô trống ⇒ chưa đủ để ghép
 
-    const joined = joinChunks(cells, f.original);
+    // (bug 263) ô lưu từ bản cũ còn ký hiệu che ⇒ gỡ theo ô gốc trước khi ghép
+    const joined = joinChunks(restoreLeakedCells(cells, f.rawChunks) as string[], f.original);
     if (!joined.trim()) continue;
 
     const cur = f.translated ?? '';

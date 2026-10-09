@@ -342,6 +342,25 @@ const SHARED_FIELD_ABORTS = { current: new Map<string, AbortController>() };
  * AbortController riêng nối vào abort của vòng, và nút bấm tay được quyền dừng lượt cũ để chạy.
  */
 const LOCK_OWNER = new Map<string, symbol>();
+
+/**
+ * (bug 263) Nút "Vá chữ Hán sót" trong khung xem chunk gọi lối VÁ GỘP của engine (sửa đúng chỗ
+ * còn chữ Hán, không xoá ô). Hook đăng ký hàm vá vào đây; component chỉ cần gọi theo path.
+ * Trả -1 khi mục đang được dịch ở lượt khác (vá lúc đó là ghi chồng lên nhau).
+ */
+const RESIDUAL_PATCH_REF = { current: null as null | ((paths: string[]) => Promise<number>) };
+export async function requestResidualPatch(path: string): Promise<number> {
+  if (SHARED_IN_FLIGHT.current.has(path)) return -1;
+  if (!RESIDUAL_PATCH_REF.current) return 0;
+  SHARED_IN_FLIGHT.current.add(path);
+  const token = Symbol(path);
+  LOCK_OWNER.set(path, token);
+  try {
+    return await RESIDUAL_PATCH_REF.current([path]);
+  } finally {
+    if (LOCK_OWNER.get(path) === token) { SHARED_IN_FLIGHT.current.delete(path); LOCK_OWNER.delete(path); }
+  }
+}
 const LOOP_FIELD_ABORTS = new Map<string, AbortController>();
 /** Lượt này đã bị lượt bấm tay CƯỚP khoá — nó phải lặng lẽ rút, không ghi gì vào field nữa. */
 class FieldTakenOverError extends Error {
@@ -4507,18 +4526,21 @@ export function useTranslation() {
    * Trả false khi không khoanh được (field không chia chunk, dữ liệu chunk lệch nhịp…) —
    * caller cứ đi đường dịch tươi như cũ.
    */
-  const armTargetedCjkResume = useCallback((path: string): boolean => {
+  /**
+   * (bug 263) Trả DANH SÁCH ô cần dịch lại — KHÔNG tự xoá. Bản cũ xoá ô ngay tại đây rồi mới gọi
+   * retranslateField; mục mà đang bị lượt khác giữ khoá thì retranslateField bỏ qua ⇒ các ô đã
+   * xoá nằm "Pending" mãi, bấm bao lần cũng thế (user: 4 tiếng không chunk nào có bản dịch). Giờ
+   * caller truyền danh sách vào `opts.clearChunks`; ô chỉ bị xoá khi khoá đã nằm trong tay.
+   */
+  const armTargetedCjkResume = useCallback((path: string): number[] | null => {
     const f = useStore.getState().fields.find(x => x.path === path);
-    if (!f?.rawChunks?.length || !f.completedChunks?.length) return false;
+    if (!f?.rawChunks?.length || !f.completedChunks?.length) return null;
     const plan = planTargetedChunkRetry(f, 'residual') ?? planTargetedChunkRetry(f, 'cjk');
-    if (!plan) return false;
-    const cur = [...f.completedChunks];
-    for (const i of plan.suspects) cur[i] = '';
-    store.updateField(path, { completedChunks: cur });
+    if (!plan) return null;
     store.addLog('info',
       `🎯 ${f.label}: chỉ dịch lại ${plan.suspects.length}/${f.rawChunks.length} phần (${plan.reason}) `
       + `— ${f.rawChunks.length - plan.suspects.length} phần đã tốt giữ nguyên.`);
-    return true;
+    return plan.suspects;
   }, [store]);
 
   /**
@@ -4700,7 +4722,8 @@ export function useTranslation() {
           // (bug 219) Entry lớn chia chunk: khoanh đúng cell còn Hán rồi resume, thay vì gọi lại
           // API cho cả 21 phần (đắt, chậm, và là chính đường làm mất bản dịch tốt).
           const targeted = armTargetedCjkResume(hits[i].path);
-          await retranslateField(hits[i].path, targeted, buildResidualRetryInstruction(hits[i]));
+          await retranslateField(hits[i].path, !!targeted, buildResidualRetryInstruction(hits[i]),
+            targeted ? { clearChunks: targeted } : undefined);
           totalFixed++;
         },
       });
@@ -4722,6 +4745,7 @@ export function useTranslation() {
 
   // startTranslation được khai báo TRƯỚC hàm này nên không gọi thẳng được → đi qua ref.
   useEffect(() => { residualSweepRef.current = residualCjkSweep; }, [residualCjkSweep]);
+  useEffect(() => { RESIDUAL_PATCH_REF.current = residualPatchPass; }, [residualPatchPass]);
 
   const getExportCard = useCallback(() => {
     if (!store.card) return null;
@@ -4907,11 +4931,23 @@ export function useTranslation() {
           // rồi dịch lại từ đầu". Dịch tươi cả field 30k là vừa đắt vừa nguy hiểm (một chốt an
           // toàn bắt lỗi là mất trắng). Bộ khoanh vùng của bug 207 đã có sẵn — dùng đúng nó:
           // xoá riêng cell còn nguyên tiếng Trung rồi resume, engine chỉ gọi lại 1-2 chunk.
+          let clearChunks: number[] | undefined;
           if (attempt === 0 && !resume && fresh.status === 'done') {
-            resume = armTargetedCjkResume(field.path);
+            // (bug 263) Chỉ SÓT lẻ tẻ (không ô nào hỏng nặng) ⇒ VÁ tại chỗ trước, rẻ và không xoá
+            // bản dịch tốt. Vá sạch thì khỏi dịch lại; còn sót thì mới khoanh ô mà dịch lại.
+            if (!planTargetedChunkRetry(fresh, 'cjk') && planTargetedChunkRetry(fresh, 'residual')) {
+              await residualPatchPass([field.path]);
+              const patched = useStore.getState().fields.find(f => f.path === field.path);
+              if (patched && countResidualHan(patched.translated || '', store.translationConfig.cssCjkHandling) === 0) {
+                success = true;
+                break;
+              }
+            }
+            const targeted = armTargetedCjkResume(field.path);
+            if (targeted) { resume = true; clearChunks = targeted; }
           }
 
-          await retranslateField(field.path, resume, extra);
+          await retranslateField(field.path, resume, extra, clearChunks ? { clearChunks } : undefined);
 
           const after = useStore.getState().fields.find(f => f.path === field.path);
           if (checkAbort()) { bulkCancelled = true; return; }
@@ -4986,7 +5022,7 @@ export function useTranslation() {
     store.saveTranslationCache();
     store.addLog(failCount === 0 ? 'success' : 'warning', `Thử lại xong: ${successCount} đã sửa, ${failCount} vẫn lỗi`);
     store.addToast(failCount === 0 ? 'success' : 'error', `${verb}: ${successCount}/${errorFields.length} xong`);
-  }, [store, retranslateField, armTargetedCjkResume]);
+  }, [store, retranslateField, armTargetedCjkResume, residualPatchPass]);
 
   /**
    * (bug 211) DANH SÁCH "MỤC CHƯA ĐẠT" — một nguồn sự thật cho cả UI lẫn nút dịch lại.

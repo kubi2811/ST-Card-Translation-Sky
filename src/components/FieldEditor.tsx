@@ -2,12 +2,23 @@ import { createPortal } from 'react-dom';
 import { useState, useMemo, useRef, useCallback, useEffect, lazy, Suspense, memo } from 'react';
 import { useStore } from '../store';
 import { useThrottledStore } from '../hooks/useThrottledStore';
-import { useTranslation } from '../hooks/useTranslation';
+import { useTranslation, requestResidualPatch } from '../hooks/useTranslation';
 import { useT, useUi } from '../i18n/useLocale';
 import { fmt } from '../i18n';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { FieldGroup, TranslationField, TranslationStatus } from '../types/card';
-import { auditChunks, joinChunks, summarizeAudit } from '../utils/chunkAudit';
+import { auditChunks, joinChunks, summarizeAudit, restoreLeakedCells, type ChunkIssue } from '../utils/chunkAudit';
+
+/** (bug 263) Nhãn chunk nói đúng bệnh: "chưa dịch" chỉ khi thật sự chưa dịch; sót thì nói còn bao nhiêu chữ Hán. */
+function chunkIssueLabel(it: ChunkIssue): string {
+  switch (it.kind) {
+    case 'missing': return 'trống';
+    case 'untranslated': return it.identical ? 'chưa dịch' : `còn ${it.han}/${it.srcHan} chữ Hán`;
+    case 'residual': return `sót ${it.han} chữ Hán`;
+    case 'too-short': return 'nghi cụt';
+    default: return 'nghi thừa';
+  }
+}
 import { chunkCharsForField } from '../utils/chunking';
 import { RotateCcw, AlertTriangle, CheckCircle2, Clock, ArrowLeftRight, BarChart3, Ban, Search, X, Copy, Check, Eye, Wand2, Zap, Brain, Download, Filter, SkipForward } from 'lucide-react';
 import { countResidualHan } from '../utils/residualCjkScan';
@@ -333,7 +344,7 @@ function ChunkStatusAndResume({
   const audit = useMemo(
     () => auditChunks(
       Array.from({ length: totalChunks }, (_, i) => field.rawChunks?.[i] || ''),
-      Array.from({ length: totalChunks }, (_, i) => field.completedChunks?.[i]),
+      restoreLeakedCells(Array.from({ length: totalChunks }, (_, i) => field.completedChunks?.[i]), field.rawChunks),
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [field.path, totalChunks, rawSig, doneSig],
@@ -397,7 +408,9 @@ function ChunkStatusAndResume({
   // User: "10-20 chunk mà chỉ 1-2 cái lỗi thì phải có nút soi ra cái nào lỗi để dịch lại
   // riêng nó, và nút ghép lại — chứ dịch lại cả entry rất mất thời gian."
   // `audit` + `issueByIndex` đã được nhớ lại ở trên (bug 220b) — không tính lại ở đây nữa.
-  const doneList: (string | undefined)[] = Array.from({ length: totalChunks }, (_, i) => field.completedChunks?.[i]);
+  // (bug 263) ô lưu từ bản cũ có thể còn ký hiệu che `__PROTECTED_URL_n__` — gỡ theo ô gốc.
+  const doneList: (string | undefined)[] = restoreLeakedCells(
+    Array.from({ length: totalChunks }, (_, i) => field.completedChunks?.[i]), field.rawChunks);
 
   const copyText = async (text: string, what: string) => {
     try {
@@ -458,17 +471,36 @@ function ChunkStatusAndResume({
           color: 'var(--accent-primary)', border: '1px solid rgba(124,106,240,0.25)', borderRadius: 'var(--radius-xs)', cursor: 'pointer' }}>
         🧩 Ghép lại
       </button>
-      {audit.suspectIndices.length > 0 && (
+      {/* (bug 263) CHỈ chunk hỏng thật (trống / chưa dịch / cụt / thừa). Chunk đã dịch mà sót vài
+          chữ Hán KHÔNG được xoá trắng để dịch lại — trước đây nút này gom cả chúng, xoá luôn bản
+          dịch tốt rồi dịch lại vẫn sót, "tốn hàng tiếng mà về vạch xuất phát". Chúng đi nút Vá. */}
+      {audit.blockingIndices.length > 0 && (
         <button
           onClick={() => {
             useStore.getState().addLog('info',
-              `🔁 Dịch lại ${audit.suspectIndices.length} chunk có vấn đề (số ${audit.suspectIndices.map(i => i + 1).join(', ')}) — ${totalChunks - audit.suspectIndices.length} chunk còn lại giữ nguyên.`);
-            retranslateField(field.path, true, undefined, { clearChunks: [...audit.suspectIndices], takeOver: true });
+              `🔁 Dịch lại ${audit.blockingIndices.length} chunk hỏng (số ${audit.blockingIndices.map(i => i + 1).join(', ')}) — ${totalChunks - audit.blockingIndices.length} chunk còn lại giữ nguyên.`);
+            retranslateField(field.path, true, undefined, { clearChunks: [...audit.blockingIndices], takeOver: true });
           }}
-          title="Chỉ dịch lại những chunk bị đánh dấu — không đụng tới chunk đã tốt"
+          title="Chỉ dịch lại chunk trống / chưa dịch / nghi cụt / nghi thừa — chunk đã dịch (kể cả còn sót vài chữ Hán) giữ nguyên"
           style={{ padding: '2px 6px', fontSize: '0.55rem', fontWeight: 600, background: 'rgba(245,158,11,0.15)',
             color: 'var(--warning, #f59e0b)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 'var(--radius-xs)', cursor: 'pointer' }}>
-          🔁 Dịch lại {audit.suspectIndices.length} chunk lỗi
+          🔁 Dịch lại {audit.blockingIndices.length} chunk hỏng
+        </button>
+      )}
+      {audit.residualIndices.length > 0 && (
+        <button
+          onClick={async () => {
+            const st = useStore.getState();
+            const han = audit.issues.filter(x => x.kind === 'residual').reduce((n, x) => n + (x.han || 0), 0);
+            st.addLog('info', `🧷 Vá ${han} chữ Hán sót ở chunk ${audit.residualIndices.map(i => i + 1).join(', ')} của ${field.label} — sửa đúng chỗ sót, KHÔNG xoá bản dịch.`);
+            const r = await requestResidualPatch(field.path);
+            if (r < 0) st.addLog('warning', `⏳ ${field.label} đang được dịch ở lượt khác — đợi lượt đó xong rồi bấm Vá lại.`);
+            else if (r === 0) st.addLog('warning', `🧷 ${field.label}: không vá được lượt này (xem dòng log ngay trên để biết lý do). Bản dịch hiện có giữ nguyên.`);
+          }}
+          title="Gom mọi chỗ còn sót chữ Hán vào một lượt gọi AI rồi điền lại đúng chỗ — chunk không bị xoá, không dịch lại cả chunk"
+          style={{ padding: '2px 6px', fontSize: '0.55rem', fontWeight: 600, background: 'rgba(34,197,94,0.12)',
+            color: 'var(--success, #22c55e)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 'var(--radius-xs)', cursor: 'pointer' }}>
+          🧷 Vá chữ Hán sót ({audit.residualIndices.length} chunk)
         </button>
       )}
       <button onClick={() => copyText(joinChunks(doneList.map(c => c || ''), field.original), 'toàn bộ bản dịch đã ghép')}
@@ -660,9 +692,7 @@ function ChunkStatusAndResume({
                     <span title={issueByIndex.get(idx)!.detail}
                       style={{ fontSize: '0.5rem', fontWeight: 700, padding: '1px 4px', borderRadius: '3px',
                         background: 'rgba(245,158,11,0.18)', color: 'var(--warning, #f59e0b)' }}>
-                      ⚠️ {issueByIndex.get(idx)!.kind === 'missing' ? 'thiếu'
-                        : issueByIndex.get(idx)!.kind === 'untranslated' ? 'chưa dịch'
-                        : issueByIndex.get(idx)!.kind === 'too-short' ? 'nghi cụt' : 'nghi thừa'}
+                      ⚠️ {chunkIssueLabel(issueByIndex.get(idx)!)}
                     </span>
                   )}
                 </span>

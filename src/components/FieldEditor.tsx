@@ -2,7 +2,7 @@ import { createPortal } from 'react-dom';
 import { useState, useMemo, useRef, useCallback, useEffect, lazy, Suspense, memo } from 'react';
 import { useStore } from '../store';
 import { useThrottledStore } from '../hooks/useThrottledStore';
-import { useTranslation, requestResidualPatch } from '../hooks/useTranslation';
+import { useTranslation, requestResidualPatch, requestResidualPatchMany } from '../hooks/useTranslation';
 import { useT, useUi } from '../i18n/useLocale';
 import { fmt } from '../i18n';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -81,13 +81,18 @@ const TAB_IDS: (FieldGroup | 'all')[] = [
  * nội dung đã ở ngôn ngữ đích nên bỏ; ignored là do chính user tắt. Chỉ cái đầu mới là thứ user
  * cần soi lại hàng loạt, nên hai cái phải là hai chip riêng, không gộp.
  */
-const STATUS_CHIPS: Array<{ id: 'all' | TranslationStatus; label: string; icon: string; color: string; hint: string }> = [
+/** (bug 264) Chip lọc ảo — không phải trạng thái của field mà là "đã dịch nhưng còn sót chữ Hán". */
+type StatusFilterId = 'all' | TranslationStatus | 'residual';
+
+const STATUS_CHIPS: Array<{ id: StatusFilterId; label: string; icon: string; color: string; hint: string }> = [
   { id: 'all', label: 'Tất cả', icon: '☰', color: 'var(--accent-primary)', hint: 'Bỏ lọc trạng thái.' },
   { id: 'skipped', label: 'Bỏ qua', icon: '⏭', color: 'var(--accent-warning)',
     hint: 'Máy tự bỏ vì tưởng nội dung đã ở ngôn ngữ đích (hoặc sai ngôn ngữ nguồn). Đoán sai thì dịch lại hàng loạt ở đây.' },
   { id: 'error', label: 'Lỗi', icon: '✖', color: 'var(--accent-danger)', hint: 'Dịch thất bại.' },
   { id: 'pending', label: 'Chưa dịch', icon: '⏳', color: 'var(--text-muted)', hint: 'Chưa tới lượt hoặc chưa chạy.' },
   { id: 'done', label: 'Đã dịch', icon: '✓', color: 'var(--accent-success)', hint: 'Đã dịch xong.' },
+  { id: 'residual', label: 'Còn sót chữ Hán', icon: '🈶', color: 'var(--accent-warning, #f59e0b)',
+    hint: 'Mục đã dịch (hoặc bị bỏ qua) mà bản dịch còn chữ Hán — cùng thước đo với danh sách "mục chưa đạt" (link, tên file, font không tính). Lọc ra để sửa tay hoặc vá nhanh.' },
   { id: 'ignored', label: 'Không dịch', icon: '🚫', color: 'var(--text-muted)', hint: 'Do BẠN tắt — máy không đụng tới.' },
 ];
 
@@ -2044,7 +2049,7 @@ export default function FieldEditor() {
    * Trước đây bảng chỉ lọc theo NHÓM (Core/Lorebook/Keys…) và ô tìm chữ. Muốn biết có bao nhiêu
    * mục bị bỏ qua thì phải cuộn hết 1104 dòng đếm bằng mắt, và muốn dịch lại thì phải bấm từng cái.
    */
-  const [statusFilter, setStatusFilter] = useState<'all' | TranslationStatus>('all');
+  const [statusFilter, setStatusFilter] = useState<StatusFilterId>('all');
   const [bulkRunning, setBulkRunning] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [jumpPath, setJumpPath] = useState<string | null>(null);
@@ -2098,16 +2103,45 @@ export default function FieldEditor() {
     return result;
   }, [fields, activeTab, searchQuery]);
 
+  /**
+   * (bug 264) "CÒN SÓT CHỮ HÁN" ngay trên bảng. User: "mọi lần muốn check là phải bấm qua kia lâu
+   * quá" (tab Kiểm tra). Luật đếm CHÉP ĐÚNG bộ quét `scanFieldsForResidualCjk` (nguồn của danh sách
+   * "mục chưa đạt") để hai con số không bao giờ lệch: field done/skipped, gốc có chữ Hán, bản dịch
+   * còn ≥ 1 chữ (link / tên file / font giữ nguyên không tính), bỏ keys lorebook.
+   * Đếm script 300 KB không rẻ ⇒ nhớ kết quả theo từng field, chỉ đếm lại khi bản dịch ĐỔI — bảng
+   * cập nhật mỗi 300ms lúc đang dịch mà không phải quét lại cả nghìn field.
+   */
+  const cssMode = translationConfig.cssCjkHandling || 'preserve';
+  const residualCache = useRef(new Map<string, { o: string; t: string; css: string; n: number }>());
+  const residualCount = useCallback((f: TranslationField): number => {
+    if (f.status !== 'done' && f.status !== 'skipped') return 0;
+    if (!f.translated || f.group === 'lorebook_keys') return 0;
+    const hit = residualCache.current.get(f.path);
+    if (hit && hit.o === f.original && hit.t === f.translated && hit.css === cssMode) return hit.n;
+    const n = countResidualHan(f.original || '', cssMode) === 0 ? 0 : countResidualHan(f.translated, cssMode);
+    residualCache.current.set(f.path, { o: f.original, t: f.translated, css: cssMode, n });
+    return n;
+  }, [cssMode]);
+
   // (bugNeedFix/176) Đếm theo TRẠNG THÁI trong phạm vi đang xem.
   const statusCounts = useMemo(() => {
-    const c: Record<string, number> = { all: scopedFields.length, skipped: 0, error: 0, pending: 0, done: 0, ignored: 0 };
-    for (const f of scopedFields) if (f.status in c) c[f.status]++;
+    const c: Record<string, number> = { all: scopedFields.length, skipped: 0, error: 0, pending: 0, done: 0, ignored: 0, residual: 0 };
+    for (const f of scopedFields) {
+      if (f.status in c) c[f.status]++;
+      if (residualCount(f) > 0) c.residual++;
+    }
     return c;
-  }, [scopedFields]);
+  }, [scopedFields, residualCount]);
 
   const filteredFields = useMemo(
-    () => (statusFilter === 'all' ? scopedFields : scopedFields.filter(f => f.status === statusFilter)),
-    [scopedFields, statusFilter],
+    () => (statusFilter === 'all' ? scopedFields
+      : statusFilter === 'residual' ? scopedFields.filter(f => residualCount(f) > 0)
+        : scopedFields.filter(f => f.status === statusFilter)),
+    [scopedFields, statusFilter, residualCount],
+  );
+  const residualTotalHan = useMemo(
+    () => (statusFilter === 'residual' ? filteredFields.reduce((n, f) => n + residualCount(f), 0) : 0),
+    [statusFilter, filteredFields, residualCount],
   );
 
   const statusCursorIndex = statusCursorPath
@@ -2313,7 +2347,38 @@ export default function FieldEditor() {
               </button>
             )}
 
-            {(statusFilter === 'skipped' || statusFilter === 'error') && filteredFields.length > 1 && (
+            {/* (bug 264) Lọc "còn sót chữ Hán" ⇒ vá nhanh cả tập (lối vá gộp, không xoá bản dịch) */}
+            {statusFilter === 'residual' && filteredFields.length > 0 && (
+              <button
+                disabled={bulkRunning || phase === 'translating'}
+                onClick={async () => {
+                  setBulkRunning(true);
+                  try {
+                    // Lối vá gộp chỉ nhận ≤ 1.000 chữ Hán một lượt (patchEligibility) — nhiều hơn
+                    // là mục gần như chưa dịch, phải dịch lại chứ vá không nổi.
+                    if (residualTotalHan > 1000) { await retranslateSkipped(filteredFields.map(f => f.path)); return; }
+                    const r = await requestResidualPatchMany(filteredFields.map(f => f.path));
+                    useStore.getState().addLog(r > 0 ? 'success' : 'warning', r > 0
+                      ? `🧷 Đã vá ${r} mục còn sót chữ Hán.`
+                      : '🧷 Không vá được lượt này (xem dòng log ngay trên để biết lý do) — sửa tay hoặc dịch lại riêng từng mục.');
+                  } finally { setBulkRunning(false); }
+                }}
+                title={'Gom mọi chỗ còn sót chữ Hán của các mục đang hiện vào MỘT lượt gọi AI rồi điền lại đúng chỗ — bản dịch không bị xoá.\n'
+                  + 'Nhiều quá (trên 1.000 chữ Hán) thì tool sẽ báo, lúc đó dịch lại riêng từng mục.'}
+                style={{
+                  marginLeft: 'auto', fontSize: '0.7rem', fontWeight: 600, padding: '3px 10px',
+                  borderRadius: 'var(--radius-sm)', cursor: bulkRunning ? 'wait' : 'pointer',
+                  border: '1px solid var(--accent-success)', background: 'rgba(34,197,94,0.1)',
+                  color: 'var(--accent-success)', opacity: bulkRunning || phase === 'translating' ? 0.5 : 1,
+                }}
+              >
+                {bulkRunning ? '⏳ Đang xử lý…'
+                  : residualTotalHan > 1000 ? `🔁 Dịch lại ${filteredFields.length} mục (còn ${residualTotalHan} chữ Hán — quá nhiều để vá)`
+                    : `🧷 Vá ${residualTotalHan} chữ Hán sót (${filteredFields.length} mục)`}
+              </button>
+            )}
+
+            {(statusFilter === 'skipped' || statusFilter === 'error' || statusFilter === 'residual') && filteredFields.length > 1 && (
               <button
                 type="button"
                 onClick={jumpToNextFilteredStatus}

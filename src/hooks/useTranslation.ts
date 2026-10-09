@@ -349,6 +349,20 @@ const LOCK_OWNER = new Map<string, symbol>();
  * Trả -1 khi mục đang được dịch ở lượt khác (vá lúc đó là ghi chồng lên nhau).
  */
 const RESIDUAL_PATCH_REF = { current: null as null | ((paths: string[]) => Promise<number>) };
+/** (bug 264) Vá gộp nhiều mục một lượt — bỏ qua mục đang được dịch ở lượt khác. */
+export async function requestResidualPatchMany(paths: string[]): Promise<number> {
+  if (!RESIDUAL_PATCH_REF.current) return 0;
+  const free = paths.filter(p => !SHARED_IN_FLIGHT.current.has(p));
+  if (!free.length) return 0;
+  const token = Symbol('patch');
+  for (const p of free) { SHARED_IN_FLIGHT.current.add(p); LOCK_OWNER.set(p, token); }
+  try {
+    return await RESIDUAL_PATCH_REF.current(free);
+  } finally {
+    for (const p of free) if (LOCK_OWNER.get(p) === token) { SHARED_IN_FLIGHT.current.delete(p); LOCK_OWNER.delete(p); }
+  }
+}
+
 export async function requestResidualPatch(path: string): Promise<number> {
   if (SHARED_IN_FLIGHT.current.has(path)) return -1;
   if (!RESIDUAL_PATCH_REF.current) return 0;

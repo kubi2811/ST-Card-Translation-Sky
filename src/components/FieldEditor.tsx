@@ -8,6 +8,11 @@ import { fmt } from '../i18n';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { FieldGroup, TranslationField, TranslationStatus } from '../types/card';
 import { auditChunks, joinChunks, summarizeAudit, restoreLeakedCells, type ChunkIssue } from '../utils/chunkAudit';
+import { fitCellsToRaw } from '../utils/chunkEdges';
+import { isLikelyJsScript, hasRealJsSignal, jsParseErrorAny } from '../utils/scriptSafety';
+
+/** (bug 265) Kết quả soi BẢN GHÉP của từng field có chunk — nhớ theo chữ ký độ dài ô + bản dịch. */
+const JOIN_STATE_CACHE = new Map<string, { key: string; jsErr: { line: number; msg: string } | null; outOfSync: boolean }>();
 
 /** (bug 263) Nhãn chunk nói đúng bệnh: "chưa dịch" chỉ khi thật sự chưa dịch; sót thì nói còn bao nhiêu chữ Hán. */
 function chunkIssueLabel(it: ChunkIssue): string {
@@ -414,8 +419,37 @@ function ChunkStatusAndResume({
   // riêng nó, và nút ghép lại — chứ dịch lại cả entry rất mất thời gian."
   // `audit` + `issueByIndex` đã được nhớ lại ở trên (bug 220b) — không tính lại ở đây nữa.
   // (bug 263) ô lưu từ bản cũ có thể còn ký hiệu che `__PROTECTED_URL_n__` — gỡ theo ô gốc.
-  const doneList: (string | undefined)[] = restoreLeakedCells(
-    Array.from({ length: totalChunks }, (_, i) => field.completedChunks?.[i]), field.rawChunks);
+  // (bug 265) …và khớp mép từng ô theo ô gốc (xuống dòng bị cắt, dấu ` AI tự thêm) — ô lưu từ bản
+  // cũ ghép thẳng là vỡ cú pháp; khớp mép xong thì "Ghép lại" ra bản chạy được, khỏi dịch lại.
+  const doneList: (string | undefined)[] = fitCellsToRaw(restoreLeakedCells(
+    Array.from({ length: totalChunks }, (_, i) => field.completedChunks?.[i]), field.rawChunks), field.rawChunks, field.original);
+
+  /**
+   * (bug 265) "ĐỦ VÀ SẠCH 7/7" MÀ BẢN DỊCH BÊN NGOÀI VẪN LÀ TIẾNG TRUNG.
+   * Từng chunk sạch không có nghĩa bản GHÉP chạy được: script mà ghép ra vỡ cú pháp thì chốt an
+   * toàn giữ nguyên bản gốc — và khung này trước giờ vẫn báo xanh. Soi luôn bản ghép ở đây.
+   * Chỉ soi khi đã đủ chunk và gốc là script parse sạch; nhớ theo chữ ký độ dài ô (như audit).
+   */
+  // KHÔNG dùng hook ở đây (đã qua lệnh `return null` sớm phía trên) — nhớ bằng bảng cấp module.
+  const joinKey = `${totalChunks}|${rawSig}|${doneSig}|${(field.translated || '').length}`;
+  let joinState = JOIN_STATE_CACHE.get(field.path);
+  if (!joinState || joinState.key !== joinKey) {
+    let jsErr: { line: number; msg: string } | null = null;
+    let outOfSync = false;
+    if (audit.blockingIndices.length === 0 && completedCount === totalChunks) {
+      const joined = joinChunks(doneList.map(c => c || ''), field.original);
+      if ((field.group === 'tavern_helper' || field.group === 'regex')
+        && isLikelyJsScript(field.original) && hasRealJsSignal(field.original) && jsParseErrorAny(field.original) === null) {
+        jsErr = jsParseErrorAny(joined);
+      }
+      outOfSync = countResidualHan(field.translated || '') > countResidualHan(joined);
+    }
+    joinState = { key: joinKey, jsErr, outOfSync };
+    JOIN_STATE_CACHE.set(field.path, joinState);
+  }
+  const joinedJsError = joinState.jsErr;
+  /** Bản dịch đang hiển thị còn NHIỀU chữ Hán hơn bản ghép của các chunk (thường là bản gốc bị chốt an toàn giữ lại). */
+  const outOfSync = joinState.outOfSync;
 
   const copyText = async (text: string, what: string) => {
     try {
@@ -450,7 +484,14 @@ function ChunkStatusAndResume({
       return;
     }
     const joined = joinChunks(doneList.map(c => c || ''), field.original);
-    useStore.getState().updateField(field.path, { translated: joined, status: 'done' });
+    // (bug 265) Ghép ra script vỡ cú pháp thì KHÔNG ghi — nạp vào SillyTavern là cả script chết.
+    if (joinedJsError) {
+      useStore.getState().addLog('warning',
+        `⚠️ Chưa ghép ${field.label}: bản ghép vỡ cú pháp JS (dòng ~${joinedJsError.line}: ${joinedJsError.msg.slice(0, 60)}). `
+        + 'Bản dịch hiện có giữ nguyên. Dịch lại chunk quanh dòng đó rồi ghép lại.');
+      return;
+    }
+    useStore.getState().updateField(field.path, { translated: joined, status: 'done', keptOriginalOnPurpose: undefined });
     useStore.getState().addLog('success', `🧩 Đã ghép lại ${totalChunks} chunk của ${field.label} (${joined.length.toLocaleString()} ký tự).`);
     // (bug 234) Ghép xong PHẢI đếm lại chữ Hán trên chính bản ghép rồi nói ra. Trước đây nút này
     // đóng dấu 'done' rồi im — người dùng chỉ thấy dòng xanh "Đã ghép lại" và tin là xong.
@@ -471,6 +512,20 @@ function ChunkStatusAndResume({
       }}>
         {summarizeAudit(audit)}
       </span>
+      {joinedJsError && (
+        <span title={`${joinedJsError.msg} — bản dịch bên ngoài đang giữ nguyên bản gốc vì ghép các chunk ra script vỡ cú pháp.`}
+          style={{ fontSize: '0.55rem', fontWeight: 600, padding: '2px 6px', borderRadius: 'var(--radius-xs)',
+            background: 'rgba(239,68,68,0.15)', color: 'var(--accent-danger, #ef4444)' }}>
+          ⛔ Bản ghép vỡ cú pháp JS (dòng ~{joinedJsError.line}) — chưa áp vào bản dịch
+        </span>
+      )}
+      {!joinedJsError && outOfSync && (
+        <span title="Các chunk đã dịch xong nhưng ô Bản dịch đang chứa nội dung khác (thường là bản gốc được chốt an toàn giữ lại). Bấm Ghép lại để áp bản của các chunk."
+          style={{ fontSize: '0.55rem', fontWeight: 600, padding: '2px 6px', borderRadius: 'var(--radius-xs)',
+            background: 'rgba(245,158,11,0.15)', color: 'var(--warning, #f59e0b)' }}>
+          ⚠️ Bản dịch chưa khớp các chunk — bấm "Ghép lại" để áp
+        </span>
+      )}
       <button onClick={rejoinFromChunks} title="Ghép các chunk đã dịch thành entry hoàn chỉnh (đúng cách engine ghép)"
         style={{ padding: '2px 6px', fontSize: '0.55rem', fontWeight: 600, background: 'rgba(124,106,240,0.15)',
           color: 'var(--accent-primary)', border: '1px solid rgba(124,106,240,0.25)', borderRadius: 'var(--radius-xs)', cursor: 'pointer' }}>

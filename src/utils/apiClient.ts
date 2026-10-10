@@ -1,5 +1,6 @@
 import { stripUrlsForCjkCheck } from './cjk';
 import { maskUrls, unmaskUrls } from './urlMask';
+import { fitChunkEdges } from './chunkEdges';
 export { maskUrls } from './urlMask';
 import { setFandom } from './fandomMode';
 import type { AIProvider, ProxySettings, ProviderConfig, GlossaryEntry, CharacterBookEntry } from '../types/card';
@@ -3686,6 +3687,8 @@ async function translateTextCore(
     console.log(`[translateText] ${fieldName}: code-heavy ${maskedText.length} ký tự → chunk 9000 (chống cụt output)`);
   }
   const chunks = chunkText(maskedText, effectiveChunkSize, config.maxTokens);
+  // (bug 265) Nội dung code/HTML được nối LIỀN ⇒ mép từng mảnh phải khớp mép gốc (chunkEdges.ts).
+  const gluedJoin = isCodeHeavy || (/<[a-z][^>]*>/i.test(maskedText) && /<\/[a-z]+>/i.test(maskedText));
 
   // (bug 203) Bản ĐÃ GỠ CHE của từng mảnh — dùng cho CẢ hai việc: báo lên UI, và so nhịp cắt
   // với lần trước. Trước đây chỉ tính trong nhánh callback, còn phép so nhịp cắt lại lấy mảnh
@@ -3994,6 +3997,8 @@ async function translateTextCore(
             }
             chunkCleaned = enforceChunkDict(idx, chunkCleaned);
           }
+          // (bug 265) mép chunk khớp mép gốc (xuống dòng, dấu ` AI tự thêm) — xem chunkEdges.ts
+          if (gluedJoin) chunkCleaned = fitChunkEdges(chunks[idx], chunkCleaned);
           translatedChunks[idx] = chunkCleaned;
           // Structural integrity check for code-heavy chunks
           if (isCodeHeavy) {
@@ -4024,7 +4029,7 @@ async function translateTextCore(
                   chunks[idx], retryCleaned, idx, chunks.length, fieldName, config, targetLang, signal
                 );
                 if (retryVerify.ok || (retryCleaned.length >= chunkCleaned.length)) {
-                  translatedChunks[idx] = retryCleaned;
+                  translatedChunks[idx] = gluedJoin ? fitChunkEdges(chunks[idx], retryCleaned) : retryCleaned;
                   console.log(`[translateText] Chunk ${idx + 1} retry ${retryVerify.ok ? 'verified ✓' : 'better than original, using retry'}`);
                 } else {
                   console.warn(`[translateText] Chunk ${idx + 1} retry also failed verification, keeping original`);
@@ -4142,6 +4147,8 @@ async function translateTextCore(
           }
           chunkCleaned = enforceChunkDict(idx, chunkCleaned);
         }
+        // (bug 265) mép chunk khớp mép gốc (xuống dòng, dấu ` AI tự thêm) — xem chunkEdges.ts
+        if (gluedJoin) chunkCleaned = fitChunkEdges(chunks[idx], chunkCleaned);
         translatedChunks[idx] = chunkCleaned;
         // Structural integrity check for code-heavy chunks
         if (isCodeHeavy) {
@@ -4171,7 +4178,7 @@ async function translateTextCore(
                 chunks[idx], retryCleaned, idx, chunks.length, fieldName, config, targetLang, signal
               );
               if (retryVerify.ok || (retryCleaned.length >= chunkCleaned.length)) {
-                translatedChunks[idx] = retryCleaned;
+                translatedChunks[idx] = gluedJoin ? fitChunkEdges(chunks[idx], retryCleaned) : retryCleaned;
                 console.log(`[translateText] Chunk ${idx + 1} retry ${retryVerify.ok ? 'verified ✓' : 'better, using retry'}`);
               } else {
                 console.warn(`[translateText] Chunk ${idx + 1} retry also failed, keeping original`);

@@ -19,6 +19,7 @@
 
 import { stripUrlsForCjkCheck } from './cjk';
 import { maskUrls } from './urlMask';
+import { fitCellsToRaw } from './chunkEdges';
 
 const LEAKED_URL_RE = /__PROTECTED_URL_(\d+)__/g;
 
@@ -315,7 +316,8 @@ export function planAutoJoin(fields: JoinableField[]): AutoJoinPlan[] {
     if (cells.some((c) => !c || !c.trim())) continue;   // còn ô trống ⇒ chưa đủ để ghép
 
     // (bug 263) ô lưu từ bản cũ còn ký hiệu che ⇒ gỡ theo ô gốc trước khi ghép
-    const joined = joinChunks(restoreLeakedCells(cells, f.rawChunks) as string[], f.original);
+    // (bug 265) …và khớp mép ô theo ô gốc (xuống dòng bị cắt, dấu ` AI tự thêm) trước khi ghép
+    const joined = joinChunks(fitCellsToRaw(restoreLeakedCells(cells, f.rawChunks), f.rawChunks, f.original) as string[], f.original);
     if (!joined.trim()) continue;
 
     const cur = f.translated ?? '';
